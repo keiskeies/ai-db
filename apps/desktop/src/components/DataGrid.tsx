@@ -1,0 +1,168 @@
+import { useRef, useState } from 'react';
+import { ArrowDown, ArrowUp, Trash2 } from 'lucide-react';
+import type { ResultField } from '@aidb/core';
+import { formatCell } from '../lib/format';
+
+export interface DataGridProps {
+  columns: ResultField[];
+  rows: unknown[][];
+  orderBy?: string;
+  orderDir?: 'asc' | 'desc';
+  onSort?: (column: string) => void;
+  editable?: boolean;
+  onCellEdit?: (rowIndex: number, columnIndex: number, value: string) => Promise<void> | void;
+  onRowDelete?: (rowIndex: number) => void;
+  newRowValues?: Record<number, string>;
+  onNewRowChange?: (columnIndex: number, value: string) => void;
+  selectedRows?: Set<number>;
+  onToggleRow?: (rowIndex: number) => void;
+  onToggleAll?: () => void;
+  rowNumberStart?: number;
+  textMode?: boolean;
+  testId?: string;
+}
+
+interface EditState {
+  row: number;
+  col: number;
+  value: string;
+  original: string;
+}
+
+export function DataGrid({
+  columns,
+  rows,
+  orderBy,
+  orderDir,
+  onSort,
+  editable,
+  onCellEdit,
+  onRowDelete,
+  newRowValues,
+  onNewRowChange,
+  selectedRows,
+  onToggleRow,
+  onToggleAll,
+  rowNumberStart = 0,
+  textMode,
+  testId = 'data-grid',
+}: DataGridProps) {
+  const [edit, setEdit] = useState<EditState | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const beginEdit = (row: number, col: number) => {
+    if (!editable || !onCellEdit) return;
+    const raw = rows[row]?.[col];
+    const value = raw === null || raw === undefined ? '' : typeof raw === 'object' ? JSON.stringify(raw) : String(raw);
+    setEdit({ row, col, value, original: value });
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  const commit = async () => {
+    if (!edit) return;
+    const current = edit;
+    setEdit(null);
+    if (!onCellEdit || current.value === current.original) return;
+    await onCellEdit(current.row, current.col, current.value);
+  };
+
+  return (
+    <div className={`grid-wrap ${textMode ? 'text-mode' : ''}`}>
+      <table className="data-grid" data-testid={testId}>
+        <thead>
+          <tr>
+            <th className="grid-rowno">#</th>
+            {onToggleRow ? (
+              <th className="grid-select">
+                <input type="checkbox" checked={rows.length > 0 && (selectedRows?.size ?? 0) === rows.length} onChange={() => onToggleAll?.()} />
+              </th>
+            ) : null}
+            {columns.map((col, index) => {
+              const active = orderBy === col.name;
+              return (
+                <th
+                  key={`${col.name}_${index}`}
+                  className={onSort ? 'sortable' : ''}
+                  onClick={() => onSort?.(col.name)}
+                  title={col.type ? `${col.name} · ${col.type}` : col.name}
+                >
+                  {col.name}
+                  {col.type ? <span className="th-type">{col.type}</span> : null}
+                  {active ? <span className="sort">{orderDir === 'desc' ? <ArrowDown size={10} /> : <ArrowUp size={10} />}</span> : null}
+                </th>
+              );
+            })}
+            {onRowDelete ? <th className="row-actions" /> : null}
+          </tr>
+        </thead>
+        <tbody>
+          {newRowValues ? (
+            <tr>
+              <td className="grid-rowno" />
+              {onToggleRow ? <td className="grid-select" /> : null}
+              {columns.map((col, index) => (
+                <td key={`new_${col.name}`} className="new-row">
+                  <input
+                    className="mono"
+                    style={{ width: '100%', border: 'none', background: 'transparent', outline: 'none', height: 26, fontSize: 11.5 }}
+                    value={newRowValues[index] ?? ''}
+                    placeholder={col.name}
+                    onChange={(e) => onNewRowChange?.(index, e.target.value)}
+                  />
+                </td>
+              ))}
+              {onRowDelete ? <td className="row-actions new-row" /> : null}
+            </tr>
+          ) : null}
+          {rows.map((row, rowIndex) => (
+            <tr key={rowIndex} data-testid={`grid-row-${rowIndex}`} className={selectedRows?.has(rowIndex) ? 'selected' : undefined}>
+              <td className="grid-rowno">{rowNumberStart + rowIndex + 1}</td>
+              {onToggleRow ? (
+                <td className="grid-select">
+                  <input type="checkbox" checked={selectedRows?.has(rowIndex) ?? false} onChange={() => onToggleRow(rowIndex)} />
+                </td>
+              ) : null}
+              {columns.map((col, colIndex) => {
+                const value = row[colIndex];
+                const formatted = formatCell(value);
+                const display = textMode && formatted.kind === 'null' ? '(Null)' : formatted.text;
+                const editing = edit?.row === rowIndex && edit?.col === colIndex;
+                return (
+                  <td
+                    key={`${col.name}_${colIndex}`}
+                    className={`${formatted.kind === 'null' ? 'null' : ''} ${formatted.kind === 'number' ? 'num' : ''} ${editing ? 'editing' : ''}`}
+                    title={display}
+                    onDoubleClick={() => beginEdit(rowIndex, colIndex)}
+                  >
+                    {editing ? (
+                      <input
+                        ref={inputRef}
+                        value={edit.value}
+                        onChange={(e) => setEdit({ ...edit, value: e.target.value })}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') void commit();
+                          if (e.key === 'Escape') setEdit(null);
+                        }}
+                        onBlur={() => void commit()}
+                      />
+                    ) : (
+                      display
+                    )}
+                  </td>
+                );
+              })}
+              {onRowDelete ? (
+                <td className="row-actions">
+                  <button className="icon-btn danger" title="delete row" onClick={() => onRowDelete(rowIndex)}>
+                    <Trash2 size={12} />
+                  </button>
+                </td>
+              ) : null}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {!rows.length ? <div className="empty-state" style={{ padding: 30 }}>没有数据</div> : null}
+    </div>
+  );
+}

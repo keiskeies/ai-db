@@ -1,0 +1,71 @@
+# ── 依赖 ──────────────────────────────────────────────
+node_modules/
+
+# ── 构建产物 ──────────────────────────────────────────
+dist/
+dist-electron/
+out/
+*.tsbuildinfo
+.vite/
+coverage/
+release/
+release-*/
+*.asar
+
+# ── 本地工具链（Electron / 独立 SDK 下载目录）─────────
+.tools/
+
+# ── 运行时数据、数据库与备份 ─────────────────────────
+.aidb/
+.aidb-bundle*/
+*.sqlite
+*.sqlite-journal
+*.db
+*.db-shm
+*.db-wal
+backups/
+exports/
+imports/
+
+# ── 密钥与证书 ────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+secrets/
+
+# ── Expo / React Native ───────────────────────────────
+.expo/
+.expo-shared/
+apps/mobile/web-build/
+apps/mobile/android/.gradle/
+apps/mobile/android/.cxx/
+apps/mobile/android/app/build/
+apps/mobile/android/app/outputs/
+apps/mobile/android/local.properties
+apps/mobile/android/gradle-app.setting
+apps/mobile/ios/build/
+apps/mobile/ios/Pods/
+apps/mobile/ios/*.xcworkspace/
+apps/mobile/ios/.xcode.env.local
+
+# ── 测试与日志 ────────────────────────────────────────
+*.log
+npm-debug.log*
+test-results/
+playwright-report/
+
+# ── 编辑器 / 系统 ─────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+.qoder/
+*.swp
+*.tmp
+docs/screenshots/*.png.tmp

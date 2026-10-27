@@ -1,0 +1,39 @@
+{
+  "name": "aidb-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI-native cross-platform database studio with an autonomous agent",
+  "workspaces": [
+    "packages/*",
+    "apps/gateway",
+    "apps/desktop",
+    "apps/mobile"
+  ],
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "dev": "npm run build:core && concurrently -k -n bridge,ui \"npm run dev:gateway\" \"npm run dev:web\"",
+    "dev:gateway": "npm --workspace apps/gateway run dev",
+    "dev:web": "npm --workspace apps/desktop run dev",
+    "dev:desktop": "npm run build:core && concurrently -k -n bridge,ui,electron \"npm run dev:gateway\" \"npm run dev:web\" \"npm --workspace apps/desktop run dev:electron\"",
+    "seed": "node --import tsx scripts/seed-demo.ts",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm --workspace @aidb/core run test && npm --workspace @aidb/gateway run test",
+    "build:core": "npm --workspace @aidb/core run build",
+    "build": "npm run build:core && npm --workspace apps/gateway run build && npm --workspace apps/desktop run build && npm run build:mobile",
+    "build:desktop": "npm run build:core && npm --workspace apps/desktop run package",
+    "build:mobile": "npm --workspace apps/mobile run export:web",
+    "e2e": "node scripts/e2e.mjs",
+    "verify:docs": "node scripts/verify-docs.mjs",
+    "verify": "npm run verify:docs && npm run typecheck && npm test && npm run build && npm run e2e"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "concurrently": "^9.1.2",
+    "playwright-core": "^1.49.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "wait-on": "^8.0.2"
+  }
+}

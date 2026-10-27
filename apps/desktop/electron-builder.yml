@@ -1,0 +1,44 @@
+appId: com.aidb.studio
+electronVersion: 45.0.0
+productName: AiDB Studio
+copyright: Copyright © 2026 AiDB
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - electron/**/*
+  - package.json
+extraResources:
+  - from: ../gateway/dist
+    to: gateway
+  - from: dist
+    to: desktop
+  - from: ../../node_modules/ssh2
+    to: gateway/node_modules/ssh2
+  - from: ../../node_modules/asn1
+    to: gateway/node_modules/asn1
+  - from: ../../node_modules/safer-buffer
+    to: gateway/node_modules/safer-buffer
+  - from: ../../node_modules/bcrypt-pbkdf
+    to: gateway/node_modules/bcrypt-pbkdf
+  - from: ../../node_modules/tweetnacl
+    to: gateway/node_modules/tweetnacl
+asar: true
+win:
+  target:
+    - nsis
+  artifactName: ${productName}-${version}-setup.${ext}
+mac:
+  target:
+    - dmg
+  category: public.app-category.developer-tools
+  artifactName: ${productName}-${version}-${arch}.${ext}
+linux:
+  target:
+    - AppImage
+  category: Development
+  artifactName: ${productName}-${version}-${arch}.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
