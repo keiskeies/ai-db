@@ -77,7 +77,7 @@ export class AgentRuntime {
     const maxSteps = deps.maxSteps ?? 12;
     const messages: ProviderMessage[] = [
       ...input.history,
-      { role: 'user', content: input.userText },
+      { role: 'user', content: input.userText, ...(input.images?.length ? { images: input.images } : {}) },
     ];
     let finalText = '';
     let tokensIn = 0;
@@ -112,6 +112,8 @@ export class AgentRuntime {
         messages,
         tools: providerTools(),
         temperature: deps.temperature,
+        ...(deps.maxTokens ? { maxTokens: deps.maxTokens } : {}),
+        ...(deps.reasoning ? { reasoning: deps.reasoning } : {}),
         context: input.context,
       };
       const calls: ToolCall[] = [];

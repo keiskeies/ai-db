@@ -18,6 +18,7 @@ export interface GatewayConfig {
   exportDir: string;
   importDir: string;
   backupDir: string;
+  attachmentDir: string;
   staticDir: string;
   production: boolean;
 }
@@ -54,6 +55,7 @@ export function loadConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfi
     exportDir: overrides.exportDir ?? ensureDir(join(home, 'exports')),
     importDir: overrides.importDir ?? ensureDir(join(home, 'imports')),
     backupDir: overrides.backupDir ?? ensureDir(join(home, 'backups')),
+  attachmentDir: overrides.attachmentDir ?? ensureDir(join(home, 'attachments')),
     staticDir: overrides.staticDir ?? process.env.AIDB_STATIC_DIR ?? defaultStatic,
     production,
   };

@@ -10,17 +10,27 @@ export interface OpenAIConfig {
   label?: string;
 }
 
+type OpenAIContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
+
 interface OpenAIMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
+  content: string | OpenAIContentPart[] | null;
   tool_calls?: { id: string; type: 'function'; function: { name: string; arguments: string } }[];
   tool_call_id?: string;
+}
+
+function userContent(msg: Extract<ProviderMessage, { role: 'user' }>): string | OpenAIContentPart[] {
+  if (!msg.images?.length) return msg.content;
+  const parts: OpenAIContentPart[] = [];
+  if (msg.content) parts.push({ type: 'text', text: msg.content });
+  for (const image of msg.images) parts.push({ type: 'image_url', image_url: { url: `data:${image.mime};base64,${image.base64}` } });
+  return parts;
 }
 
 export function toOpenAIMessages(system: string, messages: ProviderMessage[]): OpenAIMessage[] {
   const out: OpenAIMessage[] = [{ role: 'system', content: system }];
   for (const msg of messages) {
-    if (msg.role === 'user') out.push({ role: 'user', content: msg.content });
+    if (msg.role === 'user') out.push({ role: 'user', content: userContent(msg) });
     else if (msg.role === 'assistant') {
       out.push({
         role: 'assistant',
@@ -65,7 +75,8 @@ export class OpenAIProvider implements LlmProvider {
         model: this.cfg.model,
         messages: toOpenAIMessages(req.system, req.messages),
         temperature: req.temperature ?? 0.2,
-        max_tokens: req.maxTokens ?? 4096,
+        max_tokens: req.maxTokens ?? this.cfg.maxTokens ?? 4096,
+        ...(req.reasoning?.value ? { reasoning_effort: req.reasoning.value } : {}),
         tools: req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } })),
         tool_choice: 'auto',
         stream: true,

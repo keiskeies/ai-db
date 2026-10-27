@@ -10,6 +10,7 @@ export interface AnthropicConfig {
 
 type AnthropicBlock =
   | { type: 'text'; text: string }
+  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; tool_use_id: string; content: string };
 
@@ -22,6 +23,15 @@ export function toAnthropicMessages(messages: ProviderMessage[]): AnthropicMessa
   const out: AnthropicMessage[] = [];
   for (const msg of messages) {
     if (msg.role === 'user') {
+      if (msg.images?.length) {
+        const blocks: AnthropicBlock[] = msg.images.map((image) => ({
+          type: 'image' as const,
+          source: { type: 'base64' as const, media_type: image.mime, data: image.base64 },
+        }));
+        if (msg.content) blocks.push({ type: 'text', text: msg.content });
+        out.push({ role: 'user', content: blocks });
+        continue;
+      }
       const last = out[out.length - 1];
       if (last && last.role === 'user' && typeof last.content === 'string') {
         last.content = `${last.content}\n\n${msg.content}`;
@@ -57,6 +67,9 @@ export class AnthropicProvider implements LlmProvider {
 
   async *stream(req: ProviderRequest, signal?: AbortSignal): AsyncGenerator<ProviderEvent> {
     if (!this.cfg.apiKey) throw new ProviderError('缺少 Anthropic API Key', { code: 'NO_API_KEY' });
+    const budget = req.reasoning ? Number(req.reasoning.value) : NaN;
+    const thinking = Number.isFinite(budget) && budget >= 1024 ? Math.floor(budget) : undefined;
+    const requested = req.maxTokens ?? this.cfg.maxTokens ?? 4096;
     const res = await fetch(joinUrl(this.cfg.baseUrl, '/v1/messages'), {
       method: 'POST',
       headers: {
@@ -66,8 +79,10 @@ export class AnthropicProvider implements LlmProvider {
       },
       body: JSON.stringify({
         model: this.cfg.model,
-        max_tokens: this.cfg.maxTokens ?? 4096,
-        temperature: req.temperature ?? 0.2,
+        // 开启 thinking 时 max_tokens 必须大于 budget_tokens，且不接受 temperature 调整。
+        max_tokens: thinking ? Math.max(requested, thinking + 1024) : requested,
+        temperature: thinking ? 1 : (req.temperature ?? 0.2),
+        ...(thinking ? { thinking: { type: 'enabled', budget_tokens: thinking } } : {}),
         system: req.system,
         messages: toAnthropicMessages(req.messages),
         tools: req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })),

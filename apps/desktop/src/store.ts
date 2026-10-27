@@ -45,6 +45,8 @@ export interface LiveTurn {
   tokensIn: number;
   tokensOut: number;
   memories: Array<{ id: string; title: string; kind: string }>;
+  /** 本轮附带的图片附件 id，用于流式期间的用户气泡回显。 */
+  userImages?: string[];
 }
 
 export interface ApprovalState {
@@ -139,7 +141,7 @@ interface AppStore {
   loadAgentSession: (id: string) => Promise<void>;
   deleteAgentSession: (id: string) => Promise<void>;
   refreshSessions: () => Promise<void>;
-  sendAgent: (text: string, mode?: PermissionMode) => Promise<void>;
+  sendAgent: (text: string, mode?: PermissionMode, images?: string[]) => Promise<void>;
   abortAgent: () => Promise<void>;
   resolveApproval: (decision: 'allow' | 'deny', scope: 'once' | 'session' | 'always') => Promise<void>;
   prefillAgent: (text: string) => void;
@@ -621,7 +623,7 @@ export const useApp = create<AppStore>((set, get) => ({
     if (event.type === 'error') get().notify('error', get().t('agentError'), event.message);
   },
 
-  sendAgent: async (text, mode) => {
+  sendAgent: async (text, mode, images) => {
     const trimmed = text.trim();
     if (!trimmed) return;
     if (get().live && (get().live!.status === 'streaming' || get().live!.status === 'awaiting')) {
@@ -651,13 +653,14 @@ export const useApp = create<AppStore>((set, get) => ({
           tokensIn: 0,
           tokensOut: 0,
           memories: [],
+          ...(images?.length ? { userImages: images } : {}),
         },
       });
       const attachments = [...new Set([...trimmed.matchAll(/@([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]))];
       currentAbort = new AbortController();
       await streamTurn(
         sessionId,
-        { text: trimmed, mode: permission, attachments, connectionId: get().activeConnectionId },
+        { text: trimmed, mode: permission, attachments, ...(images?.length ? { images } : {}), connectionId: get().activeConnectionId },
         (event) => get().handleAgentEvent(event),
         currentAbort.signal,
       );

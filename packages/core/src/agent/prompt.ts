@@ -107,7 +107,8 @@ export function estimateTokens(text: string): number {
 
 /** Keep recent messages while staying under a rough token budget; drop oldest first, preserving the current user turn. */
 export function compactHistory(messages: ProviderMessage[], maxTokens: number): ProviderMessage[] {
-  const cost = (m: ProviderMessage) => estimateTokens(m.content) + 20;
+  // 图片按每张约 1k tokens 估算，否则带图的多轮会把压缩后的上下文撑爆。
+  const cost = (m: ProviderMessage) => estimateTokens(m.content) + 20 + ('images' in m ? (m.images?.length ?? 0) * 1000 : 0);
   let total = messages.reduce((a, m) => a + cost(m), 0);
   if (total <= maxTokens) return messages;
   const out = [...messages];

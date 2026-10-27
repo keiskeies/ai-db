@@ -188,11 +188,14 @@ export interface QueryResult {
 | GET | `/agent/tools` | 工具清单 + JSON Schema（UI 展示） |
 | GET/POST | `/agent/sessions` | 会话列表 / 新建 |
 | GET/DELETE | `/agent/sessions/:id` | 会话详情（messages + tool_runs）/ 删除 |
-| POST | `/agent/sessions/:id/turns` | **SSE** 发起回合 |
+| POST | `/agent/sessions/:id/turns` | **SSE** 发起回合（`{text, mode, attachments, images, connectionId}`） |
 | POST | `/agent/sessions/:id/abort` | 中止 |
 | POST | `/agent/approvals/:id` | `{decision, scope}` 审批结果 |
 | GET | `/agent/memories` | 记忆列表/搜索（scope/kind/q） |
 | POST | `/agent/memories` · PUT/DELETE `/agent/memories/:id` | 记忆管理 |
+| POST | `/agent/models` | 按 `{kind, baseUrl, apiKey?}` 拉取服务商模型列表 → `{models, infos, endpoint}`，`infos` 带上下文窗口/输入模态/推理档位（缺省密钥时复用已存密钥） |
+| POST | `/agent/attachments` | `{mime, base64}` 上传聊天图片，落盘 `~/.aidb/attachments/` → `{attachment:{id,mime,bytes}}`（JPEG/PNG/GIF/WebP，单张 ≤8MB） |
+| GET | `/agent/attachments/:id` | 读取附件二进制；id 限定 `<uuid>.<ext>` 白名单，拒绝路径穿越 |
 | GET/PUT | `/settings` | 设置（密钥只写不读） |
 | POST | `/pair/start` | 桌面发起配对：`{code, expiresIn, qrPayload}` |
 | POST | `/pair/claim` | 移动端兑换：`{code, deviceName, platform}` → `{token, bridgeId}` |

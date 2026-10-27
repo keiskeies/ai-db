@@ -1,10 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import {
+  activeReasoningTier,
   AgentRuntime,
   buildSystemPrompt,
   compactHistory,
   createProvider,
   extractHeuristicMemories,
+  getModelProfile,
+  historyTokenBudget,
+  maxOutputTokensOf,
+  supportsInput,
   type AgentEvent,
   type AgentMessageBlock,
   type AgentRunInput,
@@ -14,6 +19,7 @@ import {
   type Memory,
   type MemoryCandidate,
   type PermissionMode,
+  type ProviderImage,
   type ProviderMessage,
   type Risk,
   type ToolCall,
@@ -24,11 +30,14 @@ import { DbError } from './drivers';
 import type { ToolExecutor } from './executor';
 import type { ConnectionManager } from './manager';
 import type { Store } from './store';
+import { readAttachment } from './attachments';
 
 export interface TurnInput {
   text: string;
   mode?: PermissionMode;
   attachments?: string[];
+  /** 已上传到 Bridge 的图片附件 id。 */
+  images?: string[];
   connectionId?: string;
 }
 
@@ -47,6 +56,25 @@ interface PendingApproval {
 }
 
 const MODES: PermissionMode[] = ['readonly', 'ask', 'auto', 'full'];
+
+/** 一轮最多带几张图，再多只会让 prompt 变贵，不会更准。 */
+const MAX_IMAGES_PER_TURN = 4;
+
+/** ProviderImage 加附件标识，便于把图片写回消息 blocks。 */
+interface AttachedImage extends ProviderImage {
+  id: string;
+  bytes: number;
+}
+
+function imagesOf(blocks: AgentMessageBlock[], dir: string): AttachedImage[] {
+  const out: AttachedImage[] = [];
+  for (const block of blocks) {
+    if (block.type !== 'image' || !block.attachmentId) continue;
+    const file = readAttachment(dir, block.attachmentId);
+    if (file) out.push({ id: block.attachmentId, mime: file.mime, base64: file.buffer.toString('base64'), bytes: file.buffer.length });
+  }
+  return out;
+}
 
 export class AgentHost {
   private active = new Map<string, AbortController>();
@@ -105,6 +133,16 @@ export class AgentHost {
     });
   }
 
+  private loadImages(ids?: string[]): AttachedImage[] {
+    const out: AttachedImage[] = [];
+    for (const id of (ids ?? []).slice(0, MAX_IMAGES_PER_TURN)) {
+      const file = readAttachment(this.opts.config.attachmentDir, id);
+      if (!file) throw new DbError(`图片附件不存在，请重新上传：${id}`, { code: 'ATTACHMENT_NOT_FOUND', status: 400 });
+      out.push({ id, mime: file.mime, base64: file.buffer.toString('base64'), bytes: file.buffer.length });
+    }
+    return out;
+  }
+
   async startTurn(sessionId: string, input: TurnInput, emit: (event: AgentEvent) => void): Promise<void> {
     if (this.active.has(sessionId)) throw new DbError('该会话正在运行，请先中止或等待完成', { code: 'SESSION_BUSY', status: 409 });
     const text = input.text?.trim();
@@ -115,6 +153,11 @@ export class AgentHost {
     const connectionId = input.connectionId ?? session.connectionId;
     const conn = connectionId ? this.opts.store.getConnection(connectionId) : undefined;
     const settings = this.opts.store.getSettings();
+    const profile = getModelProfile(settings.agent);
+    if (input.images?.length && !supportsInput(profile, 'image')) {
+      throw new DbError('当前模型没有开启图片输入，请在 设置 → 模型能力 里勾选「图片」。', { code: 'MODEL_NO_VISION', status: 400 });
+    }
+    const images = this.loadImages(input.images);
     const provider = createProvider(settings.agent);
     const controller = new AbortController();
     this.active.set(sessionId, controller);
@@ -123,8 +166,10 @@ export class AgentHost {
     const historyMessages = store.listMessages(sessionId);
     const history: ProviderMessage[] = [];
     for (const m of historyMessages) {
-      if (m.role === 'user') history.push({ role: 'user', content: m.content });
-      else if (m.role === 'assistant' && (m.content || m.blocks.length)) {
+      if (m.role === 'user') {
+        const past = imagesOf(m.blocks, this.opts.config.attachmentDir);
+        history.push({ role: 'user', content: m.content, ...(past.length ? { images: past } : {}) });
+      } else if (m.role === 'assistant' && (m.content || m.blocks.length)) {
         const trace = m.blocks.filter((b) => b.type === 'tool_call').map((b) => b.tool).filter(Boolean);
         history.push({
           role: 'assistant',
@@ -145,7 +190,7 @@ export class AgentHost {
 
     const memories = store.searchMemories(text, { connectionId: conn?.id, database: conn?.database, limit: 6 });
     const attachmentTables = (input.attachments ?? []).map(String).slice(0, 12);
-    const compacted = compactHistory(history.slice(-24), Math.max(4000, Math.floor(settings.agent.compactionThreshold / 2)));
+    const compacted = compactHistory(history.slice(-24), historyTokenBudget(settings.agent, profile));
 
     const title = session.title === '新会话' || !session.title ? text.slice(0, 28) : session.title;
     store.updateSession(sessionId, {
@@ -155,7 +200,12 @@ export class AgentHost {
       status: 'running',
       model: settings.agent.provider === 'local' ? 'local' : settings.agent.model,
     });
-    store.appendMessage({ sessionId, role: 'user', content: text });
+    store.appendMessage({
+      sessionId,
+      role: 'user',
+      content: text,
+      blocks: images.map((img) => ({ type: 'image' as const, attachmentId: img.id, mime: img.mime, bytes: img.bytes })),
+    });
 
     const blocks: AgentMessageBlock[] = [];
     const callInfo = new Map<string, { call: ToolCall; risk: Risk }>();
@@ -204,6 +254,8 @@ export class AgentHost {
       provider,
       maxSteps: settings.agent.maxSteps,
       temperature: settings.agent.temperature,
+      maxTokens: maxOutputTokensOf(settings.agent, profile),
+      reasoning: activeReasoningTier(settings.agent, profile),
       generateId: () => randomUUID(),
       buildSystem: (run: AgentRunInput) => {
         const base = buildSystemPrompt({
@@ -232,6 +284,7 @@ export class AgentHost {
       const result = await runtime.run({
         sessionId,
         userText: text,
+        ...(images.length ? { images } : {}),
         mode,
         connection: conn,
         environment: conn?.environment ?? 'dev',

@@ -12,6 +12,7 @@ import {
   Database,
   Expand,
   History,
+  ImagePlus,
   Loader2,
   MessageSquarePlus,
   Minimize2,
@@ -27,7 +28,9 @@ import {
   Zap,
 } from 'lucide-react';
 import type { AgentMessageBlock, PermissionMode, Risk, ToolResult } from '@aidb/core';
-import { formatCell, formatDuration, formatRelative } from '../lib/format';
+import { getModelProfile, supportsInput } from '@aidb/core';
+import { api, attachmentObjectUrl, type StoredAttachment } from '../lib/api';
+import { formatBytes, formatCell, formatDuration, formatRelative } from '../lib/format';
 import { useApp, type LiveTool } from '../store';
 import { ChartView, type ChartSpec } from './ChartView';
 import { CopyButton, Markdown, RiskBadge } from './ui';
@@ -38,6 +41,18 @@ const MODE_OPTIONS: Array<{ value: PermissionMode; zh: string; en: string }> = [
   { value: 'auto', zh: '自动', en: 'Auto' },
   { value: 'full', zh: '全自动', en: 'Full auto' },
 ];
+
+/** 与 Bridge 每轮最多 4 张的限制保持一致。 */
+const MAX_IMAGES = 4;
+
+function readAsBase64(file: File): Promise<string> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? '').split(',')[1] ?? '');
+    reader.onerror = () => resolve('');
+    reader.readAsDataURL(file);
+  });
+}
 
 const SLASH = [
   { key: '/schema', label: '梳理库结构', prompt: '生成当前库的结构摘要：主要表、关系、字段含义与可疑点。' },
@@ -303,11 +318,38 @@ function AssistantBlocks({ blocks, messageId }: { blocks: AgentMessageBlock[]; m
   );
 }
 
-function UserMessage({ text }: { text: string }) {
+/** 附件图片要走带令牌的 fetch，这里把 object URL 的获取收敛到一个组件里。 */
+function ChatImage({ attachmentId, size = 96 }: { attachmentId: string; size?: number }) {
+  const [url, setUrl] = useState('');
+  useEffect(() => {
+    let alive = true;
+    attachmentObjectUrl(attachmentId)
+      .then((value) => {
+        if (alive) setUrl(value);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [attachmentId]);
+  if (!url) return <span className="chat-image skeleton" style={{ width: size, height: size }} />;
+  return <img className="chat-image" src={url} alt={attachmentId} style={{ maxWidth: size * 2, maxHeight: size * 2 }} loading="lazy" />;
+}
+
+function UserMessage({ text, images }: { text: string; images?: string[] }) {
   return (
     <div className="msg-user">
       <span className="prompt-mark">❯</span>
-      <div className="bubble">{text}</div>
+      <div className="bubble">
+        {images?.length ? (
+          <div className="chat-images">
+            {images.map((id) => (
+              <ChatImage key={id} attachmentId={id} />
+            ))}
+          </div>
+        ) : null}
+        {text}
+      </div>
     </div>
   );
 }
@@ -353,16 +395,46 @@ export function AgentPanel() {
   const clearPrefill = useApp((s) => s.clearPrefill);
   const setActiveConnection = useApp((s) => s.setActiveConnection);
   const openQuery = useApp((s) => s.openQuery);
+  const saveSettings = useApp((s) => s.saveSettings);
+  const notify = useApp((s) => s.notify);
 
   const [input, setInput] = useState('');
   const [popover, setPopover] = useState<'none' | 'mention' | 'slash'>('none');
   const [mentionQuery, setMentionQuery] = useState('');
+  const [pending, setPending] = useState<StoredAttachment[]>([]);
+  const [uploading, setUploading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const activeConnection = connections.find((c) => c.id === activeConnectionId);
   const tables = useMemo(() => (schemas ?? []).flatMap((s) => s.tables), [schemas]);
   const busy = live?.status === 'streaming' || live?.status === 'awaiting';
+  const profile = getModelProfile(settings.agent);
+  const tierLevels = profile?.reasoning ? [...new Set((profile.reasoningTiers ?? []).map((tier) => tier.level))] : [];
+  const canAttachImage = supportsInput(profile, 'image');
+
+  const uploadImages = async (files: File[]) => {
+    const images = files.filter((file) => file.type.startsWith('image/')).slice(0, MAX_IMAGES - pending.length);
+    if (!images.length) return;
+    if (!canAttachImage) {
+      notify('warning', '当前模型不支持图片', '在 设置 → 模型能力 里勾选「图片」后再试。');
+      return;
+    }
+    setUploading(true);
+    try {
+      for (const file of images) {
+        const base64 = await readAsBase64(file);
+        if (!base64) continue;
+        const { attachment } = await api.uploadAttachment({ mime: file.type, base64 });
+        setPending((prev) => (prev.some((item) => item.id === attachment.id) ? prev : [...prev, attachment]));
+      }
+    } catch (err: any) {
+      notify('error', '图片上传失败', err?.message ?? String(err));
+    } finally {
+      setUploading(false);
+    }
+  };
 
   useEffect(() => {
     if (prefill) {
@@ -396,9 +468,11 @@ export function AgentPanel() {
   const send = () => {
     if (!input.trim() || busy) return;
     const text = input;
+    const images = pending.map((item) => item.id);
     setInput('');
+    setPending([]);
     setPopover('none');
-    void sendAgent(text);
+    void sendAgent(text, undefined, images);
   };
 
   const onInput = (value: string) => {
@@ -446,7 +520,12 @@ export function AgentPanel() {
   };
 
   const renderPersisted = (message: (typeof messages)[number]) => {
-    if (message.role === 'user') return <UserMessage key={message.id} text={message.content} />;
+    if (message.role === 'user') {
+      const images = message.blocks
+        .map((block) => (block.type === 'image' ? block.attachmentId : undefined))
+        .filter((id): id is string => Boolean(id));
+      return <UserMessage key={message.id} text={message.content} images={images.length ? images : undefined} />;
+    }
     const toolCount = message.blocks.filter((b) => b.type === 'tool_call').length;
     return (
       <AssistantShell key={message.id}>
@@ -543,7 +622,7 @@ export function AgentPanel() {
 
         {live ? (
           <>
-            <UserMessage text={live.userText} />
+            <UserMessage text={live.userText} images={live.userImages} />
             <AssistantShell>
               {live.thinking ? (
                 <details className="thinking" open={!live.text && !live.tools.length}>
@@ -623,13 +702,30 @@ export function AgentPanel() {
       ) : null}
 
       <div className="composer">
-        <div className="composer-box">
+        <div
+          className="composer-box"
+          onDragOver={(e) => {
+            if (canAttachImage) e.preventDefault();
+          }}
+          onDrop={(e) => {
+            const files = Array.from(e.dataTransfer.files);
+            if (!files.length) return;
+            e.preventDefault();
+            void uploadImages(files);
+          }}
+        >
           <textarea
             ref={textareaRef}
             rows={1}
             value={input}
             placeholder={t('composerHint')}
             onChange={(e) => onInput(e.target.value)}
+            onPaste={(e) => {
+              const files = Array.from(e.clipboardData.files);
+              if (!files.length) return;
+              e.preventDefault();
+              void uploadImages(files);
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -639,6 +735,27 @@ export function AgentPanel() {
             }}
             data-testid="agent-input"
           />
+          {pending.length || uploading ? (
+            <div className="composer-images" data-testid="composer-images">
+              {pending.map((item) => (
+                <span key={item.id} className="composer-image" title={`${item.mime} · ${formatBytes(item.bytes)}`}>
+                  <ChatImage attachmentId={item.id} size={54} />
+                  <button
+                    className="icon-btn image-remove"
+                    title="移除这张图"
+                    onClick={() => setPending((prev) => prev.filter((x) => x.id !== item.id))}
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              ))}
+              {uploading ? (
+                <span className="composer-image uploading">
+                  <Loader2 size={16} className="spin" />
+                </span>
+              ) : null}
+            </div>
+          ) : null}
           <div className="composer-tools">
             <button
               className="icon-btn"
@@ -651,6 +768,27 @@ export function AgentPanel() {
             >
               <AtSign size={13} />
             </button>
+            <button
+              className="icon-btn"
+              title={canAttachImage ? `添加图片（最多 ${MAX_IMAGES} 张，也可直接粘贴或拖入）` : '当前模型未开启图片输入，请到 设置 → 模型能力 勾选'}
+              onClick={() => fileInputRef.current?.click()}
+              disabled={!canAttachImage || uploading || pending.length >= MAX_IMAGES}
+              data-testid="agent-attach-image"
+            >
+              <ImagePlus size={13} />
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              multiple
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                void uploadImages(Array.from(e.target.files ?? []));
+                e.target.value = '';
+              }}
+              data-testid="agent-image-input"
+            />
             <button
               className="icon-btn"
               title={t('slashCommands')}
@@ -680,6 +818,28 @@ export function AgentPanel() {
                 <option key={m.value} value={m.value}>{settings.locale === 'en' ? m.en : m.zh}</option>
               ))}
             </select>
+            {tierLevels.length ? (
+              <>
+                <span className="composer-perm-label">推理</span>
+                <select
+                  className="mode-select"
+                  value={settings.agent.reasoningTier ?? 'default'}
+                  onChange={(e) =>
+                    void saveSettings({
+                      ...settings,
+                      agent: { ...settings.agent, reasoningTier: e.target.value === 'default' ? undefined : e.target.value },
+                    })
+                  }
+                  title="思考档位：按模型档案里的映射下发给服务商"
+                  data-testid="agent-reasoning-tier"
+                >
+                  <option value="default">跟随服务商</option>
+                  {tierLevels.map((level) => (
+                    <option key={level} value={level}>{level}</option>
+                  ))}
+                </select>
+              </>
+            ) : null}
             <div className="spacer" />
             {busy ? (
               <button className="send-btn stop" onClick={() => void abortAgent()} title={t('stop')} data-testid="agent-stop">

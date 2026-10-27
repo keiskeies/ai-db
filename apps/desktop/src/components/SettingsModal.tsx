@@ -9,14 +9,27 @@ import {
   Loader2,
   Network,
   Palette,
+  Plus,
   RefreshCw,
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
   Trash2,
 } from 'lucide-react';
-import type { AppSettings, AuditEntry, BackupInfo, ProviderKind, ProviderPreset } from '@aidb/core';
-import { matchPreset, presetById, presetsByGroup } from '@aidb/core';
+import type { AppSettings, AuditEntry, BackupInfo, ModelInfo, ModelInputModality, ModelProfile, ModelReasoningTier, ProviderKind, ProviderPreset } from '@aidb/core';
+import {
+  DEFAULT_REASONING_TIERS,
+  TIER_LEVELS,
+  formatTokenSize,
+  matchPreset,
+  getModelProfile,
+  parseTokenSize,
+  presetById,
+  presetsByGroup,
+  profileFromModelInfo,
+  withModelProfile,
+  withoutModelProfile,
+} from '@aidb/core';
 import { api, TOKEN } from '../lib/api';
 import { formatBytes, formatRelative } from '../lib/format';
 import { useApp } from '../store';
@@ -44,6 +57,7 @@ export function SettingsModal() {
   const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [dataLoading, setDataLoading] = useState(false);
   const [modelList, setModelList] = useState<string[]>([]);
+  const [modelInfos, setModelInfos] = useState<ModelInfo[]>([]);
   const [modelSource, setModelSource] = useState('');
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState('');
@@ -55,6 +69,7 @@ export function SettingsModal() {
     setApiKey('');
     setTab('appearance');
     setModelList([]);
+    setModelInfos([]);
     setModelSource('');
     setModelsError('');
     setModelQuery('');
@@ -85,8 +100,31 @@ export function SettingsModal() {
 
   const setAgent = (patch: Partial<AppSettings['agent']>) => setForm((prev) => ({ ...prev, agent: { ...prev.agent, ...patch } }));
 
+  /** 当前模型的能力档案；未配置时为 undefined，编辑器按空值渲染。 */
+  const profile = getModelProfile(form.agent);
+
+  const patchProfile = (patch: Partial<ModelProfile>) => {
+    if (!form.agent.model) return;
+    setForm((prev) => ({ ...prev, agent: withModelProfile(prev.agent, prev.agent.model, { ...(getModelProfile(prev.agent) ?? {}), ...patch }) }));
+  };
+
+  /** 选中模型：没有档案但探测到能力时立刻预填，并把档位选择收敛到新模型支持的档位。 */
+  const pickModel = (model: string) => {
+    setForm((prev) => {
+      const stored = prev.agent.modelProfiles?.[model];
+      const info = modelInfos.find((item) => item.id === model);
+      const detected = !stored && info ? profileFromModelInfo(info) : undefined;
+      let agent: AppSettings['agent'] = { ...prev.agent, model };
+      if (detected) agent = withModelProfile(agent, model, detected);
+      const tiers = (stored ?? detected)?.reasoningTiers ?? [];
+      if (tiers.length && !tiers.some((tier) => tier.level === agent.reasoningTier)) agent = { ...agent, reasoningTier: undefined };
+      return { ...prev, agent };
+    });
+  };
+
   const clearModels = () => {
     setModelList([]);
+    setModelInfos([]);
     setModelSource('');
     setModelsError('');
     setModelQuery('');
@@ -113,17 +151,19 @@ export function SettingsModal() {
     setModelsLoading(true);
     setModelsError('');
     try {
-      const { models, endpoint } = await api.agentModels({
+      const { models, infos, endpoint } = await api.agentModels({
         kind: form.agent.provider,
         baseUrl: form.agent.baseUrl || activePreset?.baseUrl || '',
         apiKey: apiKey.trim() || undefined,
       });
       setModelList(models);
+      setModelInfos(infos ?? []);
       setModelSource(endpoint);
       if (!models.length) setModelsError('接口没有返回模型名，可直接在模型框手动填写。');
-      else notify('success', '模型列表', `${models.length} 个模型 · ${endpoint}`);
+      else notify('success', '模型列表', `${models.length} 个模型 · ${infos?.length ? `${infos.filter((i) => i.contextWindow || i.reasoning || i.inputs?.length).length} 个带能力信息 · ` : ''}${endpoint}`);
     } catch (err: any) {
       setModelList([]);
+      setModelInfos([]);
       setModelSource('');
       setModelsError(`${err?.message ?? '获取模型列表失败'}；也可直接手动填写模型名。`);
     } finally {
@@ -347,11 +387,21 @@ export function SettingsModal() {
                           <div className="model-list" data-testid="settings-model-list">
                             {modelList
                               .filter((model) => !modelQuery || model.toLowerCase().includes(modelQuery.toLowerCase()))
-                              .map((model) => (
-                                <button key={model} className={`model-item ${model === form.agent.model ? 'active' : ''}`} onClick={() => setAgent({ model })}>
-                                  <span className="mono">{model}</span>
-                                </button>
-                              ))}
+                              .map((model) => {
+                                const info = modelInfos.find((item) => item.id === model);
+                                const caps = [
+                                  info?.contextWindow ? formatTokenSize(info.contextWindow) : '',
+                                  info?.reasoning ? '推理' : '',
+                                  info?.inputs?.includes('image') ? '图片' : '',
+                                ].filter(Boolean);
+                                return (
+                                  <button key={model} className={`model-item ${model === form.agent.model ? 'active' : ''}`} onClick={() => pickModel(model)} data-testid={`model-item-${model}`}>
+                                    <span className="mono">{model}</span>
+                                    {caps.length ? <span className="model-caps">{caps.join(' · ')}</span> : null}
+                                    {form.agent.modelProfiles?.[model] ? <span className="badge read">已配置</span> : null}
+                                  </button>
+                                );
+                              })}
                           </div>
                         </div>
                       ) : null}
@@ -394,6 +444,14 @@ export function SettingsModal() {
                       </div>
                     </div>
                   )}
+                  {form.agent.provider !== 'local' && form.agent.model ? (
+                    <ModelProfileEditor
+                      model={form.agent.model}
+                      profile={profile}
+                      onPatch={patchProfile}
+                      onClear={() => setForm((prev) => ({ ...prev, agent: withoutModelProfile(prev.agent, prev.agent.model) }))}
+                    />
+                  ) : null}
                   <div className="field">
                     <label>{t('maxSteps')}</label>
                     <input className="input" type="number" min={1} max={40} value={form.agent.maxSteps} onChange={(e) => setAgent({ maxSteps: Number(e.target.value) })} />
@@ -592,6 +650,155 @@ ${backup.path}
           ) : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** 单个模型的能力档案编辑器：上下文窗口、最大输出、输入类型与推理档位映射。 */
+function ModelProfileEditor({
+  model,
+  profile,
+  onPatch,
+  onClear,
+}: {
+  model: string;
+  profile?: ModelProfile;
+  onPatch: (patch: Partial<ModelProfile>) => void;
+  onClear: () => void;
+}) {
+  const inputs = profile?.inputs ?? [];
+  const tiers = profile?.reasoningTiers ?? [];
+  const levels = [...new Set<string>([...TIER_LEVELS, ...tiers.map((tier) => tier.level)])];
+
+  const toggleInput = (modality: ModelInputModality) => {
+    const next = new Set(inputs);
+    if (next.has(modality)) next.delete(modality);
+    else next.add(modality);
+    onPatch({ inputs: [...next] });
+  };
+
+  const setTiers = (next: ModelReasoningTier[]) => onPatch({ reasoningTiers: next });
+
+  /** 标准档位用尽后仍要保证 level 唯一，否则聊天面板的下拉会出现重复 key。 */
+  const nextLevel = (taken: Set<string>) => {
+    const free = levels.find((level) => !taken.has(level));
+    if (free) return free;
+    let index = 2;
+    while (taken.has(`custom_${index}`)) index += 1;
+    return `custom_${index}`;
+  };
+
+  return (
+    <div className="field full model-profile" data-testid="model-profile">
+      <div className="model-profile-head">
+        <label>模型能力</label>
+        <span className="mono muted">{model}</span>
+        <div className="spacer" />
+        {profile ? (
+          <button className="link-btn" onClick={onClear} data-testid="model-profile-clear">
+            清除该模型的档案
+          </button>
+        ) : null}
+      </div>
+      <div className="model-profile-grid">
+        <div className="field">
+          <label>上下文窗口</label>
+          <input
+            className="input"
+            key={`ctx-${model}`}
+            defaultValue={profile?.contextWindow ? formatTokenSize(profile.contextWindow) : ''}
+            placeholder="256K"
+            onBlur={(e) => onPatch({ contextWindow: parseTokenSize(e.target.value) })}
+            data-testid="model-context-window"
+          />
+        </div>
+        <div className="field">
+          <label>最大输出 token 数</label>
+          <input
+            className="input"
+            key={`max-${model}`}
+            defaultValue={profile?.maxOutputTokens ? formatTokenSize(profile.maxOutputTokens) : ''}
+            placeholder="32K"
+            onBlur={(e) => onPatch({ maxOutputTokens: parseTokenSize(e.target.value) })}
+            data-testid="model-max-output"
+          />
+        </div>
+      </div>
+      <div className="field">
+        <label>输入类型</label>
+        <div className="row gap-6">
+          <label className="checkbox">
+            <input type="checkbox" checked={inputs.includes('text')} onChange={() => toggleInput('text')} /> 文本
+          </label>
+          <label className="checkbox">
+            <input type="checkbox" checked={inputs.includes('image')} onChange={() => toggleInput('image')} data-testid="model-input-image" /> 图片
+          </label>
+        </div>
+        <span className="hint">勾选「图片」后聊天面板才能贴图；两项都不选按仅文本处理。</span>
+      </div>
+      <div className="model-profile-switch">
+        <label>
+          推理等级
+          <span className="tip" title="开启后可定义档位与发给服务商的参数值。OpenAI 兼容协议按字符串下发 reasoning_effort；Anthropic 协议把值当作 thinking.budget_tokens 的数字。">?</span>
+        </label>
+        <div className="spacer" />
+        <button
+          className={`switch ${profile?.reasoning ? 'on' : ''}`}
+          role="switch"
+          aria-checked={Boolean(profile?.reasoning)}
+          data-testid="model-reasoning-toggle"
+          onClick={() =>
+            onPatch(
+              profile?.reasoning
+                ? { reasoning: false }
+                : { reasoning: true, reasoningTiers: tiers.length ? tiers : DEFAULT_REASONING_TIERS.map((tier) => ({ ...tier })) },
+            )
+          }
+        >
+          <span className="knob" />
+        </button>
+      </div>
+      {profile?.reasoning ? (
+        <div className="tier-table" data-testid="model-tiers">
+          <div className="tier-row tier-row-head">
+            <span>档位</span>
+            <span>API 参数值</span>
+            <span />
+          </div>
+          {tiers.map((tier, index) => (
+            <div className="tier-row" key={`${tier.level}_${index}`}>
+              <select
+                className="select"
+                value={tier.level}
+                onChange={(e) => setTiers(tiers.map((item, i) => (i === index ? { ...item, level: e.target.value } : item)))}
+              >
+                {levels.map((level) => (
+                  <option key={level} value={level}>{level}</option>
+                ))}
+              </select>
+              <input
+                className="input mono"
+                value={tier.value}
+                placeholder={tier.level === 'off' ? '关闭思考' : '如 low / 2048'}
+                onChange={(e) => setTiers(tiers.map((item, i) => (i === index ? { ...item, value: e.target.value } : item)))}
+                data-testid={`model-tier-value-${tier.level}`}
+              />
+              <button className="icon-btn" title="删除档位" onClick={() => setTiers(tiers.filter((_, i) => i !== index))}>
+                <Trash2 size={12} />
+              </button>
+            </div>
+          ))}
+          {!tiers.length ? <div className="hint">还没有档位，点下面的按钮添加。</div> : null}
+          <button
+            className="btn small"
+            onClick={() => setTiers([...tiers, { level: nextLevel(new Set(tiers.map((tier) => tier.level))), value: '' }])}
+            data-testid="model-tier-add"
+          >
+            <Plus size={12} /> 添加档位
+          </button>
+          <span className="hint">值留空表示该档不下发任何推理参数。</span>
+        </div>
+      ) : null}
     </div>
   );
 }

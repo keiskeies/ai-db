@@ -9,6 +9,7 @@ import type {
   DatabaseSchema,
   DeviceInfo,
   Memory,
+  ModelInfo,
   QueryBatchResult,
   QueryResult,
   TableInfo,
@@ -107,6 +108,8 @@ export interface TurnPayload {
   text: string;
   mode?: string;
   attachments?: string[];
+  /** 已上传的图片附件 id。 */
+  images?: string[];
   connectionId?: string;
 }
 
@@ -158,6 +161,25 @@ export async function streamTurn(sessionId: string, payload: TurnPayload, onEven
       idx = buffer.indexOf('\n\n');
     }
   }
+}
+
+export interface StoredAttachment {
+  id: string;
+  mime: string;
+  bytes: number;
+}
+
+const attachmentUrls = new Map<string, string>();
+
+/** 图片走带令牌的 fetch 再转 object URL，避免把令牌暴露在 <img src> 里。 */
+export async function attachmentObjectUrl(id: string): Promise<string> {
+  const cached = attachmentUrls.get(id);
+  if (cached) return cached;
+  const res = await fetch(`/api/agent/attachments/${encodeURIComponent(id)}`, { headers: { authorization: `Bearer ${TOKEN}` } });
+  if (!res.ok) throw new ApiError(`图片读取失败（${res.status}）`, { code: 'ATTACHMENT_ERROR', status: res.status });
+  const url = URL.createObjectURL(await res.blob());
+  attachmentUrls.set(id, url);
+  return url;
 }
 
 export const api = {
@@ -258,7 +280,9 @@ export const api = {
       `/table-options?connectionId=${encodeURIComponent(connectionId)}&table=${encodeURIComponent(table)}${database ? `&database=${encodeURIComponent(database)}` : ''}`,
     ),
   agentModels: (body: { kind: string; baseUrl: string; apiKey?: string }) =>
-    request<{ models: string[]; endpoint: string }>('/agent/models', { method: 'POST', body: JSON.stringify(body) }),
+    request<{ models: string[]; infos: ModelInfo[]; endpoint: string }>('/agent/models', { method: 'POST', body: JSON.stringify(body) }),
+  uploadAttachment: (body: { mime: string; base64: string }) =>
+    request<{ attachment: StoredAttachment }>('/agent/attachments', { method: 'POST', body: JSON.stringify(body) }),
   compareData: (body: { sourceId: string; sourceDatabase?: string; targetId: string; targetDatabase?: string; tables?: string[] }) =>
     request<{ result: any }>('/data/compare', { method: 'POST', body: JSON.stringify(body) }),
   snippets: () => request<{ snippets: any[] }>('/snippets'),

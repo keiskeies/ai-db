@@ -173,6 +173,31 @@ export interface MemoryCandidate {
   scopeKey?: string;
 }
 
+export type ModelInputModality = 'text' | 'image';
+
+/** 推理档位：level 是界面标识，value 是发给服务商的参数值；value 为空表示该档不发任何参数（即「关闭思考」）。 */
+export interface ModelReasoningTier {
+  level: string;
+  value: string;
+}
+
+/**
+ * 单个模型的能力档案，按模型名存在 AgentSettings.modelProfiles 里。
+ * 字段缺省代表未知，调用方必须按最保守的行为处理（不发推理参数、不收图）。
+ */
+export interface ModelProfile {
+  /** 上下文窗口（tokens）。 */
+  contextWindow?: number;
+  /** 单次回复的最大输出（tokens）。 */
+  maxOutputTokens?: number;
+  /** 支持的输入类型；缺省按「仅文本」处理。 */
+  inputs?: ModelInputModality[];
+  /** 是否支持可调档位的推理。 */
+  reasoning?: boolean;
+  /** 档位表；顺序即界面顺序。 */
+  reasoningTiers?: ModelReasoningTier[];
+}
+
 export interface AgentSettings {
   provider: 'local' | 'anthropic' | 'openai' | 'ollama';
   /** 服务商预设标识（deepseek / kimi / ollama …），用于界面回显与取模型列表。 */
@@ -185,6 +210,10 @@ export interface AgentSettings {
   autoMemory: boolean;
   snapshotBeforeWrite: boolean;
   compactionThreshold: number;
+  /** 按模型名保存的能力档案。 */
+  modelProfiles?: Record<string, ModelProfile>;
+  /** 当前模型选用的推理档位（对应 modelProfiles[model].reasoningTiers 的 level）。 */
+  reasoningTier?: string;
   hasApiKey?: boolean;
 }
 
@@ -241,7 +270,7 @@ export interface AgentSessionMeta {
 }
 
 export interface AgentMessageBlock {
-  type: 'tool_call' | 'tool_result' | 'plan' | 'thinking';
+  type: 'tool_call' | 'tool_result' | 'plan' | 'thinking' | 'image';
   callId?: string;
   tool?: string;
   args?: unknown;
@@ -250,6 +279,10 @@ export interface AgentMessageBlock {
   status?: string;
   items?: AgentPlanItem[];
   text?: string;
+  /** type 为 image 时指向 Bridge 本地附件。 */
+  attachmentId?: string;
+  mime?: string;
+  bytes?: number;
 }
 
 export interface AgentMessage {

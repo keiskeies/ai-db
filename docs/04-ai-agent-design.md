@@ -229,6 +229,18 @@ pinned → +0.3 且不衰减
 `packages/core/src/agent/providers/presets.ts` 内置 22 个预设，按 本地/自建、国内服务、国际服务 分组（内置离线、Ollama、LM Studio、vLLM、自定义 OpenAI 兼容、DeepSeek、Kimi、智谱 GLM、通义千问/百炼、火山方舟豆包、千帆文心、腾讯混元、讯飞星火、MiniMax、零一万物、硅基流动、OpenAI、Anthropic、Groq、Mistral、xAI、OpenRouter），每个预设声明协议、官方接入地址、默认模型与是否需要密钥；点选即写入 `settings.agent.{provider,preset,baseUrl,model}`，地址与模型仍可手改。
 模型列表由 Bridge 代理拉取：`POST /api/agent/models {kind, baseUrl, apiKey?}` → `listProviderModels()`（OpenAI 兼容读 `/models`，Anthropic 读 `/v1/models` 带 `x-api-key`，Ollama 优先 `/api/tags` 失败再退 `/v1/models`），仅接受 http/https、8s 超时、去重排序上限 500；未填密钥时复用已保存的同协议密钥，本机/内网端点（Ollama、LM Studio、vLLM）允许无密钥调用。
 
+### 9.0.1 模型能力档案（`settings.agent.modelProfiles`）
+`listProviderModels()` 除模型名外还返回 `infos[]`：从服务商 `/models` 的 `context_length`、`max_output_tokens`、`capabilities`、`input_modalities`、`reasoning.efforts` 等字段提取上下文窗口、最大输出、输入模态与推理档位。设置页选中模型时用它预填 `ModelProfile`，之后全部可手改：
+
+| 字段 | 作用 |
+|---|---|
+| `contextWindow` | 与 `compactionThreshold` 取小，收紧 `compactHistory` 的历史预算（`window − maxOutput − 8000`） |
+| `maxOutputTokens` | 下发 `max_tokens`（OpenAI 兼容）/ `max_tokens`（Anthropic），未配置时仍为 4096 |
+| `inputs` | 含 `image` 才允许聊天面板贴图；Bridge 侧同样校验，缺失时返回 `MODEL_NO_VISION` |
+| `reasoning` + `reasoningTiers` | 档位 → API 参数值映射；`reasoningTier` 记录当前选择 |
+
+档位值的下发按协议分流：OpenAI 兼容写 `reasoning_effort: <value>`，Anthropic 把 `<value>` 当 `thinking.budget_tokens`（数字，同时把 `max_tokens` 抬到 budget+1024 并固定 `temperature=1`）。值为空或档位为 `off` 时不下发任何推理参数，交回服务商默认。图片以 `<uuid>.<ext>` 附件存于 `~/.aidb/attachments/`，消息用 `blocks[].type='image'` 引用，多轮回放时重新读取为 `image_url` / `source.base64`。
+
 ### 9.1 Local Reasoner（离线演示与兜底）
 基于意图规则 + schema 事实的确定性规划器，覆盖：
 1. 列出/搜索表（"有哪些表"、"找 users"）

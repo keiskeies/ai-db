@@ -28,6 +28,7 @@ import {
   type ProviderKind,
 } from '@aidb/core';
 import { pairingCode, hashToken, randomToken, safeEqual } from './crypto';
+import { readAttachment, saveAttachment } from './attachments';
 import type { GatewayConfig } from './config';
 import type { ConnectionManager } from './manager';
 import { auditCsv, coerceValue, dumpDatabase, importCsv, writeExportFile } from './services';
@@ -663,6 +664,26 @@ export function createApiRouter(deps: ApiDeps): Router {
     }),
   );
 
+  router.post(
+    '/agent/attachments',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const attachment = saveAttachment(config.attachmentDir, { mime: str(body.mime), base64: str(body.base64) });
+      res.status(201).json({ attachment });
+    }),
+  );
+
+  router.get('/agent/attachments/:id', (req, res) => {
+    const file = readAttachment(config.attachmentDir, req.params.id);
+    if (!file) {
+      res.status(404).json({ error: { code: 'ATTACHMENT_NOT_FOUND', message: '图片附件不存在或已被清理' } });
+      return;
+    }
+    res.setHeader('cache-control', 'private, max-age=86400');
+    res.contentType(file.mime);
+    res.send(file.buffer);
+  });
+
   router.get('/agent/sessions', (_req, res) => res.json({ sessions: store.listSessions() }));
   router.post(
     '/agent/sessions',
@@ -734,6 +755,7 @@ export function createApiRouter(deps: ApiDeps): Router {
             text: String(body.text ?? ''),
             mode: str(body.mode) as Parameters<AgentHost['startTurn']>[1]['mode'],
             attachments: Array.isArray(body.attachments) ? (body.attachments as string[]) : undefined,
+            images: Array.isArray(body.images) ? (body.images as string[]).map(String).slice(0, 4) : undefined,
             connectionId: str(body.connectionId),
           },
           (event) => {

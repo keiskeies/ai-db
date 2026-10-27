@@ -51,8 +51,19 @@ export interface ProviderTool {
   inputSchema: JsonSchema;
 }
 
+/** 随消息一起下发的图片，base64 不带 data: 前缀。 */
+export interface ProviderImage {
+  mime: string;
+  base64: string;
+}
+
+export interface ProviderReasoning {
+  level: string;
+  value: string;
+}
+
 export type ProviderMessage =
-  | { role: 'user'; content: string }
+  | { role: 'user'; content: string; images?: ProviderImage[] }
   | { role: 'assistant'; content: string; toolCalls?: ToolCall[] }
   | { role: 'tool'; toolCallId: string; name: string; content: string };
 
@@ -69,6 +80,8 @@ export interface ProviderRequest {
   tools: ProviderTool[];
   temperature?: number;
   maxTokens?: number;
+  /** 当前推理档位；provider 各自决定怎么下发，value 为空的档位不会走到这里。 */
+  reasoning?: ProviderReasoning;
   context?: AgentContextData;
 }
 
@@ -117,6 +130,8 @@ export type AgentEvent =
 export interface AgentRunInput {
   sessionId: string;
   userText: string;
+  /** 本轮附带的图片，仅在模型档案声明支持图片输入时由 Bridge 传入。 */
+  images?: ProviderImage[];
   mode: PermissionMode;
   connection?: ConnectionConfig;
   environment: Environment;
@@ -138,4 +153,7 @@ export interface AgentRuntimeDeps {
   now?: () => number;
   maxSteps?: number;
   temperature?: number;
+  /** 当前模型档案里的最大输出 tokens；未配置时由 provider 兜底。 */
+  maxTokens?: number;
+  reasoning?: ProviderReasoning;
 }

@@ -14,6 +14,7 @@ export * from './agent/runtime';
 export * from './agent/providers/common';
 export * from './agent/providers/presets';
 export * from './agent/providers/models';
+export * from './agent/providers/profile';
 export * from './agent/providers/anthropic';
 export * from './agent/providers/openai';
 export * from './agent/providers/local';

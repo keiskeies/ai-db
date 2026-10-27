@@ -11,7 +11,7 @@
   "scripts": {
     "build": "node -e \"require('fs').mkdirSync('dist',{recursive:true})\" && npx tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/classify.test.ts test/ddl.test.ts test/engines.test.ts test/memory.test.ts test/local.test.ts test/concrete-ai.test.ts test/runtime.test.ts test/providers.test.ts test/schema-diff.test.ts"
+    "test": "node --import tsx --test test/classify.test.ts test/ddl.test.ts test/engines.test.ts test/memory.test.ts test/local.test.ts test/concrete-ai.test.ts test/runtime.test.ts test/providers.test.ts test/model-profile.test.ts test/schema-diff.test.ts"
   },
   "devDependencies": {
     "tsx": "^4.19.2",
