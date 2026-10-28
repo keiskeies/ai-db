@@ -2,9 +2,11 @@ import { MongoClient, ObjectId } from 'mongodb';
 import type { Collection, Document, Filter, Sort } from 'mongodb';
 import type { ColumnInfo, Engine, MqlQuery, QueryResult, StructuredQuery, TableInfo } from '@aidb/core';
 import type {
+  CreateObjectInput,
   DeleteDocumentsInput,
   DocumentWriteDriver,
   DriverTestResult,
+  ObjectCreateDriver,
   RunOptions,
   StructuredQueryDriver,
   WriteDocumentInput,
@@ -169,7 +171,7 @@ export function normalizeMql(value: unknown): MqlQuery {
   return query;
 }
 
-export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver {
+export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver, ObjectCreateDriver {
   engine: Engine = 'mongodb';
   private client?: MongoClient;
   private connected?: Promise<MongoClient>;
@@ -355,6 +357,30 @@ export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver {
     const text = typeof value === 'string' ? value.trim() : '';
     if (/^[0-9a-fA-F]{24}$/.test(text)) return new ObjectId(text);
     return value;
+  }
+
+  async createObject(input: CreateObjectInput, opts: RunOptions = {}): Promise<{ name: string; kind: string }> {
+    const target = input.name.trim();
+    if (!target) throw new DbError('集合名不能为空', { code: 'MQL_COLLECTION' });
+    const client = await this.connect();
+    try {
+      await client.db(await this.database(opts.database)).createCollection(target);
+      return { name: target, kind: 'collection' };
+    } catch (err: any) {
+      throw new DbError(err?.message ?? 'MongoDB 建集合失败', { code: err?.codeName ?? 'MONGO_CREATE' });
+    }
+  }
+
+  async dropObject(name: string, opts: RunOptions = {}): Promise<{ name: string; dropped: boolean }> {
+    const target = name.trim();
+    if (!target) throw new DbError('集合名不能为空', { code: 'MQL_COLLECTION' });
+    const client = await this.connect();
+    try {
+      await client.db(await this.database(opts.database)).collection(target).drop();
+      return { name: target, dropped: true };
+    } catch (err: any) {
+      throw new DbError(err?.message ?? 'MongoDB 删集合失败', { code: err?.codeName ?? 'MONGO_DROP' });
+    }
   }
 
   async upsertDocuments(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {

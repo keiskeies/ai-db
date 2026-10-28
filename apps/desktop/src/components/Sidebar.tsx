@@ -30,12 +30,13 @@ import {
   PanelLeftClose,
 } from 'lucide-react';
 import type { ConnectionConfig, DatabaseSchema, TableInfo } from '@aidb/core';
-import { engineMeta } from '@aidb/core';
+import { engineMeta, managesObjects } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp, type ContextMenuItem } from '../store';
 import { TableOpsDialog, type TableDialogKind } from './TableOpsDialog';
 import { DatabaseOpsDialog, type DatabaseDialogKind } from './DatabaseOpsDialog';
 import { CreateObjectDialog } from './CreateObjectDialog';
+import { DropObjectDialog } from './DropObjectDialog';
 import { TableInfoDialog } from './TableInfoDialog';
 
 const COLORS: Record<string, string> = {
@@ -90,6 +91,7 @@ export function Sidebar() {
   const [tableDialog, setTableDialog] = useState<{ kind: TableDialogKind; conn: ConnectionConfig; schema: DatabaseSchema; table: TableInfo; withData?: boolean } | null>(null);
   const [dbDialog, setDbDialog] = useState<{ kind: DatabaseDialogKind; conn: ConnectionConfig; database: string } | null>(null);
   const [objectDialog, setObjectDialog] = useState<{ conn: ConnectionConfig; database?: string } | null>(null);
+  const [dropDialog, setDropDialog] = useState<{ conn: ConnectionConfig; database?: string; name: string } | null>(null);
   const [infoTable, setInfoTable] = useState<{ table: TableInfo; database?: string } | null>(null);
 
   const filtered = useMemo(() => {
@@ -239,6 +241,15 @@ export function Sidebar() {
         onClick: () => void navigator.clipboard.writeText(table.name).then(() => notify('success', t('copied'))),
       },
     ];
+    if (managesObjects(conn.engine) && !isRedisIndex && !isEdge) {
+      items.push({ label: '', icon: null, sep: true, onClick: () => undefined });
+      items.push({
+        label: meta.model === 'search' ? '删除索引…' : '删除集合…',
+        icon: <Trash2 size={13} />,
+        danger: true,
+        onClick: () => setDropDialog({ conn, database: schema.name, name: table.name }),
+      });
+    }
     return (
       <div
         key={`${schema.name}.${table.name}`}
@@ -604,7 +615,7 @@ export function Sidebar() {
                                               style={{ paddingLeft: INDENT.folder }}
                                               onClick={() => setGroupOpen((prev) => ({ ...prev, [tableKey]: !tablesOpen }))}
                                               onContextMenu={(event) => {
-                                                if (model !== 'vector' && model !== 'search') return;
+                                                if (!managesObjects(conn.engine)) return;
                                                 openMenu(event, [
                                                   {
                                                     label: model === 'search' ? '新建索引…' : '新建集合…',
@@ -728,6 +739,14 @@ export function Sidebar() {
       ) : null}
       {infoTable ? (
         <TableInfoDialog table={infoTable.table} database={infoTable.database} onClose={() => setInfoTable(null)} />
+      ) : null}
+      {dropDialog ? (
+        <DropObjectDialog
+          connection={dropDialog.conn}
+          database={dropDialog.database}
+          name={dropDialog.name}
+          onClose={() => setDropDialog(null)}
+        />
       ) : null}
       {objectDialog ? (
         <CreateObjectDialog

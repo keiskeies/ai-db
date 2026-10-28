@@ -49,6 +49,7 @@ export function toolSignature(call: ToolCall): string {
   else if (call.name === 'delete_documents' && typeof call.args.collection === 'string') target = call.args.collection;
   else if (call.name === 'import_documents' && typeof call.args.collection === 'string') target = call.args.collection;
   else if (call.name === 'create_collection' && typeof call.args.name === 'string') target = call.args.name;
+  else if (call.name === 'delete_collection' && typeof call.args.name === 'string') target = call.args.name;
   else if (call.name === 'run_cql' && typeof call.args.query === 'string') target = call.args.query.slice(0, 40);
   else if (call.name === 'run_aql' && typeof call.args.query === 'string') target = call.args.query.slice(0, 40);
   else if (call.args.index && typeof call.args.index === 'object') {
@@ -81,6 +82,8 @@ export function describeCall(call: ToolCall): { summary: string; sql?: string } 
       const query = aqlQueryFromArgs(a);
       return { summary: `AQL ${query.text.replace(/\s+/g, ' ').slice(0, 200)}`, sql: query.text };
     }
+    case 'delete_collection':
+      return { summary: `删除集合 ${String(a.name ?? '')}`, sql: JSON.stringify({ drop: a.name }) };
     case 'create_collection':
       return { summary: `创建集合 ${String(a.name ?? '')}`, sql: JSON.stringify({ name: a.name, dimension: a.dimension, distance: a.distance, fields: a.fields ?? [] }) };
     case 'upsert_document':

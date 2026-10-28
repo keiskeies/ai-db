@@ -228,6 +228,13 @@ export class QdrantDriver implements VectorQueryDriver, DocumentWriteDriver, Obj
     return { ids: points.map((point) => String(point.id)), upserted: points.length };
   }
 
+  async dropObject(name: string, opts: RunOptions = {}): Promise<{ name: string; dropped: boolean }> {
+    const target = name.trim();
+    if (!target) throw new DbError('集合名不能为空', { code: 'VECTOR_COLLECTION' });
+    await this.request(`/collections/${encodeURIComponent(target)}`, { method: 'DELETE' }, opts.timeoutMs ?? 30000);
+    return { name: target, dropped: true };
+  }
+
   async deleteDocuments(input: DeleteDocumentsInput, opts: RunOptions = {}): Promise<{ deleted: number }> {
     if (!input.collection) throw new DbError('collection 不能为空', { code: 'VECTOR_COLLECTION' });
     if (!input.ids.length) throw new DbError('ids 不能为空', { code: 'WRITE_IDS' });

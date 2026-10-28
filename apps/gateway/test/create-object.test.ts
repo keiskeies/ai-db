@@ -8,6 +8,7 @@ import { QdrantDriver } from '../src/drivers/qdrant';
 import { ElasticsearchDriver } from '../src/drivers/elasticsearch';
 import { WeaviateDriver } from '../src/drivers/weaviate';
 import { MilvusDriver } from '../src/drivers/milvus';
+import { MongoDriver } from '../src/drivers/mongodb';
 import { supportsObjectCreate } from '../src/drivers/types';
 import { createGateway } from '../src/server';
 
@@ -58,6 +59,66 @@ test('createObject builds engine-specific payloads', async () => {
     assert.equal(supportsObjectCreate(milvus), false, 'Milvus 需要完整字段定义，不走通用建集合通道');
   } finally {
     mocked.mock.restore();
+  }
+});
+
+test('dropObject issues engine-specific DELETE requests', async () => {
+  const seen: Array<{ url: string; method?: string }> = [];
+  const mocked = mock.method(globalThis, 'fetch', async (input: any, init?: any) => {
+    seen.push({ url: String(input), method: init?.method });
+    return json({ acknowledged: true, headers_present: {}, http_code: 200, data: {}, error: false });
+  });
+  try {
+    const qdrant = new QdrantDriver({ host: '127.0.0.1', port: 6335 });
+    assert.deepEqual(await qdrant.dropObject('docs'), { name: 'docs', dropped: true });
+    assert.equal(seen[0].method, 'DELETE');
+    assert.match(seen[0].url, /\/collections\/docs$/);
+
+    const es = new ElasticsearchDriver({ host: '127.0.0.1', port: 9203 });
+    assert.deepEqual(await es.dropObject('logs'), { name: 'logs', dropped: true });
+    assert.equal(seen[1].method, 'DELETE');
+    assert.match(seen[1].url, /\/logs$/);
+
+    const weaviate = new WeaviateDriver({ host: '127.0.0.1', port: 8081 });
+    assert.deepEqual(await weaviate.dropObject('article'), { name: 'Article', dropped: true });
+    assert.equal(seen[2].method, 'DELETE');
+    assert.match(seen[2].url, /\/v1\/schema\/Article$/);
+
+    await assert.rejects(() => qdrant.dropObject('  '), /不能为空/);
+  } finally {
+    mocked.mock.restore();
+  }
+});
+
+test('MongoDB create/drop collection uses the driver API', async () => {
+  const calls: string[] = [];
+  const client = {
+    db(name: string) {
+      return {
+        createCollection(collection: string) {
+          calls.push(`create ${name}.${collection}`);
+          return Promise.resolve();
+        },
+        collection(collection: string) {
+          return {
+            drop() {
+              calls.push(`drop ${name}.${collection}`);
+              return Promise.resolve(true);
+            },
+          };
+        },
+      };
+    },
+  };
+  const driver = new MongoDriver({ host: '127.0.0.1', port: 27018, database: 'appdb' });
+  const connect = mock.method(driver as any, 'connect', () => Promise.resolve(client as any));
+  try {
+    assert.equal(supportsObjectCreate(driver), true);
+    assert.deepEqual(await driver.createObject({ name: 'logs' }), { name: 'logs', kind: 'collection' });
+    assert.deepEqual(await driver.dropObject('logs'), { name: 'logs', dropped: true });
+    assert.deepEqual(calls, ['create appdb.logs', 'drop appdb.logs']);
+  } finally {
+    connect.mock.restore();
   }
 });
 
@@ -150,7 +211,24 @@ test('Qdrant collection is created over HTTP and appears in the schema', { skip:
   assert.equal(refused.status, 403);
   assert.equal(refused.body.error.code, 'READONLY');
 
-  await fetch(`${base}/collections/aidb_created`, { method: 'DELETE' }).catch(() => undefined);
+  const dropRefused = await env.api<{ error: { code: string } }>('/objects/drop', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: readonlyId, name: 'aidb_created' }),
+  });
+  assert.equal(dropRefused.status, 403);
+  assert.equal(dropRefused.body.error.code, 'READONLY');
+
+  const dropped = await env.api<{ result: { name: string; dropped: boolean } }>('/objects/drop', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId, name: 'aidb_created' }),
+  });
+  assert.equal(dropped.status, 200, JSON.stringify(dropped.body));
+  assert.equal(dropped.body.result.dropped, true);
+  const listed = (await fetch(`${base}/collections`).then((res) => res.json())) as any;
+  assert.ok(
+    !(listed?.collections ?? []).some((item: any) => item?.name === 'aidb_created'),
+    '删除后集合不再出现',
+  );
 });
 
 test('Elasticsearch index and Weaviate class are created over HTTP', { skip: !ES_PORT || !WEAVIATE_PORT }, async () => {
@@ -200,6 +278,18 @@ test('Elasticsearch index and Weaviate class are created over HTTP', { skip: !ES
   assert.equal(schema.class, 'AidbClass');
   assert.equal(schema.properties?.[0]?.name, 'title');
 
-  await fetch(`${esBase}/aidb_es_index`, { method: 'DELETE' }).catch(() => undefined);
-  await fetch(`${wvBase}/v1/schema/AidbClass`, { method: 'DELETE' }).catch(() => undefined);
+  const esDropped = await env.api<{ result: { dropped: boolean } }>('/objects/drop', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: esId, name: 'aidb_es_index' }),
+  });
+  assert.equal(esDropped.status, 200, JSON.stringify(esDropped.body));
+  assert.equal((await fetch(`${esBase}/aidb_es_index`).then((res) => res.status)), 404);
+
+  const wvDropped = await env.api<{ result: { name: string; dropped: boolean } }>('/objects/drop', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: wvId, name: 'aidbClass' }),
+  });
+  assert.equal(wvDropped.status, 200, JSON.stringify(wvDropped.body));
+  assert.equal(wvDropped.body.result.name, 'AidbClass', '删除时同样补上首字母大写');
+  assert.equal((await fetch(`${wvBase}/v1/schema/AidbClass`).then((res) => res.status)), 404);
 });

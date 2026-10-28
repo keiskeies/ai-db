@@ -177,7 +177,7 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: 'create_collection',
     description:
-      'Create a vector collection (Qdrant: needs dimension, optional distance Cosine/Euclid/Dot/Manhattan), an Elasticsearch/OpenSearch index (optional field list with mapping types), or a Weaviate class (property list). Milvus and SQL engines are refused: use their DDL paths.',
+      'Create a vector collection (Qdrant: needs dimension, optional distance Cosine/Euclid/Dot/Manhattan), an Elasticsearch/OpenSearch index (optional field list with mapping types), a Weaviate class (property list) or a MongoDB collection. Milvus and SQL engines are refused: use their DDL paths.',
     risk: 'ddl',
     inputSchema: {
       type: 'object',
@@ -202,6 +202,24 @@ export const TOOLS: ToolDefinition[] = [
       },
     },
     summarize: (a) => `创建集合 ${a.name ?? ''}`.trim(),
+  },
+  {
+    name: 'delete_collection',
+    description:
+      'Drop a whole vector collection (Qdrant), search index (Elasticsearch/OpenSearch), Weaviate class or MongoDB collection. This destroys every document inside it: require an explicit user confirmation and pass confirm identical to name.',
+    risk: 'destructive',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connectionId', 'name', 'confirm'],
+      properties: {
+        ...connectionProp,
+        ...databaseProp,
+        name: { type: 'string', description: 'Collection, index or class to drop' },
+        confirm: { type: 'string', description: 'Must equal name, proving the caller repeated it' },
+      },
+    },
+    summarize: (a) => `删除集合 ${a.name ?? ''}`.trim(),
   },
   {
     name: 'upsert_document',

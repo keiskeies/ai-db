@@ -10,6 +10,7 @@ import {
   engineMeta,
   engineUsesSchema,
   formatStructuredQuery,
+  managesObjects,
   parseRedisCommandLine,
   quoteIdent,
   quoteQualified,
@@ -368,10 +369,10 @@ export class ConnectionManager {
     if (conn.readonly) {
       throw new DbError('只读连接不允许创建集合/索引', { code: 'READONLY', status: 403, hint: '在连接设置中关闭只读后才可建对象' });
     }
-    if (!['vector', 'search'].includes(meta.model)) {
+    if (!managesObjects(conn.engine)) {
       throw new DbError(`${meta.label} 暂不支持通过本界面创建对象`, {
         code: 'UNSUPPORTED_ENGINE',
-        hint: 'Milvus 需要完整字段与索引定义，请使用 SDK 或 REST 建集合',
+        hint: 'Milvus 需要完整字段与索引定义，请使用 SDK 或 REST 建集合；关系型引擎请使用 DDL',
       });
     }
     if (!input.name?.trim()) throw new DbError('名称不能为空', { code: 'OBJECT_NAME' });
@@ -389,6 +390,34 @@ export class ConnectionManager {
       connectionId,
       database: opts.database ?? conn.database,
       sql: JSON.stringify({ createObject: result, dimension: input.dimension, distance: input.distance, fields: (input.fields ?? []).length }),
+      status: 'ok',
+      durationMs: Date.now() - started,
+    });
+    return result;
+  }
+
+  async dropObject(connectionId: string, name: string, opts: QueryOptions): Promise<{ name: string; dropped: boolean }> {
+    const conn = this.store.getConnection(connectionId);
+    if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+    const meta = engineMeta(conn.engine);
+    if (conn.readonly) {
+      throw new DbError('只读连接不允许删除集合/索引', { code: 'READONLY', status: 403, hint: '在连接设置中关闭只读后才可删除对象' });
+    }
+    if (!name.trim()) throw new DbError('名称不能为空', { code: 'OBJECT_NAME' });
+    if (!managesObjects(conn.engine)) {
+      throw new DbError(`${meta.label} 暂不支持删除集合/索引`, { code: 'UNSUPPORTED_ENGINE', hint: '请在对应控制台执行删除命令' });
+    }
+    const driver = await this.driverFor(connectionId);
+    if (!supportsObjectCreate(driver)) {
+      throw new DbError(`${meta.label} 暂不支持删除集合/索引`, { code: 'UNSUPPORTED_ENGINE', hint: '请在对应控制台执行删除命令' });
+    }
+    const started = Date.now();
+    const result = await driver.dropObject(name, { database: opts.database, timeoutMs: opts.timeoutMs });
+    this.invalidate(connectionId);
+    this.store.addHistory({
+      connectionId,
+      database: opts.database ?? conn.database,
+      sql: JSON.stringify({ dropObject: result.name }),
       status: 'ok',
       durationMs: Date.now() - started,
     });

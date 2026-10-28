@@ -229,6 +229,8 @@ export const api = {
     distance?: string;
     fields?: Array<{ name: string; type: string }>;
   }) => request<{ result: { name: string; kind: string } }>('/objects/create', { method: 'POST', body: JSON.stringify(body) }),
+  dropObject: (body: { connectionId: string; database?: string; name: string }) =>
+    request<{ result: { name: string; dropped: boolean } }>('/objects/drop', { method: 'POST', body: JSON.stringify(body) }),
   upsertDocuments: (body: { connectionId: string; database?: string; collection: string; documents: Record<string, unknown>[] }) =>
     request<{ result: { ids: string[]; upserted: number } }>('/documents/upsert', { method: 'POST', body: JSON.stringify(body) }),
   deleteDocuments: (body: { connectionId: string; database?: string; collection: string; ids: string[] }) =>

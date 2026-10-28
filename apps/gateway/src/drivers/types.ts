@@ -81,9 +81,10 @@ export interface CreateObjectInput {
   fields?: CreateObjectField[];
 }
 
-/** 向量/搜索驱动的对象创建入口（非 SQL DDL，专用对话框使用）。 */
+/** 向量/搜索/文档驱动的对象生命周期入口（非 SQL DDL，专用对话框与工具使用）。 */
 export interface ObjectCreateDriver extends Driver {
   createObject(input: CreateObjectInput, opts?: RunOptions): Promise<{ name: string; kind: string }>;
+  dropObject(name: string, opts?: RunOptions): Promise<{ name: string; dropped: boolean }>;
 }
 
 export function supportsObjectCreate(driver: Driver): driver is ObjectCreateDriver {

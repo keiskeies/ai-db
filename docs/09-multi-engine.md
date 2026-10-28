@@ -108,7 +108,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - 结果：id、score 与 payload/entity/properties 字段，`resultKind = 'vectors'`。
 - 文本检索：`text` 由网关调用 Embedding Provider 转成向量；未配置时可直接传 `vector`。
 - 写入：`upsert_document` 单条/批量、`import_documents` CSV 批量导入（id/vector 列可指定）、`delete_documents` 按 id 列表删除。
-- 建对象：对象树右键菜单「新建集合…／新建索引…」与 `create_collection` / `POST /objects/create` 支持 Qdrant 集合（维度+距离）、Elasticsearch/OpenSearch 索引（mapping 字段）、Weaviate class（属性）；Milvus 需要完整字段与索引定义，明确拒绝。不支持 SQL DDL 设计器与备份。
+- 建对象：对象树右键菜单「新建集合…／新建索引…」与 `create_collection` / `POST /objects/create` 支持 Qdrant 集合（维度+距离）、Elasticsearch/OpenSearch 索引（mapping 字段）、Weaviate class（属性）、MongoDB 集合；Milvus 需要完整字段与索引定义，明确拒绝。删对象走对象树右键「删除集合…／删除索引…」与 `delete_collection` / `POST /objects/drop`，同样覆盖 Qdrant / Elasticsearch / OpenSearch / Weaviate / MongoDB，需要手输名字确认，只读连接返回 403。不支持 SQL DDL 设计器与备份。
 - 导出：查询结果可导出 CSV/JSON/XML（INSERT 脚本仅 SQL 引擎）。
 
 ### Cassandra / ScyllaDB
@@ -159,7 +159,8 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 | `upsert_document` | 批量写入文档/向量点（MongoDB / Qdrant / Weaviate / Milvus / ES / OpenSearch） |
 | `delete_documents` | 按 id 列表删除向量点/搜索文档 |
 | `import_documents` | CSV 批量导入文档/向量点 |
-| `create_collection` | 创建向量集合 / 搜索索引 / Weaviate class |
+| `create_collection` | 创建向量集合 / 搜索索引 / Weaviate class / MongoDB 集合 |
+| `delete_collection` | 删除向量集合 / 搜索索引 / Weaviate class / MongoDB 集合（需 `confirm` 原样重复名字） |
 | `run_cql` | Cassandra / ScyllaDB CQL（支持 `?` 参数） |
 | `vector_search` | pgvector / Qdrant / Milvus / Weaviate 向量检索（text 走 Embedding） |
 | `search_index` | Elasticsearch / OpenSearch `_search` JSON DSL |
@@ -212,7 +213,7 @@ AIDB_TEST_MONGO_PORT=27018 AIDB_TEST_REDIS_PORT=6380 AIDB_TEST_NEO4J_PORT=7688 A
 NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSWORD=SYSDBA npm --workspace @aidb/gateway run test
 ```
 
-覆盖：驱动工厂协议别名路由、MongoDB、Redis（含 Redis Stack 模块与 RediSearch）、Neo4j/Memgraph/FalkorDB、ArangoDB、Cassandra/ScyllaDB、达梦、DuckDB、TDengine、InfluxDB、TimescaleDB 超表标注（均含本地 stub 或联机协议测试）、Qdrant/Milvus/Weaviate、pgvector + Embedding、Elasticsearch/OpenSearch，HTTP `/schema`、`/query`、`/vector/search` 管线、非 SQL 连接的功能禁用。
+覆盖：驱动工厂协议别名路由、MongoDB、Redis（含 Redis Stack 模块与 RediSearch）、Neo4j/Memgraph/FalkorDB、ArangoDB、Cassandra/ScyllaDB、达梦、DuckDB、TDengine、InfluxDB、TimescaleDB 超表标注（均含本地 stub 或联机协议测试）、Qdrant/Milvus/Weaviate、pgvector + Embedding、Elasticsearch/OpenSearch，HTTP `/schema`、`/query`、`/vector/search` 管线、对象创建与删除（Qdrant / Elasticsearch / OpenSearch / Weaviate / MongoDB）、非 SQL 连接的功能禁用。
 
 ## 9. 已知限制
 

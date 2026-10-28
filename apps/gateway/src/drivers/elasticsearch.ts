@@ -210,6 +210,13 @@ export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDri
     return { ids: items.map((item: any) => String(item?.index?._id ?? '')), upserted: items.length };
   }
 
+  async dropObject(name: string, opts: RunOptions = {}): Promise<{ name: string; dropped: boolean }> {
+    const target = name.trim();
+    if (!target) throw new DbError('索引名不能为空', { code: 'SEARCH_INDEX' });
+    await this.request(`/${encodeURIComponent(target)}`, { method: 'DELETE' }, opts.timeoutMs ?? 30000);
+    return { name: target, dropped: true };
+  }
+
   async deleteDocuments(input: DeleteDocumentsInput, opts: RunOptions = {}): Promise<{ deleted: number }> {
     if (!input.collection) throw new DbError('index 不能为空', { code: 'SEARCH_INDEX' });
     if (!input.ids.length) throw new DbError('ids 不能为空', { code: 'WRITE_IDS' });

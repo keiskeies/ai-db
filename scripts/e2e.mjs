@@ -82,7 +82,7 @@ const api = async (path, init = {}) => {
 const boot = (await api('/bootstrap')).body;
 const demo = boot.connections.find((c) => c.engine === 'sqlite');
 check('bridge bootstrap', Boolean(demo), demo?.name);
-check('35 agent tools', boot.tools.length === 35, String(boot.tools.length));
+check('36 agent tools', boot.tools.length === 36, String(boot.tools.length));
 
 const MONGO_PORT = process.env.AIDB_TEST_MONGO_PORT ? Number(process.env.AIDB_TEST_MONGO_PORT) : undefined;
 const REDIS_PORT = process.env.AIDB_TEST_REDIS_PORT ? Number(process.env.AIDB_TEST_REDIS_PORT) : undefined;
@@ -575,6 +575,14 @@ if (QDRANT_PORT) {
   await page.waitForSelector('[title="向量集合 aidb_uicreated"]', { timeout: 20000 });
   await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 10000 });
   check('Collection created from the tree menu closes the dialog', true);
+
+  await page.locator('[title="向量集合 aidb_uicreated"]').click({ button: 'right' });
+  await page.click('text=删除集合…');
+  await page.waitForSelector('[data-testid="drop-object-confirm"]', { timeout: 10000 });
+  await page.fill('[data-testid="drop-object-confirm"]', 'aidb_uicreated');
+  await page.click('[data-testid="drop-object-submit"]');
+  await page.waitForSelector('[title="向量集合 aidb_uicreated"]', { state: 'detached', timeout: 20000 });
+  check('Collection dropped from the tree menu disappears', true);
 }
 
 if (TDENGINE_PORT) {

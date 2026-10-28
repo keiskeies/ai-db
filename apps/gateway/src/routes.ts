@@ -569,6 +569,46 @@ export function createApiRouter(deps: ApiDeps): Router {
     }),
   );
 
+  router.post(
+    '/objects/drop',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const connectionId = str(body.connectionId);
+      const name = str(body.name);
+      if (!connectionId || !name) {
+        throw Object.assign(new Error('connectionId 与 name 必填'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      const database = str(body.database);
+      try {
+        const result = await manager.dropObject(connectionId, name, { database, actor: 'user' });
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'objects.drop',
+          sql: JSON.stringify({ name }),
+          risk: 'destructive',
+          approval: 'manual',
+          status: 'ok',
+        });
+        res.json({ result });
+      } catch (err: any) {
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'objects.drop',
+          sql: JSON.stringify({ name }),
+          risk: 'destructive',
+          approval: 'manual',
+          status: 'error',
+          meta: { error: err.message },
+        });
+        throw err;
+      }
+    }),
+  );
+
   router.get(
     '/redis/key',
     ah(async (req, res) => {

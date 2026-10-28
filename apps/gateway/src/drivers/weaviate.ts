@@ -219,6 +219,14 @@ export class WeaviateDriver implements VectorQueryDriver, DocumentWriteDriver, O
     return { ids: created.map((item: any) => String(item?.id ?? '')), upserted: created.length || objects.length };
   }
 
+  async dropObject(name: string, opts: RunOptions = {}): Promise<{ name: string; dropped: boolean }> {
+    const raw = name.trim();
+    if (!raw) throw new DbError('class 名不能为空', { code: 'VECTOR_COLLECTION' });
+    const target = raw.charAt(0).toUpperCase() + raw.slice(1);
+    await this.request(`/v1/schema/${encodeURIComponent(target)}`, { method: 'DELETE' }, opts.timeoutMs ?? 30000);
+    return { name: target, dropped: true };
+  }
+
   async deleteDocuments(input: DeleteDocumentsInput, opts: RunOptions = {}): Promise<{ deleted: number }> {
     if (!input.collection) throw new DbError('class 不能为空', { code: 'VECTOR_COLLECTION' });
     if (!input.ids.length) throw new DbError('ids 不能为空', { code: 'WRITE_IDS' });

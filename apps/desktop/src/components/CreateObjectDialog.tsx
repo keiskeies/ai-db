@@ -21,6 +21,7 @@ export function CreateObjectDialog({
   const meta = engineMeta(connection.engine);
   const isVector = meta.model === 'vector';
   const isSearch = meta.model === 'search';
+  const isDocument = meta.model === 'document';
   const notify = useApp((s) => s.notify);
   const loadSchema = useApp((s) => s.loadSchema);
   const [name, setName] = useState('');
@@ -50,7 +51,7 @@ export function CreateObjectDialog({
         name: name.trim(),
         dimension: isVector ? Number(dimension) : undefined,
         distance: isVector ? distance : undefined,
-        fields: isVector ? [] : fields.filter((field) => field.name.trim()),
+        fields: isVector || isDocument ? [] : fields.filter((field) => field.name.trim()),
       });
       notify('success', result.kind === 'index' ? '索引已创建' : '集合已创建', result.name);
       onClose();
@@ -112,7 +113,7 @@ export function CreateObjectDialog({
           </>
         ) : null}
       </div>
-      {!isVector ? (
+      {!isVector && !isDocument ? (
         <>
           <div className="muted" style={{ fontSize: 11, margin: '12px 0 6px' }}>
             字段（{connection.engine === 'weaviate' ? 'Weaviate 属性' : 'ES mapping'}）
@@ -160,9 +161,6 @@ export function CreateObjectDialog({
             <Plus size={12} /> 添加字段
           </button>
         </>
-      ) : null}
-      {connection.engine === 'milvus' ? (
-        <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>Milvus 需要完整字段与索引定义，请改用 SDK 或 REST 建集合。</div>
       ) : null}
       {error ? <div style={{ color: 'var(--danger)', fontSize: 12, marginTop: 10 }} data-testid="create-object-error">{error}</div> : null}
     </Modal>

@@ -76,6 +76,7 @@ const DB_TOOLS = new Set([
   'delete_documents',
   'import_documents',
   'create_collection',
+  'delete_collection',
   'explain_sql',
   'sample_rows',
   'profile_column',
@@ -482,6 +483,21 @@ export class ToolExecutor {
           { database: this.databaseOf(call, conn), timeoutMs: settings.queryTimeoutMs, actor: 'agent' },
         );
         return ok(started, `已创建${result.kind === 'index' ? '索引' : '集合'} ${result.name}`, result);
+      }
+
+      case 'delete_collection': {
+        const conn = this.requireConnection(call, ctx);
+        const name = String(a.name ?? '').trim();
+        if (!name) throw new DbError('name 不能为空', { code: 'OBJECT_NAME' });
+        if (String(a.confirm ?? '') !== name) {
+          throw new DbError('删除集合需要 confirm 与 name 完全一致', { code: 'CONFIRM_REQUIRED', hint: '先向用户确认影响范围，再带上 confirm 重试' });
+        }
+        const result = await this.manager.dropObject(conn.id, name, {
+          database: this.databaseOf(call, conn),
+          timeoutMs: this.getSettings().queryTimeoutMs,
+          actor: 'agent',
+        });
+        return ok(started, `已删除集合 ${result.name}`, result);
       }
 
       case 'upsert_document': {

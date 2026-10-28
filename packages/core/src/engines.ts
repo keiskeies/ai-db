@@ -13,6 +13,8 @@ export interface EngineCapabilities {
   backup: 'sql' | 'json' | 'none';
   gridEdit: boolean;
   users: boolean;
+  /** 可在对象树里创建并删除集合/索引；只有实现了建删对象的驱动才置真。 */
+  objectLifecycle?: boolean;
 }
 
 export interface EngineMeta {
@@ -226,6 +228,7 @@ export const ENGINES: EngineMeta[] = [
       backup: 'none',
       gridEdit: false,
       users: false,
+      objectLifecycle: true,
     },
     defaultPort: 27017,
     fileBased: false,
@@ -409,6 +412,7 @@ export const ENGINES: EngineMeta[] = [
       backup: 'none',
       gridEdit: false,
       users: false,
+      objectLifecycle: true,
     },
     defaultPort: 6333,
     defaultDatabase: 'default',
@@ -463,6 +467,7 @@ export const ENGINES: EngineMeta[] = [
       backup: 'none',
       gridEdit: false,
       users: false,
+      objectLifecycle: true,
     },
     defaultPort: 8080,
     defaultDatabase: 'default',
@@ -616,6 +621,7 @@ export const ENGINES: EngineMeta[] = [
       backup: 'none',
       gridEdit: false,
       users: false,
+      objectLifecycle: true,
     },
     defaultPort: 9200,
     defaultUsername: 'elastic',
@@ -644,6 +650,7 @@ export const ENGINES: EngineMeta[] = [
       backup: 'none',
       gridEdit: false,
       users: false,
+      objectLifecycle: true,
     },
     defaultPort: 9200,
     defaultUsername: 'admin',
@@ -918,6 +925,11 @@ export function engineMeta(engine: Engine): EngineMeta {
 
 export function engineDefaultPort(engine: Engine): number | undefined {
   return engineMeta(engine).defaultPort;
+}
+
+/** 该引擎能否在对象树中创建并删除集合/索引（驱动实现了对象生命周期）。 */
+export function managesObjects(engine: Engine): boolean {
+  return engineMeta(engine).capabilities.objectLifecycle === true;
 }
 
 export function isEngine(value: unknown): value is Engine {
