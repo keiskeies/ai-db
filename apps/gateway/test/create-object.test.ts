@@ -9,12 +9,15 @@ import { ElasticsearchDriver } from '../src/drivers/elasticsearch';
 import { WeaviateDriver } from '../src/drivers/weaviate';
 import { MilvusDriver } from '../src/drivers/milvus';
 import { MongoDriver } from '../src/drivers/mongodb';
+import { ArangoDriver } from '../src/drivers/arangodb';
 import { supportsObjectCreate } from '../src/drivers/types';
 import { createGateway } from '../src/server';
 
 const QDRANT_PORT = process.env.AIDB_TEST_QDRANT_PORT ? Number(process.env.AIDB_TEST_QDRANT_PORT) : undefined;
 const ES_PORT = process.env.AIDB_TEST_ELASTICSEARCH_PORT ? Number(process.env.AIDB_TEST_ELASTICSEARCH_PORT) : undefined;
 const WEAVIATE_PORT = process.env.AIDB_TEST_WEAVIATE_PORT ? Number(process.env.AIDB_TEST_WEAVIATE_PORT) : undefined;
+const ARANGO_PORT = process.env.AIDB_TEST_ARANGO_PORT ? Number(process.env.AIDB_TEST_ARANGO_PORT) : undefined;
+const ARANGO_PASSWORD = process.env.AIDB_TEST_ARANGO_PASSWORD ?? 'testpass';
 
 function json(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } });
@@ -85,6 +88,32 @@ test('dropObject issues engine-specific DELETE requests', async () => {
     assert.match(seen[2].url, /\/v1\/schema\/Article$/);
 
     await assert.rejects(() => qdrant.dropObject('  '), /不能为空/);
+  } finally {
+    mocked.mock.restore();
+  }
+});
+
+test('ArangoDB builds document or edge collections and refuses system names', async () => {
+  const seen: Array<{ url: string; method?: string; body?: string }> = [];
+  const mocked = mock.method(globalThis, 'fetch', async (input: any, init?: any) => {
+    seen.push({ url: String(input), method: init?.method, body: init?.body ? String(init.body) : undefined });
+    return json({ name: 'ignored' });
+  });
+  try {
+    const arango = new ArangoDriver({ host: '127.0.0.1', port: 8530, database: 'aidb' });
+    assert.equal(supportsObjectCreate(arango), true);
+    assert.deepEqual(await arango.createObject({ name: 'people' }), { name: 'people', kind: 'collection' });
+    assert.match(seen[0].url, /\/_db\/aidb\/_api\/collection$/);
+    assert.deepEqual(JSON.parse(seen[0].body ?? '{}'), { name: 'people', type: 2 });
+
+    assert.deepEqual(await arango.createObject({ name: 'knows', edge: true }), { name: 'knows', kind: 'edge_label' });
+    assert.deepEqual(JSON.parse(seen[1].body ?? '{}'), { name: 'knows', type: 3 }, '边集合靠 body 里的 type=3');
+
+    await assert.rejects(() => arango.createObject({ name: '_private' }), /系统集合/);
+    assert.deepEqual(await arango.dropObject('people'), { name: 'people', dropped: true });
+    assert.equal(seen[2].method, 'DELETE');
+    assert.match(seen[2].url, /\/_api\/collection\/people$/);
+    await assert.rejects(() => arango.dropObject('_graphs'), /系统集合/);
   } finally {
     mocked.mock.restore();
   }
@@ -292,4 +321,66 @@ test('Elasticsearch index and Weaviate class are created over HTTP', { skip: !ES
   assert.equal(wvDropped.status, 200, JSON.stringify(wvDropped.body));
   assert.equal(wvDropped.body.result.name, 'AidbClass', '删除时同样补上首字母大写');
   assert.equal((await fetch(`${wvBase}/v1/schema/AidbClass`).then((res) => res.status)), 404);
+});
+
+test('ArangoDB 文档集合与边集合能建能删', { skip: !ARANGO_PORT }, async () => {
+  const base = `http://127.0.0.1:${ARANGO_PORT}`;
+  const auth = { authorization: `Basic ${Buffer.from(`root:${ARANGO_PASSWORD}`, 'utf8').toString('base64')}` };
+  for (const name of ['aidb_docs', 'aidb_edges']) {
+    await fetch(`${base}/_db/_system/_api/collection/${name}`, { method: 'DELETE', headers: auth }).catch(() => undefined);
+  }
+
+  const env = await harness();
+  after(env.close);
+  const connectionId = await env.createConnection({
+    name: 'arango-create-drop',
+    engine: 'arangodb',
+    host: '127.0.0.1',
+    port: ARANGO_PORT,
+    database: '_system',
+    username: 'root',
+    password: ARANGO_PASSWORD,
+    groupName: 'live',
+    color: 'cyan',
+    environment: 'dev',
+    readonly: false,
+  });
+
+  const docs = await env.api<{ result: { kind: string } }>('/objects/create', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId, name: 'aidb_docs' }),
+  });
+  assert.equal(docs.status, 200, JSON.stringify(docs.body));
+  assert.equal(docs.body.result.kind, 'collection');
+
+  const edges = await env.api<{ result: { kind: string } }>('/objects/create', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId, name: 'aidb_edges', edge: true }),
+  });
+  assert.equal(edges.status, 200, JSON.stringify(edges.body));
+  assert.equal(edges.body.result.kind, 'edge_label');
+  const edgeMeta = (await fetch(`${base}/_db/_system/_api/collection/aidb_edges`, { headers: auth }).then((res) => res.json())) as any;
+  assert.equal(edgeMeta.type, 3, '边集合真的是 edge collection');
+
+  const schemas = await env.api<{ schemas: Array<{ tables: Array<{ name: string; kind?: string }> }> }>(
+    `/connections/${connectionId}/schema?refresh=1`,
+  );
+  const tables = schemas.body.schemas[0].tables;
+  assert.ok(tables.some((table) => table.name === 'aidb_docs'), '对象树包含新建集合');
+  assert.ok(tables.some((table) => table.name === 'aidb_edges' && table.kind === 'edge_label'), '对象树标出边集合');
+
+  const refused = await env.api<{ error: { code: string } }>('/objects/drop', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId, name: '_graphs' }),
+  });
+  assert.ok(refused.status >= 400, '系统集合不允许删除');
+
+  const dropped = await env.api<{ result: { dropped: boolean } }>('/objects/drop', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId, name: 'aidb_docs' }),
+  });
+  assert.equal(dropped.status, 200, JSON.stringify(dropped.body));
+  assert.equal((await fetch(`${base}/_db/_system/_api/collection/aidb_docs`, { headers: auth }).then((res) => res.status)), 404);
+
+  await env.api('/objects/drop', { method: 'POST', body: JSON.stringify({ connectionId, name: 'aidb_edges' }) });
 });

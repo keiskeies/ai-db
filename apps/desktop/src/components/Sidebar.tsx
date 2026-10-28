@@ -241,10 +241,10 @@ export function Sidebar() {
         onClick: () => void navigator.clipboard.writeText(table.name).then(() => notify('success', t('copied'))),
       },
     ];
-    if (managesObjects(conn.engine) && !isRedisIndex && !isEdge) {
+    if (managesObjects(conn.engine) && !isRedisIndex) {
       items.push({ label: '', icon: null, sep: true, onClick: () => undefined });
       items.push({
-        label: meta.model === 'search' ? '删除索引…' : '删除集合…',
+        label: meta.model === 'search' ? '删除索引…' : isEdge ? '删除边集合…' : '删除集合…',
         icon: <Trash2 size={13} />,
         danger: true,
         onClick: () => setDropDialog({ conn, database: schema.name, name: table.name }),
@@ -612,6 +612,7 @@ export function Sidebar() {
                                           <>
                                             <div
                                               className="tree-node folder-node"
+                                              data-engine={conn.engine}
                                               style={{ paddingLeft: INDENT.folder }}
                                               onClick={() => setGroupOpen((prev) => ({ ...prev, [tableKey]: !tablesOpen }))}
                                               onContextMenu={(event) => {

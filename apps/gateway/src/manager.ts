@@ -360,7 +360,7 @@ export class ConnectionManager {
   /** 向量/搜索引擎的对象创建（非 SQL DDL）：Qdrant 集合、ES/OpenSearch 索引、Weaviate class。 */
   async createObject(
     connectionId: string,
-    input: { name: string; dimension?: number; distance?: string; fields?: Array<{ name: string; type: string }> },
+    input: { name: string; dimension?: number; distance?: string; fields?: Array<{ name: string; type: string }>; edge?: boolean },
     opts: QueryOptions,
   ): Promise<{ name: string; kind: string }> {
     const conn = this.store.getConnection(connectionId);
@@ -382,7 +382,7 @@ export class ConnectionManager {
     }
     const started = Date.now();
     const result = await driver.createObject(
-      { name: input.name.trim(), dimension: input.dimension, distance: input.distance, fields: input.fields ?? [] },
+      { name: input.name.trim(), dimension: input.dimension, distance: input.distance, fields: input.fields ?? [], edge: input.edge },
       { database: opts.database, timeoutMs: opts.timeoutMs },
     );
     this.invalidate(connectionId);

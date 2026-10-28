@@ -479,10 +479,12 @@ export class ToolExecutor {
             dimension: a.dimension === undefined ? undefined : Number(a.dimension),
             distance: typeof a.distance === 'string' ? a.distance : undefined,
             fields,
+            edge: a.edge === true,
           },
           { database: this.databaseOf(call, conn), timeoutMs: settings.queryTimeoutMs, actor: 'agent' },
         );
-        return ok(started, `已创建${result.kind === 'index' ? '索引' : '集合'} ${result.name}`, result);
+        const kindLabel = result.kind === 'index' ? '索引' : result.kind === 'edge_label' ? '边集合' : '集合';
+        return ok(started, `已创建${kindLabel} ${result.name}`, result);
       }
 
       case 'delete_collection': {

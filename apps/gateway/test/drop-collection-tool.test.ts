@@ -46,7 +46,7 @@ function connect(partial: Record<string, unknown>): ConnectionConfig {
 }
 
 const qdrant = connect({ name: 'qdrant-drop-tool', engine: 'qdrant', host: '127.0.0.1', port: 6335, database: 'default' });
-const arango = connect({ name: 'arango-drop-tool', engine: 'arangodb', host: '127.0.0.1', port: 8530, database: '_system' });
+const kv = connect({ name: 'redis-drop-tool', engine: 'redis', host: '127.0.0.1', port: 6399, database: '0' });
 
 function drop(conn: ConnectionConfig, args: Record<string, unknown>) {
   return executor.execute(
@@ -91,7 +91,7 @@ test('delete_collection 走驱动 DELETE 并写入审计', async () => {
 });
 
 test('不支持对象生命周期的引擎直接拒绝', async () => {
-  const result = await drop(arango, { name: 'things', confirm: 'things' });
+  const result = await drop(kv, { name: 'anything', confirm: 'anything' });
   assert.equal(result.ok, false);
   assert.equal(result.error?.code, 'UNSUPPORTED_ENGINE');
 });

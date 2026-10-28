@@ -22,11 +22,14 @@ export function CreateObjectDialog({
   const isVector = meta.model === 'vector';
   const isSearch = meta.model === 'search';
   const isDocument = meta.model === 'document';
+  const isAql = meta.languages.includes('aql');
+  const plainFields = !isVector && !isDocument && !isAql;
   const notify = useApp((s) => s.notify);
   const loadSchema = useApp((s) => s.loadSchema);
   const [name, setName] = useState('');
   const [dimension, setDimension] = useState('384');
   const [distance, setDistance] = useState('Cosine');
+  const [edge, setEdge] = useState(false);
   const [fields, setFields] = useState<Array<{ name: string; type: string }>>(
     isSearch ? [{ name: 'message', type: 'text' }] : [{ name: 'title', type: 'text' }],
   );
@@ -51,7 +54,8 @@ export function CreateObjectDialog({
         name: name.trim(),
         dimension: isVector ? Number(dimension) : undefined,
         distance: isVector ? distance : undefined,
-        fields: isVector || isDocument ? [] : fields.filter((field) => field.name.trim()),
+        edge: isAql ? edge : undefined,
+        fields: plainFields ? fields.filter((field) => field.name.trim()) : [],
       });
       notify('success', result.kind === 'index' ? '索引已创建' : '集合已创建', result.name);
       onClose();
@@ -112,8 +116,22 @@ export function CreateObjectDialog({
             ) : null}
           </>
         ) : null}
+        {isAql ? (
+          <>
+            <label>集合类型</label>
+            <select
+              className="select"
+              value={edge ? 'edge' : 'document'}
+              onChange={(event) => setEdge(event.target.value === 'edge')}
+              data-testid="create-object-kind"
+            >
+              <option value="document">文档集合</option>
+              <option value="edge">边集合</option>
+            </select>
+          </>
+        ) : null}
       </div>
-      {!isVector && !isDocument ? (
+      {plainFields ? (
         <>
           <div className="muted" style={{ fontSize: 11, margin: '12px 0 6px' }}>
             字段（{connection.engine === 'weaviate' ? 'Weaviate 属性' : 'ES mapping'}）

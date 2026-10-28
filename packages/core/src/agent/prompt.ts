@@ -182,7 +182,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
             : language === 'cql'
               ? '- Use run_cql for Cassandra/ScyllaDB. Use ? placeholders with params; CQL has no JOINs, so query tables separately. Bound SELECTs and include partition keys when possible.'
               : language === 'aql'
-                ? '- Use run_aql for ArangoDB. Use @bindVar with params and @@collection for collection names; always bound FOR ... LIMIT. INSERT/UPDATE/REPLACE/UPSERT write data and REMOVE without FILTER is rejected on read-only connections. Traversal results that contain edges render as a graph.'
+                ? '- Use run_aql for ArangoDB. Use @bindVar with params and @@collection for collection names; always bound FOR ... LIMIT. INSERT/UPDATE/REPLACE/UPSERT write data and REMOVE without FILTER is rejected on read-only connections. Traversal results that contain edges render as a graph. Use create_collection (edge=true builds an edge collection) to add a collection and delete_collection (confirm must repeat the name) to drop one.'
                 : '- Use run_redis for one Redis command at a time. Prefer SCAN over KEYS; do not use EVAL, CONFIG, FLUSHALL or SHUTDOWN. Values are returned as rows; explain the key type when relevant.';
   const sqlOnlyRules = isSql
     ? `- For audits or data-quality questions, call audit_database / check_data_quality first. Report concrete counts (rows checked, null ratios, duplicates) and provide exact, executable repair SQL — not generic advice.

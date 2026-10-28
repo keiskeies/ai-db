@@ -21,7 +21,7 @@ export function DropObjectDialog({
   const notify = useApp((s) => s.notify);
   const loadSchema = useApp((s) => s.loadSchema);
   const meta = engineMeta(connection.engine);
-  const label = meta.model === 'search' ? '索引' : meta.model === 'document' ? '集合' : '集合 / class';
+  const label = meta.model === 'search' ? '索引' : meta.model === 'vector' ? '集合 / class' : '集合';
   const [typed, setTyped] = useState('');
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);

@@ -79,6 +79,8 @@ export interface CreateObjectInput {
   dimension?: number;
   distance?: string;
   fields?: CreateObjectField[];
+  /** ArangoDB：建边集合而不是文档集合。 */
+  edge?: boolean;
 }
 
 /** 向量/搜索/文档驱动的对象生命周期入口（非 SQL DDL，专用对话框与工具使用）。 */

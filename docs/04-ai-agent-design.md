@@ -103,8 +103,8 @@ for (step = 0; step < maxSteps; step++) {
 | 32 | `upsert_document` | write | 写入 MongoDB 文档、Qdrant/Weaviate/Milvus 向量点或 Elasticsearch/OpenSearch 文档（`document` 单条或 `documents` 批量，ID 写在文档里） | `{ connectionId, database?, collection, document?, documents? }` |
 | 33 | `delete_documents` | destructive | 按明确 id 列表删除 MongoDB 文档 / 向量点 / 搜索文档，删除前必须先用查询确认范围 | `{ connectionId, database?, collection, ids[] }` |
 | 34 | `import_documents` | write | CSV 批量导入 MongoDB 文档 / 向量点 / 搜索文档（≤5000 行，列名即字段，id/vector 列单独指定） | `{ connectionId, database?, collection, csv?/path?, hasHeader?, delimiter?, idColumn?, vectorColumn? }` |
-| 35 | `create_collection` | ddl | 创建向量集合（Qdrant 需维度/距离）或搜索索引 / Weaviate class（字段列表）/ MongoDB 集合；Milvus 明确拒绝 | `{ connectionId, database?, name, dimension?, distance?, fields?[] }` |
-| 36 | `delete_collection` | destructive | 删除 Qdrant 集合 / ES·OpenSearch 索引 / Weaviate class / MongoDB 集合；`confirm` 必须与 `name` 完全一致 | `{ connectionId, database?, name, confirm }` |
+| 35 | `create_collection` | ddl | 创建向量集合（Qdrant 需维度/距离）、搜索索引 / Weaviate class（字段列表）、MongoDB 集合或 ArangoDB 文档/边集合（`edge=true`）；Milvus 明确拒绝 | `{ connectionId, database?, name, dimension?, distance?, fields?[], edge? }` |
+| 36 | `delete_collection` | destructive | 删除 Qdrant 集合 / ES·OpenSearch 索引 / Weaviate class / MongoDB 集合 / ArangoDB 集合；`confirm` 必须与 `name` 完全一致 | `{ connectionId, database?, name, confirm }` |
 
 \* `run_sql`、`run_mql`、`run_redis`、`run_cypher`、`run_cql`、`run_aql` 风险按各自语言的安全分类动态提升；`dryRun=true` 时 DDL 只返回将执行的 SQL（用于预览）。`run_mql` / `run_redis` / `run_cypher` / `run_aql` / `vector_search` 仅用于对应模型的连接，SQL 专属工具（DDL、审计、图表等）在非 SQL 连接上明确返回不支持。
 \** 导出写文件为 `write`，不触碰数据库。

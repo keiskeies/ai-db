@@ -1,5 +1,12 @@
 import type { ColumnInfo, Engine, GraphData, QueryResult, StructuredQuery, TableInfo } from '@aidb/core';
-import type { Driver, DriverTestResult, RunOptions, StructuredQueryDriver } from './types';
+import type {
+  CreateObjectInput,
+  Driver,
+  DriverTestResult,
+  ObjectCreateDriver,
+  RunOptions,
+  StructuredQueryDriver,
+} from './types';
 import { DbError } from './types';
 
 export interface ArangoOptions {
@@ -120,7 +127,7 @@ function screenColumns(docs: unknown[]): { columns: ColumnInfo[]; keys: string[]
   return { columns, keys };
 }
 
-export class ArangoDriver implements Driver, StructuredQueryDriver {
+export class ArangoDriver implements Driver, StructuredQueryDriver, ObjectCreateDriver {
   engine: Engine = 'arangodb';
 
   constructor(private opts: ArangoOptions) {}
@@ -237,6 +244,30 @@ export class ArangoDriver implements Driver, StructuredQueryDriver {
       result.push(table);
     }
     return result;
+  }
+
+  async createObject(input: CreateObjectInput, opts: RunOptions = {}): Promise<{ name: string; kind: string }> {
+    const target = input.name.trim();
+    if (!target) throw new DbError('集合名不能为空', { code: 'AQL_COLLECTION' });
+    if (target.startsWith('_')) throw new DbError('不能创建以 _ 开头的系统集合', { code: 'AQL_COLLECTION' });
+    await this.send(`${this.dbPath(opts.database)}/_api/collection`, {
+      method: 'POST',
+      // type 只能写在请求体里：ArangoDB 会忽略同名查询参数
+      body: { name: target, type: input.edge ? 3 : 2 },
+      timeoutMs: opts.timeoutMs,
+    });
+    return { name: target, kind: input.edge ? 'edge_label' : 'collection' };
+  }
+
+  async dropObject(name: string, opts: RunOptions = {}): Promise<{ name: string; dropped: boolean }> {
+    const target = name.trim();
+    if (!target) throw new DbError('集合名不能为空', { code: 'AQL_COLLECTION' });
+    if (target.startsWith('_')) throw new DbError('系统集合不允许删除', { code: 'AQL_COLLECTION' });
+    await this.send(`${this.dbPath(opts.database)}/_api/collection/${encodeURIComponent(target)}`, {
+      method: 'DELETE',
+      timeoutMs: opts.timeoutMs,
+    });
+    return { name: target, dropped: true };
   }
 
   async executeQuery(query: StructuredQuery, opts: RunOptions = {}): Promise<QueryResult> {

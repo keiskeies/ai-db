@@ -235,7 +235,7 @@ if (ARANGO_PORT) {
     return { status: res.status, body: text ? JSON.parse(text) : {} };
   };
   await arango('/_db/_system/_api/database', { method: 'POST', body: JSON.stringify({ name: ARANGO_DB }) });
-  for (const name of ['knows', 'person']) {
+  for (const name of ['knows', 'person', 'aidb_ui_col']) {
     await arango(`/_db/${ARANGO_DB}/_api/collection/${name}`, { method: 'DELETE' });
   }
   await arango(`/_db/${ARANGO_DB}/_api/collection`, { method: 'POST', body: JSON.stringify({ name: 'person' }) });
@@ -678,6 +678,23 @@ if (ARANGO_PORT) {
   }
   const exportedCsv = exportedFile ? await readFile(join(exportDir, exportedFile), 'utf8') : '';
   check('ArangoDB export writes CSV from the query window', exportedFile.endsWith('.csv') && /person\/ada/.test(exportedCsv), exportedFile);
+
+  await page.locator('.tree-node.folder-node[data-engine="arangodb"]').last().click({ button: 'right' });
+  await page.click('text=新建集合…');
+  await page.waitForSelector('[data-testid="create-object-kind"]', { timeout: 10000 });
+  await page.fill('[data-testid="create-object-name"]', 'aidb_ui_col');
+  await page.selectOption('[data-testid="create-object-kind"]', 'edge');
+  await page.click('[data-testid="create-object-submit"]');
+  await page.waitForSelector('[title="边集合 aidb_ui_col"]', { timeout: 20000 });
+  check('ArangoDB edge collection created from the tree menu', true);
+
+  await page.locator('[title="边集合 aidb_ui_col"]').click({ button: 'right' });
+  await page.click('text=删除边集合…');
+  await page.waitForSelector('[data-testid="drop-object-confirm"]', { timeout: 10000 });
+  await page.fill('[data-testid="drop-object-confirm"]', 'aidb_ui_col');
+  await page.click('[data-testid="drop-object-submit"]');
+  await page.waitForSelector('[title="边集合 aidb_ui_col"]', { state: 'detached', timeout: 20000 });
+  check('ArangoDB collection dropped from the tree menu', true);
 }
 
 if (INFLUXDB_PORT) {

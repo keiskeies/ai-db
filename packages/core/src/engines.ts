@@ -357,6 +357,7 @@ export const ENGINES: EngineMeta[] = [
     languages: ['aql'],
     capabilities: {
       objects: ['collection', 'edge_label'],
+      objectLifecycle: true,
       ddl: false,
       explain: false,
       multiStatement: false,

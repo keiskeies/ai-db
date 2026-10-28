@@ -644,6 +644,7 @@ export function createApiRouter(deps: ApiDeps): Router {
             dimension: body.dimension === undefined || body.dimension === null || body.dimension === '' ? undefined : Number(body.dimension),
             distance: str(body.distance),
             fields,
+            edge: body.edge === true,
           },
           { database, timeoutMs: settings.queryTimeoutMs, actor: 'user' },
         );
@@ -652,7 +653,7 @@ export function createApiRouter(deps: ApiDeps): Router {
           connectionId,
           database,
           tool: 'objects.create',
-          sql: JSON.stringify({ name, dimension: body.dimension, distance: str(body.distance), fields }),
+          sql: JSON.stringify({ name, dimension: body.dimension, distance: str(body.distance), fields, edge: body.edge === true }),
           risk: 'ddl',
           approval: 'manual',
           status: 'ok',
