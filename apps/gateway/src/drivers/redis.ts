@@ -622,6 +622,36 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
     return { key: name, ttl: Number(await client.ttl(name)) };
   }
 
+  /** 写 hash 字段：字段不存在时新增，存在则覆盖；只接受 hash 类型。 */
+  async setHashField(key: string, field: string, value: string, database?: string): Promise<{ key: string; field: string; created: boolean }> {
+    const name = key.trim();
+    const target = field.trim();
+    if (!name) throw new DbError('键名不能为空', { code: 'REDIS_KEY' });
+    if (!target) throw new DbError('字段名不能为空', { code: 'REDIS_FIELD' });
+    const client = await this.ready(database);
+    const type = String(await client.type(name));
+    if (type === 'none') throw new DbError(`键不存在：${name}`, { code: 'REDIS_KEY_NOT_FOUND', status: 404 });
+    if (type !== 'hash') throw new DbError(`只能编辑 hash 字段，当前类型为 ${type}`, { code: 'REDIS_TYPE' });
+    const existed = (await client.hexists(name, target)) === 1;
+    await client.hset(name, target, value);
+    return { key: name, field: target, created: !existed };
+  }
+
+  /** 删 hash 字段；最后一个字段删掉后 Redis 会自动删除整个键，这里如实回传。 */
+  async deleteHashField(key: string, field: string, database?: string): Promise<{ key: string; field: string; deleted: boolean; keyGone: boolean }> {
+    const name = key.trim();
+    const target = field.trim();
+    if (!name) throw new DbError('键名不能为空', { code: 'REDIS_KEY' });
+    if (!target) throw new DbError('字段名不能为空', { code: 'REDIS_FIELD' });
+    const client = await this.ready(database);
+    const type = String(await client.type(name));
+    if (type === 'none') throw new DbError(`键不存在：${name}`, { code: 'REDIS_KEY_NOT_FOUND', status: 404 });
+    if (type !== 'hash') throw new DbError(`只能删除 hash 字段，当前类型为 ${type}`, { code: 'REDIS_TYPE' });
+    const deleted = Number(await client.hdel(name, target)) > 0;
+    const keyGone = (await client.exists(name)) === 0;
+    return { key: name, field: target, deleted, keyGone };
+  }
+
   /** 编辑 string 键的取值；KEEPTTL 保留原过期时间，非 string 类型拒绝以免 SET 覆盖整个键。 */
   async setKeyValue(key: string, value: string, database?: string): Promise<{ key: string; type: string; ttl: number }> {
     const name = key.trim();

@@ -605,6 +605,27 @@ if (REDIS_PORT) {
   );
   check('Redis key created from the new-key dialog', true);
 
+  await page.locator('[data-testid="query-result-grid"] tbody tr', { hasText: 'aidb:e2e:created' }).first().dblclick();
+  await page.waitForSelector('[data-testid="redis-key-grid"] tbody tr', { timeout: 10000 });
+  await page.locator('[data-testid="redis-key-grid"] tbody tr', { hasText: 'name' }).first().dblclick();
+  await page.waitForSelector('[data-testid="hash-field-editor"]', { timeout: 10000 });
+  await page.fill('[data-testid="hash-field-value"]', 'Ada Lovelace');
+  await page.click('[data-testid="hash-field-save"]');
+  await page.waitForFunction(
+    () => document.querySelector('[data-testid="redis-key-grid"]')?.innerText.includes('Ada Lovelace'),
+    null,
+    { timeout: 20000 },
+  );
+  check('Redis hash field edited from the key detail dialog', true);
+
+  await page.click('[data-testid="hash-field-delete-name"]');
+  await page.waitForFunction(
+    () => !document.querySelector('[data-testid="redis-key-grid"]'),
+    null,
+    { timeout: 20000 },
+  );
+  check('Redis hash field delete removes the emptied key', true);
+
   if (REDIS_STACK) {
     await page.waitForSelector('[title="搜索索引 aidb_e2e"]', { timeout: 20000 });
     check('Redis Stack exposes RediSearch indexes', true);

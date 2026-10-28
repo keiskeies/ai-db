@@ -258,6 +258,82 @@ test('HTTP 编辑 string 键取值：保留 TTL、拒绝非 string 与只读', {
   }
 });
 
+test('HTTP 编辑 hash 字段：新增/覆盖、删除，最后一个字段带走整键', { skip: !PORT }, async () => {
+  const env = await gateway();
+  after(env.close);
+  const writable = await env.connect('redis-hash', false);
+  const readonly = await env.connect('redis-hash-ro', true);
+  const db = '9';
+
+  const client = new Redis({ host: '127.0.0.1', port: PORT!, db: Number(db), lazyConnect: true });
+  await client.connect();
+  try {
+    await client.del('aidb_hf', 'aidb_hf_last', 'aidb_hf_str');
+    await client.hset('aidb_hf', 'name', 'Ada');
+    await client.hset('aidb_hf_last', 'only', 'x');
+    await client.set('aidb_hf_str', 'plain');
+
+    const setField = (key: string, field: string, value: string) =>
+      env.api<{ result: { key: string; field: string; created: boolean } }>('/redis/hash/field', {
+        method: 'POST',
+        body: JSON.stringify({ connectionId: writable, database: db, key, field, value }),
+      });
+
+    const created = await setField('aidb_hf', 'city', 'London');
+    assert.equal(created.status, 200, JSON.stringify(created.body));
+    assert.equal(created.body.result.created, true, '新字段标记为 created');
+    assert.equal(await client.hget('aidb_hf', 'city'), 'London');
+
+    const updated = await setField('aidb_hf', 'name', 'Ada Lovelace');
+    assert.equal(updated.body.result.created, false, '已有字段是覆盖');
+    assert.equal(await client.hget('aidb_hf', 'name'), 'Ada Lovelace');
+
+    const onString = await env.api<{ error: { code: string } }>('/redis/hash/field', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: writable, database: db, key: 'aidb_hf_str', field: 'a', value: 'b' }),
+    });
+    assert.equal(onString.status, 400);
+    assert.equal(onString.body.error.code, 'REDIS_TYPE');
+    assert.equal(await client.get('aidb_hf_str'), 'plain', 'string 键不被改写');
+
+    const del = await env.api<{ result: { deleted: boolean; keyGone: boolean } }>('/redis/hash/field/delete', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: writable, database: db, key: 'aidb_hf', field: 'city' }),
+    });
+    assert.equal(del.status, 200, JSON.stringify(del.body));
+    assert.equal(del.body.result.deleted, true);
+    assert.equal(del.body.result.keyGone, false);
+    assert.equal(await client.hexists('aidb_hf', 'city'), 0);
+
+    const missingField = await env.api<{ result: { deleted: boolean } }>('/redis/hash/field/delete', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: writable, database: db, key: 'aidb_hf', field: 'nope' }),
+    });
+    assert.equal(missingField.body.result.deleted, false, '不存在的字段如实返回未删除');
+
+    const last = await env.api<{ result: { deleted: boolean; keyGone: boolean } }>('/redis/hash/field/delete', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: writable, database: db, key: 'aidb_hf_last', field: 'only' }),
+    });
+    assert.equal(last.body.result.keyGone, true, '删掉最后一个字段后键消失');
+    assert.equal(await client.exists('aidb_hf_last'), 0);
+
+    const ro = await env.api('/redis/hash/field', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: readonly, database: db, key: 'aidb_hf', field: 'a', value: 'b' }),
+    });
+    assert.equal(ro.status, 403);
+
+    const audits = await env.api<{ entries: Array<{ tool: string; risk: string }> }>(`/audit?connectionId=${writable}&limit=30`);
+    const tools = new Map((audits.body.entries ?? []).map((entry) => [entry.tool, entry.risk]));
+    assert.equal(tools.get('redis.hash.field'), 'write');
+    assert.equal(tools.get('redis.hash.field.delete'), 'destructive');
+  } finally {
+    await client.del('aidb_hf', 'aidb_hf_last', 'aidb_hf_str');
+    await client.quit();
+  }
+});
+
 test('HTTP 新建键覆盖五种类型，拒绝重复键与只读连接', { skip: !PORT }, async () => {
   const env = await gateway();
   after(env.close);

@@ -106,6 +106,8 @@ export interface RedisKeyDriver extends Driver {
   describeKey(key: string, database?: string, limit?: number): Promise<RedisKeyDetail>;
   createKey(input: CreateRedisKeyInput, database?: string): Promise<{ key: string; type: string; ttl: number }>;
   setKeyValue(key: string, value: string, database?: string): Promise<{ key: string; type: string; ttl: number }>;
+  setHashField(key: string, field: string, value: string, database?: string): Promise<{ key: string; field: string; created: boolean }>;
+  deleteHashField(key: string, field: string, database?: string): Promise<{ key: string; field: string; deleted: boolean; keyGone: boolean }>;
   deleteKeys(keys: string[], database?: string): Promise<{ deleted: number }>;
   dropIndex(name: string, database?: string): Promise<{ name: string; dropped: boolean }>;
   setTtl(key: string, seconds: number | null, database?: string): Promise<{ key: string; ttl: number }>;

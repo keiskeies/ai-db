@@ -810,6 +810,92 @@ export function createApiRouter(deps: ApiDeps): Router {
   );
 
   router.post(
+    '/redis/hash/field',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const connectionId = str(body.connectionId);
+      const key = str(body.key);
+      const field = str(body.field);
+      if (!connectionId || !key || !field) {
+        throw Object.assign(new Error('connectionId、key 与 field 必填'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      if (typeof body.value !== 'string') throw Object.assign(new Error('value 需要是字符串'), { code: 'INVALID_INPUT', status: 400 });
+      const database = str(body.database);
+      const value = body.value;
+      try {
+        const result = await manager.setHashField(connectionId, key, field, value, { database, actor: 'user' });
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'redis.hash.field',
+          sql: JSON.stringify({ key, field }),
+          risk: 'write',
+          approval: 'manual',
+          status: 'ok',
+          meta: { created: result.created },
+        });
+        res.json({ result });
+      } catch (err: any) {
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'redis.hash.field',
+          sql: JSON.stringify({ key, field }),
+          risk: 'write',
+          approval: 'manual',
+          status: 'error',
+          meta: { error: err.message },
+        });
+        throw err;
+      }
+    }),
+  );
+
+  router.post(
+    '/redis/hash/field/delete',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const connectionId = str(body.connectionId);
+      const key = str(body.key);
+      const field = str(body.field);
+      if (!connectionId || !key || !field) {
+        throw Object.assign(new Error('connectionId、key 与 field 必填'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      const database = str(body.database);
+      try {
+        const result = await manager.deleteHashField(connectionId, key, field, { database, actor: 'user' });
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'redis.hash.field.delete',
+          sql: JSON.stringify({ key, field }),
+          risk: 'destructive',
+          approval: 'manual',
+          status: 'ok',
+          meta: { deleted: result.deleted, keyGone: result.keyGone },
+        });
+        res.json({ result });
+      } catch (err: any) {
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'redis.hash.field.delete',
+          sql: JSON.stringify({ key, field }),
+          risk: 'destructive',
+          approval: 'manual',
+          status: 'error',
+          meta: { error: err.message },
+        });
+        throw err;
+      }
+    }),
+  );
+
+  router.post(
     '/redis/key/value',
     ah(async (req, res) => {
       const body = obj(req.body, 'body');

@@ -31,6 +31,7 @@ export function RedisKeyDialog({
   const [ttlInput, setTtlInput] = useState('');
   const [renameTo, setRenameTo] = useState('');
   const [valueText, setValueText] = useState('');
+  const [editField, setEditField] = useState<{ field: string; value: string } | null>(null);
   const [mutating, setMutating] = useState(false);
   const connections = useApp((s) => s.connections);
   const notify = useApp((s) => s.notify);
@@ -62,6 +63,46 @@ export function RedisKeyDialog({
       notify('success', '键值已保存', keyName);
     } catch (err: any) {
       setError(err?.message ?? '保存键值失败');
+    } finally {
+      setMutating(false);
+    }
+  };
+
+  const saveHashField = async () => {
+    if (!editField) return;
+    const field = editField.field.trim();
+    if (!field) {
+      setError('字段名不能为空');
+      return;
+    }
+    setMutating(true);
+    setError(null);
+    try {
+      await api.setHashField({ connectionId, database, key: keyName, field, value: editField.value });
+      notify('success', '字段已保存', field);
+      setEditField(null);
+      await load();
+    } catch (err: any) {
+      setError(err?.message ?? '保存字段失败');
+    } finally {
+      setMutating(false);
+    }
+  };
+
+  const removeHashField = async (field: string) => {
+    setMutating(true);
+    setError(null);
+    try {
+      const { result } = await api.deleteHashField({ connectionId, database, key: keyName, field });
+      notify('success', result.deleted ? '字段已删除' : '字段已不存在', result.keyGone ? `${field}（键已空，整键删除）` : field);
+      if (result.keyGone) {
+        void loadSchema(connectionId, true, database).catch(() => undefined);
+        onClose();
+        return;
+      }
+      await load();
+    } catch (err: any) {
+      setError(err?.message ?? '删除字段失败');
     } finally {
       setMutating(false);
     }
@@ -235,6 +276,69 @@ export function RedisKeyDialog({
                 <span className="muted" style={{ fontSize: 11 }}>SET KEEPTTL，保留原过期时间</span>
               </div>
             </div>
+          ) : detail.type === 'hash' && conn && !conn.readonly ? (
+            <>
+              <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>
+                双击字段行修改取值；字段行右侧可删除该字段。新增字段会直接写入。
+              </div>
+              <DataGrid
+                columns={detail.columns}
+                rows={detail.rows}
+                testId="redis-key-grid"
+                onRowActivate={(rowIndex) => {
+                  const row = detail.rows[rowIndex] ?? [];
+                  setEditField({ field: String(row[0] ?? ''), value: String(row[1] ?? '') });
+                }}
+              />
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                {detail.rows.map((row, index) => (
+                  <button
+                    key={`${String(row[0])}-${index}`}
+                    className="btn small"
+                    disabled={mutating || deleting}
+                    onClick={() => void removeHashField(String(row[0] ?? ''))}
+                    title={`删除字段 ${String(row[0])}`}
+                    data-testid={`hash-field-delete-${String(row[0])}`}
+                  >
+                    × {String(row[0])}
+                  </button>
+                ))}
+              </div>
+              {editField ? (
+                <div style={{ marginTop: 10 }} data-testid="hash-field-editor">
+                  <div className="form-grid">
+                    <label>字段</label>
+                    <input
+                      className="input"
+                      value={editField.field}
+                      onChange={(event) => setEditField({ ...editField, field: event.target.value })}
+                      data-testid="hash-field-name"
+                    />
+                  </div>
+                  <textarea
+                    className="textarea"
+                    value={editField.value}
+                    onChange={(event) => setEditField({ ...editField, value: event.target.value })}
+                    spellCheck={false}
+                    style={{ width: '100%', minHeight: 90, marginTop: 8, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                    data-testid="hash-field-value"
+                  />
+                  <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                    <button
+                      className="btn small primary"
+                      onClick={() => void saveHashField()}
+                      disabled={mutating}
+                      data-testid="hash-field-save"
+                    >
+                      {mutating ? <Spinner /> : null} 保存字段
+                    </button>
+                    <button className="btn small" onClick={() => setEditField(null)} disabled={mutating}>
+                      取消
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </>
           ) : detail.rows.length ? (
             <DataGrid columns={detail.columns} rows={detail.rows} testId="redis-key-grid" />
           ) : (

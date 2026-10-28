@@ -88,7 +88,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 
 - 对象树：DB 索引 → `keys` 伪对象（`rowEstimate = DBSIZE`）；安装 RediSearch 时追加每个 `FT._LIST` 索引为“搜索索引”节点，点击即执行 `FT.SEARCH <index> * LIMIT 0 20`。
 - 模块：连接测试读取 `MODULE LIST`，版本串显示为 `Redis 7.4 · JSON/RediSearch/TimeSeries/Bloom`。
-- 浏览：`SCAN` 采样，不执行 `KEYS *`；双击键行打开键详情（TYPE / TTL / 规模 / 编码 + 按类型展开的取值，覆盖 string/hash/list/set/zset/stream/JSON/TimeSeries），详情窗口内可删除该键（UNLINK，手输键名确认，只返回真实删除数）；「搜索索引」节点右键可删除索引（FT.DROPINDEX 只移除索引定义，文档保留）；详情窗口还能设置/移除过期时间（EXPIRE / PERSIST）与重命名键（RENAME，目标名已存在时拒绝）；工具栏「新建键」按类型创建 string/hash/list/set/zset（SET/HSET/RPUSH/SADD/ZADD，键已存在则 409 拒绝，可附带 TTL），只读连接不开放；string 键还能在详情里直接改值（SET KEEPTTL 保留原过期时间，非 string 类型拒绝，避免整键被覆盖）。
+- 浏览：`SCAN` 采样，不执行 `KEYS *`；双击键行打开键详情（TYPE / TTL / 规模 / 编码 + 按类型展开的取值，覆盖 string/hash/list/set/zset/stream/JSON/TimeSeries），详情窗口内可删除该键（UNLINK，手输键名确认，只返回真实删除数）；「搜索索引」节点右键可删除索引（FT.DROPINDEX 只移除索引定义，文档保留）；详情窗口还能设置/移除过期时间（EXPIRE / PERSIST）与重命名键（RENAME，目标名已存在时拒绝）；工具栏「新建键」按类型创建 string/hash/list/set/zset（SET/HSET/RPUSH/SADD/ZADD，键已存在则 409 拒绝，可附带 TTL），只读连接不开放；string 键还能在详情里直接改值（SET KEEPTTL 保留原过期时间，非 string 类型拒绝，避免整键被覆盖）；hash 键可双击字段行改值（HSET，字段不存在即新增）并逐字段删除（HDEL，删掉最后一个字段时 Redis 会连带删除整键，对话框会如实提示并关闭）。
 - 查询：单条命令；支持 String / Hash / List / Set / ZSet / Stream 的常用读取命令。
 - 结果：`SCAN` 返回 key 列表；`HGETALL` 返回 field/value；`ZRANGE WITHSCORES` 返回 member/score；`INFO` 解析为 field/value；`FT.SEARCH` 兼容 RESP2 与 RESP3 map 两种回复，统一输出 key/score/字段列。
 - 安全：只读连接拦截写命令；`FLUSHALL` / `FLUSHDB` / `CONFIG SET` / `EVAL` / `FCALL` / `SHUTDOWN` / `DEBUG` / `MODULE` 等判为 destructive；未知命令按 write 处理。
