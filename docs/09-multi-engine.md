@@ -106,7 +106,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - 查询：JSON，`op = scroll` 浏览；提供 `vector` 或 `text` 时执行相似度检索；Qdrant 支持命名向量 `field`。
 - 结果：id、score 与 payload/entity/properties 字段，`resultKind = 'vectors'`。
 - 文本检索：`text` 由网关调用 Embedding Provider 转成向量；未配置时可直接传 `vector`。
-- 写入：`upsert_document` 支持单条与批量（向量点需 `vector`），`delete_documents` 按 id 列表删除；不支持 DDL、备份与 SQL 工具。
+- 写入：`upsert_document` 单条/批量、`import_documents` CSV 批量导入（id/vector 列可指定）、`delete_documents` 按 id 列表删除；不支持 DDL、备份与 SQL 工具。
 - 导出：查询结果可导出 CSV/JSON/XML（INSERT 脚本仅 SQL 引擎）。
 
 ### Cassandra / ScyllaDB
@@ -129,7 +129,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - 对象树：索引 → mapping 字段，展示文档数/health。
 - 查询：JSON `_search` DSL（`{index, query, body, size}`），默认 `match_all`。
 - 结果：`_id`、`_score`、`_source` 字段，`resultKind = 'documents'`。
-- 写入：`upsert_document` 批量索引文档，`delete_documents` 按 `_id` 删除；不支持 DDL 与备份。
+- 写入：`upsert_document` 批量索引、`import_documents` CSV 导入（id 列映射为 `_id`）、`delete_documents` 按 `_id` 删除；不支持 DDL 与备份。
 - 导出：结果可导出 CSV/JSON/XML（INSERT 脚本仅 SQL 引擎）。
 
 ## 5. 安全模型
@@ -146,7 +146,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 
 ## 6. Agent 工具
 
-工具总数 33：
+工具总数 34：
 
 | 工具 | 作用 |
 |---|---|
@@ -156,6 +156,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 | `run_aql` | ArangoDB AQL 查询（支持 `@bindVar` 与 `@@collection`） |
 | `upsert_document` | 批量写入向量点/搜索文档（Qdrant / Weaviate / Milvus / ES / OpenSearch） |
 | `delete_documents` | 按 id 列表删除向量点/搜索文档 |
+| `import_documents` | CSV 批量导入向量点/搜索文档 |
 | `run_cql` | Cassandra / ScyllaDB CQL（支持 `?` 参数） |
 | `vector_search` | pgvector / Qdrant / Milvus / Weaviate 向量检索（text 走 Embedding） |
 | `search_index` | Elasticsearch / OpenSearch `_search` JSON DSL |

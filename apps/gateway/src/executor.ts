@@ -49,7 +49,7 @@ import {
 import type { GatewayConfig } from './config';
 import { DbError } from './drivers';
 import type { ConnectionManager } from './manager';
-import { assertExportable, dumpDatabase, exportNeedsStatement, importCsv, writeExportFile } from './services';
+import { assertExportable, dumpDatabase, exportNeedsStatement, importCsv, importDocuments, writeExportFile } from './services';
 import { generateData } from './features/generate';
 import type { Store } from './store';
 
@@ -74,6 +74,7 @@ const DB_TOOLS = new Set([
   'run_aql',
   'upsert_document',
   'delete_documents',
+  'import_documents',
   'explain_sql',
   'sample_rows',
   'profile_column',
@@ -474,6 +475,25 @@ export class ToolExecutor {
           { database: this.databaseOf(call, conn), timeoutMs: settings.queryTimeoutMs, actor: 'agent' },
         );
         return ok(started, `写入 ${result.upserted} 条`, result);
+      }
+
+      case 'import_documents': {
+        const conn = this.requireConnection(call, ctx);
+        const collection = String(a.collection ?? '').trim();
+        if (!collection) throw new DbError('collection 不能为空', { code: 'WRITE_COLLECTION' });
+        const csv = typeof a.csv === 'string' ? a.csv : undefined;
+        const path = typeof a.path === 'string' ? a.path : undefined;
+        if (!csv?.trim() && !path) throw new DbError('需要 csv 文本或本地文件路径', { code: 'EMPTY_CSV' });
+        const result = await importDocuments(this.store, this.manager, this.config, conn.id, {
+          collection,
+          csv,
+          path,
+          hasHeader: a.hasHeader !== false,
+          delimiter: typeof a.delimiter === 'string' ? a.delimiter : undefined,
+          idColumn: typeof a.idColumn === 'string' ? a.idColumn : undefined,
+          vectorColumn: typeof a.vectorColumn === 'string' ? a.vectorColumn : undefined,
+        });
+        return ok(started, `导入 ${result.imported} 条`, result);
       }
 
       case 'delete_documents': {

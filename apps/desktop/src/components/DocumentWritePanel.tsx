@@ -37,10 +37,15 @@ export function DocumentWritePanel({
   const meta = engineMeta(connection.engine);
   const isSearch = meta.model === 'search';
   const tables = useMemo(() => (schemas ?? []).flatMap((schema) => schema.tables), [schemas]);
-  const [mode, setMode] = useState<'write' | 'delete'>('write');
+  const [mode, setMode] = useState<'write' | 'delete' | 'csv'>('write');
   const [collection, setCollection] = useState(initialCollection ?? '');
   const [text, setText] = useState(() => JSON.stringify([templateFor(connection.engine)], null, 2));
   const [idsText, setIdsText] = useState('');
+  const [csvText, setCsvText] = useState('');
+  const [delimiter, setDelimiter] = useState(',');
+  const [hasHeader, setHasHeader] = useState(true);
+  const [idColumn, setIdColumn] = useState('');
+  const [vectorColumn, setVectorColumn] = useState('');
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -61,7 +66,21 @@ export function DocumentWritePanel({
     const databaseArg = isSearch ? undefined : database;
     setRunning(true);
     try {
-      if (mode === 'write') {
+      if (mode === 'csv') {
+        if (!csvText.trim()) throw new Error('请粘贴 CSV 内容');
+        const { result } = await api.importDocuments({
+          connectionId: connection.id,
+          database: databaseArg,
+          collection: collection.trim(),
+          csv: csvText,
+          hasHeader,
+          delimiter,
+          idColumn: idColumn.trim() || undefined,
+          vectorColumn: isSearch ? undefined : vectorColumn.trim() || undefined,
+        });
+        notify('success', '导入完成', `${collection} · ${result.imported} 条${result.skipped ? ` · 跳过 ${result.skipped}` : ''}`);
+        if (result.errors.length) setError(result.errors.slice(0, 3).join('；'));
+      } else if (mode === 'write') {
         let parsed: unknown;
         try {
           parsed = JSON.parse(text);
@@ -117,10 +136,13 @@ export function DocumentWritePanel({
             <button className={`btn small ${mode === 'delete' ? 'danger' : ''}`} onClick={() => setMode('delete')} disabled={running} data-testid="document-mode-delete">
               删除
             </button>
+            <button className={`btn small ${mode === 'csv' ? 'primary' : ''}`} onClick={() => setMode('csv')} disabled={running} data-testid="document-mode-csv">
+              CSV 导入
+            </button>
           </div>
           <button className="btn" onClick={onClose} disabled={running}>取消</button>
           <button className="btn primary" onClick={() => void submit()} disabled={running} data-testid="document-write-submit">
-            {running ? <Spinner /> : null} {mode === 'write' ? '写入' : '删除'}
+            {running ? <Spinner /> : null} {mode === 'write' ? '写入' : mode === 'delete' ? '删除' : '导入'}
           </button>
         </>
       }
@@ -160,7 +182,7 @@ export function DocumentWritePanel({
             data-testid="document-write-json"
           />
         </>
-      ) : (
+      ) : mode === 'delete' ? (
         <>
           <div className="muted" style={{ fontSize: 11, margin: '10px 0 6px' }}>
             输入要删除的 id，用逗号或空格分隔。删除不可撤销，请先用查询确认范围。
@@ -174,6 +196,45 @@ export function DocumentWritePanel({
             style={{ width: '100%', minHeight: 120, fontFamily: 'var(--font-mono)', fontSize: 12 }}
             data-testid="document-delete-ids"
           />
+        </>
+      ) : (
+        <>
+          <div className="muted" style={{ fontSize: 11, margin: '10px 0 6px' }}>
+            粘贴 CSV（含表头）。列名即字段名；id 列写入文档主键，向量列支持 <code>[0.1, 0.2]</code> 或 <code>0.1 0.2</code> 写法。
+          </div>
+          <textarea
+            className="textarea"
+            value={csvText}
+            onChange={(event) => setCsvText(event.target.value)}
+            spellCheck={false}
+            placeholder={'id,vector,title\n1,"[0.1, 0.2]",hello'}
+            style={{ width: '100%', minHeight: 150, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+            data-testid="document-csv"
+          />
+          <div className="form-grid" style={{ marginTop: 10 }}>
+            <label>分隔符 / 表头</label>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input
+                className="input"
+                value={delimiter}
+                onChange={(event) => setDelimiter(event.target.value.slice(0, 1) || ',')}
+                style={{ width: 60 }}
+                aria-label="CSV 分隔符"
+              />
+              <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
+                <input type="checkbox" checked={hasHeader} onChange={(event) => setHasHeader(event.target.checked)} />
+                首行为表头
+              </label>
+            </div>
+            <label>id 列</label>
+            <input className="input" value={idColumn} onChange={(event) => setIdColumn(event.target.value)} placeholder="留空则自动生成" data-testid="document-csv-id" />
+            {!isSearch ? (
+              <>
+                <label>向量列</label>
+                <input className="input" value={vectorColumn} onChange={(event) => setVectorColumn(event.target.value)} placeholder="vector" data-testid="document-csv-vector" />
+              </>
+            ) : null}
+          </div>
         </>
       )}
       {error ? <div style={{ color: 'var(--danger)', fontSize: 12, marginTop: 8 }} data-testid="document-write-error">{error}</div> : null}

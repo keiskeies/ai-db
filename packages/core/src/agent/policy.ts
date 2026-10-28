@@ -47,6 +47,7 @@ export function toolSignature(call: ToolCall): string {
   else if (call.name === 'search_index' && typeof call.args.index === 'string') target = call.args.index;
   else if (call.name === 'upsert_document' && typeof call.args.collection === 'string') target = call.args.collection;
   else if (call.name === 'delete_documents' && typeof call.args.collection === 'string') target = call.args.collection;
+  else if (call.name === 'import_documents' && typeof call.args.collection === 'string') target = call.args.collection;
   else if (call.name === 'run_cql' && typeof call.args.query === 'string') target = call.args.query.slice(0, 40);
   else if (call.name === 'run_aql' && typeof call.args.query === 'string') target = call.args.query.slice(0, 40);
   else if (call.args.index && typeof call.args.index === 'object') {
@@ -81,6 +82,8 @@ export function describeCall(call: ToolCall): { summary: string; sql?: string } 
     }
     case 'upsert_document':
       return { summary: `写入 ${String(a.collection ?? '')}`, sql: JSON.stringify(a.documents ?? a.document ?? {}) };
+    case 'import_documents':
+      return { summary: `CSV 导入 ${String(a.collection ?? '')}`, sql: typeof a.csv === 'string' ? a.csv.slice(0, 240) : String(a.path ?? '') };
     case 'delete_documents':
       return { summary: `删除 ${String(a.collection ?? '')} · ${Array.isArray(a.ids) ? (a.ids as unknown[]).length : 0} 条`, sql: JSON.stringify({ collection: a.collection, ids: a.ids ?? [] }) };
     case 'create_table':

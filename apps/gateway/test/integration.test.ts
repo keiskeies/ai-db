@@ -60,7 +60,7 @@ test('health, bootstrap and demo seed', async () => {
 
   const boot = await api<{ connections: ConnectionConfig[]; tools: unknown[]; settings: { agent: { provider: string } } }>('/bootstrap');
   assert.equal(boot.status, 200);
-  assert.equal(boot.body.tools.length, 33);
+  assert.equal(boot.body.tools.length, 34);
   demo = boot.body.connections.find((c) => c.engine === 'sqlite')!;
   assert.ok(demo, 'demo connection exists');
   assert.equal(boot.body.settings.agent.provider, 'local');

@@ -219,6 +219,21 @@ export const api = {
     request<{ result: { ids: string[]; upserted: number } }>('/documents/upsert', { method: 'POST', body: JSON.stringify(body) }),
   deleteDocuments: (body: { connectionId: string; database?: string; collection: string; ids: string[] }) =>
     request<{ result: { deleted: number } }>('/documents/delete', { method: 'POST', body: JSON.stringify(body) }),
+  importDocuments: (body: {
+    connectionId: string;
+    database?: string;
+    collection: string;
+    csv?: string;
+    path?: string;
+    hasHeader?: boolean;
+    delimiter?: string;
+    idColumn?: string;
+    vectorColumn?: string;
+  }) =>
+    request<{ result: { imported: number; skipped: number; errors: string[]; collection: string } }>('/documents/import', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   data: (params: { connectionId: string; table: string; database?: string; limit?: number; offset?: number; orderBy?: string; orderDir?: string; where?: string }) => {
     const q = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== null && value !== '') q.set(key, String(value));

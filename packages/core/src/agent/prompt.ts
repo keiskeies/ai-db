@@ -176,7 +176,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       : language === 'cypher'
         ? '- Use run_cypher with Cypher. Pass values as $params instead of string interpolation. Read-only connections reject write clauses and write procedures. Prefer MATCH ... RETURN with a bounded LIMIT; node/relationship results are returned as JSON cells.'
         : language === 'vector'
-          ? '- Use vector_search with a vector or text (text requires an embedding provider). For Qdrant/Milvus use collection and optional named field; for pgvector also pass field (the vector column). topK is capped at 1000. Use upsert_document to create or replace points/documents (pass a documents array for a batch) and delete_documents with an explicit ids list to remove them; Qdrant/Weaviate/Milvus documents need a vector.'
+          ? '- Use vector_search with a vector or text (text requires an embedding provider). For Qdrant/Milvus use collection and optional named field; for pgvector also pass field (the vector column). topK is capped at 1000. Use upsert_document to create or replace points/documents (pass a documents array for a batch), import_documents to bulk-load a CSV, and delete_documents with an explicit ids list to remove them; Qdrant/Weaviate/Milvus documents need a vector.'
           : language === 'search'
             ? '- Use search_index with an Elasticsearch/OpenSearch _search JSON DSL body. Pass query (the DSL query object) or body; size is capped at 10000. Do not use SQL for this connection. Use upsert_document to index a JSON document by id.'
             : language === 'cql'

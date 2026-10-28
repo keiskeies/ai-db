@@ -82,7 +82,7 @@ const api = async (path, init = {}) => {
 const boot = (await api('/bootstrap')).body;
 const demo = boot.connections.find((c) => c.engine === 'sqlite');
 check('bridge bootstrap', Boolean(demo), demo?.name);
-check('33 agent tools', boot.tools.length === 33, String(boot.tools.length));
+check('34 agent tools', boot.tools.length === 34, String(boot.tools.length));
 
 const MONGO_PORT = process.env.AIDB_TEST_MONGO_PORT ? Number(process.env.AIDB_TEST_MONGO_PORT) : undefined;
 const REDIS_PORT = process.env.AIDB_TEST_REDIS_PORT ? Number(process.env.AIDB_TEST_REDIS_PORT) : undefined;
@@ -519,10 +519,24 @@ if (QDRANT_PORT) {
   check('Qdrant batch write inserts points', true);
 
   await page.click('[data-testid="open-document-write"]');
+  await page.waitForSelector('[data-testid="document-mode-csv"]', { timeout: 10000 });
+  await page.fill('[data-testid="document-write-collection"]', 'aidb_e2e');
+  await page.click('[data-testid="document-mode-csv"]');
+  await page.fill('[data-testid="document-csv-id"]', 'id');
+  await page.fill('[data-testid="document-csv-vector"]', 'vector');
+  await page.fill(
+    '[data-testid="document-csv"]',
+    ['id,vector,name', '5,"[0.5, 0.5, 0]",Grace', '6,"[0.6, 0.1, 0]",Alan'].join(String.fromCharCode(10)),
+  );
+  await page.click('[data-testid="document-write-submit"]');
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 6, null, { timeout: 25000 });
+  check('Qdrant CSV import adds points', true);
+
+  await page.click('[data-testid="open-document-write"]');
   await page.waitForSelector('[data-testid="document-mode-delete"]', { timeout: 10000 });
   await page.fill('[data-testid="document-write-collection"]', 'aidb_e2e');
   await page.click('[data-testid="document-mode-delete"]');
-  await page.fill('[data-testid="document-delete-ids"]', '3, 4');
+  await page.fill('[data-testid="document-delete-ids"]', '3, 4, 5, 6');
   await page.click('[data-testid="document-write-submit"]');
   await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 2, null, { timeout: 20000 });
   check('Qdrant delete by ids removes points', true);

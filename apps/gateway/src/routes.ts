@@ -36,7 +36,7 @@ import { pairingCode, hashToken, randomToken, safeEqual } from './crypto';
 import { readAttachment, saveAttachment } from './attachments';
 import type { GatewayConfig } from './config';
 import type { ConnectionManager } from './manager';
-import { assertExportable, auditCsv, coerceValue, dumpDatabase, exportNeedsStatement, importCsv, writeExportFile } from './services';
+import { assertExportable, auditCsv, coerceValue, dumpDatabase, exportNeedsStatement, importCsv, importDocuments, writeExportFile } from './services';
 import type { Store } from './store';
 import type { AgentHost } from './agentHost';
 import type { JobScheduler } from './scheduler';
@@ -502,6 +502,63 @@ export function createApiRouter(deps: ApiDeps): Router {
           tool: 'documents.delete',
           sql: JSON.stringify({ collection, ids: ids.slice(0, 5), count: ids.length }),
           risk: 'destructive',
+          approval: 'manual',
+          status: 'error',
+          durationMs: Date.now() - started,
+          meta: { error: err.message },
+        });
+        throw err;
+      }
+    }),
+  );
+
+  router.post(
+    '/documents/import',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const connectionId = str(body.connectionId);
+      const collection = str(body.collection);
+      if (!connectionId || !collection) {
+        throw Object.assign(new Error('connectionId 与 collection 必填'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      const csvText = str(body.csv);
+      const started = Date.now();
+      const summary = {
+        collection,
+        rows: csvText ? csvText.split('\n').filter((line: string) => line.trim()).length : undefined,
+        path: str(body.path),
+      };
+      try {
+        const result = await importDocuments(store, manager, config, connectionId, {
+          collection,
+          csv: str(body.csv),
+          path: str(body.path),
+          hasHeader: body.hasHeader !== false,
+          delimiter: str(body.delimiter),
+          idColumn: str(body.idColumn),
+          vectorColumn: str(body.vectorColumn),
+        });
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database: str(body.database),
+          tool: 'documents.import',
+          sql: JSON.stringify(summary),
+          risk: 'write',
+          approval: 'manual',
+          status: 'ok',
+          durationMs: Date.now() - started,
+          meta: { imported: result.imported, skipped: result.skipped },
+        });
+        res.json({ result });
+      } catch (err: any) {
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database: str(body.database),
+          tool: 'documents.import',
+          sql: JSON.stringify(summary),
+          risk: 'write',
           approval: 'manual',
           status: 'error',
           durationMs: Date.now() - started,

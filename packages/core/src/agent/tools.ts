@@ -194,6 +194,29 @@ export const TOOLS: ToolDefinition[] = [
     summarize: (a) => `写入 ${a.collection ?? ''}${Array.isArray(a.documents) ? ` ×${(a.documents as unknown[]).length}` : ''}`.trim(),
   },
   {
+    name: 'import_documents',
+    description:
+      'Bulk-import a CSV into a Qdrant/Weaviate/Milvus collection or an Elasticsearch/OpenSearch index (max 5000 rows). Header names become fields; idColumn maps the id field and vectorColumn parses arrays like "[0.1,0.2]" for vector collections.',
+    risk: 'write',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connectionId', 'collection'],
+      properties: {
+        ...connectionProp,
+        ...databaseProp,
+        collection: { type: 'string' },
+        csv: { type: 'string', description: 'CSV text' },
+        path: { type: 'string', description: 'Local CSV path inside the import directory' },
+        hasHeader: { type: 'boolean' },
+        delimiter: { type: 'string' },
+        idColumn: { type: 'string' },
+        vectorColumn: { type: 'string' },
+      },
+    },
+    summarize: (a) => `CSV 导入 ${a.collection ?? ''}`.trim(),
+  },
+  {
     name: 'delete_documents',
     description:
       'Delete documents/points by an explicit id list from a Qdrant, Weaviate, Milvus collection or an Elasticsearch/OpenSearch index. Always confirm the ids with a read query first.',

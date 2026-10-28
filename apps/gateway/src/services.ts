@@ -225,6 +225,129 @@ function coerce(value: string, type: string): unknown {
   return value;
 }
 
+/** CSV 批量导入向量/搜索集合：列名即字段，id/vector 单独指定。 */
+export interface DocumentImportOptions {
+  collection: string;
+  csv?: string;
+  path?: string;
+  hasHeader?: boolean;
+  delimiter?: string;
+  idColumn?: string;
+  vectorColumn?: string;
+}
+
+function coerceCell(value: string): unknown {
+  const text = value.trim();
+  if (!text) return null;
+  if (text === 'true' || text === 'false') return text === 'true';
+  if (/^-?\d+(\.\d+)?$/.test(text)) return Number(text);
+  if (text.startsWith('{') || text.startsWith('[')) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return value;
+    }
+  }
+  return value;
+}
+
+function parseVectorCell(value: string): number[] | null {
+  const text = value.trim();
+  if (!text) return null;
+  const candidates = text.startsWith('[') ? [text] : [text, `[${text}]`];
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (Array.isArray(parsed)) {
+        const numbers = parsed.map(Number).filter((n) => Number.isFinite(n));
+        if (numbers.length === parsed.length && numbers.length) return numbers;
+      }
+    } catch {
+      /* 继续尝试下一种写法 */
+    }
+  }
+  const split = text.split(/[;\s]+/).map((part) => Number(part)).filter((n) => Number.isFinite(n));
+  return split.length ? split : null;
+}
+
+export async function importDocuments(
+  store: Store,
+  manager: ConnectionManager,
+  config: GatewayConfig,
+  connectionId: string,
+  opts: DocumentImportOptions,
+): Promise<{ imported: number; skipped: number; errors: string[]; collection: string }> {
+  const conn = store.getConnection(connectionId);
+  if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+  if (conn.readonly) throw new DbError('只读连接禁止导入', { code: 'READONLY', status: 403 });
+  const content = opts.csv?.trim() || (opts.path ? readFileSync(resolveImportFile(config, opts.path), 'utf8') : '');
+  if (!content.trim()) throw new DbError('CSV 内容为空', { code: 'EMPTY_CSV' });
+  const delimiter = opts.delimiter === '\\t' ? '\t' : opts.delimiter || ',';
+  const parsed = parseCsv(content, delimiter);
+  if (!parsed.length) throw new DbError('CSV 没有可导入的行', { code: 'EMPTY_CSV' });
+  const headerRow = opts.hasHeader === false ? undefined : parsed[0];
+  const dataRows = opts.hasHeader === false ? parsed : parsed.slice(1);
+  if (!dataRows.length) throw new DbError('CSV 只有表头，没有数据行', { code: 'EMPTY_CSV' });
+  if (dataRows.length > 5000) throw new DbError('单次导入最多 5000 行，请拆分文件', { code: 'TOO_MANY_ROWS' });
+  const names = (column: string, index: number) => (headerRow?.[index]?.trim() || `col${index + 1}` || column).trim();
+
+  const idIndex = opts.idColumn
+    ? (headerRow ?? []).findIndex((name) => name.trim().toLowerCase() === opts.idColumn!.trim().toLowerCase())
+    : -1;
+  const vectorIndex = opts.vectorColumn
+    ? (headerRow ?? []).findIndex((name) => name.trim().toLowerCase() === opts.vectorColumn!.trim().toLowerCase())
+    : -1;
+  if (opts.idColumn && idIndex < 0) throw new DbError(`找不到 id 列：${opts.idColumn}`, { code: 'CSV_MAPPING' });
+  if (opts.vectorColumn && vectorIndex < 0) throw new DbError(`找不到 vector 列：${opts.vectorColumn}`, { code: 'CSV_MAPPING' });
+
+  const isSearch = engineMeta(conn.engine).model === 'search';
+  const documents: Record<string, unknown>[] = [];
+  const errors: string[] = [];
+  dataRows.forEach((row, offset) => {
+    const line = offset + (opts.hasHeader === false ? 1 : 2);
+    if (row.every((cell) => !cell.trim())) return;
+    const document: Record<string, unknown> = {};
+    if (idIndex >= 0) {
+      const raw = row[idIndex].trim();
+      if (!raw) {
+        errors.push(`第 ${line} 行：id 为空`);
+        return;
+      }
+      if (isSearch) document._id = raw;
+      else document.id = raw;
+    }
+    if (vectorIndex >= 0) {
+      const vector = parseVectorCell(row[vectorIndex]);
+      if (!vector) {
+        errors.push(`第 ${line} 行：vector 不是数组，例如 "[0.1, 0.2]"`);
+        return;
+      }
+      document.vector = vector;
+    }
+    row.forEach((cell, index) => {
+      if (index === idIndex || index === vectorIndex) return;
+      document[names('', index)] = coerceCell(cell);
+    });
+    documents.push(document);
+  });
+  if (!documents.length) {
+    throw new DbError(errors[0] ?? 'CSV 中没有可导入的数据行', { code: 'EMPTY_CSV', hint: '检查 id 列与 vector 列是否指向真实表头' });
+  }
+
+  let imported = 0;
+  const batchSize = 200;
+  for (let start = 0; start < documents.length; start += batchSize) {
+    const chunk = documents.slice(start, start + batchSize);
+    try {
+      const result = await manager.writeDocuments(connectionId, { collection: opts.collection, documents: chunk }, { database: conn.database, actor: 'user' });
+      imported += result.upserted;
+    } catch (err: any) {
+      errors.push(`第 ${start + 1}-${start + chunk.length} 行：${err?.message ?? '写入失败'}`);
+    }
+  }
+  return { imported, skipped: documents.length - imported, errors: errors.slice(0, 20), collection: opts.collection };
+}
+
 export async function importCsv(
   store: Store,
   manager: ConnectionManager,
