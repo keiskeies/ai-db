@@ -92,7 +92,12 @@ export function Sidebar() {
   const [dbDialog, setDbDialog] = useState<{ kind: DatabaseDialogKind; conn: ConnectionConfig; database: string } | null>(null);
   const [objectDialog, setObjectDialog] = useState<{ conn: ConnectionConfig; database?: string } | null>(null);
   const [dropDialog, setDropDialog] = useState<{ conn: ConnectionConfig; database?: string; name: string } | null>(null);
-  const [infoTable, setInfoTable] = useState<{ table: TableInfo; database?: string } | null>(null);
+  const [infoTable, setInfoTable] = useState<{
+    table: TableInfo;
+    database?: string;
+    objectLabel?: string;
+    relational?: boolean;
+  } | null>(null);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -234,6 +239,9 @@ export function Sidebar() {
           ),
       },
       { label: '', icon: null, sep: true, onClick: () => undefined },
+      ...(table.indexes?.length
+        ? [{ label: '对象信息', icon: <Info size={13} />, onClick: () => setInfoTable({ table, database: schema.name, objectLabel, relational: false }) }]
+        : []),
       { label: t('refresh'), icon: <RefreshCw size={13} />, onClick: () => void loadSchema(conn.id, true) },
       {
         label: t('copy'),
@@ -739,7 +747,13 @@ export function Sidebar() {
         />
       ) : null}
       {infoTable ? (
-        <TableInfoDialog table={infoTable.table} database={infoTable.database} onClose={() => setInfoTable(null)} />
+        <TableInfoDialog
+          table={infoTable.table}
+          database={infoTable.database}
+          objectLabel={infoTable.objectLabel}
+          relational={infoTable.relational ?? true}
+          onClose={() => setInfoTable(null)}
+        />
       ) : null}
       {dropDialog ? (
         <DropObjectDialog

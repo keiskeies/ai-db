@@ -76,3 +76,28 @@ test('MongoDB documents import from CSV through the write channel', { skip: !MON
     await driver.close();
   }
 });
+
+test('MongoDB 集合索引出现在对象信息里', { skip: !MONGO_PORT }, async () => {
+  const admin = new MongoClient(`mongodb://127.0.0.1:${MONGO_PORT}`, { serverSelectionTimeoutMS: 5000 });
+  await admin.connect();
+  await admin.db(DB).collection('indexed').deleteMany({});
+  await admin.db(DB).collection('indexed').insertMany([{ weight: 1 }, { weight: 2 }]);
+  await admin.db(DB).collection('indexed').createIndex({ weight: 1 }, { name: 'weight_unique', unique: true });
+  await admin.db(DB).collection('indexed').createIndex({ ttl: 1 }, { name: 'ttl_idx', expireAfterSeconds: 3600 });
+  await admin.close();
+
+  const driver = new MongoDriver({ host: '127.0.0.1', port: MONGO_PORT!, database: DB });
+  try {
+    const tables = await driver.describe(DB);
+    const table = tables.find((item) => item.name === 'indexed');
+    assert.ok(table, 'describe 返回了该集合');
+    const byName = new Map((table!.indexes ?? []).map((index) => [index.name, index]));
+    assert.ok(byName.get('_id_')?.primary, '_id_ 标成主键索引');
+    assert.equal(byName.get('weight_unique')?.unique, true);
+    assert.deepEqual(byName.get('weight_unique')?.columns, ['weight']);
+    assert.equal(byName.get('weight_unique')?.method, 'unique');
+    assert.match(byName.get('ttl_idx')?.comment ?? '', /TTL 3600s/);
+  } finally {
+    await driver.close();
+  }
+});

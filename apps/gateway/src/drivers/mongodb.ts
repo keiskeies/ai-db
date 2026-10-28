@@ -1,6 +1,6 @@
 import { MongoClient, ObjectId } from 'mongodb';
 import type { Collection, Document, Filter, Sort } from 'mongodb';
-import type { ColumnInfo, Engine, MqlQuery, QueryResult, StructuredQuery, TableInfo } from '@aidb/core';
+import type { ColumnInfo, Engine, IndexInfo, MqlQuery, QueryResult, StructuredQuery, TableInfo } from '@aidb/core';
 import type {
   CreateObjectInput,
   DeleteDocumentsInput,
@@ -83,6 +83,28 @@ function flattenFields(doc: Record<string, unknown>, prefix = '', depth = 0, out
     out.set(name, value);
   }
   return out;
+}
+
+/** $listIndexes 的原始条目转成对象树用的 IndexInfo。 */
+function normalizeIndexes(raw: Array<Record<string, unknown>>): IndexInfo[] {
+  return raw.map((index) => {
+    const key = (index.key ?? {}) as Record<string, unknown>;
+    const keys = Object.keys(key);
+    const first = String(index.name ?? keys.join('_'));
+    const special = typeof index.type === 'string' ? index.type : '';
+    const notes: string[] = [];
+    if (index.sparse) notes.push('sparse');
+    if (index.expireAfterSeconds !== undefined) notes.push(`TTL ${index.expireAfterSeconds}s`);
+    if (index.background) notes.push('background');
+    return {
+      name: first,
+      columns: keys,
+      unique: Boolean(index.unique),
+      primary: first === '_id_',
+      method: special || (index.unique ? 'unique' : 'normal'),
+      comment: notes.length ? notes.join(' · ') : undefined,
+    };
+  });
 }
 
 function inferColumns(docs: Record<string, unknown>[]): ColumnInfo[] {
@@ -270,6 +292,11 @@ export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver, 
                 table.columns = inferColumns(sample);
               } catch {
                 /* sampling is best effort */
+              }
+              try {
+                table.indexes = normalizeIndexes(await db.collection(coll.name).indexes());
+              } catch {
+                /* 权限受限的集合可能读不到索引 */
               }
             }
             return table;

@@ -113,6 +113,7 @@ if (MONGO_PORT) {
     { name: 'beta', weight: 2 },
     { name: 'gamma', weight: 3 },
   ]);
+  await client.db('aidb_e2e').collection('widgets').createIndex({ name: 1 }, { unique: true, name: 'name_unique' });
   await client.close();
 }
 if (TIMESCALE_PORT) {
@@ -388,6 +389,14 @@ if (MONGO_PORT) {
   await page.click('[data-testid="document-write-submit"]');
   await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 3, null, { timeout: 25000 });
   check('MongoDB delete by id removes the document', true);
+
+  await page.locator('[title="集合 widgets"]').click({ button: 'right' });
+  await page.click('text=对象信息');
+  await page.locator('[data-testid="object-info-index-name"]', { hasText: '_id_' }).first().waitFor({ timeout: 10000 });
+  const indexNames = await page.locator('[data-testid="object-info-index-name"]').allInnerTexts();
+  check('MongoDB collection indexes show in object info', indexNames.includes('_id_') && indexNames.includes('name_unique'), indexNames.join(','));
+  await page.locator('.modal-head .icon-btn').last().click();
+  await page.waitForTimeout(200);
 
   await page.screenshot({ path: join(shots, 'desktop-mongodb.png') });
 }
