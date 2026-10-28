@@ -318,6 +318,7 @@ export function createApiRouter(deps: ApiDeps): Router {
           allowMulti: body.allowMulti === undefined ? settings.allowMultiStatement : Boolean(body.allowMulti),
           autoLimit: settings.autoLimit,
           actor: 'user',
+          sessionId: str(body.sessionId),
         });
         store.addAudit({
           actor: 'user',
@@ -806,6 +807,69 @@ export function createApiRouter(deps: ApiDeps): Router {
         });
         throw err;
       }
+    }),
+  );
+
+  router.post(
+    '/tx/begin',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const connectionId = str(body.connectionId);
+      const sessionId = str(body.sessionId);
+      if (!connectionId || !sessionId) {
+        throw Object.assign(new Error('connectionId 与 sessionId 必填'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      const database = str(body.database);
+      const result = await manager.beginTransaction(sessionId, connectionId, { database, actor: 'user' });
+      store.addAudit({
+        actor: 'user',
+        connectionId,
+        database,
+        tool: 'tx.begin',
+        sql: 'BEGIN',
+        risk: 'write',
+        approval: 'manual',
+        status: 'ok',
+      });
+      res.json({ result });
+    }),
+  );
+
+  router.post(
+    '/tx/commit',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const sessionId = str(body.sessionId);
+      if (!sessionId) throw Object.assign(new Error('sessionId 必填'), { code: 'INVALID_INPUT', status: 400 });
+      const result = await manager.commitTransaction(sessionId);
+      store.addAudit({
+        actor: 'user',
+        tool: 'tx.commit',
+        sql: 'COMMIT',
+        risk: 'write',
+        approval: 'manual',
+        status: 'ok',
+      });
+      res.json({ result });
+    }),
+  );
+
+  router.post(
+    '/tx/rollback',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const sessionId = str(body.sessionId);
+      if (!sessionId) throw Object.assign(new Error('sessionId 必填'), { code: 'INVALID_INPUT', status: 400 });
+      const result = await manager.rollbackTransaction(sessionId);
+      store.addAudit({
+        actor: 'user',
+        tool: 'tx.rollback',
+        sql: 'ROLLBACK',
+        risk: 'write',
+        approval: 'manual',
+        status: 'ok',
+      });
+      res.json({ result });
     }),
   );
 

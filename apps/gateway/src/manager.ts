@@ -43,7 +43,7 @@ import type { GatewayConfig } from './config';
 import { createDriver, DbError, type Driver } from './drivers';
 import { normalizeMql } from './drivers/mongodb';
 import type { CreateRedisKeyInput, RedisKeyDriver } from './drivers/types';
-import { supportsCollectionIndexes, supportsDocumentRead, supportsDocumentWrite, supportsFieldAdd, supportsKeyDetail, supportsLineProtocol, supportsObjectCreate, supportsStructuredQuery, supportsVectorSearch } from './drivers/types';
+import { supportsCollectionIndexes, supportsDocumentRead, supportsDocumentWrite, supportsFieldAdd, supportsKeyDetail, supportsLineProtocol, supportsObjectCreate, supportsStructuredQuery, supportsTransaction, supportsVectorSearch, type TransactionDriver } from './drivers/types';
 import { embedText } from './embeddings';
 import type { Store } from './store';
 
@@ -59,10 +59,14 @@ export interface QueryOptions {
   allowMulti?: boolean;
   autoLimit?: boolean;
   actor: 'user' | 'agent';
+  /** 跨请求事务会话；存在时语句走被固定的那条连接。 */
+  sessionId?: string;
 }
 
 export class ConnectionManager {
   private clients = new Map<string, CachedDriver>();
+  /** 跨请求事务会话：会话 id → 连接与开始时间（用于超时回收）。 */
+  private txSessions = new Map<string, { connectionId: string; database?: string; startedAt: number }>();
 
   constructor(
     private store: Store,
@@ -906,6 +910,80 @@ export class ConnectionManager {
     throw new DbError(`${meta.label} 不支持向量检索`, { code: 'UNSUPPORTED_ENGINE' });
   }
 
+  /** 跨请求事务：只有固定得住连接的驱动（目前 MySQL）支持。 */
+  private async txDriver(connectionId: string): Promise<{ conn: ConnectionConfig; driver: TransactionDriver }> {
+    const conn = this.store.getConnection(connectionId);
+    if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+    if (conn.readonly) {
+      throw new DbError('只读连接不允许开启事务', { code: 'READONLY', status: 403, hint: '在连接设置中关闭只读后才可开启事务' });
+    }
+    const driver = await this.driverFor(connectionId);
+    if (!supportsTransaction(driver)) {
+      throw new DbError(`${engineMeta(conn.engine).label} 暂不支持跨请求事务`, {
+        code: 'UNSUPPORTED_ENGINE',
+        hint: '目前只有 MySQL 支持 begin/commit/rollback',
+      });
+    }
+    return { conn, driver };
+  }
+
+  async beginTransaction(sessionId: string, connectionId: string, opts: QueryOptions): Promise<{ sessionId: string; database?: string }> {
+    const { conn, driver } = await this.txDriver(connectionId);
+    if (this.txSessions.has(sessionId)) throw new DbError('该会话已有进行中的事务', { code: 'TX_ACTIVE' });
+    const database = opts.database ?? conn.database;
+    await driver.beginTransaction(sessionId, database);
+    this.txSessions.set(sessionId, { connectionId, database, startedAt: Date.now() });
+    this.store.addHistory({
+      connectionId,
+      database,
+      sql: 'BEGIN',
+      status: 'ok',
+      durationMs: 0,
+    });
+    return { sessionId, database };
+  }
+
+  async commitTransaction(sessionId: string): Promise<{ sessionId: string; committed: true }> {
+    const session = this.txSessions.get(sessionId);
+    if (!session) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
+    const driver = await this.driverFor(session.connectionId);
+    if (!supportsTransaction(driver)) throw new DbError('驱动不再支持事务', { code: 'UNSUPPORTED_ENGINE' });
+    await driver.commitTransaction(sessionId);
+    this.txSessions.delete(sessionId);
+    this.store.addHistory({
+      connectionId: session.connectionId,
+      database: session.database,
+      sql: 'COMMIT',
+      status: 'ok',
+      durationMs: Date.now() - session.startedAt,
+    });
+    return { sessionId, committed: true };
+  }
+
+  async rollbackTransaction(sessionId: string): Promise<{ sessionId: string; rolledBack: true }> {
+    const session = this.txSessions.get(sessionId);
+    if (!session) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
+    const driver = await this.driverFor(session.connectionId);
+    if (!supportsTransaction(driver)) throw new DbError('驱动不再支持事务', { code: 'UNSUPPORTED_ENGINE' });
+    await driver.rollbackTransaction(sessionId);
+    this.txSessions.delete(sessionId);
+    this.store.addHistory({
+      connectionId: session.connectionId,
+      database: session.database,
+      sql: 'ROLLBACK',
+      status: 'ok',
+      durationMs: Date.now() - session.startedAt,
+    });
+    return { sessionId, rolledBack: true };
+  }
+
+  /** 会话当前是否在事务里（路由用来决定走固定连接还是普通池）。 */
+  transactionOf(sessionId: string | undefined): { connectionId: string; database?: string } | null {
+    if (!sessionId) return null;
+    const session = this.txSessions.get(sessionId);
+    return session ? { connectionId: session.connectionId, database: session.database } : null;
+  }
+
   async query(connectionId: string, sql: string, opts: QueryOptions): Promise<QueryBatchResult> {
     const conn = this.store.getConnection(connectionId);
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
@@ -925,6 +1003,9 @@ export class ConnectionManager {
       }
     }
     const driver = await this.driverFor(connectionId);
+    // 事务会话里的语句必须走被固定的那条连接，否则 COMMIT/ROLLBACK 作用不到。
+    const txSession = opts.sessionId ? this.txSessions.get(opts.sessionId) : undefined;
+    const txDriver = txSession && supportsTransaction(driver) ? driver : undefined;
     const started = Date.now();
     const sets: QueryResult[] = [];
     const messages: string[] = [];
@@ -933,7 +1014,9 @@ export class ConnectionManager {
       for (const [index, statement] of statements.entries()) {
         const prepared = opts.autoLimit !== false && opts.maxRows ? applyLimit(statement, opts.maxRows, conn.engine) : statement;
         try {
-          const result = await driver.run(prepared, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs });
+          const result = txDriver && opts.sessionId
+            ? await txDriver.runInTransaction(opts.sessionId, prepared, [], { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs })
+            : await driver.run(prepared, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs });
           sets.push(result);
           messages.push(
             result.columns.length

@@ -118,6 +118,24 @@ export function supportsKeyDetail(driver: Driver): driver is RedisKeyDriver {
   return typeof (driver as RedisKeyDriver).describeKey === 'function';
 }
 
+/** 固定得住单条连接的驱动才能做跨请求事务（目前只有 MySQL）。 */
+export interface TransactionDriver extends Driver {
+  beginTransaction(sessionId: string, database?: string): Promise<void>;
+  runInTransaction(sessionId: string, sql: string, params: unknown[], opts?: RunOptions): Promise<QueryResult>;
+  commitTransaction(sessionId: string): Promise<void>;
+  rollbackTransaction(sessionId: string): Promise<void>;
+}
+
+export function supportsTransaction(driver: Driver): driver is TransactionDriver {
+  const candidate = driver as TransactionDriver;
+  return (
+    typeof candidate.beginTransaction === 'function' &&
+    typeof candidate.runInTransaction === 'function' &&
+    typeof candidate.commitTransaction === 'function' &&
+    typeof candidate.rollbackTransaction === 'function'
+  );
+}
+
 /** 时序引擎的行协议写入入口（InfluxDB v3 的 SQL 只读）。 */
 export interface LineProtocolDriver extends Driver {
   writeLineProtocol(lines: string[], database?: string, timeoutMs?: number): Promise<{ written: number }>;

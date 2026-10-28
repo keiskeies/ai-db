@@ -1,5 +1,5 @@
 import mysql from 'mysql2/promise';
-import type { Pool, FieldPacket, ResultSetHeader } from 'mysql2/promise';
+import type { Pool, PoolConnection, FieldPacket, ResultSetHeader } from 'mysql2/promise';
 import { engineMeta } from '@aidb/core';
 import type { ColumnInfo, Engine, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions } from './types';
@@ -45,9 +45,39 @@ const MYSQL_TYPES: Record<number, string> = {
 export class MysqlDriver implements Driver {
   engine: Engine;
   private pools = new Map<string, Pool>();
+  /** 跨请求事务：会话 id → 被固定的连接。 */
+  private txConnections = new Map<string, PoolConnection>();
 
   constructor(private opts: MysqlOptions, engine: Engine = 'mysql') {
     this.engine = engine;
+  }
+
+  private toResult(rows: any, fields: any, started: number, sql: string, maxRows?: number): QueryResult {
+    if (Array.isArray(rows)) {
+      const fieldList = (Array.isArray(fields) ? fields : []) as FieldPacket[];
+      const columns = fieldList.map((f) => ({ name: f.name, type: MYSQL_TYPES[f.type ?? -1] ?? String(f.type ?? '') }));
+      const all = rows as Array<Record<string, unknown>>;
+      const limit = maxRows && maxRows > 0 ? maxRows : all.length;
+      const sliced = all.slice(0, limit);
+      return {
+        columns,
+        rows: toRowArray(columns, sliced),
+        rowCount: sliced.length,
+        durationMs: Date.now() - started,
+        truncated: all.length > sliced.length,
+        statement: sql,
+      };
+    }
+    const header = rows as ResultSetHeader;
+    return {
+      columns: [],
+      rows: [],
+      rowCount: 0,
+      affected: header.affectedRows ?? 0,
+      lastInsertId: header.insertId,
+      durationMs: Date.now() - started,
+      statement: sql,
+    };
   }
 
   private pool(database?: string): Pool {
@@ -206,37 +236,65 @@ export class MysqlDriver implements Driver {
     const started = Date.now();
     try {
       const [rows, fields] = await this.pool(opts.database).query({ sql, values: params, timeout: opts.timeoutMs });
-      if (Array.isArray(rows)) {
-        const fieldList = (Array.isArray(fields) ? fields : []) as FieldPacket[];
-        const columns = fieldList.map((f) => ({ name: f.name, type: MYSQL_TYPES[f.type ?? -1] ?? String(f.type ?? '') }));
-        const all = rows as Array<Record<string, unknown>>;
-        const limit = opts.maxRows && opts.maxRows > 0 ? opts.maxRows : all.length;
-        const sliced = all.slice(0, limit);
-        return {
-          columns,
-          rows: toRowArray(columns, sliced),
-          rowCount: sliced.length,
-          durationMs: Date.now() - started,
-          truncated: all.length > sliced.length,
-          statement: sql,
-        };
-      }
-      const header = rows as ResultSetHeader;
-      return {
-        columns: [],
-        rows: [],
-        rowCount: 0,
-        affected: header.affectedRows ?? 0,
-        lastInsertId: header.insertId,
-        durationMs: Date.now() - started,
-        statement: sql,
-      };
+      return this.toResult(rows, fields, started, sql, opts.maxRows);
     } catch (err: any) {
       throw new DbError(err.message ?? 'MySQL 执行失败', { code: err.code ?? 'MYSQL_ERROR', hint: err.sqlMessage ? undefined : undefined });
     }
   }
 
+  /** 开启跨请求事务：从连接池取一条连接固定下来，后续查询都走它。 */
+  async beginTransaction(sessionId: string, database?: string): Promise<void> {
+    if (this.txConnections.has(sessionId)) throw new DbError('该会话已有进行中的事务', { code: 'TX_ACTIVE' });
+    const connection = await this.pool(database).getConnection();
+    try {
+      await connection.beginTransaction();
+    } catch (err: any) {
+      connection.release();
+      throw new DbError(err?.message ?? '开启事务失败', { code: 'TX_BEGIN' });
+    }
+    this.txConnections.set(sessionId, connection);
+  }
+
+  /** 事务内执行：复用固定连接，结果映射与普通查询一致。 */
+  async runInTransaction(sessionId: string, sql: string, params: unknown[], opts: RunOptions = {}): Promise<QueryResult> {
+    const connection = this.txConnections.get(sessionId);
+    if (!connection) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
+    const started = Date.now();
+    try {
+      const [rows, fields] = await connection.query({ sql, values: params, timeout: opts.timeoutMs });
+      return this.toResult(rows, fields, started, sql, opts.maxRows);
+    } catch (err: any) {
+      throw new DbError(err.message ?? 'MySQL 事务执行失败', { code: err.code ?? 'MYSQL_ERROR' });
+    }
+  }
+
+  async commitTransaction(sessionId: string): Promise<void> {
+    await this.finishTransaction(sessionId, 'commit');
+  }
+
+  async rollbackTransaction(sessionId: string): Promise<void> {
+    await this.finishTransaction(sessionId, 'rollback');
+  }
+
+  private async finishTransaction(sessionId: string, mode: 'commit' | 'rollback'): Promise<void> {
+    const connection = this.txConnections.get(sessionId);
+    if (!connection) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
+    this.txConnections.delete(sessionId);
+    try {
+      if (mode === 'commit') await connection.commit();
+      else await connection.rollback();
+    } catch (err: any) {
+      throw new DbError(err?.message ?? `${mode === 'commit' ? '提交' : '回滚'}事务失败`, { code: mode === 'commit' ? 'TX_COMMIT' : 'TX_ROLLBACK' });
+    } finally {
+      connection.release();
+    }
+  }
+
+  /** 连接被回收前必须回滚，避免事务悬挂占用连接。 */
   async close(): Promise<void> {
+    for (const [sessionId] of this.txConnections) {
+      await this.finishTransaction(sessionId, 'rollback').catch(() => undefined);
+    }
     await Promise.all([...this.pools.values()].map((p) => p.end().catch(() => undefined)));
     this.pools.clear();
   }
