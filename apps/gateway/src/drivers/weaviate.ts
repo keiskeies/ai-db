@@ -1,6 +1,18 @@
 import type { ColumnInfo, Engine, QueryResult, StructuredQuery, TableInfo, VectorQuery } from '@aidb/core';
 import { vectorQueryFromArgs } from '@aidb/core';
-import type { CreateObjectInput, DeleteDocumentsInput, DocumentWriteDriver, DriverTestResult, ObjectCreateDriver, RunOptions, VectorQueryDriver, WriteDocumentInput, WriteDocumentResult } from './types';
+import type {
+  CreateFieldInput,
+  CreateObjectInput,
+  DeleteDocumentsInput,
+  DocumentWriteDriver,
+  DriverTestResult,
+  FieldAddDriver,
+  ObjectCreateDriver,
+  RunOptions,
+  VectorQueryDriver,
+  WriteDocumentInput,
+  WriteDocumentResult,
+} from './types';
 import { DbError } from './types';
 
 export interface WeaviateOptions {
@@ -72,7 +84,7 @@ function objectsToResult(
   };
 }
 
-export class WeaviateDriver implements VectorQueryDriver, DocumentWriteDriver, ObjectCreateDriver {
+export class WeaviateDriver implements VectorQueryDriver, DocumentWriteDriver, ObjectCreateDriver, FieldAddDriver {
   engine: Engine = 'weaviate';
 
   constructor(private opts: WeaviateOptions) {}
@@ -225,6 +237,22 @@ export class WeaviateDriver implements VectorQueryDriver, DocumentWriteDriver, O
     const target = raw.charAt(0).toUpperCase() + raw.slice(1);
     await this.request(`/v1/schema/${encodeURIComponent(target)}`, { method: 'DELETE' }, opts.timeoutMs ?? 30000);
     return { name: target, dropped: true };
+  }
+
+  /** class 可以追加 property；名字沿用首字母大写的 class 规则。 */
+  async createField(input: CreateFieldInput, opts: RunOptions = {}): Promise<{ name: string; type: string; added: boolean }> {
+    const raw = input.object.trim();
+    const property = input.name.trim();
+    if (!raw) throw new DbError('class 名不能为空', { code: 'VECTOR_COLLECTION' });
+    if (!property) throw new DbError('字段名不能为空', { code: 'WEAVIATE_PROPERTY' });
+    const target = raw.charAt(0).toUpperCase() + raw.slice(1);
+    const dataType = WEAVIATE_TYPES[input.type.toLowerCase()] ?? 'text';
+    await this.request(
+      `/v1/schema/${encodeURIComponent(target)}/properties`,
+      { method: 'POST', body: JSON.stringify({ name: property, dataType: [dataType] }) },
+      opts.timeoutMs ?? 30000,
+    );
+    return { name: property, type: dataType, added: true };
   }
 
   async deleteDocuments(input: DeleteDocumentsInput, opts: RunOptions = {}): Promise<{ deleted: number }> {

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { Engine, TableInfo } from '@aidb/core';
+import { fieldTypeOptions } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp } from '../store';
 import { Modal, Spinner } from './ui';
@@ -14,6 +15,7 @@ interface Props {
   /** 连接 id + 该引擎支持索引管理时，索引区直接可建删。 */
   connectionId?: string;
   manageIndexes?: boolean;
+  canAddField?: boolean;
   engine?: Engine;
 }
 
@@ -25,6 +27,7 @@ export function TableInfoDialog({
   relational = true,
   connectionId,
   manageIndexes = false,
+  canAddField = false,
   engine,
 }: Props) {
   const t = useApp((s) => s.t);
@@ -43,6 +46,10 @@ export function TableInfoDialog({
   const [sparse, setSparse] = useState(false);
   const [ttl, setTtl] = useState('');
   const [payloadType, setPayloadType] = useState('keyword');
+  const [addingField, setAddingField] = useState(false);
+  const [fieldName, setFieldName] = useState('');
+  const [fieldType, setFieldType] = useState('');
+  const fieldTypes = engine ? fieldTypeOptions(engine) : [];
   const [pendingDrop, setPendingDrop] = useState<string | null>(null);
   const [dropTyped, setDropTyped] = useState('');
   const [busy, setBusy] = useState(false);
@@ -97,6 +104,30 @@ export function TableInfoDialog({
     }
   };
 
+  const submitField = async () => {
+    if (!connectionId) return;
+    const name = fieldName.trim();
+    if (!name) {
+      setError('字段名不能为空');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const { result } = await api.createField({
+        connectionId,
+        database,
+        object: table.name,
+        name,
+        type: fieldType || fieldTypes[0] || 'text',
+      });
+      done('字段已追加', `${result.name} · ${result.type}`);
+    } catch (err: any) {
+      setError(err?.message ?? '追加字段失败');
+      setBusy(false);
+    }
+  };
+
   return (
     <Modal
       title={`对象信息 · ${table.name}`}
@@ -115,7 +146,45 @@ export function TableInfoDialog({
         </div>
 
         <div>
-          <div className="tool-section-title">列（{columns.length}）</div>
+          <div className="tool-section-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span>列（{columns.length}）</span>
+            {canAddField ? (
+              <button
+                className="btn small"
+                onClick={() => {
+                  setAddingField((prev) => !prev);
+                  setError(null);
+                }}
+                disabled={busy}
+                data-testid="create-field-open"
+              >
+                新建字段…
+              </button>
+            ) : null}
+          </div>
+          {canAddField && addingField ? (
+            <div className="form-grid" style={{ marginBottom: 8 }} data-testid="create-field-form">
+              <label>字段名</label>
+              <input className="input" value={fieldName} onChange={(event) => setFieldName(event.target.value)} placeholder="message" data-testid="field-name" />
+              <label>类型</label>
+              <select className="select" value={fieldType || fieldTypes[0] || 'text'} onChange={(event) => setFieldType(event.target.value)} data-testid="field-type">
+                {fieldTypes.map((type) => (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                ))}
+              </select>
+              <label />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn primary" onClick={() => void submitField()} disabled={busy} data-testid="field-submit">
+                  {busy ? <Spinner /> : null} 追加
+                </button>
+                <button className="btn" onClick={() => setAddingField(false)} disabled={busy}>
+                  取消
+                </button>
+              </div>
+            </div>
+          ) : null}
           <div className="mini-table-wrap">
             <table className="tool-table">
               <thead><tr><th>#</th><th>名称</th><th>类型</th><th>可空</th>{relational ? <><th>默认值</th><th>主键</th><th>自增</th></> : <th>主键</th>}</tr></thead>
@@ -123,7 +192,7 @@ export function TableInfoDialog({
                 {columns.map((column, index) => (
                   <tr key={column.name}>
                     <td className="muted">{index + 1}</td>
-                    <td className="mono">{column.name}</td>
+                    <td className="mono" data-testid="object-info-column-name">{column.name}</td>
                     <td className="mono">{column.type}</td>
                     <td>{column.nullable ? 'YES' : 'NO'}</td>
                     {relational ? <td className="mono">{column.defaultValue ?? '—'}</td> : null}

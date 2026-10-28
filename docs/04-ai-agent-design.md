@@ -77,7 +77,7 @@ for (step = 0; step < maxSteps; step++) {
 | 6 | `sample_rows` | read | 表样例数据（脱敏可选） | `{ connectionId, database?, table, limit? }` |
 | 7 | `profile_column` | read | 列画像（空值率、基数、Top 值、min/max） | `{ connectionId, table, column }` |
 | 8 | `create_table` | ddl | 结构化建表（列/索引定义） | `{ connectionId, database?, table, columns[], indexes? }` |
-| 9 | `alter_table` | ddl/destructive | 增删改列、重命名、改类型 | `{ connectionId, table, operations[] }` |
+| 9 | `alter_table` | ddl/destructive | 增删改列、重命名、改类型；Elasticsearch/OpenSearch（mapping）与 Weaviate（property）只支持 add_column | `{ connectionId, table, operations[] }` |
 | 10 | `drop_object` | destructive | 删除表/视图/索引 | `{ connectionId, kind, name, cascade? }` |
 | 11 | `manage_index` | ddl | 创建/删除索引（SQL 表；MongoDB 集合支持 unique / sparse / TTL，`_id_` 拒删；Qdrant 建 payload 索引，单字段 + `type`） | `{ connectionId, table, action, index, name?, sparse?, expireAfterSeconds?, type? }` |
 | 12 | `export_result` | write | 导出查询或整表到文件 | `{ connectionId, sql?, table?, format, path? , limit? }` |

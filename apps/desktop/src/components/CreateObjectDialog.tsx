@@ -1,13 +1,10 @@
 import { useState } from 'react';
 import { Plus } from 'lucide-react';
 import type { ConnectionConfig } from '@aidb/core';
-import { engineMeta } from '@aidb/core';
+import { engineMeta, fieldTypeOptions } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp } from '../store';
 import { Modal, Spinner } from './ui';
-
-const ES_TYPES = ['text', 'keyword', 'boolean', 'integer', 'long', 'float', 'double', 'date', 'ip', 'nested', 'object'];
-const WEAVIATE_TYPES = ['text', 'int', 'number', 'boolean', 'date'];
 
 export function CreateObjectDialog({
   connection,
@@ -67,7 +64,8 @@ export function CreateObjectDialog({
     }
   };
 
-  const typeOptions = connection.engine === 'weaviate' ? WEAVIATE_TYPES : isSearch ? ES_TYPES : WEAVIATE_TYPES;
+  const engineTypes = fieldTypeOptions(connection.engine);
+  const typeOptions = engineTypes.length ? engineTypes : ['text'];
 
   return (
     <Modal

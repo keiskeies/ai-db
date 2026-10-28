@@ -1,4 +1,5 @@
 import {
+  addField,
   applyLimit,
   classifyAql,
   classifyCql,
@@ -39,7 +40,7 @@ import {
 import type { GatewayConfig } from './config';
 import { createDriver, DbError, type Driver } from './drivers';
 import { normalizeMql } from './drivers/mongodb';
-import { supportsCollectionIndexes, supportsDocumentWrite, supportsKeyDetail, supportsObjectCreate, supportsStructuredQuery, supportsVectorSearch } from './drivers/types';
+import { supportsCollectionIndexes, supportsDocumentWrite, supportsFieldAdd, supportsKeyDetail, supportsObjectCreate, supportsStructuredQuery, supportsVectorSearch } from './drivers/types';
 import { embedText } from './embeddings';
 import type { Store } from './store';
 
@@ -483,6 +484,45 @@ export class ConnectionManager {
       connectionId,
       database: opts.database ?? conn.database,
       sql: JSON.stringify({ dropIndex: { collection: input.collection, name: result.name } }),
+      status: 'ok',
+      durationMs: Date.now() - started,
+    });
+    return result;
+  }
+
+  /** 给已有对象追加字段（ES/OpenSearch mapping、Weaviate property）。 */
+  async createField(
+    connectionId: string,
+    input: { object: string; name: string; type: string },
+    opts: QueryOptions,
+  ): Promise<{ name: string; type: string; added: boolean }> {
+    const conn = this.store.getConnection(connectionId);
+    if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+    const meta = engineMeta(conn.engine);
+    if (conn.readonly) {
+      throw new DbError('只读连接不允许追加字段', { code: 'READONLY', status: 403, hint: '在连接设置中关闭只读后才可改结构' });
+    }
+    if (!addField(conn.engine)) {
+      throw new DbError(`${meta.label} 不支持追加字段`, {
+        code: 'UNSUPPORTED_ENGINE',
+        hint: meta.model === 'document' ? 'MongoDB 文档无固定 schema，直接写入带新字段的文档即可' : '该引擎的字段定义只能通过重建对象修改',
+      });
+    }
+    if (!input.object?.trim() || !input.name?.trim()) throw new DbError('对象与字段名必填', { code: 'FIELD_INPUT' });
+    const driver = await this.driverFor(connectionId);
+    if (!supportsFieldAdd(driver)) {
+      throw new DbError(`${meta.label} 驱动不支持追加字段`, { code: 'UNSUPPORTED_ENGINE' });
+    }
+    const started = Date.now();
+    const result = await driver.createField(
+      { object: input.object.trim(), name: input.name.trim(), type: input.type?.trim() || 'text' },
+      { database: opts.database, timeoutMs: opts.timeoutMs },
+    );
+    this.invalidate(connectionId);
+    this.store.addHistory({
+      connectionId,
+      database: opts.database ?? conn.database,
+      sql: JSON.stringify({ addField: { object: input.object, name: result.name, type: result.type } }),
       status: 'ok',
       durationMs: Date.now() - started,
     });

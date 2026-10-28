@@ -92,6 +92,8 @@ const DM_PORT = process.env.AIDB_TEST_DM_PORT ? Number(process.env.AIDB_TEST_DM_
 const DM_PASSWORD = process.env.AIDB_TEST_DM_PASSWORD ?? 'SYSDBA';
 const QDRANT_PORT = process.env.AIDB_TEST_QDRANT_PORT ? Number(process.env.AIDB_TEST_QDRANT_PORT) : undefined;
 const MILVUS_PORT = process.env.AIDB_TEST_MILVUS_PORT ? Number(process.env.AIDB_TEST_MILVUS_PORT) : undefined;
+const ES_PORT = process.env.AIDB_TEST_ELASTICSEARCH_PORT ? Number(process.env.AIDB_TEST_ELASTICSEARCH_PORT) : undefined;
+const WEAVIATE_PORT = process.env.AIDB_TEST_WEAVIATE_PORT ? Number(process.env.AIDB_TEST_WEAVIATE_PORT) : undefined;
 const DUCKDB_E2E = process.env.AIDB_TEST_DUCKDB === '1';
 const TDENGINE_PORT = process.env.AIDB_TEST_TDENGINE_PORT ? Number(process.env.AIDB_TEST_TDENGINE_PORT) : undefined;
 const FALKORDB_PORT = process.env.AIDB_TEST_FALKORDB_PORT ? Number(process.env.AIDB_TEST_FALKORDB_PORT) : undefined;
@@ -139,6 +141,29 @@ if (REDIS_PORT) {
     await client.call('FT.CREATE', 'aidb_e2e', 'ON', 'JSON', 'PREFIX', '1', 'doc:', 'SCHEMA', '$.name', 'AS', 'name', 'TEXT');
   }
   await client.quit();
+}
+if (ES_PORT) {
+  const esBase = `http://127.0.0.1:${ES_PORT}`;
+  await fetch(`${esBase}/aidb_es_ui`, { method: 'DELETE' }).catch(() => undefined);
+  await fetch(`${esBase}/aidb_es_ui`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ mappings: { properties: { message: { type: 'text' } } } }),
+  });
+  await fetch(`${esBase}/aidb_es_ui/_doc/1?refresh=true`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ message: 'hello' }),
+  });
+}
+if (WEAVIATE_PORT) {
+  const wvBase = `http://127.0.0.1:${WEAVIATE_PORT}`;
+  await fetch(`${wvBase}/v1/schema/AidbUiClass`, { method: 'DELETE' }).catch(() => undefined);
+  await fetch(`${wvBase}/v1/schema`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ class: 'AidbUiClass', vectorizer: 'none', properties: [{ name: 'title', dataType: ['text'] }] }),
+  });
 }
 if (NEO4J_PORT) {
   const neo4j = (await import('neo4j-driver')).default;
@@ -861,6 +886,92 @@ if (ARANGO_PORT) {
   await page.waitForTimeout(200);
 }
 
+if (ES_PORT) {
+  await page.click('[data-testid="sidebar-new-connection"]');
+  await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
+  await page.fill('[data-testid="connection-name"]', 'Elasticsearch E2E');
+  await page.selectOption('[data-testid="connection-engine"]', 'elasticsearch');
+  await page.fill('[data-testid="connection-host"]', '127.0.0.1');
+  await page.fill('[data-testid="connection-port"]', String(ES_PORT));
+  await page.click('[data-testid="connection-save"]');
+  await page.locator('.conn-row', { hasText: 'Elasticsearch E2E' }).waitFor({ timeout: 15000 });
+  await page.waitForSelector('[title="索引 aidb_es_ui"]', { timeout: 25000 });
+  check('Elasticsearch connection expands to indices', true);
+  await page.click('[title="索引 aidb_es_ui"]');
+  await page.locator('[data-testid="query-run"]').last().click();
+  await page.waitForSelector('[data-testid="query-result-grid"] tbody tr', { timeout: 20000 });
+  check('Elasticsearch search DSL returns documents', true);
+
+  const openEsInfo = async () => {
+    await page.locator('[title="索引 aidb_es_ui"]').click({ button: 'right' });
+    await page.click('text=对象信息');
+    await page.waitForSelector('[data-testid="create-field-open"]', { timeout: 10000 });
+  };
+  await openEsInfo();
+  await page.click('[data-testid="create-field-open"]');
+  await page.fill('[data-testid="field-name"]', 'extra_ui');
+  await page.selectOption('[data-testid="field-type"]', 'keyword');
+  await page.click('[data-testid="field-submit"]');
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
+  await openEsInfo();
+  await page.waitForFunction(
+    () => [...document.querySelectorAll('[data-testid="object-info-column-name"]')].some((cell) => cell.textContent === 'extra_ui'),
+    null,
+    { timeout: 20000 },
+  );
+  check('Elasticsearch mapping field added from object info', true);
+  await page.locator('.modal-head .icon-btn').last().click();
+  await page.waitForTimeout(200);
+
+  await page.locator('[title="索引 aidb_es_ui"]').click({ button: 'right' });
+  await page.click('text=删除索引…');
+  await page.waitForSelector('[data-testid="drop-object-confirm"]', { timeout: 10000 });
+  await page.fill('[data-testid="drop-object-confirm"]', 'aidb_es_ui');
+  await page.click('[data-testid="drop-object-submit"]');
+  await page.waitForSelector('[title="索引 aidb_es_ui"]', { state: 'detached', timeout: 20000 });
+  check('Elasticsearch index dropped from the tree menu', true);
+}
+
+if (WEAVIATE_PORT) {
+  await page.click('[data-testid="sidebar-new-connection"]');
+  await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
+  await page.fill('[data-testid="connection-name"]', 'Weaviate E2E');
+  await page.selectOption('[data-testid="connection-engine"]', 'weaviate');
+  await page.fill('[data-testid="connection-host"]', '127.0.0.1');
+  await page.fill('[data-testid="connection-port"]', String(WEAVIATE_PORT));
+  await page.click('[data-testid="connection-save"]');
+  await page.locator('.conn-row', { hasText: 'Weaviate E2E' }).waitFor({ timeout: 15000 });
+  await page.waitForSelector('[title="向量集合 AidbUiClass"]', { timeout: 25000 });
+  check('Weaviate connection expands to classes', true);
+
+  await page.locator('[title="向量集合 AidbUiClass"]').click({ button: 'right' });
+  await page.click('text=对象信息');
+  await page.locator('[data-testid="object-info-column-name"]', { hasText: 'title' }).first().waitFor({ timeout: 10000 });
+  await page.click('[data-testid="create-field-open"]');
+  await page.fill('[data-testid="field-name"]', 'views_ui');
+  await page.selectOption('[data-testid="field-type"]', 'int');
+  await page.click('[data-testid="field-submit"]');
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
+  await page.locator('[title="向量集合 AidbUiClass"]').click({ button: 'right' });
+  await page.click('text=对象信息');
+  await page.waitForFunction(
+    () => [...document.querySelectorAll('[data-testid="object-info-column-name"]')].some((cell) => cell.textContent === 'views_ui'),
+    null,
+    { timeout: 20000 },
+  );
+  check('Weaviate class property added from object info', true);
+  await page.locator('.modal-head .icon-btn').last().click();
+  await page.waitForTimeout(200);
+
+  await page.locator('[title="向量集合 AidbUiClass"]').click({ button: 'right' });
+  await page.click('text=删除集合…');
+  await page.waitForSelector('[data-testid="drop-object-confirm"]', { timeout: 10000 });
+  await page.fill('[data-testid="drop-object-confirm"]', 'AidbUiClass');
+  await page.click('[data-testid="drop-object-submit"]');
+  await page.waitForSelector('[title="向量集合 AidbUiClass"]', { state: 'detached', timeout: 20000 });
+  check('Weaviate class dropped from the tree menu', true);
+}
+
 if (INFLUXDB_PORT) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
@@ -897,7 +1008,7 @@ if (DUCKDB_E2E) {
   check('DuckDB data grid returns rows', duckRows === 2, `${duckRows} rows`);
 }
 
-if (MONGO_PORT || REDIS_PORT || NEO4J_PORT || DM_PORT || QDRANT_PORT || DUCKDB_E2E || TDENGINE_PORT || FALKORDB_PORT || INFLUXDB_PORT || ARANGO_PORT || TIMESCALE_PORT) {
+if (MONGO_PORT || REDIS_PORT || NEO4J_PORT || DM_PORT || QDRANT_PORT || ES_PORT || WEAVIATE_PORT || DUCKDB_E2E || TDENGINE_PORT || FALKORDB_PORT || INFLUXDB_PORT || ARANGO_PORT || TIMESCALE_PORT) {
   // 恢复初始工作区：bootstrap 会把 active connection 指回 demo，并重新出现欢迎页
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });

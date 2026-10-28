@@ -610,6 +610,48 @@ export function createApiRouter(deps: ApiDeps): Router {
   );
 
   router.post(
+    '/fields/create',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const connectionId = str(body.connectionId);
+      const object = str(body.object);
+      const name = str(body.name);
+      if (!connectionId || !object || !name) {
+        throw Object.assign(new Error('connectionId、object 与 name 必填'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      const database = str(body.database);
+      const type = str(body.type) || 'text';
+      try {
+        const result = await manager.createField(connectionId, { object, name, type }, { database, actor: 'user' });
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'fields.create',
+          sql: JSON.stringify({ object, name, type }),
+          risk: 'ddl',
+          approval: 'manual',
+          status: 'ok',
+        });
+        res.json({ result });
+      } catch (err: any) {
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'fields.create',
+          sql: JSON.stringify({ object, name, type }),
+          risk: 'ddl',
+          approval: 'manual',
+          status: 'error',
+          meta: { error: err.message },
+        });
+        throw err;
+      }
+    }),
+  );
+
+  router.post(
     '/indexes/create',
     ah(async (req, res) => {
       const body = obj(req.body, 'body');

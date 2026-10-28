@@ -1,6 +1,17 @@
 import type { ColumnInfo, Engine, QueryResult, SearchQuery, StructuredQuery, TableInfo } from '@aidb/core';
 import { searchQueryFromArgs } from '@aidb/core';
-import type { CreateObjectInput, DeleteDocumentsInput, DocumentWriteDriver, DriverTestResult, ObjectCreateDriver, RunOptions, WriteDocumentInput, WriteDocumentResult } from './types';
+import type {
+  CreateFieldInput,
+  CreateObjectInput,
+  DeleteDocumentsInput,
+  DocumentWriteDriver,
+  DriverTestResult,
+  FieldAddDriver,
+  ObjectCreateDriver,
+  RunOptions,
+  WriteDocumentInput,
+  WriteDocumentResult,
+} from './types';
 import { DbError } from './types';
 
 export interface ElasticsearchOptions {
@@ -72,7 +83,7 @@ function hitsToResult(hits: Array<Record<string, any>>, started: number, stateme
   };
 }
 
-export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDriver {
+export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDriver, FieldAddDriver {
   engine: Engine;
 
   constructor(private opts: ElasticsearchOptions, engine: Engine = 'elasticsearch') {
@@ -215,6 +226,21 @@ export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDri
     if (!target) throw new DbError('索引名不能为空', { code: 'SEARCH_INDEX' });
     await this.request(`/${encodeURIComponent(target)}`, { method: 'DELETE' }, opts.timeoutMs ?? 30000);
     return { name: target, dropped: true };
+  }
+
+  /** mapping 可以追加字段；已存在字段由 ES 自行判定是否冲突。 */
+  async createField(input: CreateFieldInput, opts: RunOptions = {}): Promise<{ name: string; type: string; added: boolean }> {
+    const target = input.object.trim();
+    const name = input.name.trim();
+    if (!target) throw new DbError('索引名不能为空', { code: 'SEARCH_INDEX' });
+    if (!name) throw new DbError('字段名不能为空', { code: 'SEARCH_FIELD' });
+    const type = ES_TYPES.has(String(input.type).toLowerCase()) ? String(input.type).toLowerCase() : 'keyword';
+    await this.request(
+      `/${encodeURIComponent(target)}/_mapping`,
+      { method: 'PUT', body: JSON.stringify({ properties: { [name]: { type } } }) },
+      opts.timeoutMs ?? 30000,
+    );
+    return { name, type, added: true };
   }
 
   async deleteDocuments(input: DeleteDocumentsInput, opts: RunOptions = {}): Promise<{ deleted: number }> {

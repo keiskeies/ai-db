@@ -19,6 +19,8 @@ export interface EngineCapabilities {
   documentWrite?: boolean;
   /** 可在对象信息面板里创建/删除索引（驱动实现了 CollectionIndexDriver）。 */
   indexManage?: boolean;
+  /** 可给已有对象追加字段（ES/OpenSearch 的 mapping、Weaviate 的 property）。 */
+  fieldAdd?: boolean;
 }
 
 export interface EngineMeta {
@@ -481,6 +483,7 @@ export const ENGINES: EngineMeta[] = [
       users: false,
       documentWrite: true,
       objectLifecycle: true,
+      fieldAdd: true,
     },
     defaultPort: 8080,
     defaultDatabase: 'default',
@@ -636,6 +639,7 @@ export const ENGINES: EngineMeta[] = [
       users: false,
       documentWrite: true,
       objectLifecycle: true,
+      fieldAdd: true,
     },
     defaultPort: 9200,
     defaultUsername: 'elastic',
@@ -666,6 +670,7 @@ export const ENGINES: EngineMeta[] = [
       users: false,
       documentWrite: true,
       objectLifecycle: true,
+      fieldAdd: true,
     },
     defaultPort: 9200,
     defaultUsername: 'admin',
@@ -955,6 +960,20 @@ export function writesDocuments(engine: Engine): boolean {
 /** 该引擎能否在对象信息面板里创建/删除索引。 */
 export function managesIndexes(engine: Engine): boolean {
   return engineMeta(engine).capabilities.indexManage === true;
+}
+
+const ES_FIELD_TYPES = ['text', 'keyword', 'boolean', 'integer', 'long', 'float', 'double', 'date', 'ip', 'nested', 'object'];
+const WEAVIATE_FIELD_TYPES = ['text', 'int', 'number', 'boolean', 'date'];
+
+/** 该引擎能否给已有对象追加字段。 */
+export function addField(engine: Engine): boolean {
+  return engineMeta(engine).capabilities.fieldAdd === true;
+}
+
+/** 追加字段时可选的类型；不支持的引擎返回空数组。 */
+export function fieldTypeOptions(engine: Engine): string[] {
+  if (!addField(engine)) return [];
+  return engineMeta(engine).transport === 'weaviate-http' ? [...WEAVIATE_FIELD_TYPES] : [...ES_FIELD_TYPES];
 }
 
 export function isEngine(value: unknown): value is Engine {

@@ -30,7 +30,7 @@ import {
   PanelLeftClose,
 } from 'lucide-react';
 import type { ConnectionConfig, DatabaseSchema, Engine, TableInfo } from '@aidb/core';
-import { engineMeta, managesIndexes, managesObjects } from '@aidb/core';
+import { addField, engineMeta, managesIndexes, managesObjects } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp, type ContextMenuItem } from '../store';
 import { TableOpsDialog, type TableDialogKind } from './TableOpsDialog';
@@ -99,6 +99,7 @@ export function Sidebar() {
     relational?: boolean;
     connectionId?: string;
     manageIndexes?: boolean;
+    canAddField?: boolean;
     engine?: Engine;
   } | null>(null);
 
@@ -242,7 +243,7 @@ export function Sidebar() {
           ),
       },
       { label: '', icon: null, sep: true, onClick: () => undefined },
-      ...(table.indexes?.length
+      ...(table.indexes?.length || managesIndexes(conn.engine) || addField(conn.engine)
         ? [{
             label: '对象信息',
             icon: <Info size={13} />,
@@ -254,6 +255,7 @@ export function Sidebar() {
                 relational: false,
                 connectionId: conn.id,
                 manageIndexes: managesIndexes(conn.engine) && !conn.readonly,
+                canAddField: addField(conn.engine) && !conn.readonly,
                 engine: conn.engine,
               }),
           }]
@@ -770,6 +772,7 @@ export function Sidebar() {
           relational={infoTable.relational ?? true}
           connectionId={infoTable.connectionId}
           manageIndexes={infoTable.manageIndexes}
+          canAddField={infoTable.canAddField}
           engine={infoTable.engine}
           onClose={() => setInfoTable(null)}
         />

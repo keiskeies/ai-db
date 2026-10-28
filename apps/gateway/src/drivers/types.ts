@@ -128,6 +128,21 @@ export function supportsCollectionIndexes(driver: Driver): driver is CollectionI
   );
 }
 
+/** 有显式 schema 的非关系型驱动：给已有对象追加字段。 */
+export interface CreateFieldInput {
+  object: string;
+  name: string;
+  type: string;
+}
+
+export interface FieldAddDriver extends Driver {
+  createField(input: CreateFieldInput, opts?: RunOptions): Promise<{ name: string; type: string; added: boolean }>;
+}
+
+export function supportsFieldAdd(driver: Driver): driver is FieldAddDriver {
+  return typeof (driver as FieldAddDriver).createField === 'function';
+}
+
 export interface ConnectionRecord {
   config: import('@aidb/core').ConnectionConfig;
   secret: import('@aidb/core').ConnectionSecret;

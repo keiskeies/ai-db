@@ -397,7 +397,8 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'alter_table',
-    description: 'Alter a table: add/drop/rename columns, change column type, add/drop indexes. Dropping columns is destructive.',
+    description:
+      'Alter a table: add/drop/rename columns, change column type, add/drop indexes. Dropping columns is destructive. On Elasticsearch/OpenSearch (mapping) and Weaviate (property) only add_column is supported.',
     risk: 'dynamic',
     inputSchema: {
       type: 'object',

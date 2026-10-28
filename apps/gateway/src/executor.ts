@@ -2,6 +2,7 @@ import {
   aqlQueryFromArgs,
   buildAlterTable,
   buildCount,
+  addField,
   buildCreateIndex,
   buildCreateTable,
   buildDropIndex,
@@ -202,8 +203,8 @@ export class ToolExecutor {
     const a = call.args;
     if (SQL_ONLY_TOOLS.has(call.name)) {
       const conn = this.requireConnection(call, ctx);
-      // manage_index 在支持索引管理的文档引擎上走结构化通道，不是 SQL DDL
-      if (call.name === 'manage_index' && managesIndexes(conn.engine)) {
+      // manage_index / alter_table 在支持这些能力的文档与搜索引擎上走结构化通道，不是 SQL DDL
+      if ((call.name === 'manage_index' && managesIndexes(conn.engine)) || (call.name === 'alter_table' && addField(conn.engine))) {
         /* 放到下面的 dispatch 分支处理 */
       } else if (!isSqlEngine(conn.engine)) {
         throw new DbError(`${engineMeta(conn.engine).label} 不支持 ${call.name}`, {
@@ -727,6 +728,27 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
         const database = this.databaseOf(call, conn);
         const tableName = String(a.table ?? '');
         const { table } = await this.manager.findTable(conn.id, database, tableName);
+        if (addField(conn.engine)) {
+          const ops = Array.isArray(a.operations) ? (a.operations as Array<Record<string, unknown>>) : [];
+          if (!ops.length) throw new DbError('operations 不能为空');
+          const added: string[] = [];
+          for (const op of ops) {
+            if (op.op !== 'add_column') {
+              throw new DbError(`${engineMeta(conn.engine).label} 的结构变更只支持 add_column`, {
+                code: 'UNSUPPORTED_ENGINE',
+                hint: '其余变更请在引擎控制台完成',
+              });
+            }
+            const column = (op.column ?? {}) as { name?: string; type?: string };
+            const result = await this.manager.createField(
+              conn.id,
+              { object: tableName, name: String(column.name ?? ''), type: String(column.type ?? 'text') },
+              { database, timeoutMs: this.getSettings().queryTimeoutMs, actor: 'agent' },
+            );
+            added.push(`${result.name}:${result.type}`);
+          }
+          return ok(started, `已追加 ${added.length} 个字段`, { table: tableName, columns: added });
+        }
         const operations = Array.isArray(a.operations) ? (a.operations as AlterOp[]) : [];
         if (!operations.length) throw new DbError('operations 不能为空');
         const statements = buildAlterTable(conn.engine, table.name, operations, this.schemaFor(conn, table));

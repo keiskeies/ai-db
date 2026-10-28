@@ -247,6 +247,8 @@ export const api = {
   }) => request<{ result: { name: string; created: boolean } }>('/indexes/create', { method: 'POST', body: JSON.stringify(body) }),
   dropIndex: (body: { connectionId: string; database?: string; collection: string; name: string }) =>
     request<{ result: { name: string; dropped: boolean } }>('/indexes/drop', { method: 'POST', body: JSON.stringify(body) }),
+  createField: (body: { connectionId: string; database?: string; object: string; name: string; type: string }) =>
+    request<{ result: { name: string; type: string; added: boolean } }>('/fields/create', { method: 'POST', body: JSON.stringify(body) }),
   dropObject: (body: { connectionId: string; database?: string; name: string }) =>
     request<{ result: { name: string; dropped: boolean } }>('/objects/drop', { method: 'POST', body: JSON.stringify(body) }),
   upsertDocuments: (body: { connectionId: string; database?: string; collection: string; documents: Record<string, unknown>[] }) =>
