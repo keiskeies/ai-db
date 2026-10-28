@@ -15,6 +15,8 @@ export interface EngineCapabilities {
   users: boolean;
   /** 可在对象树里创建并删除集合/索引；只有实现了建删对象的驱动才置真。 */
   objectLifecycle?: boolean;
+  /** 可批量写入与删除文档/向量点（驱动实现了 DocumentWriteDriver）。 */
+  documentWrite?: boolean;
 }
 
 export interface EngineMeta {
@@ -228,6 +230,7 @@ export const ENGINES: EngineMeta[] = [
       backup: 'none',
       gridEdit: false,
       users: false,
+      documentWrite: true,
       objectLifecycle: true,
     },
     defaultPort: 27017,
@@ -366,6 +369,7 @@ export const ENGINES: EngineMeta[] = [
       backup: 'none',
       gridEdit: false,
       users: false,
+      documentWrite: true,
     },
     defaultPort: 8529,
     defaultUsername: 'root',
@@ -413,6 +417,7 @@ export const ENGINES: EngineMeta[] = [
       backup: 'none',
       gridEdit: false,
       users: false,
+      documentWrite: true,
       objectLifecycle: true,
     },
     defaultPort: 6333,
@@ -441,6 +446,7 @@ export const ENGINES: EngineMeta[] = [
       backup: 'none',
       gridEdit: false,
       users: false,
+      documentWrite: true,
     },
     defaultPort: 19530,
     defaultDatabase: 'default',
@@ -468,6 +474,7 @@ export const ENGINES: EngineMeta[] = [
       backup: 'none',
       gridEdit: false,
       users: false,
+      documentWrite: true,
       objectLifecycle: true,
     },
     defaultPort: 8080,
@@ -622,6 +629,7 @@ export const ENGINES: EngineMeta[] = [
       backup: 'none',
       gridEdit: false,
       users: false,
+      documentWrite: true,
       objectLifecycle: true,
     },
     defaultPort: 9200,
@@ -651,6 +659,7 @@ export const ENGINES: EngineMeta[] = [
       backup: 'none',
       gridEdit: false,
       users: false,
+      documentWrite: true,
       objectLifecycle: true,
     },
     defaultPort: 9200,
@@ -931,6 +940,11 @@ export function engineDefaultPort(engine: Engine): number | undefined {
 /** 该引擎能否在对象树中创建并删除集合/索引（驱动实现了对象生命周期）。 */
 export function managesObjects(engine: Engine): boolean {
   return engineMeta(engine).capabilities.objectLifecycle === true;
+}
+
+/** 该引擎能否批量写入/删除文档或向量点。 */
+export function writesDocuments(engine: Engine): boolean {
+  return engineMeta(engine).capabilities.documentWrite === true;
 }
 
 export function isEngine(value: unknown): value is Engine {

@@ -55,7 +55,7 @@ export interface DeleteDocumentsInput {
   ids: string[];
 }
 
-/** 向量/搜索驱动实现的写入入口；SQL 与文档型驱动不实现。 */
+/** 文档型 / 向量 / 搜索驱动实现的批量写入入口；SQL 引擎走 DML。 */
 export interface DocumentWriteDriver extends StructuredQueryDriver {
   upsertDocuments(input: WriteDocumentInput, opts?: RunOptions): Promise<WriteDocumentResult>;
   deleteDocuments(input: DeleteDocumentsInput, opts?: RunOptions): Promise<{ deleted: number }>;

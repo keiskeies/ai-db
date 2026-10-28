@@ -168,7 +168,9 @@ export function DocumentWritePanel({
           <div className="muted" style={{ fontSize: 11, margin: '10px 0 6px' }}>
             {isSearch || connection.engine === 'mongodb'
               ? '粘贴一个 JSON 对象或对象数组（批量）；用 _id 指定文档 ID。'
-              : connection.engine === 'qdrant'
+              : connection.engine === 'arangodb'
+                ? '粘贴 JSON 对象或对象数组（批量）；用 _key 指定文档主键，同 _key 的文档会被整体替换。'
+                : connection.engine === 'qdrant'
                 ? '数组元素需含 vector 与可选 payload；Qdrant 的 id 必须是整数或 UUID。'
                 : connection.engine === 'weaviate'
                   ? 'properties 为对象属性，vector 可选；带 id 时覆盖同 ID 对象。'
@@ -186,7 +188,7 @@ export function DocumentWritePanel({
       ) : mode === 'delete' ? (
         <>
           <div className="muted" style={{ fontSize: 11, margin: '10px 0 6px' }}>
-            输入要删除的 id，用逗号或空格分隔。删除不可撤销，请先用查询确认范围。
+            输入要删除的 {isSearch || connection.engine === 'mongodb' ? '_id' : connection.engine === 'arangodb' ? '_key' : 'id'}，用逗号或空格分隔。删除不可撤销，请先用查询确认范围。
           </div>
           <textarea
             className="textarea"

@@ -156,9 +156,9 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 | `run_redis` | 单条 Redis 命令 |
 | `run_cypher` | Neo4j / Memgraph / FalkorDB Cypher 查询（支持 `$params`） |
 | `run_aql` | ArangoDB AQL 查询（支持 `@bindVar` 与 `@@collection`） |
-| `upsert_document` | 批量写入文档/向量点（MongoDB / Qdrant / Weaviate / Milvus / ES / OpenSearch） |
-| `delete_documents` | 按 id 列表删除向量点/搜索文档 |
-| `import_documents` | CSV 批量导入文档/向量点 |
+| `upsert_document` | 批量写入文档/向量点（MongoDB / ArangoDB / Qdrant / Weaviate / Milvus / ES / OpenSearch） |
+| `delete_documents` | 按 id 列表删除文档/向量点/搜索文档（ArangoDB 用 `_key`） |
+| `import_documents` | CSV 批量导入文档/向量点（含 ArangoDB，id 列映射为 `_key`） |
 | `create_collection` | 创建向量集合 / 搜索索引 / Weaviate class / MongoDB 集合 |
 | `delete_collection` | 删除向量集合 / 搜索索引 / Weaviate class / MongoDB 集合（需 `confirm` 原样重复名字） |
 | `run_cql` | Cassandra / ScyllaDB CQL（支持 `?` 参数） |
@@ -233,7 +233,7 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 - TDengine 走 taosAdapter REST：无参数化查询、无网格编辑；对象树最多列出 500 个表，超大库请用 SQL 过滤。
 - FalkorDB 通过 Redis 协议执行 `GRAPH.QUERY`：参数以 `CYPHER k=v` 前缀内联（驱动已做字面量转义），属性/统计信息来自 `GRAPH.QUERY` 的第二、三段返回；无多图事务与索引管理 UI。
 - InfluxDB 3 的 SQL 接口只读，且只有 `iox`/`system`/`information_schema` 三个 schema；建库写数据需用 `influxdb3` CLI 或行协议 API。InfluxDB 1.x/2.x 的 Flux/InfluxQL 端点不同，当前只保证 3.x。
-- ArangoDB 走 HTTP `/_api/cursor`：AQL 无 DDL 设计器，文档集合与边集合通过 `/_api/collection` 在对象树里新建/删除（边集合靠请求体 `type: 3`，查询参数会被忽略）；`_` 前缀的系统集合既不能创建也不能删除。文档集合与边集合都按对象树展示，带 `_from`/`_to` 或 path 的结果自动切换图视图；单批上限 1000 行，超出自动 follow-up 并截断。
+- ArangoDB 走 HTTP `/_api/cursor`：AQL 无 DDL 设计器，文档集合与边集合通过 `/_api/collection` 在对象树里新建/删除（边集合靠请求体 `type: 3`，查询参数会被忽略）；`_` 前缀的系统集合既不能创建也不能删除。写入走 `/_api/document/{collection}?overwriteMode=replace`（带 `_key` 覆盖、不带则插入，`_id`/`_rev` 会被剔除），删除用 `REMOVE … FILTER d._key IN @ids`；批量接口按条目返回错误，遇到非法 `_key` 会抛错而不是静默跳过。文档集合与边集合都按对象树展示，带 `_from`/`_to` 或 path 的结果自动切换图视图；单批上限 1000 行，超出自动 follow-up 并截断。
 - 向量/搜索写入已支持单条文档写入；批量导入与删除仍待补。
 
 ## 10. 后续路线

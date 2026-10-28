@@ -7,7 +7,7 @@ import { keymap } from '@codemirror/view';
 import { MSSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql as sqlLang } from '@codemirror/lang-sql';
 import { AlignLeft, BarChart3, Bookmark, Database, Download, FileDown, FilePlus, FileUp, History, ListChecks, Network, Play, Plus, Sparkles, Table2, TerminalSquare, Trash2, WandSparkles, Wrench } from 'lucide-react';
 import type { ConnectionConfig, QueryBatchResult } from '@aidb/core';
-import { engineMeta } from '@aidb/core';
+import { engineMeta, writesDocuments } from '@aidb/core';
 import { api } from '../lib/api';
 import { formatDuration } from '../lib/format';
 import { formatSql } from '../lib/sqlFormat';
@@ -58,7 +58,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const conn = connections.find((c) => c.id === tab.connectionId);
   const isSql = conn ? engineMeta(conn.engine).languages.includes('sql') : true;
   const canVector = conn ? engineMeta(conn.engine).model === 'vector' || engineMeta(conn.engine).dialect === 'postgres' : false;
-  const canWriteDocuments = conn ? ['vector', 'search', 'document'].includes(engineMeta(conn.engine).model) : false;
+  const canWriteDocuments = conn ? writesDocuments(conn.engine) : false;
   const [vectorOpen, setVectorOpen] = useState(false);
   const [writeOpen, setWriteOpen] = useState(false);
   const [keyDialog, setKeyDialog] = useState<string | null>(null);

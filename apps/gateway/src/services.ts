@@ -301,7 +301,11 @@ export async function importDocuments(
   if (opts.vectorColumn && vectorIndex < 0) throw new DbError(`找不到 vector 列：${opts.vectorColumn}`, { code: 'CSV_MAPPING' });
 
   const model = engineMeta(conn.engine).model;
-  const idKey = model === 'search' || model === 'document' ? '_id' : 'id';
+  const idKey = engineMeta(conn.engine).languages.includes('aql')
+    ? '_key'
+    : model === 'search' || model === 'document'
+      ? '_id'
+      : 'id';
   const documents: Record<string, unknown>[] = [];
   const errors: string[] = [];
   dataRows.forEach((row, offset) => {

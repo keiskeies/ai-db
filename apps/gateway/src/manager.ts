@@ -332,7 +332,7 @@ export class ConnectionManager {
     }
     const driver = await this.driverFor(connectionId);
     if (!supportsDocumentWrite(driver)) {
-      throw new DbError(`${meta.label} 暂不支持写入文档/向量`, { code: 'UNSUPPORTED_ENGINE', hint: '当前支持 Qdrant / Weaviate / Milvus / Elasticsearch / OpenSearch' });
+      throw new DbError(`${meta.label} 暂不支持写入文档/向量`, { code: 'UNSUPPORTED_ENGINE', hint: '当前支持 MongoDB / ArangoDB / Qdrant / Weaviate / Milvus / Elasticsearch / OpenSearch' });
     }
     return { conn, driver, name: collection.trim() };
   }

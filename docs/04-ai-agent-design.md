@@ -100,9 +100,9 @@ for (step = 0; step < maxSteps; step++) {
 | 29 | `search_index` | read | Elasticsearch/OpenSearch `_search` JSON DSL | `{ connectionId, database?, index, query?, body?, size? }` |
 | 30 | `run_cql` | 动态* | Cassandra/ScyllaDB CQL，支持 `?` 参数 | `{ connectionId, database?, query, params?, maxRows? }` |
 | 31 | `run_aql` | 动态* | ArangoDB AQL；支持 `@bindVar` 与 `@@collection`，只读连接拒绝写操作 | `{ connectionId, database?, query, params?, maxRows? }` |
-| 32 | `upsert_document` | write | 写入 MongoDB 文档、Qdrant/Weaviate/Milvus 向量点或 Elasticsearch/OpenSearch 文档（`document` 单条或 `documents` 批量，ID 写在文档里） | `{ connectionId, database?, collection, document?, documents? }` |
-| 33 | `delete_documents` | destructive | 按明确 id 列表删除 MongoDB 文档 / 向量点 / 搜索文档，删除前必须先用查询确认范围 | `{ connectionId, database?, collection, ids[] }` |
-| 34 | `import_documents` | write | CSV 批量导入 MongoDB 文档 / 向量点 / 搜索文档（≤5000 行，列名即字段，id/vector 列单独指定） | `{ connectionId, database?, collection, csv?/path?, hasHeader?, delimiter?, idColumn?, vectorColumn? }` |
+| 32 | `upsert_document` | write | 写入 MongoDB 文档、ArangoDB 文档（`_key` 相同则覆盖）、Qdrant/Weaviate/Milvus 向量点或 Elasticsearch/OpenSearch 文档（`document` 单条或 `documents` 批量，ID 写在文档里） | `{ connectionId, database?, collection, document?, documents? }` |
+| 33 | `delete_documents` | destructive | 按明确 id 列表删除 MongoDB 文档 / ArangoDB 文档（`_key`） / 向量点 / 搜索文档，删除前必须先用查询确认范围 | `{ connectionId, database?, collection, ids[] }` |
+| 34 | `import_documents` | write | CSV 批量导入 MongoDB 文档 / ArangoDB 文档 / 向量点 / 搜索文档（≤5000 行，列名即字段，id/vector 列单独指定） | `{ connectionId, database?, collection, csv?/path?, hasHeader?, delimiter?, idColumn?, vectorColumn? }` |
 | 35 | `create_collection` | ddl | 创建向量集合（Qdrant 需维度/距离）、搜索索引 / Weaviate class（字段列表）、MongoDB 集合或 ArangoDB 文档/边集合（`edge=true`）；Milvus 明确拒绝 | `{ connectionId, database?, name, dimension?, distance?, fields?[], edge? }` |
 | 36 | `delete_collection` | destructive | 删除 Qdrant 集合 / ES·OpenSearch 索引 / Weaviate class / MongoDB 集合 / ArangoDB 集合；`confirm` 必须与 `name` 完全一致 | `{ connectionId, database?, name, confirm }` |
 

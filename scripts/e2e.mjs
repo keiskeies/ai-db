@@ -695,6 +695,26 @@ if (ARANGO_PORT) {
   await page.click('[data-testid="drop-object-submit"]');
   await page.waitForSelector('[title="边集合 aidb_ui_col"]', { state: 'detached', timeout: 20000 });
   check('ArangoDB collection dropped from the tree menu', true);
+
+  await page.click('[title="文档集合 person"]');
+  await page.locator('[data-testid="query-run"]').last().click();
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 2, null, { timeout: 20000 });
+  await page.click('[data-testid="open-document-write"]');
+  await page.waitForSelector('[data-testid="document-write-json"]', { timeout: 10000 });
+  await page.fill('[data-testid="document-write-collection"]', 'person');
+  await page.fill('[data-testid="document-write-json"]', JSON.stringify({ _key: 'grace', name: 'Grace', age: 45 }));
+  await page.click('[data-testid="document-write-submit"]');
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 3, null, { timeout: 20000 });
+  check('ArangoDB document write inserts by _key', true);
+
+  await page.click('[data-testid="open-document-write"]');
+  await page.waitForSelector('[data-testid="document-mode-delete"]', { timeout: 10000 });
+  await page.fill('[data-testid="document-write-collection"]', 'person');
+  await page.click('[data-testid="document-mode-delete"]');
+  await page.fill('[data-testid="document-delete-ids"]', 'grace');
+  await page.click('[data-testid="document-write-submit"]');
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 2, null, { timeout: 20000 });
+  check('ArangoDB delete by _key removes the document', true);
 }
 
 if (INFLUXDB_PORT) {

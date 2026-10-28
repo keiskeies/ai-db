@@ -1,11 +1,15 @@
 import type { ColumnInfo, Engine, GraphData, QueryResult, StructuredQuery, TableInfo } from '@aidb/core';
 import type {
   CreateObjectInput,
+  DeleteDocumentsInput,
+  DocumentWriteDriver,
   Driver,
   DriverTestResult,
   ObjectCreateDriver,
   RunOptions,
   StructuredQueryDriver,
+  WriteDocumentInput,
+  WriteDocumentResult,
 } from './types';
 import { DbError } from './types';
 
@@ -127,7 +131,7 @@ function screenColumns(docs: unknown[]): { columns: ColumnInfo[]; keys: string[]
   return { columns, keys };
 }
 
-export class ArangoDriver implements Driver, StructuredQueryDriver, ObjectCreateDriver {
+export class ArangoDriver implements Driver, StructuredQueryDriver, ObjectCreateDriver, DocumentWriteDriver {
   engine: Engine = 'arangodb';
 
   constructor(private opts: ArangoOptions) {}
@@ -268,6 +272,40 @@ export class ArangoDriver implements Driver, StructuredQueryDriver, ObjectCreate
       timeoutMs: opts.timeoutMs,
     });
     return { name: target, dropped: true };
+  }
+
+  /** 批量写入走文档接口：overwriteMode=replace 让带 _key 的文档替换、其余插入。 */
+  async upsertDocuments(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {
+    if (!input.collection) throw new DbError('collection 不能为空', { code: 'AQL_COLLECTION' });
+    if (!input.documents.length) throw new DbError('至少需要一个文档', { code: 'WRITE_DOCUMENT' });
+    const docs = input.documents.map((document) => {
+      const clone = { ...document };
+      delete clone._id;
+      delete clone._rev;
+      return clone;
+    });
+    const reply = await this.send(
+      `${this.dbPath(opts.database)}/_api/document/${encodeURIComponent(input.collection)}?overwriteMode=replace`,
+      { method: 'POST', body: docs, timeoutMs: opts.timeoutMs ?? 30000 },
+    );
+    const items = Array.isArray(reply.body) ? reply.body : [];
+    const failed = items.find((item: any) => item?.error);
+    if (failed) {
+      throw new DbError(String(failed.errorMessage ?? '写入失败'), { code: `ARANGO_${failed.errorNum ?? 0}` });
+    }
+    return { ids: items.map((item: any) => String(item._key ?? '')), upserted: items.length };
+  }
+
+  async deleteDocuments(input: DeleteDocumentsInput, opts: RunOptions = {}): Promise<{ deleted: number }> {
+    if (!input.collection) throw new DbError('collection 不能为空', { code: 'AQL_COLLECTION' });
+    if (!input.ids.length) throw new DbError('ids 不能为空', { code: 'WRITE_IDS' });
+    const { docs } = await this.cursor(
+      opts.database,
+      `FOR d IN @@collection FILTER d._key IN @ids REMOVE d IN @@collection RETURN OLD._key`,
+      { '@collection': input.collection, ids: input.ids },
+      input.ids.length,
+    );
+    return { deleted: docs.length };
   }
 
   async executeQuery(query: StructuredQuery, opts: RunOptions = {}): Promise<QueryResult> {
