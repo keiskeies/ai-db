@@ -5,10 +5,7 @@ body {
   letter-spacing: 0.05px;
 }
 .app {
-  background:
-    radial-gradient(900px 420px at 12% -10%, var(--glow-blue), transparent 60%),
-    radial-gradient(720px 360px at 92% -12%, var(--glow-violet), transparent 62%),
-    var(--bg-app);
+  background: radial-gradient(820px 340px at 50% -12%, var(--glow-accent), transparent 62%), var(--bg-app);
 }
 .titlebar {
   height: 34px;
@@ -26,16 +23,16 @@ body {
   right: 0;
   bottom: -1px;
   height: 1px;
-  background: linear-gradient(90deg, transparent, var(--accent) 25%, var(--violet) 70%, transparent);
-  opacity: 0.55;
+  background: linear-gradient(90deg, transparent, var(--accent) 32%, var(--accent) 68%, transparent);
+  opacity: 0.35;
 }
 .brand { gap: 7px; padding-left: 2px; }
 .brand-mark {
   width: 20px;
   height: 20px;
   border-radius: 6px;
-  background: linear-gradient(140deg, var(--accent-2), var(--accent) 52%, var(--violet));
-  box-shadow: 0 0 14px var(--glow-blue);
+  background: linear-gradient(140deg, var(--accent), var(--accent-2));
+  box-shadow: 0 0 10px var(--glow-accent);
   font-size: 9.5px;
 }
 .brand-name { font-size: 12px; font-weight: 700; letter-spacing: 0.15px; }
@@ -87,8 +84,8 @@ body {
 .tab.active { background: var(--bg-app); }
 .tab.active::after {
   height: 2px;
-  background: linear-gradient(90deg, var(--accent-2), var(--accent), var(--violet));
-  box-shadow: 0 0 10px var(--glow-blue);
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--glow-accent);
 }
 .tab-add { width: 32px; }
 .toolbar {
@@ -112,9 +109,10 @@ body {
 }
 .btn:hover { border-color: var(--border-strong); background: var(--bg-hover); }
 .btn.primary {
-  background: linear-gradient(135deg, var(--accent), #6d5dff);
+  background: var(--accent);
   border-color: transparent;
-  box-shadow: 0 2px 12px var(--glow-blue);
+  color: var(--on-solid);
+  box-shadow: 0 1px 6px var(--glow-accent);
 }
 .btn.primary:hover { filter: brightness(1.08); }
 .btn.danger { background: var(--danger-soft); }
@@ -178,8 +176,8 @@ body {
 .agent-head .agent-title { font-size: 11.5px; gap: 6px; }
 .agent-dot {
   width: 16px; height: 16px; border-radius: 5px;
-  background: linear-gradient(140deg, var(--violet), #6d5dff);
-  color: #fff; font-size: 8px;
+  background: var(--agent);
+  color: var(--on-solid); font-size: 8px;
   box-shadow: 0 0 12px var(--glow-violet);
 }
 .agent-sub {
@@ -247,8 +245,8 @@ body {
 .mode-select { font-size: 9.5px; height: 22px; background: var(--bg-panel); }
 .send-btn {
   width: 27px; height: 27px; border-radius: 7px;
-  background: linear-gradient(135deg, var(--violet), #6d5dff);
-  color: #fff;
+  background: var(--agent);
+  color: var(--on-solid);
   box-shadow: 0 2px 12px var(--glow-violet);
 }
 .mention-popover { bottom: 112px; }
@@ -261,8 +259,8 @@ body {
 .welcome-hero { gap: 12px; margin-bottom: 16px; align-items: flex-start; }
 .welcome-mark {
   width: 40px; height: 40px; border-radius: 11px;
-  background: linear-gradient(140deg, var(--accent-2), var(--accent) 55%, var(--violet));
-  box-shadow: 0 0 24px var(--glow-blue);
+  background: linear-gradient(140deg, var(--accent), var(--accent-2));
+  box-shadow: 0 0 16px var(--glow-accent);
 }
 .welcome h1 { font-size: 21px; margin-bottom: 4px; letter-spacing: -0.4px; }
 .welcome .lead { font-size: 12px; line-height: 1.55; }

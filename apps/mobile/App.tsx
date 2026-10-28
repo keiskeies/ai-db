@@ -259,7 +259,7 @@ function PairScreen({ onConnected }: { onConnected: (config: BridgeConfig) => vo
           )}
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <Pressable testID="m-connect" style={[styles.primaryButton, busy && { opacity: 0.6 }]} onPress={() => void connect()} disabled={busy}>
-            {busy ? <ActivityIndicator color="#1a120d" size="small" /> : <Sparkles size={15} color="#1a120d" />}
+            {busy ? <ActivityIndicator color="#0b0d0d" size="small" /> : <Sparkles size={15} color="#0b0d0d" />}
             <Text style={styles.primaryButtonText}>{busy ? '连接中…' : '连接 Bridge'}</Text>
           </Pressable>
         </View>
@@ -663,7 +663,7 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
         <Text style={[styles.pairTitle, { fontSize: 18, marginTop: 12 }]}>连接失败</Text>
         <Text style={[styles.hint, { textAlign: 'center' }]}>{error}</Text>
         <Pressable style={styles.primaryButton} onPress={() => void bootstrap()}>
-          <RefreshCw size={14} color="#1a120d" />
+          <RefreshCw size={14} color="#0b0d0d" />
           <Text style={styles.primaryButtonText}>重试</Text>
         </Pressable>
         <Pressable onPress={() => void onDisconnect()} style={{ marginTop: 12 }}>
@@ -859,7 +859,7 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
               <View style={styles.sheetHead}>
                 <Text style={styles.sheetTitle}>会话</Text>
                 <Pressable style={styles.primarySmall} onPress={() => void newSession()}>
-                  <Plus size={13} color="#1a120d" />
+                  <Plus size={13} color="#0b0d0d" />
                   <Text style={styles.primarySmallText}>新会话</Text>
                 </Pressable>
                 <Pressable style={styles.iconButton} onPress={() => setPicker(null)}>
@@ -1170,11 +1170,11 @@ function ChatScreen({
           />
           {busy ? (
             <Pressable style={[styles.sendButton, { backgroundColor: colors.danger }]} onPress={onStop}>
-              <Square size={13} color="#fff" />
+              <Square size={13} color="#0b0d0d" />
             </Pressable>
           ) : (
             <Pressable testID="m-send" style={[styles.sendButton, (!input.trim() || !connected) && { opacity: 0.4 }]} onPress={onSend} disabled={!input.trim() || !connected}>
-              <Send size={14} color="#1a120d" />
+              <Send size={14} color="#0b0d0d" />
             </Pressable>
           )}
         </View>

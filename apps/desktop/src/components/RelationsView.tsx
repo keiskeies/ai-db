@@ -34,15 +34,15 @@ export function RelationsView({ tab }: { tab: RelationsTab }) {
 
   const exportSvg = (layout: { nodes: Node[]; edges: Array<{ d: string; title: string }>; width: number; height: number }) => {
     const esc = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const body: string[] = [`<rect width="${layout.width}" height="${layout.height}" fill="#0a0f18"/>`];
-    for (const edge of layout.edges) body.push(`<path d="${edge.d}" fill="none" stroke="#9a7bff" stroke-opacity="0.55" stroke-width="1.4"><title>${esc(edge.title)}</title></path>`);
+    const body: string[] = [`<rect width="${layout.width}" height="${layout.height}" fill="#111414"/>`];
+    for (const edge of layout.edges) body.push(`<path d="${edge.d}" fill="none" stroke="#45c8c3" stroke-opacity="0.55" stroke-width="1.4"><title>${esc(edge.title)}</title></path>`);
     for (const node of layout.nodes) {
-      body.push(`<rect x="${node.x}" y="${node.y}" width="${224}" height="${node.h}" rx="8" fill="#0e1522" stroke="#233250"/>`);
-      body.push(`<rect x="${node.x}" y="${node.y}" width="224" height="28" rx="8" fill="#152033"/>`);
-      body.push(`<text x="${node.x + 9}" y="${node.y + 18}" fill="#e8f0ff" font-family="Inter, sans-serif" font-size="11" font-weight="600">${esc(node.table.name)}</text>`);
+      body.push(`<rect x="${node.x}" y="${node.y}" width="${224}" height="${node.h}" rx="8" fill="#171b1b" stroke="#272a2a"/>`);
+      body.push(`<rect x="${node.x}" y="${node.y}" width="224" height="28" rx="8" fill="#1e2323"/>`);
+      body.push(`<text x="${node.x + 9}" y="${node.y + 18}" fill="#f1f3f1" font-family="Inter, sans-serif" font-size="11" font-weight="600">${esc(node.table.name)}</text>`);
       (node.table.columns ?? []).slice(0, 9).forEach((column, index) => {
-        body.push(`<text x="${node.x + 9}" y="${node.y + 46 + index * 17}" fill="${column.primaryKey ? '#4d7cff' : '#90a4c2'}" font-family="Consolas, monospace" font-size="9">${esc(column.name)}</text>`);
-        body.push(`<text x="${node.x + 214}" y="${node.y + 46 + index * 17}" fill="#5a6d8a" font-family="Consolas, monospace" font-size="8" text-anchor="end">${esc(column.type.slice(0, 18))}</text>`);
+        body.push(`<text x="${node.x + 9}" y="${node.y + 46 + index * 17}" fill="${column.primaryKey ? '#45c8c3' : '#b8beba'}" font-family="Consolas, monospace" font-size="9">${esc(column.name)}</text>`);
+        body.push(`<text x="${node.x + 214}" y="${node.y + 46 + index * 17}" fill="#858d88" font-family="Consolas, monospace" font-size="8" text-anchor="end">${esc(column.type.slice(0, 18))}</text>`);
       });
     }
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${layout.width}" height="${layout.height}" viewBox="0 0 ${layout.width} ${layout.height}">${body.join('')}</svg>`;

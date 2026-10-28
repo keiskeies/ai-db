@@ -16,7 +16,7 @@ export interface ChartSpec {
   note?: string;
 }
 
-const COLORS = ['#5B8CFF', '#9A7BFF', '#2DD4BF', '#F5C451', '#FF6B81', '#60A5FA', '#34D399', '#F472B6'];
+const COLORS = ['#45c8c3', '#e0af63', '#a9c97e', '#8fa8f0', '#e58cb0', '#c48fc8', '#6e9fbf', '#d98e6e'];
 
 export interface ChartViewProps {
   chart: ChartSpec;
@@ -205,13 +205,9 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef }: AxisBodyProps) {
       data-testid="chart-svg"
     >
       <defs>
-        <linearGradient id={`bar-${id}`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#5B8CFF" stopOpacity="0.95" />
-          <stop offset="100%" stopColor="#5B8CFF" stopOpacity="0.35" />
-        </linearGradient>
         <linearGradient id={`area-${id}`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#9A7BFF" stopOpacity="0.35" />
-          <stop offset="100%" stopColor="#9A7BFF" stopOpacity="0.02" />
+          <stop offset="0%" stopColor="#45c8c3" stopOpacity="0.35" />
+          <stop offset="100%" stopColor="#45c8c3" stopOpacity="0.02" />
         </linearGradient>
       </defs>
       {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
@@ -230,6 +226,8 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef }: AxisBodyProps) {
         ? history.map((point, index) => {
             const top = y(Math.max(point.value, 0));
             const bottom = y(Math.min(point.value, 0));
+            // 分类少时每根柱一个定性色（和饼图同一套），超过色板长度就退回单色，避免循环撞色
+            const fill = history.length <= COLORS.length ? COLORS[index % COLORS.length] : COLORS[0];
             return (
               <rect
                 key={`${point.label}-${index}`}
@@ -238,7 +236,8 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef }: AxisBodyProps) {
                 width={band * 0.6}
                 height={Math.max(1, bottom - top)}
                 rx={2}
-                fill={`url(#bar-${id})`}
+                fill={fill}
+                fillOpacity={0.92}
               >
                 <title>{`${point.label}: ${point.value.toLocaleString()}`}</title>
               </rect>
@@ -248,13 +247,13 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef }: AxisBodyProps) {
       {type === 'line' ? (
         <>
           {areaPath ? <path d={areaPath} fill={`url(#area-${id})`} /> : null}
-          {bandPath ? <path d={bandPath} fill="#F5C451" fillOpacity="0.18" stroke="none" data-testid="chart-forecast-band" /> : null}
-          {linePath ? <path d={linePath} fill="none" stroke="#9A7BFF" strokeWidth="2" /> : null}
+          {bandPath ? <path d={bandPath} fill="#e0af63" fillOpacity="0.16" stroke="none" data-testid="chart-forecast-band" /> : null}
+          {linePath ? <path d={linePath} fill="none" stroke="#45c8c3" strokeWidth="2" /> : null}
           {forecastPath ? (
-            <path d={forecastPath} fill="none" stroke="#F5C451" strokeWidth="2" strokeDasharray="4 3" data-testid="chart-forecast-line" />
+            <path d={forecastPath} fill="none" stroke="#e0af63" strokeWidth="2" strokeDasharray="4 3" data-testid="chart-forecast-line" />
           ) : null}
           {history.map((point, index) => (
-            <circle key={`${point.label}-${index}`} cx={cx(index)} cy={y(point.value)} r="2.6" fill="#9A7BFF">
+            <circle key={`${point.label}-${index}`} cx={cx(index)} cy={y(point.value)} r="2.6" fill="#45c8c3">
               <title>{`${point.label}: ${point.value.toLocaleString()}`}</title>
             </circle>
           ))}

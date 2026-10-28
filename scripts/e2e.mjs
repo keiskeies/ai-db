@@ -372,9 +372,30 @@ await page.waitForTimeout(300);
 await page.click('[data-testid="theme-toggle"]');
 await page.waitForTimeout(800);
 check('theme toggles to light', (await page.evaluate(() => document.documentElement.dataset.theme)) === 'light');
+// 设计约束：底必须是中性石墨（三通道接近），强调色必须是青（G/B 高于 R），否则又滑回蓝黑
+const rgbOf = (hex) => {
+  const n = parseInt(hex.replace('#', ''), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+};
+const neutralHex = (hex) => {
+  const [r, g, b] = rgbOf(hex);
+  return Math.max(r, g, b) - Math.min(r, g, b) <= 8;
+};
+const cyanHex = (hex) => {
+  const [r, g, b] = rgbOf(hex);
+  return g > r && b > r;
+};
+const readPalette = () => page.evaluate(() => {
+  const style = getComputedStyle(document.documentElement);
+  return { bg: style.getPropertyValue('--bg-app').trim(), accent: style.getPropertyValue('--accent').trim() };
+});
+const lightPalette = await readPalette();
+check('light palette is neutral paper with cyan accent', neutralHex(lightPalette.bg) && cyanHex(lightPalette.accent), `${lightPalette.bg} / ${lightPalette.accent}`);
 await page.screenshot({ path: join(shots, 'desktop-light.png') });
 await page.click('[data-testid="theme-toggle"]');
 await page.waitForTimeout(600);
+const darkPalette = await readPalette();
+check('dark surface is neutral graphite, accent is cyan', neutralHex(darkPalette.bg) && cyanHex(darkPalette.accent), `${darkPalette.bg} / ${darkPalette.accent}`);
 
 await page.click('[data-testid="agent-memory"]');
 await page.waitForSelector('[data-testid="memory-drawer"]', { timeout: 10000 });

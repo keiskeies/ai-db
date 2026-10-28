@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { basicSetup, EditorView } from 'codemirror';
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { EditorState, Prec } from '@codemirror/state';
+import { tags as t } from '@lezer/highlight';
 import { keymap } from '@codemirror/view';
 import { MSSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql as sqlLang } from '@codemirror/lang-sql';
 import { AlignLeft, BarChart3, Bookmark, Database, Download, FileDown, FileUp, History, ListChecks, Play, Plus, Sparkles, Table2, TerminalSquare, Trash2, WandSparkles, Wrench } from 'lucide-react';
@@ -14,6 +16,21 @@ import { DataGrid } from './DataGrid';
 import { Spinner } from './ui';
 
 type QueryTab = Extract<Tab, { kind: 'query' }>;
+
+// 语法着色的暖色版本：默认高亮是给浅色底调的，放在铸铁底上又冷又灰
+const sqlHighlight = (dark: boolean) =>
+  HighlightStyle.define([
+    { tag: [t.keyword, t.modifier], color: dark ? '#5fd8d3' : '#0a7370' },
+    { tag: [t.string, t.special(t.string)], color: dark ? '#a9c97e' : '#4d6b22' },
+    { tag: [t.number, t.bool], color: dark ? '#e0af63' : '#8a5f0d' },
+    { tag: [t.comment, t.lineComment, t.blockComment], color: dark ? '#858d88' : '#6a726e', fontStyle: 'italic' },
+    { tag: [t.typeName, t.className, t.namespace], color: dark ? '#8fa8f0' : '#3d4f9e' },
+    { tag: [t.atom, t.null], color: dark ? '#f07c86' : '#bd3546' },
+    { tag: [t.propertyName, t.attributeName], color: dark ? '#b8beba' : '#4c5350' },
+    { tag: [t.variableName, t.name], color: dark ? '#f1f3f1' : '#131716' },
+    { tag: [t.operator, t.punctuation, t.bracket], color: dark ? '#8b9490' : '#5f6663' },
+    { tag: t.invalid, color: dark ? '#f07c86' : '#bd3546' },
+  ]);
 
 function dialectFor(engine?: ConnectionConfig['engine']) {
   if (engine === 'mysql' || engine === 'mariadb') return MySQL;
@@ -65,9 +82,9 @@ export function QueryView({ tab }: { tab: QueryTab }) {
         '&': { backgroundColor: 'var(--bg-app)', color: 'var(--text-primary)', height: '100%' },
         '.cm-content': { caretColor: 'var(--accent)', padding: '8px 0' },
         '.cm-gutters': { backgroundColor: 'var(--bg-app)', color: 'var(--text-muted)', border: 'none', paddingRight: 4 },
-        '.cm-activeLine': { backgroundColor: 'rgba(91,147,255,.055)' },
-        '.cm-activeLineGutter': { backgroundColor: 'rgba(91,147,255,.08)', color: 'var(--text-secondary)' },
-        '.cm-selectionBackground, ::selection': { backgroundColor: 'rgba(91,147,255,.24) !important' },
+        '.cm-activeLine': { backgroundColor: 'rgba(69,200,195,.06)' },
+        '.cm-activeLineGutter': { backgroundColor: 'rgba(69,200,195,.09)', color: 'var(--text-secondary)' },
+        '.cm-selectionBackground, ::selection': { backgroundColor: 'rgba(69,200,195,.24) !important' },
         '.cm-cursor': { borderLeftColor: 'var(--accent)' },
         '.cm-tooltip': { backgroundColor: 'var(--bg-elevated)', border: '1px solid var(--border-strong)', borderRadius: '6px' },
         '.cm-tooltip-autocomplete ul li[aria-selected]': { backgroundColor: 'var(--bg-hover)', color: 'var(--text-primary)' },
@@ -90,6 +107,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
         ),
         basicSetup,
         sqlLang({ dialect: dialectFor(conn?.engine) }),
+        syntaxHighlighting(sqlHighlight(isDark)),
         theme,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
