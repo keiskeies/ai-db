@@ -1,6 +1,6 @@
 import type { ColumnInfo, Engine, QueryResult, SearchQuery, StructuredQuery, TableInfo } from '@aidb/core';
 import { searchQueryFromArgs } from '@aidb/core';
-import type { DocumentWriteDriver, DriverTestResult, RunOptions, WriteDocumentInput, WriteDocumentResult } from './types';
+import type { DeleteDocumentsInput, DocumentWriteDriver, DriverTestResult, RunOptions, WriteDocumentInput, WriteDocumentResult } from './types';
 import { DbError } from './types';
 
 export interface ElasticsearchOptions {
@@ -184,20 +184,39 @@ export class ElasticsearchDriver implements DocumentWriteDriver {
     throw new DbError('搜索驱动不支持参数化 SQL', { code: 'SEARCH_ONLY' });
   }
 
-  async upsertDocument(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {
+  async upsertDocuments(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {
     if (!input.collection) throw new DbError('index 不能为空', { code: 'SEARCH_INDEX' });
-    const document = { ...(input.document ?? {}) };
-    const inlineId = typeof document._id === 'string' ? document._id : undefined;
-    delete document._id;
-    const id = input.id ?? inlineId;
-    const index = encodeURIComponent(input.collection);
-    const path = id ? `/${index}/_doc/${encodeURIComponent(id)}` : `/${index}/_doc`;
+    if (!input.documents.length) throw new DbError('至少需要一个文档', { code: 'WRITE_DOCUMENT' });
+    const lines: string[] = [];
+    for (const document of input.documents) {
+      const { _id, ...rest } = document;
+      const id = typeof _id === 'string' ? _id : undefined;
+      lines.push(JSON.stringify(id ? { index: { _index: input.collection, _id: id } } : { index: { _index: input.collection } }));
+      lines.push(JSON.stringify(rest));
+    }
     const response = await this.request<any>(
-      path,
-      { method: id ? 'PUT' : 'POST', body: JSON.stringify(document) },
+      '/_bulk?refresh=true',
+      { method: 'POST', body: `${lines.join('\n')}\n`, headers: { 'content-type': 'application/x-ndjson' } },
       opts.timeoutMs ?? 30000,
     );
-    return { id: String(response?._id ?? id ?? ''), upserted: 1 };
+    const items = Array.isArray(response?.items) ? response.items : [];
+    const failed = items.find((item: any) => item?.index?.error);
+    if (failed) {
+      const error = failed.index.error;
+      throw new DbError(String(error?.reason ?? error?.type ?? '批量写入失败'), { code: 'SEARCH_BULK' });
+    }
+    return { ids: items.map((item: any) => String(item?.index?._id ?? '')), upserted: items.length };
+  }
+
+  async deleteDocuments(input: DeleteDocumentsInput, opts: RunOptions = {}): Promise<{ deleted: number }> {
+    if (!input.collection) throw new DbError('index 不能为空', { code: 'SEARCH_INDEX' });
+    if (!input.ids.length) throw new DbError('ids 不能为空', { code: 'WRITE_IDS' });
+    const response = await this.request<any>(
+      `/${encodeURIComponent(input.collection)}/_delete_by_query?refresh=true`,
+      { method: 'POST', body: JSON.stringify({ query: { ids: { values: input.ids } } }) },
+      opts.timeoutMs ?? 30000,
+    );
+    return { deleted: Number(response?.deleted ?? input.ids.length) };
   }
 
   async close(): Promise<void> {

@@ -318,30 +318,46 @@ export class ConnectionManager {
     return this.executeStructured(connectionId, conn, query, opts);
   }
 
-  async writeDocument(connectionId: string, input: { collection: string; document: Record<string, unknown>; id?: string }, opts: QueryOptions): Promise<{ id: string; upserted: number }> {
+  private async documentWriter(connectionId: string, collection: string) {
     const conn = this.store.getConnection(connectionId);
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
     const meta = engineMeta(conn.engine);
     if (conn.readonly) {
       throw new DbError('只读连接不允许写入', { code: 'READONLY', status: 403, hint: '在连接设置中关闭只读后才可写入' });
     }
-    if (!input.collection || !input.collection.trim()) {
+    if (!collection || !collection.trim()) {
       throw new DbError('collection 不能为空', { code: 'WRITE_COLLECTION' });
-    }
-    if (!input.document || typeof input.document !== 'object' || Array.isArray(input.document)) {
-      throw new DbError('document 必须是 JSON 对象', { code: 'WRITE_DOCUMENT' });
     }
     const driver = await this.driverFor(connectionId);
     if (!supportsDocumentWrite(driver)) {
       throw new DbError(`${meta.label} 暂不支持写入文档/向量`, { code: 'UNSUPPORTED_ENGINE', hint: '当前支持 Qdrant / Weaviate / Milvus / Elasticsearch / OpenSearch' });
     }
+    return { conn, driver, name: collection.trim() };
+  }
+
+  /** 批量写入历史只留摘要，避免把整批文档塞进历史表。 */
+  private describeBatch(collection: string, count: number, ids: string[]): string {
+    return JSON.stringify({ collection, count, ids: ids.slice(0, 5) });
+  }
+
+  async writeDocuments(
+    connectionId: string,
+    input: { collection: string; documents: Record<string, unknown>[] },
+    opts: QueryOptions,
+  ): Promise<{ ids: string[]; upserted: number }> {
+    const { conn, driver, name } = await this.documentWriter(connectionId, input.collection);
+    const documents = input.documents ?? [];
+    if (!documents.length) throw new DbError('至少需要一个文档', { code: 'WRITE_DOCUMENT' });
+    if (documents.some((document) => !document || typeof document !== 'object' || Array.isArray(document))) {
+      throw new DbError('documents 必须是 JSON 对象数组', { code: 'WRITE_DOCUMENT' });
+    }
     const started = Date.now();
     try {
-      const result = await driver.upsertDocument({ ...input, collection: input.collection.trim() }, { database: opts.database, timeoutMs: opts.timeoutMs });
+      const result = await driver.upsertDocuments({ collection: name, documents }, { database: opts.database, timeoutMs: opts.timeoutMs });
       this.store.addHistory({
         connectionId,
         database: opts.database ?? conn.database,
-        sql: JSON.stringify({ collection: input.collection, id: result.id, document: input.document }),
+        sql: this.describeBatch(name, result.upserted, result.ids),
         status: 'ok',
         durationMs: Date.now() - started,
         rowCount: result.upserted,
@@ -351,12 +367,45 @@ export class ConnectionManager {
       this.store.addHistory({
         connectionId,
         database: opts.database ?? conn.database,
-        sql: JSON.stringify({ collection: input.collection, id: input.id, document: input.document }),
+        sql: this.describeBatch(name, documents.length, []),
         status: 'error',
         durationMs: Date.now() - started,
         error: err?.message ?? '写入失败',
       });
       throw err instanceof DbError ? err : new DbError(err?.message ?? '写入失败');
+    }
+  }
+
+  async deleteDocuments(
+    connectionId: string,
+    input: { collection: string; ids: string[] },
+    opts: QueryOptions,
+  ): Promise<{ deleted: number }> {
+    const { conn, driver, name } = await this.documentWriter(connectionId, input.collection);
+    const ids = input.ids.map((id) => String(id).trim()).filter(Boolean);
+    if (!ids.length) throw new DbError('ids 不能为空', { code: 'WRITE_IDS', hint: '删除必须给出明确的 id 列表' });
+    const started = Date.now();
+    try {
+      const result = await driver.deleteDocuments({ collection: name, ids }, { database: opts.database, timeoutMs: opts.timeoutMs });
+      this.store.addHistory({
+        connectionId,
+        database: opts.database ?? conn.database,
+        sql: this.describeBatch(name, result.deleted, ids),
+        status: 'ok',
+        durationMs: Date.now() - started,
+        rowCount: result.deleted,
+      });
+      return result;
+    } catch (err: any) {
+      this.store.addHistory({
+        connectionId,
+        database: opts.database ?? conn.database,
+        sql: this.describeBatch(name, ids.length, ids),
+        status: 'error',
+        durationMs: Date.now() - started,
+        error: err?.message ?? '删除失败',
+      });
+      throw err instanceof DbError ? err : new DbError(err?.message ?? '删除失败');
     }
   }
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { FilePlus } from 'lucide-react';
+import { FilePlus, Trash2 } from 'lucide-react';
 import type { ConnectionConfig } from '@aidb/core';
 import { engineMeta } from '@aidb/core';
 import { api } from '../lib/api';
@@ -10,8 +10,8 @@ const TEMPLATES: Record<string, Record<string, unknown>> = {
   qdrant: { id: 1, vector: [0.1, 0.2, 0.3], payload: { title: 'hello' } },
   weaviate: { properties: { title: 'hello' }, vector: [0.1, 0.2, 0.3] },
   milvus: { id: 1, vector: [0.1, 0.2, 0.3], title: 'hello' },
-  elasticsearch: { title: 'hello', body: 'indexed from AiDB' },
-  opensearch: { title: 'hello', body: 'indexed from AiDB' },
+  elasticsearch: { _id: 'doc-1', title: 'hello', body: 'indexed from AiDB' },
+  opensearch: { _id: 'doc-1', title: 'hello', body: 'indexed from AiDB' },
 };
 
 function templateFor(engine: string): Record<string, unknown> {
@@ -37,9 +37,10 @@ export function DocumentWritePanel({
   const meta = engineMeta(connection.engine);
   const isSearch = meta.model === 'search';
   const tables = useMemo(() => (schemas ?? []).flatMap((schema) => schema.tables), [schemas]);
+  const [mode, setMode] = useState<'write' | 'delete'>('write');
   const [collection, setCollection] = useState(initialCollection ?? '');
-  const [id, setId] = useState('');
-  const [text, setText] = useState(() => JSON.stringify(templateFor(connection.engine), null, 2));
+  const [text, setText] = useState(() => JSON.stringify([templateFor(connection.engine)], null, 2));
+  const [idsText, setIdsText] = useState('');
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,29 +58,46 @@ export function DocumentWritePanel({
       setError('请选择或填写集合名');
       return;
     }
-    let document: Record<string, unknown>;
-    try {
-      const parsed = JSON.parse(text);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('必须是 JSON 对象');
-      document = parsed as Record<string, unknown>;
-    } catch (err: any) {
-      setError(`JSON 解析失败：${err?.message ?? '格式错误'}`);
-      return;
-    }
+    const databaseArg = isSearch ? undefined : database;
     setRunning(true);
     try {
-      const { result } = await api.upsertDocument({
-        connectionId: connection.id,
-        database: isSearch ? undefined : database,
-        collection: collection.trim(),
-        id: id.trim() || undefined,
-        document,
-      });
-      notify('success', '写入成功', result.id ? `${collection} · ${result.id}` : collection);
+      if (mode === 'write') {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(text);
+        } catch (err: any) {
+          throw new Error(`JSON 解析失败：${err?.message ?? '格式错误'}`);
+        }
+        const list = Array.isArray(parsed) ? parsed : [parsed];
+        const documents = list.filter((item) => item && typeof item === 'object' && !Array.isArray(item)) as Record<string, unknown>[];
+        if (!documents.length || documents.length !== list.length) {
+          throw new Error('需要至少一个 JSON 对象，数组元素也必须都是对象');
+        }
+        const { result } = await api.upsertDocuments({
+          connectionId: connection.id,
+          database: databaseArg,
+          collection: collection.trim(),
+          documents,
+        });
+        notify('success', '写入成功', `${collection} · ${result.upserted} 条`);
+      } else {
+        const ids = idsText
+          .split(/[,\s]+/)
+          .map((id) => id.trim())
+          .filter(Boolean);
+        if (!ids.length) throw new Error('请填写要删除的 id');
+        const { result } = await api.deleteDocuments({
+          connectionId: connection.id,
+          database: databaseArg,
+          collection: collection.trim(),
+          ids,
+        });
+        notify('success', '删除完成', `${collection} · ${result.deleted} 条`);
+      }
       onDone?.();
       onClose();
     } catch (err: any) {
-      setError(err?.message ?? '写入失败');
+      setError(err?.message ?? '操作失败');
     } finally {
       setRunning(false);
     }
@@ -87,14 +105,22 @@ export function DocumentWritePanel({
 
   return (
     <Modal
-      title={`写入${isSearch ? '文档' : '向量点'}`}
-      icon={<FilePlus size={15} />}
+      title={isSearch ? '文档写入' : '向量点写入'}
+      icon={mode === 'write' ? <FilePlus size={15} /> : <Trash2 size={15} />}
       onClose={onClose}
       footer={
         <>
+          <div style={{ display: 'flex', gap: 6, marginRight: 'auto' }}>
+            <button className={`btn small ${mode === 'write' ? 'primary' : ''}`} onClick={() => setMode('write')} disabled={running} data-testid="document-mode-write">
+              写入
+            </button>
+            <button className={`btn small ${mode === 'delete' ? 'danger' : ''}`} onClick={() => setMode('delete')} disabled={running} data-testid="document-mode-delete">
+              删除
+            </button>
+          </div>
           <button className="btn" onClick={onClose} disabled={running}>取消</button>
           <button className="btn primary" onClick={() => void submit()} disabled={running} data-testid="document-write-submit">
-            {running ? <Spinner /> : null} 写入
+            {running ? <Spinner /> : null} {mode === 'write' ? '写入' : '删除'}
           </button>
         </>
       }
@@ -113,27 +139,44 @@ export function DocumentWritePanel({
             <option key={table.name} value={table.name} />
           ))}
         </datalist>
-        <label>ID（可选）</label>
-        <input value={id} onChange={(event) => setId(event.target.value)} placeholder="留空则由服务端生成" data-testid="document-write-id" />
       </div>
-      <div className="muted" style={{ fontSize: 11, margin: '10px 0 6px' }}>
-        {isSearch
-          ? '输入要索引的 JSON 文档；指定 ID 时覆盖同 ID 文档。'
-          : connection.engine === 'qdrant'
-            ? '需要 vector 与可选 payload；Qdrant 的 id 必须是整数或 UUID。'
-            : connection.engine === 'weaviate'
-              ? 'properties 为对象属性，vector 可选；指定 ID 时覆盖同 ID 对象。'
-              : '按集合 schema 提供字段；向量库需要 vector 字段。'}
-      </div>
-      <textarea
-        className="textarea"
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        spellCheck={false}
-        style={{ width: '100%', minHeight: 220, fontFamily: 'var(--mono, monospace)', fontSize: 12 }}
-        data-testid="document-write-json"
-      />
-      {error ? <div className="error-text" style={{ color: 'var(--danger)', fontSize: 12, marginTop: 8 }} data-testid="document-write-error">{error}</div> : null}
+      {mode === 'write' ? (
+        <>
+          <div className="muted" style={{ fontSize: 11, margin: '10px 0 6px' }}>
+            {isSearch
+              ? '粘贴一个 JSON 对象或对象数组（批量）；用 _id 指定文档 ID。'
+              : connection.engine === 'qdrant'
+                ? '数组元素需含 vector 与可选 payload；Qdrant 的 id 必须是整数或 UUID。'
+                : connection.engine === 'weaviate'
+                  ? 'properties 为对象属性，vector 可选；带 id 时覆盖同 ID 对象。'
+                  : '按集合 schema 提供字段；向量库需要 vector 字段。'}
+          </div>
+          <textarea
+            className="textarea"
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            spellCheck={false}
+            style={{ width: '100%', minHeight: 220, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+            data-testid="document-write-json"
+          />
+        </>
+      ) : (
+        <>
+          <div className="muted" style={{ fontSize: 11, margin: '10px 0 6px' }}>
+            输入要删除的 id，用逗号或空格分隔。删除不可撤销，请先用查询确认范围。
+          </div>
+          <textarea
+            className="textarea"
+            value={idsText}
+            onChange={(event) => setIdsText(event.target.value)}
+            spellCheck={false}
+            placeholder="1, 2, 3"
+            style={{ width: '100%', minHeight: 120, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+            data-testid="document-delete-ids"
+          />
+        </>
+      )}
+      {error ? <div style={{ color: 'var(--danger)', fontSize: 12, marginTop: 8 }} data-testid="document-write-error">{error}</div> : null}
     </Modal>
   );
 }

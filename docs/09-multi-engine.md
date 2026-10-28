@@ -152,7 +152,8 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 | `run_redis` | 单条 Redis 命令 |
 | `run_cypher` | Neo4j / Memgraph / FalkorDB Cypher 查询（支持 `$params`） |
 | `run_aql` | ArangoDB AQL 查询（支持 `@bindVar` 与 `@@collection`） |
-| `upsert_document` | 写入向量点/搜索文档（Qdrant / Weaviate / Milvus / ES / OpenSearch） |
+| `upsert_document` | 批量写入向量点/搜索文档（Qdrant / Weaviate / Milvus / ES / OpenSearch） |
+| `delete_documents` | 按 id 列表删除向量点/搜索文档 |
 | `run_cql` | Cassandra / ScyllaDB CQL（支持 `?` 参数） |
 | `vector_search` | pgvector / Qdrant / Milvus / Weaviate 向量检索（text 走 Embedding） |
 | `search_index` | Elasticsearch / OpenSearch `_search` JSON DSL |
@@ -233,7 +234,7 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 | 阶段 | 内容 |
 |---|---|
 | P1 | 已完成：Neo4j、达梦 DM8、DuckDB、Qdrant、Milvus、pgvector + Embedding |
-| P2 | 已完成：Memgraph、Cassandra/ScyllaDB、Weaviate、Elasticsearch/OpenSearch、TDengine、FalkorDB、InfluxDB、ArangoDB、交互式图视图、向量/搜索单条写入、Redis Stack 模块与 RediSearch 浏览；待补：批量写入/删除 |
+| P2 | 已完成：Memgraph、Cassandra/ScyllaDB、Weaviate、Elasticsearch/OpenSearch、TDengine、FalkorDB、InfluxDB、ArangoDB、交互式图视图、向量/搜索单条写入、Redis Stack 模块与 RediSearch 浏览；待补：向量/搜索结果的导入导出与批量更新 |
 | P3 | 已完成：TimescaleDB（复用 PG 驱动 + 超表标注）；待接：云数仓（Snowflake / BigQuery / Redshift / Databricks）、Db2 / SAP HANA、无 Node 驱动的国产库（神通 / GBase 8s / 崖山 / 虚谷） |
 
 ## 11. 关键文件

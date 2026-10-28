@@ -177,21 +177,39 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: 'upsert_document',
     description:
-      'Create or replace one document/point in a Qdrant, Weaviate, Milvus collection or an Elasticsearch/OpenSearch index. document is a JSON object; vector collections need a vector (plus optional id/payload). Read-only connections reject writes.',
+      'Create or replace documents/points in a Qdrant, Weaviate, Milvus collection or an Elasticsearch/OpenSearch index. Pass one document or a documents array (max 500). Vector collections need a vector field; ids live inside each document (use _id for Elasticsearch).',
     risk: 'write',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
-      required: ['connectionId', 'collection', 'document'],
+      required: ['connectionId', 'collection'],
       properties: {
         ...connectionProp,
         ...databaseProp,
         collection: { type: 'string', description: 'Collection, class or index name' },
-        id: { type: 'string', description: 'Document/point id; generated when omitted' },
-        document: { type: 'object', description: 'JSON document; vector collections include vector and payload' },
+        document: { type: 'object', description: 'A single JSON document' },
+        documents: { type: 'array', items: { type: 'object' }, maxItems: 500, description: 'Batch of JSON documents' },
       },
     },
-    summarize: (a) => `写入 ${a.collection ?? ''}${a.id ? ` · ${a.id}` : ''}`.trim(),
+    summarize: (a) => `写入 ${a.collection ?? ''}${Array.isArray(a.documents) ? ` ×${(a.documents as unknown[]).length}` : ''}`.trim(),
+  },
+  {
+    name: 'delete_documents',
+    description:
+      'Delete documents/points by an explicit id list from a Qdrant, Weaviate, Milvus collection or an Elasticsearch/OpenSearch index. Always confirm the ids with a read query first.',
+    risk: 'destructive',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connectionId', 'collection', 'ids'],
+      properties: {
+        ...connectionProp,
+        ...databaseProp,
+        collection: { type: 'string', description: 'Collection, class or index name' },
+        ids: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 500, description: 'Document ids to delete' },
+      },
+    },
+    summarize: (a) => `删除 ${a.collection ?? ''} ×${Array.isArray(a.ids) ? (a.ids as unknown[]).length : 0}`.trim(),
   },
   {
     name: 'search_index',

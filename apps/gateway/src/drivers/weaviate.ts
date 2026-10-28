@@ -1,6 +1,6 @@
 import type { ColumnInfo, Engine, QueryResult, StructuredQuery, TableInfo, VectorQuery } from '@aidb/core';
 import { vectorQueryFromArgs } from '@aidb/core';
-import type { DocumentWriteDriver, DriverTestResult, RunOptions, VectorQueryDriver, WriteDocumentInput, WriteDocumentResult } from './types';
+import type { DeleteDocumentsInput, DocumentWriteDriver, DriverTestResult, RunOptions, VectorQueryDriver, WriteDocumentInput, WriteDocumentResult } from './types';
 import { DbError } from './types';
 
 export interface WeaviateOptions {
@@ -181,25 +181,42 @@ export class WeaviateDriver implements VectorQueryDriver, DocumentWriteDriver {
     throw new DbError('Weaviate 不支持参数化 SQL，请使用向量查询', { code: 'VECTOR_ONLY' });
   }
 
-  async upsertDocument(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {
+  async upsertDocuments(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {
     if (!input.collection) throw new DbError('class 不能为空', { code: 'VECTOR_COLLECTION' });
-    const document = input.document ?? {};
-    const vector = Array.isArray(document.vector) ? document.vector : undefined;
-    const properties =
-      document.properties && typeof document.properties === 'object' && !Array.isArray(document.properties)
-        ? (document.properties as Record<string, unknown>)
-        : Object.fromEntries(Object.entries(document).filter(([key]) => !['id', 'vector', 'properties'].includes(key)));
-    const id = input.id ?? (typeof document.id === 'string' ? document.id : undefined);
-    const body: Record<string, unknown> = { class: input.collection, properties };
-    if (id) body.id = id;
-    if (vector) body.vector = vector;
-    const path = id ? `/v1/objects/${encodeURIComponent(input.collection)}/${encodeURIComponent(id)}` : '/v1/objects';
+    if (!input.documents.length) throw new DbError('至少需要一个文档', { code: 'WRITE_DOCUMENT' });
+    const objects = input.documents.map((document) => {
+      const vector = Array.isArray(document.vector) ? document.vector : undefined;
+      const properties =
+        document.properties && typeof document.properties === 'object' && !Array.isArray(document.properties)
+          ? (document.properties as Record<string, unknown>)
+          : Object.fromEntries(Object.entries(document).filter(([key]) => !['id', 'vector', 'properties'].includes(key)));
+      const id = typeof document.id === 'string' ? document.id : undefined;
+      return { class: input.collection, properties, ...(vector ? { vector } : {}), ...(id ? { id } : {}) };
+    });
     const response = await this.request<any>(
-      path,
-      { method: id ? 'PUT' : 'POST', body: JSON.stringify(body) },
+      '/v1/batch/objects',
+      { method: 'POST', body: JSON.stringify({ objects }) },
       opts.timeoutMs ?? 30000,
     );
-    return { id: String(response?.id ?? id ?? ''), upserted: 1 };
+    const created = Array.isArray(response) ? response : [];
+    const failed = created.find((item: any) => item?.result?.error);
+    if (failed) throw new DbError(String(failed.result.error?.message ?? '批量写入失败'), { code: 'WEAVIATE_BATCH' });
+    return { ids: created.map((item: any) => String(item?.id ?? '')), upserted: created.length || objects.length };
+  }
+
+  async deleteDocuments(input: DeleteDocumentsInput, opts: RunOptions = {}): Promise<{ deleted: number }> {
+    if (!input.collection) throw new DbError('class 不能为空', { code: 'VECTOR_COLLECTION' });
+    if (!input.ids.length) throw new DbError('ids 不能为空', { code: 'WRITE_IDS' });
+    let deleted = 0;
+    for (const id of input.ids) {
+      await this.request(
+        `/v1/objects/${encodeURIComponent(input.collection)}/${encodeURIComponent(id)}`,
+        { method: 'DELETE' },
+        opts.timeoutMs ?? 30000,
+      );
+      deleted += 1;
+    }
+    return { deleted };
   }
 
   async close(): Promise<void> {

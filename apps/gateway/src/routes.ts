@@ -411,32 +411,38 @@ export function createApiRouter(deps: ApiDeps): Router {
     }),
   );
 
+  const documentBatch = (body: Record<string, unknown>) => {
+    const connectionId = str(body.connectionId);
+    const collection = str(body.collection);
+    if (!connectionId || !collection) {
+      throw Object.assign(new Error('connectionId 与 collection 必填'), { code: 'INVALID_INPUT', status: 400 });
+    }
+    const raw = Array.isArray(body.documents) ? body.documents : body.document ? [body.document] : [];
+    const documents = raw.filter(
+      (item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item),
+    );
+    if (!documents.length) {
+      throw Object.assign(new Error('document 或 documents 必须是非空 JSON 对象'), { code: 'INVALID_INPUT', status: 400 });
+    }
+    return { connectionId, collection, documents };
+  };
+
   router.post(
     '/documents/upsert',
     ah(async (req, res) => {
       const body = obj(req.body, 'body');
-      const connectionId = str(body.connectionId);
-      const collection = str(body.collection);
-      if (!connectionId || !collection) {
-        throw Object.assign(new Error('connectionId 与 collection 必填'), { code: 'INVALID_INPUT', status: 400 });
-      }
-      if (!body.document || typeof body.document !== 'object' || Array.isArray(body.document)) {
-        throw Object.assign(new Error('document 必须是 JSON 对象'), { code: 'INVALID_INPUT', status: 400 });
-      }
+      const { connectionId, collection, documents } = documentBatch(body);
+      const database = str(body.database);
       const settings = store.getSettings();
       const started = Date.now();
       try {
-        const result = await manager.writeDocument(
-          connectionId,
-          { collection, document: body.document as Record<string, unknown>, id: str(body.id) },
-          { database: str(body.database), timeoutMs: settings.queryTimeoutMs, actor: 'user' },
-        );
+        const result = await manager.writeDocuments(connectionId, { collection, documents }, { database, timeoutMs: settings.queryTimeoutMs, actor: 'user' });
         store.addAudit({
           actor: 'user',
           connectionId,
-          database: str(body.database),
+          database,
           tool: 'documents.upsert',
-          sql: JSON.stringify({ collection, id: result.id, document: body.document }),
+          sql: JSON.stringify({ collection, count: result.upserted, ids: result.ids.slice(0, 5) }),
           risk: 'write',
           approval: 'manual',
           status: 'ok',
@@ -447,10 +453,55 @@ export function createApiRouter(deps: ApiDeps): Router {
         store.addAudit({
           actor: 'user',
           connectionId,
-          database: str(body.database),
+          database,
           tool: 'documents.upsert',
-          sql: JSON.stringify({ collection, id: str(body.id), document: body.document }),
+          sql: JSON.stringify({ collection, count: documents.length }),
           risk: 'write',
+          approval: 'manual',
+          status: 'error',
+          durationMs: Date.now() - started,
+          meta: { error: err.message },
+        });
+        throw err;
+      }
+    }),
+  );
+
+  router.post(
+    '/documents/delete',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const connectionId = str(body.connectionId);
+      const collection = str(body.collection);
+      const ids = Array.isArray(body.ids) ? body.ids.map((id) => String(id).trim()).filter(Boolean) : [];
+      if (!connectionId || !collection || !ids.length) {
+        throw Object.assign(new Error('connectionId、collection 与非空 ids 必填'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      const database = str(body.database);
+      const settings = store.getSettings();
+      const started = Date.now();
+      try {
+        const result = await manager.deleteDocuments(connectionId, { collection, ids }, { database, timeoutMs: settings.queryTimeoutMs, actor: 'user' });
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'documents.delete',
+          sql: JSON.stringify({ collection, ids: ids.slice(0, 5), count: ids.length }),
+          risk: 'destructive',
+          approval: 'manual',
+          status: 'ok',
+          durationMs: Date.now() - started,
+        });
+        res.json({ result });
+      } catch (err: any) {
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'documents.delete',
+          sql: JSON.stringify({ collection, ids: ids.slice(0, 5), count: ids.length }),
+          risk: 'destructive',
           approval: 'manual',
           status: 'error',
           durationMs: Date.now() - started,

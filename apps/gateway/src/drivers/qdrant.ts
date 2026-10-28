@@ -1,7 +1,7 @@
 import type { ColumnInfo, Engine, QueryResult, StructuredQuery, TableInfo, VectorQuery } from '@aidb/core';
 import { randomUUID } from 'node:crypto';
 import { vectorQueryFromArgs } from '@aidb/core';
-import type { Driver, DocumentWriteDriver, DriverTestResult, RunOptions, VectorQueryDriver, WriteDocumentInput, WriteDocumentResult } from './types';
+import type { DeleteDocumentsInput, DocumentWriteDriver, DriverTestResult, RunOptions, VectorQueryDriver, WriteDocumentInput, WriteDocumentResult } from './types';
 import { DbError } from './types';
 
 export interface QdrantOptions {
@@ -205,29 +205,39 @@ export class QdrantDriver implements VectorQueryDriver, DocumentWriteDriver {
     return this.vectorSearch(query, opts);
   }
 
-  async upsertDocument(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {
+  async upsertDocuments(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {
     if (!input.collection) throw new DbError('collection 不能为空', { code: 'VECTOR_COLLECTION' });
-    const document = input.document ?? {};
-    const vector = document.vector;
-    const namedVector = vector && typeof vector === 'object' && !Array.isArray(vector) ? (vector as Record<string, unknown>) : undefined;
-    if (!Array.isArray(vector) && !namedVector) {
-      throw new DbError('Qdrant 写入需要 document.vector（数组或命名向量对象）', { code: 'VECTOR_REQUIRED' });
-    }
-    const rawId = input.id ?? document.id ?? randomUUID();
-    const payload =
-      document.payload && typeof document.payload === 'object' && !Array.isArray(document.payload)
-        ? (document.payload as Record<string, unknown>)
-        : Object.fromEntries(Object.entries(document).filter(([key]) => !['id', 'vector', 'payload'].includes(key)));
-    const numericId = typeof rawId === 'string' && /^\d+$/.test(rawId) ? Number(rawId) : rawId;
-    const body = {
-      points: [{ id: numericId, vector, payload }],
-    };
+    if (!input.documents.length) throw new DbError('至少需要一个文档', { code: 'WRITE_DOCUMENT' });
+    const points = input.documents.map((document) => {
+      const vector = document.vector;
+      if (!Array.isArray(vector) && !(vector && typeof vector === 'object')) {
+        throw new DbError('Qdrant 写入需要 document.vector（数组或命名向量对象）', { code: 'VECTOR_REQUIRED' });
+      }
+      const rawId = document.id ?? randomUUID();
+      const payload =
+        document.payload && typeof document.payload === 'object' && !Array.isArray(document.payload)
+          ? (document.payload as Record<string, unknown>)
+          : Object.fromEntries(Object.entries(document).filter(([key]) => !['id', 'vector', 'payload'].includes(key)));
+      return { id: typeof rawId === 'string' && /^\d+$/.test(rawId) ? Number(rawId) : rawId, vector, payload };
+    });
     await this.request(
       `/collections/${encodeURIComponent(input.collection)}/points?wait=true`,
-      { method: 'PUT', body: JSON.stringify(body) },
+      { method: 'PUT', body: JSON.stringify({ points }) },
       opts.timeoutMs ?? 30000,
     );
-    return { id: String(rawId), upserted: 1 };
+    return { ids: points.map((point) => String(point.id)), upserted: points.length };
+  }
+
+  async deleteDocuments(input: DeleteDocumentsInput, opts: RunOptions = {}): Promise<{ deleted: number }> {
+    if (!input.collection) throw new DbError('collection 不能为空', { code: 'VECTOR_COLLECTION' });
+    if (!input.ids.length) throw new DbError('ids 不能为空', { code: 'WRITE_IDS' });
+    const points = input.ids.map((id) => (/^\d+$/.test(id) ? Number(id) : id));
+    await this.request(
+      `/collections/${encodeURIComponent(input.collection)}/points/delete?wait=true`,
+      { method: 'POST', body: JSON.stringify({ points }) },
+      opts.timeoutMs ?? 30000,
+    );
+    return { deleted: points.length };
   }
 
   async runParams(): Promise<QueryResult> {

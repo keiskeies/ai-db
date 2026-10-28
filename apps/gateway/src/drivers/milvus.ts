@@ -1,6 +1,6 @@
 import type { ColumnInfo, Engine, QueryResult, StructuredQuery, TableInfo, VectorQuery } from '@aidb/core';
 import { vectorQueryFromArgs } from '@aidb/core';
-import type { DocumentWriteDriver, DriverTestResult, RunOptions, VectorQueryDriver, WriteDocumentInput, WriteDocumentResult } from './types';
+import type { DeleteDocumentsInput, DocumentWriteDriver, DriverTestResult, RunOptions, VectorQueryDriver, WriteDocumentInput, WriteDocumentResult } from './types';
 import { DbError } from './types';
 
 export interface MilvusOptions {
@@ -213,18 +213,37 @@ export class MilvusDriver implements VectorQueryDriver, DocumentWriteDriver {
     throw new DbError('Milvus 不支持参数化 SQL，请使用向量查询', { code: 'VECTOR_ONLY' });
   }
 
-  async upsertDocument(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {
+  async upsertDocuments(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {
     if (!input.collection) throw new DbError('collection 不能为空', { code: 'VECTOR_COLLECTION' });
-    const document = { ...(input.document ?? {}) };
-    if (input.id && document.id === undefined) document.id = input.id;
+    if (!input.documents.length) throw new DbError('至少需要一个文档', { code: 'WRITE_DOCUMENT' });
     const response = await this.request<any>(
       '/v2/vectordb/entities/upsert',
-      { collectionName: input.collection, data: [document] },
+      { collectionName: input.collection, data: input.documents },
       opts.timeoutMs ?? 30000,
     );
     const data = response?.data ?? {};
-    const id = String(input.id ?? data.upsertIds?.[0] ?? data.insertIds?.[0] ?? document.id ?? '');
-    return { id, upserted: Number(data.upsertCount ?? data.insertCount ?? 1) };
+    const ids = Array.isArray(data.upsertIds) ? data.upsertIds.map(String) : input.documents.map((document) => String(document.id ?? ''));
+    return { ids, upserted: Number(data.upsertCount ?? input.documents.length) };
+  }
+
+  async deleteDocuments(input: DeleteDocumentsInput, opts: RunOptions = {}): Promise<{ deleted: number }> {
+    if (!input.collection) throw new DbError('collection 不能为空', { code: 'VECTOR_COLLECTION' });
+    if (!input.ids.length) throw new DbError('ids 不能为空', { code: 'WRITE_IDS' });
+    const list = input.ids
+      .map((id) => {
+        if (/^-?\d+$/.test(id)) return id;
+        if (id.includes("'") || id.includes('\\')) {
+          throw new DbError('Milvus 删除的 id 不能包含引号或反斜杠', { code: 'WRITE_IDS' });
+        }
+        return `'${id}'`;
+      })
+      .join(', ');
+    const response = await this.request<any>(
+      '/v2/vectordb/entities/delete',
+      { collectionName: input.collection, filter: `id in [${list}]` },
+      opts.timeoutMs ?? 30000,
+    );
+    return { deleted: Number(response?.data?.deleteCount ?? input.ids.length) };
   }
 
   async close(): Promise<void> {

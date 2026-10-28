@@ -73,6 +73,7 @@ const DB_TOOLS = new Set([
   'run_cql',
   'run_aql',
   'upsert_document',
+  'delete_documents',
   'explain_sql',
   'sample_rows',
   'profile_column',
@@ -462,17 +463,33 @@ export class ToolExecutor {
         const conn = this.requireConnection(call, ctx);
         const collection = String(a.collection ?? '').trim();
         if (!collection) throw new DbError('collection 不能为空', { code: 'WRITE_COLLECTION' });
-        const document = a.document;
-        if (!document || typeof document !== 'object' || Array.isArray(document)) {
-          throw new DbError('document 必须是 JSON 对象', { code: 'WRITE_DOCUMENT' });
-        }
+        const raw = Array.isArray(a.documents) ? a.documents : a.document ? [a.document] : [];
+        const documents = raw.filter(
+          (item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item),
+        );
+        if (!documents.length) throw new DbError('document 或 documents 必须是非空 JSON 对象', { code: 'WRITE_DOCUMENT' });
         const settings = this.getSettings();
-        const result = await this.manager.writeDocument(
+        const result = await this.manager.writeDocuments(
           conn.id,
-          { collection, document: document as Record<string, unknown>, id: typeof a.id === 'string' ? a.id : undefined },
+          { collection, documents },
           { database: this.databaseOf(call, conn), timeoutMs: settings.queryTimeoutMs, actor: 'agent' },
         );
-        return ok(started, `已写入 ${result.id || collection}`, result);
+        return ok(started, `写入 ${result.upserted} 条`, result);
+      }
+
+      case 'delete_documents': {
+        const conn = this.requireConnection(call, ctx);
+        const collection = String(a.collection ?? '').trim();
+        if (!collection) throw new DbError('collection 不能为空', { code: 'WRITE_COLLECTION' });
+        const ids = Array.isArray(a.ids) ? a.ids.map((id) => String(id).trim()).filter(Boolean) : [];
+        if (!ids.length) throw new DbError('ids 不能为空：删除必须给出明确 id 列表', { code: 'WRITE_IDS' });
+        const settings = this.getSettings();
+        const result = await this.manager.deleteDocuments(
+          conn.id,
+          { collection, ids },
+          { database: this.databaseOf(call, conn), timeoutMs: settings.queryTimeoutMs, actor: 'agent' },
+        );
+        return ok(started, `删除 ${result.deleted} 条`, result);
       }
 
       case 'explain_sql': {

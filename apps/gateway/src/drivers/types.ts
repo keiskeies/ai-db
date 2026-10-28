@@ -42,22 +42,30 @@ export function supportsVectorSearch(driver: Driver): driver is VectorQueryDrive
 
 export interface WriteDocumentInput {
   collection: string;
-  document: Record<string, unknown>;
-  id?: string;
+  documents: Record<string, unknown>[];
 }
 
 export interface WriteDocumentResult {
-  id: string;
+  ids: string[];
   upserted: number;
+}
+
+export interface DeleteDocumentsInput {
+  collection: string;
+  ids: string[];
 }
 
 /** 向量/搜索驱动实现的写入入口；SQL 与文档型驱动不实现。 */
 export interface DocumentWriteDriver extends StructuredQueryDriver {
-  upsertDocument(input: WriteDocumentInput, opts?: RunOptions): Promise<WriteDocumentResult>;
+  upsertDocuments(input: WriteDocumentInput, opts?: RunOptions): Promise<WriteDocumentResult>;
+  deleteDocuments(input: DeleteDocumentsInput, opts?: RunOptions): Promise<{ deleted: number }>;
 }
 
 export function supportsDocumentWrite(driver: Driver): driver is DocumentWriteDriver {
-  return typeof (driver as DocumentWriteDriver).upsertDocument === 'function';
+  return (
+    typeof (driver as DocumentWriteDriver).upsertDocuments === 'function' &&
+    typeof (driver as DocumentWriteDriver).deleteDocuments === 'function'
+  );
 }
 
 export interface ConnectionRecord {

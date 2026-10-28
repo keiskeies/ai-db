@@ -215,8 +215,10 @@ export const api = {
     text?: string;
     topK?: number;
   }) => request<{ result: QueryResult }>('/vector/search', { method: 'POST', body: JSON.stringify(body) }),
-  upsertDocument: (body: { connectionId: string; database?: string; collection: string; id?: string; document: Record<string, unknown> }) =>
-    request<{ result: { id: string; upserted: number } }>('/documents/upsert', { method: 'POST', body: JSON.stringify(body) }),
+  upsertDocuments: (body: { connectionId: string; database?: string; collection: string; documents: Record<string, unknown>[] }) =>
+    request<{ result: { ids: string[]; upserted: number } }>('/documents/upsert', { method: 'POST', body: JSON.stringify(body) }),
+  deleteDocuments: (body: { connectionId: string; database?: string; collection: string; ids: string[] }) =>
+    request<{ result: { deleted: number } }>('/documents/delete', { method: 'POST', body: JSON.stringify(body) }),
   data: (params: { connectionId: string; table: string; database?: string; limit?: number; offset?: number; orderBy?: string; orderDir?: string; where?: string }) => {
     const q = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== null && value !== '') q.set(key, String(value));
