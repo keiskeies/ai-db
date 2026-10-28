@@ -409,6 +409,16 @@ await page.screenshot({ path: join(shots, 'desktop-settings.png') });
 await page.locator('.settings-modal .modal-head .icon-btn').click();
 await page.waitForTimeout(300);
 
+const optionAvg = () => page.evaluate(() => {
+  const opt = document.querySelector('option');
+  if (!opt) return 255;
+  const m = /rgba?\(([^)]+)\)/.exec(getComputedStyle(opt).backgroundColor);
+  if (!m) return 255;
+  const [r, g, b] = m[1].split(',').map((v) => Number(v.trim()));
+  return (r + g + b) / 3;
+});
+const darkOption = await optionAvg();
+check('native select options follow the dark surface', darkOption < 60, `avg ${Math.round(darkOption)}`);
 await page.click('[data-testid="theme-toggle"]');
 await page.waitForTimeout(800);
 check('theme toggles to light', (await page.evaluate(() => document.documentElement.dataset.theme)) === 'light');
@@ -431,6 +441,8 @@ const readPalette = () => page.evaluate(() => {
 });
 const lightPalette = await readPalette();
 check('light palette is neutral paper with cyan accent', neutralHex(lightPalette.bg) && cyanHex(lightPalette.accent), `${lightPalette.bg} / ${lightPalette.accent}`);
+const lightOption = await optionAvg();
+check('native select options follow the light surface too', lightOption > 180, `avg ${Math.round(lightOption)}`);
 await page.screenshot({ path: join(shots, 'desktop-light.png') });
 await page.click('[data-testid="theme-toggle"]');
 await page.waitForTimeout(600);

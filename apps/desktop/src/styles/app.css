@@ -18,6 +18,11 @@ a { color: var(--accent); text-decoration: none; }
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; border: 2px solid var(--bg-panel); }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 ::-webkit-scrollbar-track { background: transparent; }
+/* 原生下拉的弹出列表不吃页面底色：显式给 option 上色，否则暗色主题里会白底浅字 */
+option, optgroup { background-color: var(--bg-elevated); color: var(--text-primary); }
+option:disabled { color: var(--text-muted); }
+input[type='checkbox'], input[type='radio'], input[type='range'], progress { accent-color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .mono { font-family: var(--font-mono); }
 .muted { color: var(--text-muted); }
