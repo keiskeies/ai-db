@@ -1,4 +1,4 @@
-import test, { mock } from 'node:test';
+import test, { after, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { ArangoDriver } from '../src/drivers/arangodb';
 import { supportsDocumentWrite } from '../src/drivers/types';
@@ -6,6 +6,11 @@ import { supportsDocumentWrite } from '../src/drivers/types';
 const PORT = process.env.AIDB_TEST_ARANGO_PORT ? Number(process.env.AIDB_TEST_ARANGO_PORT) : undefined;
 const PASSWORD = process.env.AIDB_TEST_ARANGO_PASSWORD ?? 'testpass';
 const COLLECTION = 'aidb_arango_write';
+
+// Windows 上 --test-force-exit 会在 socket 句柄尚未关闭时硬退出，留出时间让连接自然关闭
+after(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 300));
+});
 
 function driver(): ArangoDriver {
   return new ArangoDriver({ host: '127.0.0.1', port: PORT!, database: '_system', user: 'root', password: PASSWORD });
