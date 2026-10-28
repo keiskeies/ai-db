@@ -47,7 +47,14 @@ export interface VectorQuery {
   field?: string;
 }
 
-export type StructuredQuery = MqlQuery | RedisQuery | CypherQuery | VectorQuery;
+export interface SearchQuery {
+  language: 'search';
+  index: string;
+  body?: Record<string, unknown>;
+  size?: number;
+}
+
+export type StructuredQuery = MqlQuery | RedisQuery | CypherQuery | VectorQuery | SearchQuery;
 
 export function queryLanguageOf(query: StructuredQuery): QueryLanguage {
   return query.language;
@@ -57,6 +64,7 @@ export function formatStructuredQuery(query: StructuredQuery): string {
   if (query.language === 'mql') return JSON.stringify(query);
   if (query.language === 'cypher') return query.text;
   if (query.language === 'vector') return JSON.stringify(query);
+  if (query.language === 'search') return JSON.stringify(query);
   return [query.command, ...(query.args ?? [])].join(' ');
 }
 
@@ -113,6 +121,17 @@ export function vectorQueryFromArgs(args: Record<string, unknown>): VectorQuery 
   if (typeof args.field === 'string' && args.field.trim()) query.field = args.field.trim();
   if (args.filter && typeof args.filter === 'object' && !Array.isArray(args.filter)) query.filter = args.filter as Record<string, unknown>;
   if (args.op === 'scroll' || args.op === 'search') query.op = args.op;
+  return query;
+}
+
+export function searchQueryFromArgs(args: Record<string, unknown>): SearchQuery {
+  const query: SearchQuery = {
+    language: 'search',
+    index: typeof args.index === 'string' ? args.index : '',
+  };
+  if (args.body && typeof args.body === 'object' && !Array.isArray(args.body)) query.body = args.body as Record<string, unknown>;
+  else if (args.query && typeof args.query === 'object' && !Array.isArray(args.query)) query.body = { query: args.query };
+  if (typeof args.size === 'number') query.size = args.size;
   return query;
 }
 
@@ -270,10 +289,20 @@ export function readonlyViolationForQuery(query: StructuredQuery): string | null
         ? classifyRedis(query)
         : query.language === 'cypher'
           ? classifyCypher(query)
-          : classifyVector(query);
+          : query.language === 'vector'
+            ? classifyVector(query)
+            : classifySearch(query);
   if (safety.kind === 'read') return null;
   const label =
-    query.language === 'mql' ? 'MongoDB 写操作' : query.language === 'redis' ? (query as RedisQuery).command : query.language === 'cypher' ? 'Cypher 写操作' : '向量写操作';
+    query.language === 'mql'
+      ? 'MongoDB 写操作'
+      : query.language === 'redis'
+        ? (query as RedisQuery).command
+        : query.language === 'cypher'
+          ? 'Cypher 写操作'
+          : query.language === 'vector'
+            ? '向量写操作'
+            : '搜索写操作';
   return `只读连接不允许执行 ${label}${safety.reason ? `（${safety.reason}）` : ''}`;
 }
 
@@ -363,6 +392,16 @@ export function classifyVector(query: VectorQuery): QuerySafety {
   }
   if (query.vector && query.vector.some((value) => !Number.isFinite(value))) {
     return { risk: 'destructive', kind: 'destructive', reason: '向量必须全部是有限数值' };
+  }
+  return { risk: 'read', kind: 'read' };
+}
+
+export function classifySearch(query: SearchQuery): QuerySafety {
+  if (!query.index || !query.index.trim()) {
+    return { risk: 'destructive', kind: 'destructive', reason: '索引名不能为空' };
+  }
+  if (query.size !== undefined && (!Number.isFinite(query.size) || query.size < 1 || query.size > 10000)) {
+    return { risk: 'destructive', kind: 'destructive', reason: 'size 必须在 1-10000 之间' };
   }
   return { risk: 'read', kind: 'read' };
 }

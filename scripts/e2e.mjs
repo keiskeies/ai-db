@@ -82,7 +82,7 @@ const api = async (path, init = {}) => {
 const boot = (await api('/bootstrap')).body;
 const demo = boot.connections.find((c) => c.engine === 'sqlite');
 check('bridge bootstrap', Boolean(demo), demo?.name);
-check('28 agent tools', boot.tools.length === 28, String(boot.tools.length));
+check('29 agent tools', boot.tools.length === 29, String(boot.tools.length));
 
 const MONGO_PORT = process.env.AIDB_TEST_MONGO_PORT ? Number(process.env.AIDB_TEST_MONGO_PORT) : undefined;
 const REDIS_PORT = process.env.AIDB_TEST_REDIS_PORT ? Number(process.env.AIDB_TEST_REDIS_PORT) : undefined;
@@ -252,7 +252,7 @@ await page.waitForTimeout(150);
 await page.click('[data-testid="sidebar-new-connection"]');
 await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
 const engineOptions = await page.locator('[data-testid="connection-engine"] option').count();
-check('connection form lists 30 engines', engineOptions === 30, String(engineOptions));
+check('connection form lists 34 engines', engineOptions === 34, String(engineOptions));
 await page.screenshot({ path: join(shots, 'desktop-connection-engines.png') });
 await page.locator('.modal-head .icon-btn').click();
 await page.waitForTimeout(200);
@@ -334,6 +334,10 @@ if (NEO4J_PORT) {
   }
   check('Neo4j Cypher query returns nodes', neo4jRows === 2, `${neo4jRows} rows`);
   check('Neo4j query hides SQL-only actions', (await page.locator('.query-actions').getByText('美化 SQL').count()) === 0);
+  await page.click('[data-testid="result-mode-graph"]');
+  await page.waitForSelector('[data-testid="graph-view"]', { timeout: 10000 });
+  const graphNodes = await page.locator('[data-testid="graph-node"]').count();
+  check('Neo4j graph view renders nodes', graphNodes === 2, `${graphNodes} nodes`);
 }
 
 if (DM_PORT) {

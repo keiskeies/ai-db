@@ -1,6 +1,6 @@
 import neo4j from 'neo4j-driver';
 import type { Driver as BoltDriver, Node as Neo4jNode, Relationship as Neo4jRelationship } from 'neo4j-driver';
-import type { ColumnInfo, Engine, QueryResult, StructuredQuery, TableInfo } from '@aidb/core';
+import type { ColumnInfo, Engine, GraphData, QueryResult, StructuredQuery, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions, StructuredQueryDriver } from './types';
 import { DbError } from './types';
 
@@ -10,6 +10,7 @@ export interface Neo4jOptions {
   user?: string;
   password?: string;
   database?: string;
+  defaultDatabase?: string;
   ssl?: boolean;
 }
 
@@ -110,6 +111,7 @@ function resultFromRecords(
   statement: string,
   maxRows: number,
   affected: number,
+  graphData?: GraphData,
 ): QueryResult {
   const columnNames: string[] = [];
   const seen = new Set<string>();
@@ -122,11 +124,11 @@ function resultFromRecords(
   }
   const ordered = columnNames.slice(0, 120);
   const rows = records.slice(0, maxRows).map((record) => ordered.map((key) => serialize(record.get(key))));
-  let graph = false;
+  let hasGraph = false;
   const columns = ordered.map((name) => {
     const sample = records.slice(0, maxRows).map((record) => record.get(name)).find((value) => value !== null && value !== undefined);
     const type = scalarType(sample);
-    if (type === 'node' || type === 'relationship' || type === 'path') graph = true;
+    if (type === 'node' || type === 'relationship' || type === 'path') hasGraph = true;
     return {
       name,
       type,
@@ -141,22 +143,71 @@ function resultFromRecords(
     truncated: records.length > maxRows,
     affected: affected || undefined,
     statement,
-    resultKind: graph ? 'graph' : 'table',
+    resultKind: hasGraph ? 'graph' : 'table',
+    graph: graphData,
   };
 }
 
+function collectGraph(records: Array<{ keys: string[]; get(key: string): unknown }>): GraphData | undefined {
+  const nodes = new Map<string, { id: string; labels: string[]; properties: Record<string, unknown> }>();
+  const edges = new Map<string, { id: string; type: string; source: string; target: string; properties: Record<string, unknown> }>();
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (neo4j.isNode(value)) {
+      const id = elementId(value);
+      if (!nodes.has(id)) {
+        nodes.set(id, {
+          id,
+          labels: value.labels,
+          properties: serialize(value.properties) as Record<string, unknown>,
+        });
+      }
+      return;
+    }
+    if (neo4j.isRelationship(value)) {
+      const id = elementId(value);
+      if (!edges.has(id)) {
+        edges.set(id, {
+          id,
+          type: value.type,
+          source: value.startNodeElementId,
+          target: value.endNodeElementId,
+          properties: serialize(value.properties) as Record<string, unknown>,
+        });
+      }
+      return;
+    }
+    if (neo4j.isPath(value)) {
+      visit(value.start);
+      for (const segment of value.segments) {
+        visit(segment.start);
+        visit(segment.relationship);
+        visit(segment.end);
+      }
+    }
+  };
+  for (const record of records) for (const key of record.keys) visit(record.get(key));
+  return nodes.size ? { nodes: [...nodes.values()], edges: [...edges.values()] } : undefined;
+}
+
 export class Neo4jDriver implements StructuredQueryDriver {
-  engine: Engine = 'neo4j';
+  engine: Engine;
   private bolt?: BoltDriver;
 
-  constructor(private opts: Neo4jOptions) {}
+  constructor(private opts: Neo4jOptions, engine: Engine = 'neo4j') {
+    this.engine = engine;
+  }
 
   private uri(): string {
     if (this.opts.host.startsWith('neo4j://') || this.opts.host.startsWith('neo4j+s://') || this.opts.host.startsWith('bolt://') || this.opts.host.startsWith('bolt+s://')) {
       return this.opts.host;
     }
     const scheme = this.opts.ssl ? 'neo4j+s' : 'neo4j';
-    return `${scheme}://${this.opts.host || '127.0.0.1'}:${this.opts.port || 7687}`;
+    const direct = this.opts.ssl ? 'bolt+s' : 'bolt';
+    return `${this.engine === 'memgraph' ? direct : scheme}://${this.opts.host || '127.0.0.1'}:${this.opts.port || 7687}`;
   }
 
   private driver(): BoltDriver {
@@ -172,7 +223,7 @@ export class Neo4jDriver implements StructuredQueryDriver {
   }
 
   private database(database?: string): string {
-    return database || this.opts.database || 'neo4j';
+    return database || this.opts.database || this.opts.defaultDatabase || 'neo4j';
   }
 
   async test(): Promise<DriverTestResult> {
@@ -192,9 +243,9 @@ export class Neo4jDriver implements StructuredQueryDriver {
     try {
       const result = await session.run('SHOW DATABASES YIELD name RETURN name ORDER BY name');
       const names = result.records.map((record) => String(record.get('name'))).filter(Boolean);
-      return names.length ? names : ['neo4j'];
+      return names.length ? names : [this.opts.defaultDatabase ?? 'neo4j'];
     } catch {
-      return ['neo4j'];
+      return [this.opts.defaultDatabase ?? 'neo4j'];
     } finally {
       await session.close();
     }
@@ -204,8 +255,16 @@ export class Neo4jDriver implements StructuredQueryDriver {
     const db = this.database(database);
     const session = this.driver().session({ database: db });
     try {
-      const labelsResult = await session.run('CALL db.labels() YIELD label RETURN label ORDER BY label');
-      const relResult = await session.run('CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType ORDER BY relationshipType');
+      const labelsResult = await session.run(
+        this.engine === 'memgraph'
+          ? 'MATCH (n) UNWIND labels(n) AS label RETURN DISTINCT label ORDER BY label'
+          : 'CALL db.labels() YIELD label RETURN label ORDER BY label',
+      );
+      const relResult = await session.run(
+        this.engine === 'memgraph'
+          ? 'MATCH ()-[r]->() RETURN DISTINCT type(r) AS relationshipType ORDER BY relationshipType'
+          : 'CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType ORDER BY relationshipType',
+      );
       const tables: TableInfo[] = [];
       for (const record of labelsResult.records.slice(0, 200)) {
         const label = String(record.get('label'));
@@ -256,6 +315,7 @@ export class Neo4jDriver implements StructuredQueryDriver {
         keys: record.keys.map(String),
         get: (key: string) => record.get(key),
       }));
+      const graph = collectGraph(records);
       const plan = (result.summary as { plan?: unknown; profile?: unknown } | undefined)?.plan ?? (result.summary as { profile?: unknown } | undefined)?.profile;
       if (!records.length && plan) {
         return {
@@ -267,7 +327,7 @@ export class Neo4jDriver implements StructuredQueryDriver {
           resultKind: 'table',
         };
       }
-      return resultFromRecords(records, started, text, maxRows, affected);
+      return resultFromRecords(records, started, text, maxRows, affected, graph);
     } catch (err: any) {
       if (err instanceof DbError) throw err;
       throw new DbError(err?.message ?? 'Cypher 执行失败', {

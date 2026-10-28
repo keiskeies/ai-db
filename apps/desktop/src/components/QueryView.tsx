@@ -5,7 +5,7 @@ import { EditorState, Prec } from '@codemirror/state';
 import { tags as t } from '@lezer/highlight';
 import { keymap } from '@codemirror/view';
 import { MSSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql as sqlLang } from '@codemirror/lang-sql';
-import { AlignLeft, BarChart3, Bookmark, Database, Download, FileDown, FileUp, History, ListChecks, Play, Plus, Sparkles, Table2, TerminalSquare, Trash2, WandSparkles, Wrench } from 'lucide-react';
+import { AlignLeft, BarChart3, Bookmark, Database, Download, FileDown, FileUp, History, ListChecks, Network, Play, Plus, Sparkles, Table2, TerminalSquare, Trash2, WandSparkles, Wrench } from 'lucide-react';
 import type { ConnectionConfig, QueryBatchResult } from '@aidb/core';
 import { engineMeta } from '@aidb/core';
 import { api } from '../lib/api';
@@ -14,6 +14,7 @@ import { formatSql } from '../lib/sqlFormat';
 import { useApp, type Tab } from '../store';
 import { ChartView, type ChartSpec } from './ChartView';
 import { DataGrid } from './DataGrid';
+import { GraphView } from './GraphView';
 import { VectorSearchPanel } from './VectorSearchPanel';
 import { Spinner } from './ui';
 
@@ -61,6 +62,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const [batch, setBatch] = useState<QueryBatchResult | null>(null);
   const [activeSet, setActiveSet] = useState(0);
   const [resultTab, setResultTab] = useState<'results' | 'messages' | 'history' | 'chart' | 'snippets'>('results');
+  const [resultMode, setResultMode] = useState<'table' | 'graph'>('table');
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [editorPct, setEditorPct] = useState(38);
@@ -92,6 +94,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
       setError(null);
       setActiveSet(0);
       setResultTab('results');
+      setResultMode('table');
     }
     const theme = EditorView.theme(
       {
@@ -467,7 +470,9 @@ ${text}
                 ? 'Neo4j：输入 Cypher，例如 MATCH (n) RETURN n LIMIT 100'
                 : conn && engineMeta(conn.engine).model === 'vector'
                   ? '向量库：输入 JSON，例如 {"collection":"docs","vector":[...],"topK":5}；scroll 可浏览全部点'
-                  : 'Redis：输入单条命令，例如 SCAN 0 COUNT 100 或 HGETALL user:1'}
+                  : conn && engineMeta(conn.engine).model === 'search'
+                    ? '搜索：输入 JSON，例如 {"index":"logs","query":{"match_all":{}},"size":20}'
+                    : 'Redis：输入单条命令，例如 SCAN 0 COUNT 100 或 HGETALL user:1'}
           </span>
         )}
         <div className="spacer" />
@@ -535,6 +540,24 @@ ${text}
             <button className={`result-tab ${resultTab === 'messages' ? 'active' : ''}`} onClick={() => setResultTab('messages')} data-testid="query-messages">
               消息 {error ? <span style={{ color: 'var(--danger)' }}>!</span> : null}
             </button>
+            {set && set.resultKind === 'graph' && set.graph ? (
+              <>
+                <button
+                  className={`result-tab ${resultMode === 'table' ? 'active' : ''}`}
+                  onClick={() => { setResultTab('results'); setResultMode('table'); }}
+                  data-testid="result-mode-table"
+                >
+                  <Table2 size={11} /> 表格
+                </button>
+                <button
+                  className={`result-tab ${resultMode === 'graph' ? 'active' : ''}`}
+                  onClick={() => { setResultTab('results'); setResultMode('graph'); }}
+                  data-testid="result-mode-graph"
+                >
+                  <Network size={11} /> 图
+                </button>
+              </>
+            ) : null}
             {set && set.columns.length > 1 ? (
               <button className={`result-tab ${resultTab === 'chart' ? 'active' : ''}`} onClick={() => setResultTab('chart')}>
                 <BarChart3 size={11} /> 图表
@@ -552,7 +575,13 @@ ${text}
 
           {resultTab === 'results' ? (
             set && set.columns.length ? (
-              <DataGrid columns={set.columns} rows={set.rows} testId="query-result-grid" />
+              set.resultKind === 'graph' && set.graph && resultMode === 'graph' ? (
+                <div style={{ padding: 10 }}>
+                  <GraphView graph={set.graph} />
+                </div>
+              ) : (
+                <DataGrid columns={set.columns} rows={set.rows} testId="query-result-grid" />
+              )
             ) : set ? (
               <div className="messages-panel">
                 <div className="ok">执行成功</div>

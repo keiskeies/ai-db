@@ -10,10 +10,14 @@ export type Engine =
   | 'mongodb'
   | 'redis'
   | 'neo4j'
+  | 'memgraph'
   | 'dm'
   | 'qdrant'
   | 'milvus'
+  | 'weaviate'
   | 'duckdb'
+  | 'elasticsearch'
+  | 'opensearch'
   | 'kingbase'
   | 'opengauss'
   | 'gaussdb'
@@ -48,12 +52,13 @@ export type Transport =
   | 'qdrant-http'
   | 'milvus-http'
   | 'duckdb-file'
+  | 'elasticsearch-http'
   | 'weaviate-http';
 
 /** SQL 方言；协议别名（金仓、TiDB 等）复用已有方言。 */
 export type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickhouse' | 'dm';
 
-export type QueryLanguage = 'sql' | 'mql' | 'redis' | 'cypher' | 'vector';
+export type QueryLanguage = 'sql' | 'mql' | 'redis' | 'cypher' | 'vector' | 'search';
 
 export type DbObjectKind = 'table' | 'view' | 'collection' | 'key' | 'node_label' | 'edge_label' | 'vector_collection' | 'index';
 
@@ -182,6 +187,25 @@ export interface ResultField {
   kind?: 'scalar' | 'json' | 'vector' | 'geometry';
 }
 
+export interface GraphNode {
+  id: string;
+  labels: string[];
+  properties: Record<string, unknown>;
+}
+
+export interface GraphEdge {
+  id: string;
+  type: string;
+  source: string;
+  target: string;
+  properties: Record<string, unknown>;
+}
+
+export interface GraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
 export interface QueryResult {
   columns: ResultField[];
   rows: unknown[][];
@@ -194,6 +218,8 @@ export interface QueryResult {
   statement?: string;
   /** 结果形态；缺省按 table 处理，非关系型引擎用它选择渲染器。 */
   resultKind?: 'table' | 'documents' | 'keys' | 'graph' | 'vectors';
+  /** 图查询的可视化数据；resultKind 为 graph 时由 Neo4j/Memgraph 驱动填充。 */
+  graph?: GraphData;
 }
 
 export interface QueryBatchResult {

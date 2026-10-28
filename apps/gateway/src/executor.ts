@@ -23,6 +23,7 @@ import {
   redisQueryFromArgs,
   resolveRisk,
   round,
+  searchQueryFromArgs,
   summarize,
   toSeries,
   topShare,
@@ -66,6 +67,7 @@ const DB_TOOLS = new Set([
   'run_redis',
   'run_cypher',
   'vector_search',
+  'search_index',
   'explain_sql',
   'sample_rows',
   'profile_column',
@@ -343,8 +345,8 @@ export class ToolExecutor {
 
       case 'run_cypher': {
         const conn = this.requireConnection(call, ctx);
-        if (conn.engine !== 'neo4j') {
-          throw new DbError('run_cypher 仅用于 Neo4j 连接', { code: 'UNSUPPORTED_ENGINE', hint: 'SQL 连接请使用 run_sql' });
+        if (conn.engine !== 'neo4j' && conn.engine !== 'memgraph') {
+          throw new DbError('run_cypher 仅用于 Neo4j/Memgraph 连接', { code: 'UNSUPPORTED_ENGINE', hint: 'SQL 连接请使用 run_sql' });
         }
         const query = cypherQueryFromArgs(a);
         if (!query.text.trim()) throw new DbError('Cypher 不能为空', { code: 'CYPHER_EMPTY' });
@@ -376,6 +378,26 @@ export class ToolExecutor {
           actor: 'agent',
         });
         return ok(started, `返回 ${result.rowCount} 个向量结果`, { ...result });
+      }
+
+      case 'search_index': {
+        const conn = this.requireConnection(call, ctx);
+        const index = String(a.index ?? '').trim();
+        if (!index) throw new DbError('index 不能为空', { code: 'SEARCH_INDEX' });
+        const query = searchQueryFromArgs({ ...a, index });
+        const settings = this.getSettings();
+        const batch = await this.manager.queryStructured(conn.id, query, {
+          database: this.databaseOf(call, conn),
+          maxRows: Math.min(10000, Math.max(1, Number(a.size) || settings.defaultLimit)),
+          timeoutMs: settings.queryTimeoutMs,
+          actor: 'agent',
+        });
+        const last = batch.sets[0];
+        return ok(started, `返回 ${last?.rowCount ?? 0} 条命中`, {
+          ...last,
+          messages: batch.messages,
+          durationMs: batch.durationMs,
+        });
       }
 
       case 'explain_sql': {

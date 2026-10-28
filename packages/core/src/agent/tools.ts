@@ -175,6 +175,26 @@ export const TOOLS: ToolDefinition[] = [
     summarize: (a) => `向量检索 ${a.collection ?? ''}${a.field ? ` · ${a.field}` : ''}`.trim(),
   },
   {
+    name: 'search_index',
+    description:
+      'Run an Elasticsearch/OpenSearch _search JSON DSL against an index. Pass the DSL body as query (e.g. {"match":{"message":"error"}}), or omit it for match_all. size is capped at 10000.',
+    risk: 'read',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connectionId', 'index'],
+      properties: {
+        ...connectionProp,
+        ...databaseProp,
+        index: { type: 'string', description: 'Index name, e.g. logs-*' },
+        query: { type: 'object', description: 'Elasticsearch query DSL (the query object)' },
+        body: { type: 'object', description: 'Full search body; overrides query' },
+        size: { type: 'integer', minimum: 1, maximum: 10000 },
+      },
+    },
+    summarize: (a) => `搜索 ${a.index ?? ''}`.trim(),
+  },
+  {
     name: 'explain_sql',
     description: 'Get the query execution plan (EXPLAIN) for a SQL statement.',
     risk: 'read',

@@ -61,6 +61,9 @@ test('Neo4j driver contract', { skip: !NEO4J_PORT }, async () => {
   assert.equal(graph.resultKind, 'graph');
   assert.deepEqual(graph.columns.map((column) => column.kind), ['json', 'json', 'json']);
   assert.match(JSON.stringify(graph.rows[0][0]), /Ada/);
+  assert.ok(graph.graph, 'graph payload');
+  assert.equal(graph.graph.nodes.length, 3);
+  assert.equal(graph.graph.edges.length, 2);
 
   const count = await driver.executeQuery({ language: 'cypher', text: 'MATCH (n) RETURN count(n) AS c' });
   assert.deepEqual(count.rows, [[3]]);

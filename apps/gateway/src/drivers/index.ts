@@ -2,6 +2,7 @@ import { engineDefaultPort, engineMeta, type ConnectionConfig, type ConnectionSe
 import { ClickHouseDriver } from './clickhouse';
 import { DmDriver } from './dm';
 import { DuckdbDriver } from './duckdb';
+import { ElasticsearchDriver } from './elasticsearch';
 import { MongoDriver } from './mongodb';
 import { MilvusDriver } from './milvus';
 import { MysqlDriver } from './mysql';
@@ -12,6 +13,7 @@ import { QdrantDriver } from './qdrant';
 import { RedisDriver } from './redis';
 import { SqliteDriver } from './sqlite';
 import { SqlServerDriver } from './sqlserver';
+import { WeaviateDriver } from './weaviate';
 import { openTunnel, type Tunnel } from './ssh';
 import { DbError, type Driver } from './types';
 
@@ -147,14 +149,18 @@ export async function createDriver(config: ConnectionConfig, secret: ConnectionS
       return { driver, close: () => closeWithTunnel(driver) };
     }
     case 'bolt': {
-      const driver = new Neo4jDriver({
-        host: connectHost,
-        port: connectPort,
-        user: config.username,
-        password: secret.password,
-        database: config.database,
-        ssl: config.ssl,
-      });
+      const driver = new Neo4jDriver(
+        {
+          host: connectHost,
+          port: connectPort,
+          user: config.username,
+          password: secret.password,
+          database: config.database,
+          defaultDatabase: meta.defaultDatabase,
+          ssl: config.ssl,
+        },
+        config.engine,
+      );
       return { driver, close: () => closeWithTunnel(driver) };
     }
     case 'qdrant-http': {
@@ -175,8 +181,28 @@ export async function createDriver(config: ConnectionConfig, secret: ConnectionS
       });
       return { driver, close: () => closeWithTunnel(driver) };
     }
-    case 'weaviate-http':
-      throw new DbError(`${meta.label} 驱动尚未接入`, { code: 'UNSUPPORTED_ENGINE' });
+    case 'weaviate-http': {
+      const driver = new WeaviateDriver({
+        host: connectHost,
+        port: connectPort,
+        apiKey: secret.password,
+        ssl: config.ssl,
+      });
+      return { driver, close: () => closeWithTunnel(driver) };
+    }
+    case 'elasticsearch-http': {
+      const driver = new ElasticsearchDriver(
+        {
+          host: connectHost,
+          port: connectPort,
+          user: config.username,
+          password: secret.password,
+          ssl: config.ssl,
+        },
+        config.engine,
+      );
+      return { driver, close: () => closeWithTunnel(driver) };
+    }
     default:
       throw new DbError(`不支持的数据库类型：${config.engine}`, { code: 'UNSUPPORTED_ENGINE' });
   }

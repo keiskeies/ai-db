@@ -158,12 +158,14 @@ export function Sidebar() {
     const isMongo = meta.model === 'document';
     const isGraph = meta.model === 'graph';
     const isVector = meta.model === 'vector';
+    const isSearch = meta.model === 'search';
     const isEdge = table.kind === 'edge_label';
-    const objectLabel = isMongo ? '集合' : isGraph ? (isEdge ? '关系类型' : '节点标签') : isVector ? '向量集合' : '键空间';
-    const openLabel = isMongo ? '打开集合' : isGraph ? (isEdge ? '打开关系类型' : '打开节点标签') : isVector ? '浏览集合' : '浏览键';
-    const newQueryLabel = isMongo ? '新建 MQL 查询' : isGraph ? '新建 Cypher 查询' : isVector ? '新建向量查询' : '命令列';
+    const objectLabel = isMongo ? '集合' : isGraph ? (isEdge ? '关系类型' : '节点标签') : isVector ? '向量集合' : isSearch ? '索引' : '键空间';
+    const openLabel = isMongo ? '打开集合' : isGraph ? (isEdge ? '打开关系类型' : '打开节点标签') : isVector ? '浏览集合' : isSearch ? '打开索引' : '浏览键';
+    const newQueryLabel = isMongo ? '新建 MQL 查询' : isGraph ? '新建 Cypher 查询' : isVector ? '新建向量查询' : isSearch ? '新建搜索查询' : '命令列';
     const vectorQuery = JSON.stringify({ collection: table.name, op: 'scroll', topK: 20 }, null, 2);
-    const newQueryText = isMongo ? '' : isGraph ? 'MATCH (n) RETURN n LIMIT 100' : isVector ? vectorQuery : 'SCAN 0 COUNT 100';
+    const searchQuery = JSON.stringify({ index: table.name, query: { match_all: {} }, size: 100 }, null, 2);
+    const newQueryText = isMongo ? '' : isGraph ? 'MATCH (n) RETURN n LIMIT 100' : isVector ? vectorQuery : isSearch ? searchQuery : 'SCAN 0 COUNT 100';
     const open = () => {
       if (isMongo) {
         openQuery(
@@ -180,6 +182,8 @@ export function Sidebar() {
         openQuery(conn.id, text, table.name, schema.name);
       } else if (isVector) {
         openQuery(conn.id, vectorQuery, table.name, schema.name);
+      } else if (isSearch) {
+        openQuery(conn.id, searchQuery, table.name, schema.name);
       } else {
         openQuery(conn.id, 'SCAN 0 COUNT 100', `${meta.label} · ${schema.name}`, schema.name);
       }
@@ -202,7 +206,9 @@ export function Sidebar() {
                 ? `解释${objectLabel} ${table.name} 的属性和关系，并给出 3 个 Cypher 查询示例。`
                 : isVector
                   ? `解释向量集合 ${table.name} 的维度、距离与 payload 字段，并给出向量检索示例。`
-                  : `总结 Redis 键空间 ${schema.name} 的键类型与常见前缀，并给出浏览与排查命令。`,
+                  : isSearch
+                    ? `解释索引 ${table.name} 的 mapping 与字段用途，并给出 3 个 _search DSL 示例。`
+                    : `总结 Redis 键空间 ${schema.name} 的键类型与常见前缀，并给出浏览与排查命令。`,
           ),
       },
       { label: '', icon: null, sep: true, onClick: () => undefined },
@@ -495,7 +501,9 @@ export function Sidebar() {
                                                 ? 'MATCH (n) RETURN n LIMIT 100'
                                                 : engineMeta(conn.engine).model === 'vector'
                                                   ? '{\n  "collection": "",\n  "op": "scroll",\n  "topK": 20\n}'
-                                                  : 'SCAN 0 COUNT 100',
+                                                  : engineMeta(conn.engine).model === 'search'
+                                                    ? '{\n  "index": "",\n  "query": { "match_all": {} },\n  "size": 100\n}'
+                                                    : 'SCAN 0 COUNT 100',
                                             undefined,
                                             schema.name,
                                           ),
@@ -578,7 +586,7 @@ export function Sidebar() {
                                               ) : (
                                                 <Database size={13} style={{ color: 'var(--accent)' }} />
                                               )}
-                                              <span className="node-label">{model === 'document' ? '集合' : model === 'graph' ? '标签' : model === 'vector' ? '向量集合' : '键空间'}</span>
+                                              <span className="node-label">{model === 'document' ? '集合' : model === 'graph' ? '标签' : model === 'vector' ? '向量集合' : model === 'search' ? '索引' : '键空间'}</span>
                                               <span className="tree-count">{tables.length}</span>
                                             </div>
                                             {tablesOpen ? tables.map((table) => renderTable(conn, schema, table, INDENT.tableLeaf)) : null}
@@ -594,7 +602,9 @@ export function Sidebar() {
                                                       ? 'MATCH (n) RETURN n LIMIT 100'
                                                       : model === 'vector'
                                                         ? '{\n  "collection": "",\n  "op": "scroll",\n  "topK": 20\n}'
-                                                        : 'SCAN 0 COUNT 100',
+                                                        : model === 'search'
+                                                          ? '{\n  "index": "",\n  "query": { "match_all": {} },\n  "size": 100\n}'
+                                                          : 'SCAN 0 COUNT 100',
                                                 )
                                               }
                                             >

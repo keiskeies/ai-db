@@ -3,6 +3,7 @@ import {
   classifyCypher,
   classifyMql,
   classifyRedis,
+  classifySearch,
   classifyVector,
   engineMeta,
   engineUsesSchema,
@@ -11,6 +12,7 @@ import {
   quoteIdent,
   quoteQualified,
   readonlyViolation,
+  searchQueryFromArgs,
   splitStatements,
   vectorQueryFromArgs,
   type AppSettings,
@@ -22,6 +24,7 @@ import {
   type QueryBatchResult,
   type QueryResult,
   type RedisQuery,
+  type SearchQuery,
   type StructuredQuery,
   type TableInfo,
   type VectorQuery,
@@ -104,7 +107,7 @@ export class ConnectionManager {
   async schema(connectionId: string, database?: string, refresh = false, ttlMs = 30000): Promise<DatabaseSchema[]> {
     const conn = this.store.getConnection(connectionId);
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
-    const dbKey = database ?? conn.database ?? (conn.engine === 'sqlite' ? 'main' : conn.engine === 'redis' ? '0' : conn.engine === 'neo4j' ? 'neo4j' : '');
+    const dbKey = database ?? conn.database ?? (conn.engine === 'sqlite' ? 'main' : conn.engine === 'redis' ? '0' : conn.engine === 'neo4j' ? 'neo4j' : conn.engine === 'memgraph' ? 'memgraph' : conn.engine === 'elasticsearch' || conn.engine === 'opensearch' ? 'default' : '');
     const cached = this.store.getSchemaCache(connectionId, dbKey);
     if (!refresh && cached && Date.now() - new Date(cached.fetchedAt).getTime() < ttlMs) {
       try {
@@ -125,7 +128,7 @@ export class ConnectionManager {
       if (!groups.size) groups.set(dbKey || 'public', []);
       schemas = [...groups.entries()].map(([name, list]) => ({ name, tables: list }));
     } else {
-      const fallback = conn.engine === 'mongodb' ? 'default' : conn.engine === 'redis' ? '0' : conn.engine === 'neo4j' ? 'neo4j' : 'main';
+      const fallback = conn.engine === 'mongodb' ? 'default' : conn.engine === 'redis' ? '0' : conn.engine === 'neo4j' ? 'neo4j' : conn.engine === 'memgraph' ? 'memgraph' : conn.engine === 'elasticsearch' || conn.engine === 'opensearch' ? 'default' : 'main';
       schemas = [{ name: dbKey || fallback, tables }];
     }
     this.store.setSchemaCache(connectionId, dbKey, schemas);
@@ -157,7 +160,7 @@ export class ConnectionManager {
       if (!query) throw new DbError('Redis 命令为空', { code: 'REDIS_EMPTY' });
       return query;
     }
-    if (conn.engine === 'neo4j') {
+    if (conn.engine === 'neo4j' || conn.engine === 'memgraph') {
       const trimmed = text.trim();
       if (!trimmed) throw new DbError('Cypher 不能为空', { code: 'CYPHER_EMPTY' });
       if (trimmed.startsWith('{')) {
@@ -177,7 +180,7 @@ export class ConnectionManager {
       }
       return { language: 'cypher', text: trimmed };
     }
-    if (conn.engine === 'qdrant' || conn.engine === 'milvus') {
+    if (conn.engine === 'qdrant' || conn.engine === 'milvus' || conn.engine === 'weaviate') {
       let parsed: Record<string, unknown>;
       try {
         parsed = JSON.parse(text) as Record<string, unknown>;
@@ -187,6 +190,15 @@ export class ConnectionManager {
       const query = vectorQueryFromArgs(parsed);
       if (!query.op) query.op = query.vector?.length || query.text ? 'search' : 'scroll';
       return query;
+    }
+    if (conn.engine === 'elasticsearch' || conn.engine === 'opensearch') {
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        throw new DbError('搜索查询需要 JSON，例如 {"index":"logs","query":{"match_all":{}},"size":20}', { code: 'SEARCH_PARSE' });
+      }
+      return searchQueryFromArgs(parsed);
     }
     throw new DbError(`${engineMeta(conn.engine).label} 暂不支持查询`, { code: 'UNSUPPORTED_ENGINE' });
   }
@@ -200,10 +212,20 @@ export class ConnectionManager {
             ? classifyRedis(query as RedisQuery)
             : query.language === 'cypher'
               ? classifyCypher(query as CypherQuery)
-              : classifyVector(query as VectorQuery);
+              : query.language === 'vector'
+                ? classifyVector(query as VectorQuery)
+                : classifySearch(query as SearchQuery);
       if (safety.kind !== 'read') {
         const label =
-          query.language === 'mql' ? 'MongoDB 写操作' : query.language === 'redis' ? (query as RedisQuery).command : query.language === 'cypher' ? 'Cypher 写操作' : '向量写操作';
+          query.language === 'mql'
+            ? 'MongoDB 写操作'
+            : query.language === 'redis'
+              ? (query as RedisQuery).command
+              : query.language === 'cypher'
+                ? 'Cypher 写操作'
+                : query.language === 'vector'
+                  ? '向量写操作'
+                  : '搜索写操作';
         throw new DbError(`只读连接不允许执行 ${label}${safety.reason ? `（${safety.reason}）` : ''}`, {
           code: 'READONLY',
           status: 403,

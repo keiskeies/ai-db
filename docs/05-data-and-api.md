@@ -132,7 +132,7 @@ CREATE INDEX idx_agent_ctx ON agent_context(connection_id, database_name, kind);
 ```ts
 export type Engine =
   | 'sqlite' | 'mysql' | 'mariadb' | 'postgresql' | 'cockroachdb' | 'sqlserver' | 'oracle' | 'clickhouse'
-  | 'mongodb' | 'redis' | 'neo4j' | 'dm' | 'qdrant' | 'milvus' | 'duckdb'
+  | 'mongodb' | 'redis' | 'neo4j' | 'memgraph' | 'dm' | 'qdrant' | 'milvus' | 'weaviate' | 'duckdb' | 'elasticsearch' | 'opensearch'
   | 'kingbase' | 'opengauss' | 'gaussdb' | 'oceanbase' | 'tidb' | 'polardb' | 'tdsql' | 'gbase8a'
   | 'doris' | 'starrocks' | 'highgo' | 'vastbase' | 'ivorysql' | 'greatsql' | 'goldendb';
 export type Environment = 'dev' | 'staging' | 'prod';
@@ -196,7 +196,7 @@ export interface QueryResult {
 | GET/POST | `/jobs` · PUT/DELETE `/jobs/:id` | 自动化任务 CRUD |
 | POST | `/jobs/:id/run` | 立即运行任务 |
 | POST | `/backups/:id/restore` | 从备份恢复 |
-| POST | `/query` | `{connectionId, database?, sql, limit?, offset?, mode?}` → QueryResult。SQL 连接执行 SQL；MongoDB 的 `sql` 为 JSON MQL（`{collection, op, filter?, pipeline?, limit?}`）；Redis 的 `sql` 为单条命令文本（如 `SCAN 0 COUNT 100`）；Qdrant/Milvus 的 `sql` 为 JSON 向量查询 |
+| POST | `/query` | `{connectionId, database?, sql, limit?, offset?, mode?}` → QueryResult。SQL 连接执行 SQL；MongoDB 的 `sql` 为 JSON MQL；Redis 为单条命令；Qdrant/Milvus/Weaviate 为 JSON 向量查询；Elasticsearch/OpenSearch 为 JSON `_search` 请求 |
 | POST | `/vector/search` | `{connectionId, database?, collection, field?, vector?, text?, topK?, filter?}` → `{result}`；pgvector 需 field，Qdrant/Milvus 可选命名向量；text 走 Embedding |
 | GET | `/data` | `?connectionId&database&table&limit&offset&orderBy&where` |
 | POST | `/rows` | `{op:'insert'|'insertMany'|'update'|'delete'|'deleteMany', values?/rows?/key?/keys?}` |
