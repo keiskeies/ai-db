@@ -10,10 +10,11 @@ import type {
   DeviceInfo,
   Memory,
   PermissionMode,
+  QuestionSuggestion,
   Risk,
   ToolResult,
 } from '@aidb/core';
-import { engineMeta } from '@aidb/core';
+import { DEFAULT_SETTINGS, engineMeta } from '@aidb/core';
 import { ApiError, api, streamTurn, type BootstrapData } from './lib/api';
 import { translate, type I18nKey, type Locale } from './i18n';
 export type Tab =
@@ -90,6 +91,11 @@ interface AppStore {
   agentSessionId?: string;
   agentSessionMeta?: AgentSessionMeta;
   agentMessages: AgentMessage[];
+  /**
+   * 追问建议独立于 live 存放：回合结束后 live 会被持久化消息替换掉，
+   * 挂在 live 上的建议会随之消失，用户根本来不及点。
+   */
+  agentFollowUps: QuestionSuggestion[];
   agentMode: PermissionMode;
   live?: LiveTurn;
   approval?: ApprovalState;
@@ -141,6 +147,7 @@ interface AppStore {
   loadAgentSession: (id: string) => Promise<void>;
   deleteAgentSession: (id: string) => Promise<void>;
   refreshSessions: () => Promise<void>;
+  renameAgentSession: (id: string, title: string) => Promise<void>;
   sendAgent: (text: string, mode?: PermissionMode, images?: string[]) => Promise<void>;
   abortAgent: () => Promise<void>;
   resolveApproval: (decision: 'allow' | 'deny', scope: 'once' | 'session' | 'always') => Promise<void>;
@@ -185,26 +192,7 @@ function tabId(prefix: string): string {
 export const useApp = create<AppStore>((set, get) => ({
   booted: false,
   connections: [],
-  settings: {
-    theme: 'dark',
-    density: 'compact',
-    locale: 'zh',
-    defaultLimit: 100,
-    queryTimeoutMs: 30000,
-    allowMultiStatement: false,
-    autoLimit: true,
-    agent: {
-      provider: 'local',
-      baseUrl: 'https://api.anthropic.com',
-      model: 'claude-sonnet-4-20250514',
-      temperature: 0.2,
-      maxSteps: 12,
-      autoMemory: true,
-      snapshotBeforeWrite: true,
-      compactionThreshold: 24000,
-      hasApiKey: false,
-    },
-  },
+  settings: { ...DEFAULT_SETTINGS, agent: { ...DEFAULT_SETTINGS.agent, hasApiKey: false } },
   tools: [],
   sessions: [],
   schemas: {},
@@ -217,6 +205,7 @@ export const useApp = create<AppStore>((set, get) => ({
   agentOpen: true,
   agentExpanded: false,
   agentMessages: [],
+  agentFollowUps: [],
   agentMode: 'ask',
   sessionsOpen: false,
   memoryOpen: false,
@@ -490,6 +479,21 @@ export const useApp = create<AppStore>((set, get) => ({
     }
   },
 
+  renameAgentSession: async (id, title) => {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    try {
+      const { session } = await api.updateSession(id, { title: trimmed });
+      // 本地同步：列表行与当前会话头都要跟着改，否则得等下一次 refresh 才看得到
+      set((prev) => ({
+        sessions: prev.sessions.map((item) => (item.id === id ? session : item)),
+        agentSessionMeta: prev.agentSessionMeta?.id === id ? session : prev.agentSessionMeta,
+      }));
+    } catch (err) {
+      get().notify('error', get().t('error'), errorText(err));
+    }
+  },
+
   newAgentSession: async () => {
     try {
       if (get().live && (get().live!.status === 'streaming' || get().live!.status === 'awaiting')) await get().abortAgent();
@@ -501,6 +505,7 @@ export const useApp = create<AppStore>((set, get) => ({
         agentSessionId: session.id,
         agentSessionMeta: session,
         agentMessages: [],
+        agentFollowUps: [],
         live: undefined,
         approval: undefined,
         agentOpen: true,
@@ -520,6 +525,7 @@ export const useApp = create<AppStore>((set, get) => ({
         agentSessionId: id,
         agentSessionMeta: detail.session,
         agentMessages: detail.messages,
+        agentFollowUps: [],
         live: undefined,
         approval: undefined,
         agentOpen: true,
@@ -536,7 +542,7 @@ export const useApp = create<AppStore>((set, get) => ({
   deleteAgentSession: async (id) => {
     try {
       await api.deleteSession(id);
-      if (get().agentSessionId === id) set({ agentSessionId: undefined, agentSessionMeta: undefined, agentMessages: [], live: undefined });
+      if (get().agentSessionId === id) set({ agentSessionId: undefined, agentSessionMeta: undefined, agentMessages: [], agentFollowUps: [], live: undefined });
       await get().refreshSessions();
     } catch (err) {
       get().notify('error', get().t('error'), errorText(err));
@@ -601,6 +607,8 @@ export const useApp = create<AppStore>((set, get) => ({
         case 'memory_used':
           live.memories = event.memories;
           break;
+        case 'suggestions':
+          return { live, agentFollowUps: event.items };
         case 'usage':
           live.tokensIn += event.tokensIn;
           live.tokensOut += event.tokensOut;
@@ -642,6 +650,7 @@ export const useApp = create<AppStore>((set, get) => ({
       set({
         agentMode: permission,
         approval: undefined,
+        agentFollowUps: [],
         live: {
           userText: trimmed,
           text: '',

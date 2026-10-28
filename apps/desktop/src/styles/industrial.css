@@ -335,6 +335,25 @@ body {
 .chart-foot { display: flex; align-items: center; gap: 6px; font-size: 8.5px; color: var(--text-muted); margin-top: 3px; }
 .chart-open { margin-left: auto; border: none; background: transparent; color: var(--accent); font-size: 9px; display: inline-flex; align-items: center; gap: 3px; padding: 2px 3px; }
 .chart-open:hover { color: var(--accent-hover); text-decoration: underline; }
+.chart-toolbar { display: flex; align-items: center; gap: 5px; padding: 3px 0 5px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 5px; flex-wrap: wrap; }
+.chart-toolbar .spacer { flex: 1; }
+.chart-types { display: inline-flex; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); overflow: hidden; }
+.chart-type { border: none; background: transparent; color: var(--text-muted); padding: 3px 6px; display: inline-flex; align-items: center; cursor: pointer; }
+.chart-type + .chart-type { border-left: 1px solid var(--border-subtle); }
+.chart-type:hover { color: var(--text-primary); background: var(--bg-hover); }
+.chart-type.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.chart-axis-pick { display: inline-flex; align-items: center; gap: 3px; font-size: 9px; color: var(--text-muted); }
+.chart-axis-pick .select { width: 108px; font-size: 10px; padding: 2px 4px; }
+.chart-note { margin-top: 5px; padding: 5px 7px; border-left: 2px solid var(--warning); background: color-mix(in srgb, var(--warning) 9%, transparent); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; font-size: 9.5px; line-height: 1.6; color: var(--text-secondary); }
+.chart-zero { stroke: var(--text-muted); stroke-width: 1; stroke-opacity: .5; }
+.chart-modal { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.55); display: grid; place-items: center; padding: 24px; }
+.chart-modal-body { position: relative; width: min(880px, 94vw); max-height: 90vh; overflow: auto; background: var(--bg-panel); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 12px; }
+.chart-modal-body .chart-card { margin-top: 0; border: none; background: transparent; padding: 0; }
+.chart-modal-close { position: absolute; top: 8px; right: 8px; z-index: 1; }
+.chart-result-tabs { display: inline-flex; gap: 2px; margin-bottom: 5px; border-bottom: 1px solid var(--border-subtle); }
+.chart-result-tab { border: none; background: transparent; color: var(--text-muted); font-size: 10px; padding: 3px 8px; cursor: pointer; border-bottom: 2px solid transparent; }
+.chart-result-tab:hover { color: var(--text-primary); }
+.chart-result-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 .pie-row { display: flex; align-items: center; gap: 12px; padding: 4px 0; }
 .pie { width: 108px; height: 108px; border-radius: 50%; position: relative; flex: 0 0 108px; box-shadow: 0 0 24px rgba(0,0,0,.2); }
 .pie-hole { position: absolute; inset: 18px; border-radius: 50%; background: var(--bg-panel); display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px solid var(--border-subtle); }

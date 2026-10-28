@@ -15,9 +15,12 @@ import {
   buildUpdate,
   classifySql,
   encodeSse,
+  isAgentContextActive,
   listProviderModels,
   quoteIdent,
   sseHeaders,
+  suggestQuestions,
+  tablesFromSql,
   type AppSettings,
   type ColumnDef,
   type ConnectionConfig,
@@ -841,6 +844,103 @@ export function createApiRouter(deps: ApiDeps): Router {
   router.delete('/agent/memories/:id', (req, res) => {
     store.deleteMemory(req.params.id);
     res.status(204).end();
+  });
+
+  /** 猜你想问：纯本地规则，不查库、不调模型，离线模式同样可用。 */
+  router.get(
+    '/agent/suggest',
+    ah(async (req, res) => {
+      const connectionId = str(req.query.connectionId);
+      if (!connectionId) throw Object.assign(new Error('connectionId 必填'), { code: 'INVALID_INPUT', status: 400 });
+      const database = str(req.query.database);
+      const limit = num(req.query.limit, 6, 1, 12);
+      const schemas = await manager.schema(connectionId, database);
+      const history = store.listHistory({ connectionId, limit: 50 }).flatMap((h) => tablesFromSql(h.sql));
+      res.json({
+        suggestions: suggestQuestions(schemas, { limit, history, bundle: store.agentContextBundle(connectionId, database) }),
+      });
+    }),
+  );
+
+  // ---------- agent business context ----------
+  router.get('/agent/context', (req, res) => {
+    const connectionId = str(req.query.connectionId);
+    if (!connectionId) throw Object.assign(new Error('connectionId 必填'), { code: 'INVALID_INPUT', status: 400 });
+    const database = str(req.query.database) ?? '';
+    const entries = store.listAgentContext(connectionId, database);
+    const bundle = store.agentContextBundle(connectionId, database);
+    res.json({ entries, bundle, active: isAgentContextActive(bundle) });
+  });
+
+  router.put('/agent/context/entry', (req, res) => {
+    const body = obj(req.body, 'body');
+    const connectionId = str(body.connectionId);
+    const table = str(body.table);
+    const kindRaw = str(body.kind) ?? 'table';
+    if (!connectionId || !table) throw Object.assign(new Error('connectionId 与 table 必填'), { code: 'INVALID_INPUT', status: 400 });
+    if (kindRaw !== 'table' && kindRaw !== 'column') throw Object.assign(new Error('kind 只能是 table 或 column'), { code: 'INVALID_INPUT', status: 400 });
+    const entry = store.upsertAgentContextEntry({
+      connectionId,
+      database: str(body.database) ?? '',
+      kind: kindRaw,
+      table,
+      column: str(body.column),
+      enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
+      alias: body.alias === null ? null : str(body.alias),
+      description: body.description === null ? null : str(body.description),
+    });
+    res.json({ entry });
+  });
+
+  router.put('/agent/context/relation', (req, res) => {
+    const body = obj(req.body, 'body');
+    const connectionId = str(body.connectionId);
+    const table = str(body.table);
+    const column = str(body.column);
+    const refTable = str(body.refTable);
+    const refColumn = str(body.refColumn);
+    if (!connectionId || !table || !column || !refTable || !refColumn) {
+      throw Object.assign(new Error('connectionId、table、column、refTable、refColumn 均必填'), { code: 'INVALID_INPUT', status: 400 });
+    }
+    const entry = store.upsertAgentRelation({
+      connectionId,
+      database: str(body.database) ?? '',
+      table,
+      column,
+      refTable,
+      refColumn,
+      description: body.description === null ? null : str(body.description),
+    });
+    res.json({ entry });
+  });
+
+  router.post('/agent/context/bulk', (req, res) => {
+    const body = obj(req.body, 'body');
+    const connectionId = str(body.connectionId);
+    if (!connectionId || !Array.isArray(body.tables)) {
+      throw Object.assign(new Error('connectionId 与 tables[] 必填'), { code: 'INVALID_INPUT', status: 400 });
+    }
+    const tables = (body.tables as unknown[]).map(String).slice(0, 2000);
+    const touched = store.bulkSetAgentContextTables({
+      connectionId,
+      database: str(body.database) ?? '',
+      tables,
+      enabled: body.enabled !== false,
+    });
+    res.json({ touched });
+  });
+
+  router.delete('/agent/context/entry/:id', (req, res) => {
+    store.deleteAgentContext(req.params.id);
+    res.status(204).end();
+  });
+
+  /** 清空某个连接（可选某个库）的全部业务上下文配置，回到「未配置」的默认行为。 */
+  router.delete('/agent/context', (req, res) => {
+    const connectionId = str(req.query.connectionId);
+    if (!connectionId) throw Object.assign(new Error('connectionId 必填'), { code: 'INVALID_INPUT', status: 400 });
+    const removed = store.clearAgentContext(connectionId, str(req.query.database));
+    res.json({ removed });
   });
 
   // ---------- pairing ----------

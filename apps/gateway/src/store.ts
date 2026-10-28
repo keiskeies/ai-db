@@ -2,10 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import {
   DEFAULT_SETTINGS,
+  bundleAgentContext,
+  emptyBundle,
   isDuplicateMemory,
   looksLikeSecret,
   mergeMemoryContent,
   rankMemories,
+  type AgentContextBundle,
+  type AgentContextEntry,
   type AgentMessage,
   type AgentMessageBlock,
   type AgentSessionMeta,
@@ -100,6 +104,22 @@ CREATE TABLE IF NOT EXISTS snippets (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, sql TEXT NOT NULL, tags TEXT,
   connection_id TEXT, created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS agent_context (
+  id TEXT PRIMARY KEY,
+  connection_id TEXT NOT NULL,
+  database_name TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL CHECK (kind IN ('table','column','relation')),
+  table_name TEXT NOT NULL,
+  column_name TEXT,
+  ref_table TEXT,
+  ref_column TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  alias TEXT,
+  description TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_ctx ON agent_context(connection_id, database_name, kind);
 `;
 
 interface ConnectionRow {
@@ -169,6 +189,22 @@ interface MemoryRow {
   updated_at: string;
 }
 
+interface AgentContextRow {
+  id: string;
+  connection_id: string;
+  database_name: string;
+  kind: AgentContextEntry['kind'];
+  table_name: string;
+  column_name: string | null;
+  ref_table: string | null;
+  ref_column: string | null;
+  enabled: number;
+  alias: string | null;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 interface AuditRow {
   id: string;
   actor: AuditEntry['actor'];
@@ -206,9 +242,25 @@ export interface ConnectionInput {
 
 const iso = () => new Date().toISOString();
 
+/** 业务语义类记忆：召回时走独立配额，不挤占情景记忆的 6 条名额。 */
+const BUSINESS_KINDS: MemoryKind[] = ['glossary', 'sql_example'];
+
+function filterKinds(memories: Memory[], kinds?: MemoryKind[], excludeKinds?: MemoryKind[]): Memory[] {
+  if (kinds?.length) {
+    const allow = new Set(kinds);
+    return memories.filter((m) => allow.has(m.kind));
+  }
+  if (excludeKinds?.length) {
+    const deny = new Set(excludeKinds);
+    return memories.filter((m) => !deny.has(m.kind));
+  }
+  return memories;
+}
+
 export class Store {
   readonly db: DatabaseSync;
   private box: SecretBox;
+  private contextCache = new Map<string, { at: number; bundle: AgentContextBundle }>();
 
   constructor(dbPath: string, secret: string) {
     this.db = new DatabaseSync(dbPath);
@@ -807,8 +859,12 @@ export class Store {
     this.exec(`UPDATE memories SET use_count = use_count + 1, last_used_at = ? WHERE id IN (${placeholders})`, [now, ...ids]);
   }
 
-  searchMemories(query: string, ctx: { connectionId?: string; database?: string; limit?: number } = {}): Memory[] {
-    const memories = this.listMemories({ includeArchived: false, limit: 500 });
+  searchMemories(
+    query: string,
+    ctx: { connectionId?: string; database?: string; limit?: number; kinds?: MemoryKind[]; excludeKinds?: MemoryKind[] } = {},
+  ): Memory[] {
+    const all = this.listMemories({ includeArchived: false, limit: 500 });
+    const memories = filterKinds(all, ctx.kinds, ctx.excludeKinds);
     if (!query.trim()) {
       return memories
         .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.importance - a.importance)
@@ -817,6 +873,192 @@ export class Store {
     const ranked = rankMemories(query, memories, { connectionId: ctx.connectionId, database: ctx.database, limit: ctx.limit ?? 8 });
     this.markMemoriesUsed(ranked.map((m) => m.id));
     return ranked;
+  }
+
+  /**
+   * 单轮召回：业务语义（术语 / 示例 SQL）走独立配额，不与情景记忆争名额。
+   * 无相关记忆时三类均为空数组，prompt 输出与未引入该机制前完全一致。
+   */
+  recallForTurn(query: string, ctx: { connectionId?: string; database?: string } = {}): {
+    memories: Memory[];
+    glossary: Memory[];
+    sqlExamples: Memory[];
+  } {
+    const scope = { connectionId: ctx.connectionId, database: ctx.database };
+    const memories = this.searchMemories(query, { ...scope, limit: 6, excludeKinds: BUSINESS_KINDS });
+    // 术语与示例 SQL 是常驻业务上下文，即使与本轮问题字面不相关也应注入，故空查询时按重要度兜底。
+    const glossary = this.searchMemories(query, { ...scope, limit: 20, kinds: ['glossary'] });
+    const sqlExamples = this.searchMemories(query, { ...scope, limit: 3, kinds: ['sql_example'] });
+    return { memories, glossary, sqlExamples };
+  }
+
+  // ---------- agent context (业务上下文覆盖) ----------
+  private rowToAgentContext(row: AgentContextRow): AgentContextEntry {
+    return {
+      id: row.id,
+      connectionId: row.connection_id,
+      database: row.database_name,
+      kind: row.kind,
+      table: row.table_name,
+      column: row.column_name ?? undefined,
+      refTable: row.ref_table ?? undefined,
+      refColumn: row.ref_column ?? undefined,
+      enabled: Boolean(row.enabled),
+      alias: row.alias ?? undefined,
+      description: row.description ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  /**
+   * 列出覆盖项。`database` 为 undefined 时返回该连接的全部库配置；
+   * 传入具体库名（含空串）时精确匹配，避免把 A 库的配置套到 B 库上。
+   */
+  listAgentContext(connectionId: string, database?: string): AgentContextEntry[] {
+    const rows =
+      database === undefined
+        ? this.all<AgentContextRow>('SELECT * FROM agent_context WHERE connection_id = ? ORDER BY kind, table_name, column_name', [connectionId])
+        : this.all<AgentContextRow>('SELECT * FROM agent_context WHERE connection_id = ? AND database_name = ? ORDER BY kind, table_name, column_name', [
+            connectionId,
+            database,
+          ]);
+    return rows.map((r) => this.rowToAgentContext(r));
+  }
+
+  /**
+   * upsert 表 / 列覆盖。定位键：connection + database + kind + table + column。
+   * 传入的字段为 undefined 表示「不改」；传 null 表示「清空」。
+   */
+  upsertAgentContextEntry(input: {
+    id?: string;
+    connectionId: string;
+    database?: string;
+    kind: 'table' | 'column';
+    table: string;
+    column?: string;
+    enabled?: boolean;
+    alias?: string | null;
+    description?: string | null;
+  }): AgentContextEntry {
+    if (input.kind === 'column' && !input.column?.trim()) throw new Error('列覆盖必须提供 column');
+    this.invalidateAgentContextCache();
+    const database = input.database ?? '';
+    const table = input.table.trim();
+    const column = input.kind === 'column' ? input.column!.trim() : null;
+    const now = iso();
+    const existing = this.one<AgentContextRow>(
+      'SELECT * FROM agent_context WHERE connection_id = ? AND database_name = ? AND kind = ? AND table_name = ? AND column_name IS ?',
+      [input.connectionId, database, input.kind, table, column],
+    );
+    if (existing) {
+      this.exec(
+        `UPDATE agent_context SET enabled = ?, alias = ?, description = ?, updated_at = ? WHERE id = ?`,
+        [
+          input.enabled === undefined ? existing.enabled : input.enabled ? 1 : 0,
+          input.alias === undefined ? existing.alias : input.alias,
+          input.description === undefined ? existing.description : input.description,
+          now,
+          existing.id,
+        ],
+      );
+      return this.rowToAgentContext(this.one<AgentContextRow>('SELECT * FROM agent_context WHERE id = ?', [existing.id])!);
+    }
+    const id = input.id ?? randomUUID();
+    this.exec(
+      `INSERT INTO agent_context (id,connection_id,database_name,kind,table_name,column_name,ref_table,ref_column,enabled,alias,description,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,NULL,NULL,?,?,?,?,?)`,
+      [id, input.connectionId, database, input.kind, table, column, input.enabled === false ? 0 : 1, input.alias ?? null, input.description ?? null, now, now],
+    );
+    return this.rowToAgentContext(this.one<AgentContextRow>('SELECT * FROM agent_context WHERE id = ?', [id])!);
+  }
+
+  /** upsert 手工关联关系；定位键为四元组，避免同一关系重复录入。 */
+  upsertAgentRelation(input: {
+    connectionId: string;
+    database?: string;
+    table: string;
+    column: string;
+    refTable: string;
+    refColumn: string;
+    description?: string | null;
+  }): AgentContextEntry {
+    const database = input.database ?? '';
+    const now = iso();
+    this.invalidateAgentContextCache();
+    const existing = this.one<AgentContextRow>(
+      `SELECT * FROM agent_context WHERE connection_id = ? AND database_name = ? AND kind = 'relation'
+       AND table_name = ? AND column_name = ? AND ref_table = ? AND ref_column = ?`,
+      [input.connectionId, database, input.table.trim(), input.column.trim(), input.refTable.trim(), input.refColumn.trim()],
+    );
+    if (existing) {
+      this.exec('UPDATE agent_context SET description = ?, updated_at = ? WHERE id = ?', [
+        input.description === undefined ? existing.description : input.description,
+        now,
+        existing.id,
+      ]);
+      return this.rowToAgentContext(this.one<AgentContextRow>('SELECT * FROM agent_context WHERE id = ?', [existing.id])!);
+    }
+    const id = randomUUID();
+    this.exec(
+      `INSERT INTO agent_context (id,connection_id,database_name,kind,table_name,column_name,ref_table,ref_column,enabled,alias,description,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,1,NULL,?,?,?)`,
+      [id, input.connectionId, database, 'relation', input.table.trim(), input.column.trim(), input.refTable.trim(), input.refColumn.trim(), input.description ?? null, now, now],
+    );
+    return this.rowToAgentContext(this.one<AgentContextRow>('SELECT * FROM agent_context WHERE id = ?', [id])!);
+  }
+
+  deleteAgentContext(id: string): void {
+    this.invalidateAgentContextCache();
+    this.exec('DELETE FROM agent_context WHERE id = ?', [id]);
+  }
+
+  /** 清空某连接（可选某库）的全部覆盖项，使 Agent 回到未配置的默认行为。 */
+  clearAgentContext(connectionId: string, database?: string): number {
+    this.invalidateAgentContextCache();
+    const result = database
+      ? this.exec('DELETE FROM agent_context WHERE connection_id = ? AND database_name = ?', [connectionId, database])
+      : this.exec('DELETE FROM agent_context WHERE connection_id = ?', [connectionId]);
+    return result.changes;
+  }
+
+  /** 批量启用 / 禁用表（表管理面板的「全选 / 反选 / 仅启用勾选」）。 */
+  bulkSetAgentContextTables(input: { connectionId: string; database?: string; tables: string[]; enabled: boolean }): number {
+    const database = input.database ?? '';
+    let touched = 0;
+    this.db.exec('BEGIN');
+    try {
+      for (const raw of input.tables) {
+        const table = String(raw).trim();
+        if (!table) continue;
+        this.upsertAgentContextEntry({ connectionId: input.connectionId, database, kind: 'table', table, enabled: input.enabled });
+        touched++;
+      }
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+    return touched;
+  }
+
+  /**
+   * 聚合为 prompt 可直接消费的结构；无任何配置时返回 inactive bundle。带 30s 缓存，写操作立即失效。
+   * 未指定具体库时返回 inactive——无法判断该套用哪个库的配置，宁可退回默认行为也不误伤。
+   */
+  agentContextBundle(connectionId: string, database?: string): AgentContextBundle {
+    if (!database) return emptyBundle({ connectionId, database: '' });
+    const key = `${connectionId}\u0000${database}`;
+    const now = Date.now();
+    const hit = this.contextCache.get(key);
+    if (hit && now - hit.at < 30_000) return hit.bundle;
+    const bundle = bundleAgentContext(this.listAgentContext(connectionId, database), { connectionId, database });
+    this.contextCache.set(key, { at: now, bundle });
+    return bundle;
+  }
+
+  private invalidateAgentContextCache(): void {
+    this.contextCache.clear();
   }
 
   // ---------- audit ----------

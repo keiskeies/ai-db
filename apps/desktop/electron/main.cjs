@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, shell, session } = require('electron');
 const path = require('node:path');
 const http = require('node:http');
 const net = require('node:net');
@@ -7,6 +7,28 @@ const { spawn } = require('node:child_process');
 
 let gatewayProcess = null;
 let mainWindow = null;
+
+const EXPORT_FILTERS = {
+  png: { name: 'PNG 图片', extensions: ['png'] },
+  svg: { name: 'SVG 矢量图', extensions: ['svg'] },
+  csv: { name: 'CSV 文件', extensions: ['csv'] },
+  sql: { name: 'SQL 脚本', extensions: ['sql'] },
+  json: { name: 'JSON 文件', extensions: ['json'] },
+};
+
+// 图表 PNG、ERD SVG、审计 CSV 这类导出在桌面端一律走原生「另存为」。Electron 不挂
+// 这个处理器时也会弹框，但没有类型过滤器，用户存出来的文件可能丢扩展名。
+function registerExportDialogs() {
+  session.defaultSession.on('will-download', (_event, item) => {
+    const filename = item.getFilename() || 'export';
+    const filter = EXPORT_FILTERS[filename.split('.').pop().toLowerCase()];
+    item.setSaveDialogOptions({
+      defaultPath: filename,
+      buttonLabel: '保存',
+      ...(filter ? { filters: [filter, { name: '所有文件', extensions: ['*'] }] } : {}),
+    });
+  });
+}
 
 function getFreePort() {
   return new Promise((resolve, reject) => {
@@ -104,7 +126,10 @@ async function createWindow() {
   });
 }
 
-app.whenReady().then(createWindow).catch((err) => {
+app.whenReady().then(() => {
+  registerExportDialogs();
+  return createWindow();
+}).catch((err) => {
   console.error('[desktop] failed to start', err);
   app.quit();
 });

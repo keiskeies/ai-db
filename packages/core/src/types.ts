@@ -139,8 +139,74 @@ export interface AuditEntry {
   createdAt: string;
 }
 
-export type MemoryKind = 'fact' | 'preference' | 'schema' | 'episodic' | 'procedural';
+export type MemoryKind = 'fact' | 'preference' | 'schema' | 'episodic' | 'procedural' | 'glossary' | 'sql_example';
 export type MemoryScopeType = 'global' | 'connection' | 'database' | 'table';
+
+/** 顺序即 UI 展示顺序；业务语义类（glossary / sql_example）单独配额，不挤占情景记忆的召回名额。 */
+export const MEMORY_KINDS: MemoryKind[] = ['fact', 'preference', 'schema', 'episodic', 'procedural', 'glossary', 'sql_example'];
+
+export const MEMORY_KIND_LABELS: Record<MemoryKind, { zh: string; en: string }> = {
+  fact: { zh: '事实', en: 'Fact' },
+  preference: { zh: '偏好', en: 'Preference' },
+  schema: { zh: '结构', en: 'Schema' },
+  episodic: { zh: '情景', en: 'Episodic' },
+  procedural: { zh: '程序', en: 'Procedural' },
+  glossary: { zh: '术语', en: 'Term' },
+  sql_example: { zh: '示例 SQL', en: 'SQL example' },
+};
+
+/** Agent 上下文覆盖项：表 / 列的启用状态与业务语义，或一条手工维护的表关联关系。 */
+export type AgentContextKind = 'table' | 'column' | 'relation';
+
+export interface AgentContextEntry {
+  id: string;
+  connectionId: string;
+  database: string;
+  kind: AgentContextKind;
+  table: string;
+  column?: string;
+  refTable?: string;
+  refColumn?: string;
+  enabled: boolean;
+  alias?: string;
+  description?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 按库聚合后的上下文，直接喂给 prompt 构造器。 */
+export interface AgentContextBundle {
+  connectionId: string;
+  database: string;
+  /** 用户显式禁用的表；为空表示未做任何取舍，Agent 行为与未配置时一致。 */
+  disabledTables: string[];
+  disabledColumns: Record<string, string[]>;
+  tableMeta: Record<string, { alias?: string; description?: string }>;
+  columnMeta: Record<string, Record<string, { alias?: string; description?: string }>>;
+  relations: Array<{ leftTable: string; leftColumn: string; rightTable: string; rightColumn: string; description?: string }>;
+}
+
+export const EMPTY_AGENT_CONTEXT_BUNDLE: AgentContextBundle = {
+  connectionId: '',
+  database: '',
+  disabledTables: [],
+  disabledColumns: {},
+  tableMeta: {},
+  columnMeta: {},
+  relations: [],
+};
+
+/** bundle 是否含任何会改变 prompt 输出的内容；false 时必须走完全等同旧行为的路径。 */
+export function isAgentContextActive(bundle?: AgentContextBundle | null): boolean {
+  if (!bundle) return false;
+  return Boolean(
+    bundle.disabledTables.length ||
+      Object.keys(bundle.disabledColumns).length ||
+      Object.keys(bundle.tableMeta).length ||
+      Object.keys(bundle.columnMeta).length ||
+      bundle.relations.length,
+  );
+}
 
 export interface Memory {
   id: string;
@@ -208,6 +274,8 @@ export interface AgentSettings {
   temperature: number;
   maxSteps: number;
   autoMemory: boolean;
+  /** 每轮结束后基于本轮涉及的表给出可点击的追问建议。 */
+  followUpSuggestions: boolean;
   snapshotBeforeWrite: boolean;
   compactionThreshold: number;
   /** 按模型名保存的能力档案。 */
@@ -244,6 +312,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     temperature: 0.2,
     maxSteps: 12,
     autoMemory: true,
+    followUpSuggestions: true,
     snapshotBeforeWrite: true,
     compactionThreshold: 24000,
   },

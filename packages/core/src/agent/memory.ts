@@ -78,11 +78,14 @@ export function rankMemories(query: string, memories: Memory[], ctx: RankContext
     lex = lex / Math.sqrt(qTokens.length + 2);
     const days = Math.max(0, (now - new Date(m.updatedAt || m.createdAt).getTime()) / 86400000);
     const recency = Math.exp(-days / 90);
+    // 业务语义类记忆是准确率的直接来源，给一点固定加成；不影响原有五类的相对排序。
+    const semantics = m.kind === 'glossary' || m.kind === 'sql_example' ? 0.1 : 0;
     const score =
       0.55 * Math.min(1, lex / 1.6) +
       0.25 * scopeScore(m, ctx) +
       0.15 * m.importance +
       0.05 * recency +
+      semantics +
       (m.pinned ? 0.3 : 0);
     if (score > 0.05 || m.pinned) scored.push({ ...m, score });
   }
@@ -117,10 +120,44 @@ export interface ExtractDefaults {
   sessionId?: string;
 }
 
-/** Conservative offline extraction: only explicit remember/preference statements. */
+/**
+ * 术语定义句式。分强弱两类标记：
+ * - 强标记（简称 / 指的是 / stands for …）语义唯一，单独出现即可判定为术语；
+ * - 弱标记（就是 / means）在普通陈述句里太常见（「这个方案就是我想要的」），
+ *   必须同时出现「记住」类触发词才收录，避免把闲聊写进长期记忆污染后续每一轮 prompt。
+ */
+const STRONG_TERM_RE = /^\s*([^，,。;；]{1,24}?)\s*(?:简称|指的是|的意思是|叫作|叫做|stands for|refers to)\s*([^，,。;；]{1,60}?)\s*$/i;
+const WEAK_TERM_RE = /^\s*([^，,。;；]{1,24}?)\s*(?:就是|means)\s*([^，,。;；]{1,60}?)\s*$/i;
+const REMEMBER_RE = /(?:记住|记一下|remember|以后|下次|默认|偏好|习惯)/i;
+
+function extractGlossary(text: string, defaults: ExtractDefaults): MemoryCandidate | null {
+  if (text.length > 90) return null;
+  const remembered = REMEMBER_RE.test(text);
+  const body = text.replace(/^(?:请?记住|记一下|remember)[:：,，\s]*/i, '').trim();
+  const m = STRONG_TERM_RE.exec(body) ?? (remembered ? WEAK_TERM_RE.exec(body) : null);
+  if (!m) return null;
+  const term = m[1].trim();
+  const meaning = m[2].trim();
+  if (!term || !meaning || term === meaning) return null;
+  const scopeType: MemoryScopeType = defaults.connectionId ? 'connection' : 'global';
+  return {
+    kind: 'glossary',
+    title: term,
+    content: `${term} = ${meaning}`,
+    tags: tokenize(`${term} ${meaning}`).slice(0, 6),
+    importance: 0.8,
+    confidence: remembered ? 0.75 : 0.6,
+    scopeType,
+    scopeKey: scopeType === 'connection' ? (defaults.connectionId as string) : '*',
+  };
+}
+
+/** Conservative offline extraction: explicit remember/preference statements and term definitions. */
 export function extractHeuristicMemories(userText: string, defaults: ExtractDefaults = {}): MemoryCandidate[] {
   const text = userText.trim();
   if (!text || looksLikeSecret(text)) return [];
+  const glossary = extractGlossary(text, defaults);
+  if (glossary) return [glossary];
   const trigger = /(?:记住|记一下|remember|以后|下次|默认|偏好|习惯)/i.test(text);
   if (!trigger) return [];
   let content = text

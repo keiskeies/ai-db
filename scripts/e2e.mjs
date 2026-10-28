@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import { createReadStream, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -81,7 +82,7 @@ const api = async (path, init = {}) => {
 const boot = (await api('/bootstrap')).body;
 const demo = boot.connections.find((c) => c.engine === 'sqlite');
 check('bridge bootstrap', Boolean(demo), demo?.name);
-check('22 agent tools', boot.tools.length === 22, String(boot.tools.length));
+check('24 agent tools', boot.tools.length === 24, String(boot.tools.length));
 
 // Mobile static server
 const mime = { '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ttf': 'font/ttf' };
@@ -236,6 +237,116 @@ await page.waitForSelector('.chart-card', { timeout: 25000 });
 check('agent renders a chart artifact', (await page.locator('.chart-card svg, .chart-card .pie').count()) > 0);
 await page.screenshot({ path: join(shots, 'desktop-chart.png') });
 
+// ---------------- P3 图表三 tab / 工具条 / PNG ----------------
+// 锚点用 chart-tabs 而不是 chart-card：切到「明细」时图表卡会卸载，用它定位会瞬间失效
+const chartToolCard = page.locator('.tool-card').filter({ has: page.locator('[data-testid="chart-tabs"]') }).first();
+check('chart result offers 图表/明细/SQL tabs', (await chartToolCard.locator('[data-testid="chart-tabs"] button').count()) === 3, await chartToolCard.locator('[data-testid="chart-tabs"] button').allTextContents().then((t) => t.join('|')).catch(() => ''));
+await chartToolCard.locator('[data-testid="chart-tab-rows"]').click();
+check('明细 tab exposes the rows the tool already returned', (await chartToolCard.locator('.tool-table tbody tr').count()) > 0, `${await chartToolCard.locator('.tool-table tbody tr').count()} rows`);
+await chartToolCard.locator('[data-testid="chart-tab-sql"]').click();
+check('SQL tab shows the chart SQL', /select/i.test((await chartToolCard.locator('.sql-block').first().textContent()) ?? ''));
+await chartToolCard.locator('[data-testid="chart-tab-chart"]').click();
+check('switching back restores the chart', (await chartToolCard.locator('[data-testid="chart-svg"]').count()) === 1);
+const chartCard = chartToolCard.locator('[data-testid="chart-card"]');
+check('chart toolbar is shared into the agent card', (await chartCard.locator('[data-testid="chart-toolbar"]').count()) === 1);
+await chartCard.locator('[data-testid="chart-type-line"]').click();
+check('chart type switches without a round trip', /LINE/.test((await chartCard.locator('.chart-head .badge').textContent()) ?? ''));
+await chartCard.locator('[data-testid="chart-type-bar"]').click();
+const pngDownload = page.waitForEvent('download', { timeout: 15000 });
+await chartCard.locator('[data-testid="chart-export-png"]').click();
+const pngPath = await (await pngDownload).path();
+const pngHead = (await readFile(pngPath)).subarray(0, 4);
+check('chart PNG export produces a real PNG', pngHead[0] === 0x89 && pngHead[1] === 0x50 && pngHead[2] === 0x4e && pngHead[3] === 0x47, `${pngHead.toString('hex')} ${(await statSync(pngPath)).size}B`);
+
+// ---------------- P4 执行详情 ----------------
+const execToggles = page.locator('[data-testid="exec-toggle"]');
+check('每轮消息提供执行详情入口', (await execToggles.count()) > 0, `${await execToggles.count()} toggles`);
+await execToggles.first().click();
+const execDetail = page.locator('[data-testid="exec-detail"]').first();
+check('执行详情抽屉展开', (await execDetail.count()) === 1);
+check('时间线至少一行且带耗时', (await execDetail.locator('.exec-row').count()) > 0 && /\d/.test((await execDetail.locator('.exec-ms').first().textContent()) ?? ''));
+check('汇总行给出调用次数', /次调用/.test((await execDetail.locator('[data-testid="exec-summary"]').textContent()) ?? ''), (await execDetail.locator('[data-testid="exec-summary"]').textContent()) ?? '');
+await execDetail.locator('.exec-head').first().click();
+check('单行可展开看参数', (await execDetail.locator('.exec-body').count()) > 0);
+await execToggles.first().click();
+
+// ---------------- P2 追问建议 ----------------
+check('回合结束后出现追问建议', (await page.locator('[data-testid="agent-followups"] .suggest-chip').count()) > 0, `${await page.locator('[data-testid="agent-followups"] .suggest-chip').count()} chips`);
+
+// ---------------- P3 forecast_chart ----------------
+await page.fill('[data-testid="agent-input"]', '预测未来 3 个月 orders 的数量');
+await page.click('[data-testid="agent-send"]');
+await page.waitForFunction(() => document.querySelector('.chart-note') !== null, { timeout: 30000 });
+const forecastNote = (await page.locator('.chart-note').first().textContent()) ?? '';
+check('forecast 说明写清方法与拟合度', /方法：(线性回归|移动平均)/.test(forecastNote) && /r=/.test(forecastNote), forecastNote.slice(0, 80));
+check('forecast 段以虚线渲染', (await page.locator('[data-testid="chart-forecast-line"]').count()) > 0);
+check('forecast 带区间带', (await page.locator('[data-testid="chart-forecast-band"]').count()) > 0);
+await page.screenshot({ path: join(shots, 'desktop-forecast.png') });
+
+// ---------------- P2 猜你想问 ----------------
+await page.click('[data-testid="agent-new-session"]');
+await page.waitForSelector('[data-testid="agent-suggestions"]', { timeout: 10000 });
+const suggestChips = page.locator('[data-testid="agent-suggestions"] .suggest-chip');
+const chipCount = await suggestChips.count();
+check('空会话给出猜你想问', chipCount > 0 && chipCount <= 6, `${chipCount} chips`);
+const chipText = (await suggestChips.first().textContent()) ?? '';
+await suggestChips.first().click();
+check('点击推荐填入输入框且不自动发送', (await page.locator('[data-testid="agent-input"]').inputValue()).length > 4 && chipText.length > 0);
+await page.fill('[data-testid="agent-input"]', '');
+
+// ---------------- P5 会话重命名与搜索 ----------------
+await page.click('[data-testid="agent-sessions"]');
+await page.waitForSelector('.sessions-drawer', { timeout: 8000 });
+const sessionTotal = await page.locator('.session-item').count();
+const renamed = `E2E会话${Date.now().toString().slice(-6)}`;
+await page.fill('[data-testid="session-search"]', '不存在zzz');
+check('会话搜索能过滤到空', (await page.locator('.session-item').count()) === 0);
+await page.fill('[data-testid="session-search"]', '');
+check('清空搜索恢复全量', (await page.locator('.session-item').count()) === sessionTotal, `${sessionTotal} sessions`);
+await page.locator('.session-item').first().locator('[data-testid="session-rename"]').click();
+await page.waitForSelector('[data-testid="session-rename-input"]', { timeout: 5000 });
+await page.fill('[data-testid="session-rename-input"]', renamed);
+await page.locator('[data-testid="session-rename-input"]').press('Enter');
+await page.waitForTimeout(600);
+const renamedOnServer = (await api('/agent/sessions')).body.sessions.some((s) => s.title === renamed);
+check('会话重命名已落库', renamedOnServer, renamed);
+await page.screenshot({ path: join(shots, 'desktop-sessions.png') });
+await page.click('.sessions-head .icon-btn');
+
+// ---------------- P1 业务上下文 ----------------
+await page.click('[data-testid="ribbon"] button[title="视图"]');
+await page.waitForSelector('.tools-modal', { timeout: 10000 });
+await page.locator('.tools-nav button').filter({ hasText: 'Agent 上下文' }).click();
+await page.waitForSelector('[data-testid="ctx-connection"]', { timeout: 8000 });
+if ((await page.locator('[data-testid="ctx-connection"]').inputValue()) !== demo.id) {
+  await page.selectOption('[data-testid="ctx-connection"]', demo.id);
+}
+// schema 是异步加载的，必须等表格真的出行，否则拿不到任何 ctx-enable-* 开关
+await page.waitForSelector('[data-testid="ctx-table-grid"] tbody tr', { timeout: 25000 });
+const ctxToggle = page.locator('[data-testid^="ctx-enable-"]').first();
+const ctxTable = (await ctxToggle.getAttribute('data-testid')).replace('ctx-enable-', '');
+// /agent/context 对 database 是精确过滤，不带就会查到空列表
+const ctxDb = encodeURIComponent(await page.locator('[data-testid="ctx-database"]').inputValue());
+const ctxUrl = `/agent/context?connectionId=${demo.id}&database=${ctxDb}`;
+await ctxToggle.click();
+await page.waitForTimeout(700);
+const ctxAfter = await api(ctxUrl);
+check('禁用表写入业务上下文', ctxAfter.body.entries.some((e) => e.table === ctxTable && e.enabled === false), `${ctxTable}: ${JSON.stringify(ctxAfter.body.entries.slice(0, 2))}`);
+await ctxToggle.click();
+await page.waitForTimeout(700);
+const ctxRestored = await api(ctxUrl);
+check('重新启用同样落库', ctxRestored.body.entries.some((e) => e.table === ctxTable && e.enabled === true), ctxTable);
+// 清空是破坏性操作，UI 用 window.confirm 二次确认；Playwright 默认会自动 dismiss
+let confirmText = '';
+page.once('dialog', async (dialog) => { confirmText = dialog.message(); await dialog.accept(); });
+await page.click('[data-testid="ctx-clear"]');
+await page.waitForTimeout(700);
+check('清空业务上下文前二次确认', /清空/.test(confirmText), confirmText.slice(0, 50));
+check('清空业务上下文', ((await api(ctxUrl)).body.entries ?? []).length === 0);
+await page.locator('.tools-modal .icon-btn').first().click();
+await page.waitForTimeout(400);
+check('业务上下文面板可关闭', (await page.locator('.tools-modal').count()) === 0);
+
 await page.fill('[data-testid="agent-input"]', '给数据库做一次体检');
 await page.click('[data-testid="agent-send"]');
 await page.waitForFunction(() => document.querySelector('.agent-transcript')?.textContent?.includes('体检完成'), { timeout: 30000 });
@@ -319,6 +430,56 @@ check('mobile settings shows Bridge and Agent', (await mobile.locator('body').in
 await mobile.screenshot({ path: join(shots, 'mobile-settings.png') });
 
 // ---------------- Electron desktop shell ----------------
+// 桌面形态的导出交给 Electron 下载管理器：浏览器里的 download 事件在这儿根本不会触发，
+// 只能从主进程侧取证（will-download + 落盘字节）。返回 'OK …' 或 'FAIL …' 供 check 使用。
+async function electronPngExport(app, window) {
+  const saveTo = join(tmpdir(), `aidb-e2e-electron-${Date.now()}.png`);
+  try {
+    await app.evaluate(({ session }, target) => {
+      global.__export = null;
+      session.defaultSession.on('will-download', (_event, item) => {
+        global.__export = { name: item.getFilename(), bytes: item.getTotalBytes(), filters: item.getSaveDialogOptions()?.filters ?? null };
+        item.setSavePath(target); // 别让原生「另存为」框在无头环境里卡住整条流水线
+        item.once('done', (_e, state) => { global.__export.state = state; });
+      });
+    }, saveTo);
+
+    await window.click('[data-testid="welcome-new-query"]');
+    await window.waitForSelector('[data-testid="query-run"]', { timeout: 15000 });
+    const conn = window.locator('[data-testid="query-connection"]');
+    const options = await conn.locator('option').allTextContents();
+    const demo = options.findIndex((text) => /demo/i.test(text));
+    if (demo < 0) return `FAIL no demo connection (options: ${options.join(' | ')})`;
+    await conn.selectOption({ index: demo });
+    await window.waitForTimeout(1500);
+    await window.click('.cm-content');
+    await window.keyboard.type('SELECT status, COUNT(*) AS cnt FROM orders GROUP BY status');
+    await window.click('[data-testid="query-run"]');
+    await window.waitForSelector('.grid-row, tbody tr', { timeout: 25000 });
+    await window.locator('.result-tabs .result-tab').filter({ hasText: '图表' }).first().click();
+    await window.waitForSelector('[data-testid="chart-svg"]', { timeout: 15000 });
+    await window.locator('[data-testid="chart-export-png"]').click();
+
+    let info = null;
+    for (let i = 0; i < 40; i++) {
+      info = await app.evaluate(() => global.__export);
+      if (info?.state) break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    if (!info) return 'FAIL will-download never fired — export is silently dropped on desktop';
+    if (info.state !== 'completed') return `FAIL download state=${info.state}`;
+    const bytes = await readFile(saveTo);
+    if (!(bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47)) return `FAIL not a PNG (${bytes.subarray(0, 4).toString('hex')})`;
+    const filtered = Array.isArray(info.filters) && info.filters.some((f) => f.extensions?.includes('png'));
+    if (!filtered) return `FAIL save dialog without a PNG filter (${JSON.stringify(info.filters)})`;
+    return `OK ${info.name} ${bytes.length}B ${bytes.readUInt32BE(16)}x${bytes.readUInt32BE(20)}`;
+  } catch (err) {
+    return `FAIL ${String(err).split('\n')[0].slice(0, 180)}`;
+  } finally {
+    rmSync(saveTo, { force: true });
+  }
+}
+
 let electronBinary;
 const candidates =
   process.platform === 'win32'
@@ -344,7 +505,9 @@ if (!electronBinary) {
 if (electronBinary) {
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
+  delete env.VITE_DEV_SERVER_URL; // 必须走内嵌 Bridge + dist，才是真实的桌面形态
   let electronOk = false;
+  let exportDetail = 'not attempted';
   let lastError = '';
   for (let attempt = 1; attempt <= 2 && !electronOk; attempt++) {
     let app;
@@ -354,8 +517,10 @@ if (electronBinary) {
       await window.waitForSelector('[data-testid="app-root"]', { timeout: 45000 });
       await window.waitForTimeout(1500);
       electronOk = (await window.locator('.conn-row').count()) >= 1;
-      if (electronOk) await window.screenshot({ path: join(shots, 'electron-desktop.png') });
-      else lastError = 'no connections in Electron window';
+      if (electronOk) {
+        await window.screenshot({ path: join(shots, 'electron-desktop.png') });
+        exportDetail = await electronPngExport(app, window);
+      } else lastError = 'no connections in Electron window';
       await app.close();
       app = undefined;
     } catch (err) {
@@ -365,6 +530,7 @@ if (electronBinary) {
     }
   }
   check('electron shell boots with embedded bridge', electronOk, electronOk ? '' : lastError);
+  check('electron 桌面形态导出真 PNG', electronOk && exportDetail.startsWith('OK'), exportDetail);
 } else {
   console.log('SKIP  electron shell — no Electron binary installed');
 }

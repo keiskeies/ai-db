@@ -1,20 +1,13 @@
 import { useState } from 'react';
 import { Brain, Pencil, Pin, PinOff, Plus, Search, Trash2, X } from 'lucide-react';
-import type { MemoryKind } from '@aidb/core';
+import { MEMORY_KINDS, MEMORY_KIND_LABELS, type MemoryKind } from '@aidb/core';
 import { formatRelative } from '../lib/format';
 import { useApp } from '../store';
-
-const KIND_LABEL: Record<string, string> = {
-  fact: '事实',
-  preference: '偏好',
-  schema: '结构',
-  episodic: '情景',
-  procedural: '流程',
-};
 
 export function MemoryDrawer() {
   const open = useApp((s) => s.memoryOpen);
   const t = useApp((s) => s.t);
+  const locale = useApp((s) => s.settings.locale);
   const memories = useApp((s) => s.memories);
   const query = useApp((s) => s.memoryQuery);
   const activeConnectionId = useApp((s) => s.activeConnectionId);
@@ -70,7 +63,7 @@ export function MemoryDrawer() {
           />
         </div>
         <p className="hint" style={{ marginTop: 6 }}>
-          四层记忆：工作记忆（会话）、情景记忆（摘要）、语义记忆（事实/偏好/结构）、程序记忆（流程）。跨会话自动检索。
+          四层记忆：工作记忆（会话）、情景记忆（摘要）、语义记忆（事实/偏好/结构）、程序记忆（流程）。术语与示例 SQL 属于业务上下文，在工具箱「Agent 上下文」中维护。跨会话自动检索。
         </p>
       </div>
       <div className="drawer-body">
@@ -78,8 +71,8 @@ export function MemoryDrawer() {
           <div className="memory-form">
             <div className="row gap-6">
               <select className="select" style={{ height: 26, fontSize: 11 }} value={kind} onChange={(e) => setKind(e.target.value as MemoryKind)}>
-                {['fact', 'preference', 'schema', 'procedural'].map((k) => (
-                  <option key={k} value={k}>{KIND_LABEL[k]}</option>
+                {MEMORY_KINDS.map((k) => (
+                  <option key={k} value={k}>{MEMORY_KIND_LABELS[k][locale]}</option>
                 ))}
               </select>
               <select className="select" style={{ height: 26, fontSize: 11 }} value={scope} onChange={(e) => setScope(e.target.value)}>
@@ -143,7 +136,7 @@ export function MemoryDrawer() {
             ) : (
               <>
                 <div className="m-head">
-                  <span className="badge agent">{KIND_LABEL[memory.kind] ?? memory.kind}</span>
+                  <span className="badge agent">{MEMORY_KIND_LABELS[memory.kind]?.[locale] ?? memory.kind}</span>
                   <span className="m-title">{memory.title}</span>
                   {memory.pinned ? <Pin size={11} style={{ color: 'var(--warning)' }} /> : null}
                 </div>

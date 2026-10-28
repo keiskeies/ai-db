@@ -1,4 +1,6 @@
+import type { QuestionSuggestion } from './suggest';
 import type {
+  AgentContextBundle,
   AgentPlanItem,
   ConnectionConfig,
   DatabaseSchema,
@@ -71,6 +73,10 @@ export interface AgentContextData {
   connection?: ConnectionConfig;
   databases?: DatabaseSchema[];
   memories?: Memory[];
+  /** 用户维护的表/列启用状态与业务语义；离线推理器同样据此收敛可用表。 */
+  agentContext?: AgentContextBundle;
+  /** 术语词典，供离线推理器把简称展开成业务全称。 */
+  glossary?: Memory[];
   attachmentTables?: string[];
 }
 
@@ -122,6 +128,7 @@ export type AgentEvent =
   | { type: 'approval_resolved'; approvalId: string; decision: 'allow' | 'deny'; scope: 'once' | 'session' | 'always' }
   | { type: 'plan'; items: AgentPlanItem[] }
   | { type: 'memory_used'; memories: { id: string; title: string; kind: string }[] }
+  | { type: 'suggestions'; items: QuestionSuggestion[] }
   | { type: 'usage'; tokensIn: number; tokensOut: number }
   | { type: 'done'; turnId: string; durationMs: number; summary?: string }
   | { type: 'aborted'; turnId: string; reason: string }

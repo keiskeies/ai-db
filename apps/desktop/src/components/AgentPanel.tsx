@@ -17,7 +17,9 @@ import {
   MessageSquarePlus,
   Minimize2,
   PanelRightClose,
+  Pencil,
   Plus,
+  Search,
   ShieldAlert,
   Sparkles,
   Square,
@@ -27,7 +29,8 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import type { AgentMessageBlock, PermissionMode, Risk, ToolResult } from '@aidb/core';
+import type { AgentMessageBlock, PermissionMode, QuestionSuggestion, Risk, TableInfo, ToolResult } from '@aidb/core';
+import { suggestionLabel } from '@aidb/core';
 import { getModelProfile, supportsInput } from '@aidb/core';
 import { api, attachmentObjectUrl, type StoredAttachment } from '../lib/api';
 import { formatBytes, formatCell, formatDuration, formatRelative } from '../lib/format';
@@ -54,11 +57,18 @@ function readAsBase64(file: File): Promise<string> {
   });
 }
 
-const SLASH = [
+const SLASH: Array<{ key: string; label: string; prompt: string | ((tables: TableInfo[]) => string) }> = [
   { key: '/schema', label: '梳理库结构', prompt: '生成当前库的结构摘要：主要表、关系、字段含义与可疑点。' },
   { key: '/audit', label: '数据库体检', prompt: '对当前数据库做一次体检：缺少主键、外键缺索引、重复索引与空表，并给出修复 SQL。' },
-  { key: '/quality', label: '数据质量', prompt: '检查 orders 的空值、空串和重复主键，并给出排查 SQL。' },
-  { key: '/chart', label: '画图分析', prompt: '按 status 统计 orders 并画柱状图。' },
+  { key: '/quality', label: '数据质量', prompt: (tables) => (tables[0] ? `检查 ${tables[0].name} 的空值、空串和重复主键，并给出排查 SQL。` : '检查当前表的空值、空串和重复主键，并给出排查 SQL。') },
+  { key: '/chart', label: '画图分析', prompt: (tables) => {
+      const target = tables.find((t) => (t.columns ?? []).some((c) => /(status|state|type|category|level)/i.test(c.name))) ?? tables[0];
+      if (!target) return '按第一个分组列统计并画柱状图。';
+      const dimension = (target.columns ?? []).find((c) => /(status|state|type|category|level)/i.test(c.name));
+      return dimension
+        ? `按 ${dimension.name} 统计 ${target.name} 的记录数并画柱状图。`
+        : `统计 ${target.name} 近 12 个月的记录数趋势并画折线图。`;
+    } },
   { key: '/explain', label: '解释执行计划', prompt: '解释最近一次查询的执行计划，指出瓶颈并给出优化建议。' },
   { key: '/optimize', label: '优化 SQL', prompt: '优化当前 SQL，并给出索引建议和改写后的语句。' },
   { key: '/backup', label: '备份数据库', prompt: '备份当前数据库。' },
@@ -102,6 +112,28 @@ function ResultView({ result, onOpenEditor }: { result: ToolResult; onOpenEditor
   const data = result.data as Record<string, any> | undefined;
   const sql = typeof data?.sql === 'string' ? data.sql : undefined;
   const chart = data?.chart as ChartSpec | undefined;
+  const connectionId = useApp((s) => s.activeConnectionId);
+  const notify = useApp((s) => s.notify);
+  const detail = data?.columns && Array.isArray(data?.rows) ? data : undefined;
+  const chartSql = typeof data?.chartSql === 'string' ? data.chartSql : chart?.sql;
+  // render_chart / forecast_chart 的返回值里本来就同时带 chart 与明细，早期用 !chart 把明细挡掉了
+  const [tab, setTab] = useState<'chart' | 'rows' | 'sql'>('chart');
+  const tabs: Array<'chart' | 'rows' | 'sql'> = [];
+  if (chart) {
+    tabs.push('chart');
+    if (detail) tabs.push('rows');
+    if (chartSql) tabs.push('sql');
+  }
+  const active = tabs.includes(tab) ? tab : 'chart';
+  const exportCsv = async () => {
+    if (!connectionId || !chartSql) return;
+    try {
+      const res = await api.exportData({ connectionId, sql: chartSql, format: 'csv' });
+      notify('success', '已导出 CSV', `${res.file.rows} 行 → ${res.file.path}`);
+    } catch (err) {
+      notify('error', '导出失败', (err as Error)?.message ?? String(err));
+    }
+  };
   return (
     <div>
       <div className="tool-result-line">
@@ -130,13 +162,41 @@ function ResultView({ result, onOpenEditor }: { result: ToolResult; onOpenEditor
       ) : null}
       {chart ? (
         <div style={{ marginTop: 8 }}>
-          <ChartView chart={chart} onOpenEditor={onOpenEditor} />
+          {tabs.length > 1 ? (
+            <div className="chart-result-tabs" data-testid="chart-tabs">
+              {tabs.map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={`chart-result-tab${active === id ? ' active' : ''}`}
+                  data-testid={`chart-tab-${id}`}
+                  onClick={() => setTab(id)}
+                >
+                  {id === 'chart' ? '图表' : id === 'rows' ? `明细 ${detail?.rows.length ?? 0}` : 'SQL'}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {active === 'chart' ? (
+            <ChartView
+              chart={chart}
+              onOpenEditor={onOpenEditor}
+              onExportCsv={chartSql && connectionId ? () => void exportCsv() : undefined}
+            />
+          ) : null}
+          {active === 'rows' && detail ? <MiniTable data={detail} max={50} /> : null}
+          {active === 'sql' && chartSql ? (
+            <div className="sql-block">
+              {chartSql}
+              <span style={{ position: 'absolute', top: 4, right: 4 }}><CopyButton text={chartSql} /></span>
+            </div>
+          ) : null}
         </div>
       ) : null}
       {!chart && data?.ddl ? <div className="sql-block" style={{ marginTop: 7 }}>{data.ddl}</div> : null}
-      {!chart && data?.columns && data?.rows ? (
+      {!chart && detail ? (
         <div style={{ marginTop: 7 }}>
-          <MiniTable data={data} />
+          <MiniTable data={detail} />
         </div>
       ) : null}
       {!chart && !data?.columns && data?.tables ? (
@@ -283,6 +343,68 @@ function PlanCard({ items }: { items: Array<{ id: string; text: string; status: 
   );
 }
 
+/**
+ * 执行详情：直接按 message.blocks 渲染本轮时间线。
+ * 不走 tool_runs 表——那张表的 message_id 恒为 NULL，按轮查询拿不到数据。
+ */
+function ExecutionDetail({ blocks, tokens }: { blocks: AgentMessageBlock[]; tokens?: number }) {
+  const results = new Map<string, ToolResult>();
+  for (const block of blocks) if (block.type === 'tool_result' && block.callId) results.set(block.callId, block.result as ToolResult);
+  const calls = blocks.filter((block) => block.type === 'tool_call');
+  const [openRow, setOpenRow] = useState<string | null>(null);
+  if (!calls.length) return null;
+  const totalMs = calls.reduce((sum, block) => sum + (results.get(block.callId ?? '')?.meta?.durationMs ?? 0), 0);
+  const failed = calls.filter((block) => results.get(block.callId ?? '')?.ok === false).length;
+  return (
+    <div className="exec-detail" data-testid="exec-detail">
+      {calls.map((block, index) => {
+        const key = block.callId ?? `row-${index}`;
+        const result = results.get(block.callId ?? '');
+        const args = (block.args ?? {}) as Record<string, unknown>;
+        const sql = typeof args.sql === 'string' ? args.sql : undefined;
+        const rows = Array.isArray((result?.data as Record<string, unknown> | undefined)?.rows)
+          ? ((result?.data as Record<string, unknown>).rows as unknown[]).length
+          : undefined;
+        const isOpen = openRow === key;
+        return (
+          <div key={key} className={`exec-row${result && !result.ok ? ' failed' : ''}`}>
+            <button type="button" className="exec-head" data-testid={`exec-row-${index}`} onClick={() => setOpenRow(isOpen ? null : key)}>
+              <span className="exec-index">{index + 1}</span>
+              <span className="exec-tool">{block.tool ?? 'tool'}</span>
+              {block.risk ? <RiskBadge risk={block.risk} /> : null}
+              <span className={result?.ok === false ? 'err' : 'ok'}>{result?.ok === false ? '✗' : '✓'}</span>
+              <span className="muted exec-ms">{formatDuration(result?.meta?.durationMs ?? 0)}</span>
+              <ChevronRight size={11} className={`exec-chevron${isOpen ? ' open' : ''}`} />
+            </button>
+            {isOpen ? (
+              <div className="exec-body">
+                <div className="exec-label">{sql ? 'SQL' : '参数'}</div>
+                <pre className="exec-pre">{sql ?? JSON.stringify(args, null, 2)}</pre>
+                {sql ? <span className="exec-copy"><CopyButton text={sql} /></span> : null}
+                {result ? (
+                  <>
+                    <div className="exec-label">结果</div>
+                    <pre className="exec-pre">
+                      {result.summary}
+                      {rows !== undefined ? ` · ${rows} 行` : ''}
+                      {result.error ? `\n${result.error.code}: ${result.error.message}` : ''}
+                    </pre>
+                  </>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+      <div className="exec-summary" data-testid="exec-summary">
+        {calls.length} 次调用 · {formatDuration(totalMs)}
+        {failed ? ` · ${failed} 次失败` : ''}
+        {tokens ? ` · ↓${tokens.toLocaleString()} tokens` : ''}
+      </div>
+    </div>
+  );
+}
+
 function AssistantBlocks({ blocks, messageId }: { blocks: AgentMessageBlock[]; messageId: string }) {
   const openQuery = useApp((s) => s.openQuery);
   const results = new Map<string, ToolResult>();
@@ -368,6 +490,7 @@ export function AgentPanel() {
   const agentOpen = useApp((s) => s.agentOpen);
   const expanded = useApp((s) => s.agentExpanded);
   const messages = useApp((s) => s.agentMessages);
+  const followUps = useApp((s) => s.agentFollowUps);
   const live = useApp((s) => s.live);
   const approval = useApp((s) => s.approval);
   const sessions = useApp((s) => s.sessions);
@@ -401,6 +524,26 @@ export function AgentPanel() {
   const [input, setInput] = useState('');
   const [popover, setPopover] = useState<'none' | 'mention' | 'slash'>('none');
   const [mentionQuery, setMentionQuery] = useState('');
+  const [suggestions, setSuggestions] = useState<QuestionSuggestion[]>([]);
+  const [execOpen, setExecOpen] = useState<Set<string>>(new Set());
+  const [sessionQuery, setSessionQuery] = useState('');
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  const renameSession = useApp((s) => s.renameAgentSession);
+
+  const startRename = (id: string, title: string) => {
+    setRenamingId(id);
+    setRenameDraft(title);
+  };
+  const commitRename = async (id: string) => {
+    const title = renameDraft.trim();
+    setRenamingId(null);
+    if (!title) {
+      notify('warning', t('rename'), t('renameEmpty'));
+      return;
+    }
+    await renameSession(id, title);
+  };
   const [pending, setPending] = useState<StoredAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -436,6 +579,26 @@ export function AgentPanel() {
     }
   };
 
+  // 猜你想问：服务端用本地规则从已加载 schema 推导，不查库、不调模型，离线模式同样可用
+  useEffect(() => {
+    if (!activeConnectionId) {
+      setSuggestions([]);
+      return;
+    }
+    let cancelled = false;
+    api
+      .suggest({ connectionId: activeConnectionId, database: activeConnection?.database, limit: 6 })
+      .then((res) => {
+        if (!cancelled) setSuggestions(res.suggestions);
+      })
+      .catch(() => {
+        if (!cancelled) setSuggestions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeConnectionId, activeConnection?.database, tables.length]);
+
   useEffect(() => {
     if (prefill) {
       setInput(prefill);
@@ -463,7 +626,12 @@ export function AgentPanel() {
   const providerLabel =
     settings.agent.provider === 'local' ? 'Local' : settings.agent.provider === 'anthropic' ? settings.agent.model.replace(/^claude-/, '') : settings.agent.model;
   const modeLabel = MODE_OPTIONS.find((m) => m.value === agentMode);
-  const filteredSessions = sessions;
+  // 纯前端过滤：listSessions 已经返回全量，不需要新接口
+  const filteredSessions = useMemo(() => {
+    const query = sessionQuery.trim().toLowerCase();
+    if (!query) return sessions;
+    return sessions.filter((session) => session.title.toLowerCase().includes(query));
+  }, [sessions, sessionQuery]);
 
   const send = () => {
     if (!input.trim() || busy) return;
@@ -513,7 +681,7 @@ export function AgentPanel() {
     }
     const command = SLASH.find((c) => c.key === key);
     if (command) {
-      setInput(command.prompt);
+      setInput(typeof command.prompt === 'function' ? command.prompt(tables) : command.prompt);
       setPopover('none');
       textareaRef.current?.focus();
     }
@@ -527,11 +695,25 @@ export function AgentPanel() {
       return <UserMessage key={message.id} text={message.content} images={images.length ? images : undefined} />;
     }
     const toolCount = message.blocks.filter((b) => b.type === 'tool_call').length;
+    const detailOpen = execOpen.has(message.id);
     return (
       <AssistantShell key={message.id}>
         {message.content ? <Markdown>{message.content}</Markdown> : null}
         <AssistantBlocks blocks={message.blocks} messageId={message.id} />
-        {toolCount ? <div className="turn-end">{toolCount} 次工具调用</div> : null}
+        {toolCount ? (
+          <div className="turn-end">
+            {toolCount} 次工具调用
+            <button
+              type="button"
+              className="exec-toggle"
+              data-testid="exec-toggle"
+              onClick={() => setExecOpen((prev) => { const next = new Set(prev); if (next.has(message.id)) next.delete(message.id); else next.add(message.id); return next; })}
+            >
+              {detailOpen ? t('hideExecutionDetail') : t('executionDetail')}
+            </button>
+          </div>
+        ) : null}
+        {detailOpen ? <ExecutionDetail blocks={message.blocks} tokens={message.tokens} /> : null}
       </AssistantShell>
     );
   };
@@ -590,11 +772,27 @@ export function AgentPanel() {
             <div className="hero"><Sparkles size={22} /></div>
             <h3>{t('emptyAgentTitle')}</h3>
             <p>{t('emptyAgentHint')}</p>
+            {suggestions.length ? (
+              <div className="suggest-block" data-testid="agent-suggestions">
+                <div className="plan-title" style={{ padding: '0 2px' }}>猜你想问</div>
+                <div className="suggest-list">
+                  {suggestions.map((s) => {
+                    const label = suggestionLabel(s.kind);
+                    return (
+                      <button key={s.id} className="suggest-chip" title={s.reason} onClick={() => setInput(s.prompt)} data-testid={`suggest-${s.kind}`}>
+                        <Sparkles size={10} />
+                        <span className="truncate">{s.prompt}</span>
+                        {/* 问题里已经写了「趋势」就不再重复挂同一个标签 */}
+                        {s.prompt.includes(label) ? null : <em>{label}</em>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
             <div className="cap-grid">
               {[
                 { icon: <ShieldAlert size={13} />, label: '数据库体检', prompt: '对当前数据库做一次体检：缺少主键、外键缺索引、重复索引与空表，并给出修复 SQL。' },
-                { icon: <Sparkles size={13} />, label: '画图分析', prompt: tables.find((x) => x.name === 'orders') ? '按 status 统计 orders 并画柱状图。' : '按第一个分组列统计并画柱状图。' },
-                { icon: <Check size={13} />, label: '数据质量', prompt: tables.find((x) => x.name === 'orders') ? '检查 orders 的空值、空串和重复主键，并给出排查 SQL。' : '检查当前表的空值、空串和重复主键。' },
                 { icon: <Database size={13} />, label: '备份数据库', prompt: '备份当前数据库。' },
               ].map((cap) => (
                 <button key={cap.label} className="cap-card" onClick={() => setInput(cap.prompt)}>
@@ -671,6 +869,17 @@ export function AgentPanel() {
               ) : null}
             </AssistantShell>
           </>
+        ) : null}
+
+        {!busy && followUps.length ? (
+          <div className="followups" data-testid="agent-followups">
+            <span className="muted">继续问：</span>
+            {followUps.map((s) => (
+              <button key={s.id} className="suggest-chip small" title={s.reason} onClick={() => setInput(s.prompt)}>
+                <span className="truncate">{s.prompt}</span>
+              </button>
+            ))}
+          </div>
         ) : null}
       </div>
 
@@ -868,21 +1077,65 @@ export function AgentPanel() {
               <X size={14} />
             </button>
           </div>
+          <div className="sessions-search">
+            <Search size={12} />
+            <input
+              className="sessions-search-input"
+              value={sessionQuery}
+              placeholder={t('searchSessions')}
+              data-testid="session-search"
+              onChange={(e) => setSessionQuery(e.target.value)}
+            />
+            {sessionQuery ? (
+              <button type="button" className="icon-btn" title={t('close')} data-testid="session-search-clear" onClick={() => setSessionQuery('')}>
+                <X size={11} />
+              </button>
+            ) : null}
+          </div>
           <div style={{ flex: 1, overflow: 'auto' }}>
             {filteredSessions.length ? (
               filteredSessions.map((session) => (
                 <div
                   key={session.id}
                   className={`session-item ${session.id === agentSessionId ? 'active' : ''}`}
-                  onClick={() => void loadAgentSession(session.id)}
+                  onClick={() => { if (renamingId !== session.id) void loadAgentSession(session.id); }}
                 >
                   <TerminalSquare size={13} style={{ color: 'var(--agent)' }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div className="s-title">{session.title}</div>
+                    {renamingId === session.id ? (
+                      <input
+                        className="s-rename"
+                        value={renameDraft}
+                        autoFocus
+                        title={t('renameHint')}
+                        data-testid="session-rename-input"
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onBlur={() => void commitRename(session.id)}
+                        onKeyDown={(e) => {
+                          e.stopPropagation();
+                          if (e.key === 'Enter') void commitRename(session.id);
+                          if (e.key === 'Escape') setRenamingId(null);
+                        }}
+                      />
+                    ) : (
+                      <div className="s-title">{session.title}</div>
+                    )}
                     <div className="s-meta">
                       {formatRelative(session.updatedAt)} · {session.permissionMode} · {session.tokensIn + session.tokensOut} tokens
                     </div>
                   </div>
+                  <button
+                    className="icon-btn"
+                    title={t('rename')}
+                    data-testid="session-rename"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startRename(session.id, session.title);
+                    }}
+                  >
+                    <Pencil size={12} />
+                  </button>
                   <button
                     className="icon-btn danger"
                     onClick={(e) => {

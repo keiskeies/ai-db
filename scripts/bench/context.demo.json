@@ -1,0 +1,37 @@
+{
+  "tables": {
+    "orders": { "alias": "订单", "description": "一笔订单。金额列 total_cents 单位是人民币分，展示时除以 100 换算成元" },
+    "order_items": { "alias": "订单明细", "description": "订单行项目。销量看 qty，成交金额看 qty * unit_cents" },
+    "users": { "alias": "用户", "description": "注册用户，tier 是会员等级" },
+    "products": { "alias": "商品", "description": "商品主数据，price_cents 是标价（分），不代表实际成交价" },
+    "events": { "alias": "行为事件", "description": "埋点事件流水，按 type 区分行为" }
+  },
+  "columns": {
+    "orders.status": { "description": "订单状态：completed=已支付/已完成，pending=待支付，cancelled=已取消，refunded=已退款。统计「已支付」时用 completed" },
+    "orders.total_cents": { "alias": "成交额", "description": "订单成交金额，单位：分" },
+    "orders.channel": { "alias": "渠道", "description": "下单渠道来源" },
+    "orders.created_at": { "alias": "下单时间" },
+    "order_items.qty": { "alias": "销量", "description": "该行项目卖出的件数" }
+  },
+  "relations": [
+    { "table": "orders", "column": "user_id", "refTable": "users", "refColumn": "id", "description": "下单人" },
+    { "table": "order_items", "column": "order_id", "refTable": "orders", "refColumn": "id", "description": "明细所属订单" },
+    { "table": "order_items", "column": "product_id", "refTable": "products", "refColumn": "id", "description": "明细对应商品" }
+  ],
+  "glossary": [
+    { "title": "成交额", "content": "orders.total_cents 的合计，单位是分，回答时换算成元" },
+    { "title": "已支付", "content": "指 orders.status = 'completed'，库里没有 PAID 这个取值" },
+    { "title": "客单价", "content": "成交额 / 订单数，即 SUM(total_cents) / COUNT(*)" },
+    { "title": "销量", "content": "order_items.qty 的合计，不是订单数" }
+  ],
+  "sqlExamples": [
+    {
+      "title": "上月成交额（元）",
+      "content": "SELECT ROUND(SUM(total_cents) / 100.0, 2) AS gmv_yuan FROM orders WHERE status = 'completed' AND created_at >= date('now', '-1 month')"
+    },
+    {
+      "title": "卖得最多的商品",
+      "content": "SELECT p.name, SUM(oi.qty) AS sold FROM order_items oi JOIN products p ON p.id = oi.product_id JOIN orders o ON o.id = oi.order_id WHERE o.status = 'completed' GROUP BY p.name ORDER BY sold DESC LIMIT 5"
+    }
+  ]
+}

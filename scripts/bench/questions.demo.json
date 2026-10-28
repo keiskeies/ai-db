@@ -1,0 +1,34 @@
+[
+  {
+    "q": "上个月的成交额是多少",
+    "expectTables": ["orders"],
+    "notes": "术语题：「成交额」在 schema 里没有对应列名，未配置术语时模型只能猜 total_cents 还是 price_cents"
+  },
+  {
+    "q": "已支付订单有多少笔",
+    "expectTables": ["orders"],
+    "notes": "枚举释义题：真实取值是 completed/pending/cancelled/refunded，没有 PAID"
+  },
+  {
+    "q": "每个用户下了多少单，取前 5 名",
+    "expectTables": ["orders", "users"],
+    "allowExtraTables": true,
+    "notes": "跨表题：需要 orders.user_id → users.id"
+  },
+  {
+    "q": "近 3 个月下单人数的变化趋势",
+    "expectTables": ["orders"],
+    "notes": "时间序列题：应按月聚合去重用户数"
+  },
+  {
+    "q": "哪个商品卖得最多",
+    "expectTables": ["order_items", "products"],
+    "allowExtraTables": true,
+    "notes": "跨表题：销量在 order_items.qty，商品名在 products.name；orders 不该出现"
+  },
+  {
+    "q": "各渠道的客单价是多少",
+    "expectTables": ["orders"],
+    "notes": "术语题：客单价 = 成交额 / 订单数，按 channel 分组"
+  }
+]

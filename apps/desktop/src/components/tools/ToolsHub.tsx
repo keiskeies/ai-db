@@ -3,6 +3,7 @@ import {
   ArrowLeftRight,
   BarChart3,
   Braces,
+  BookMarked,
   Code2,
   Database,
   FileSearch,
@@ -27,6 +28,7 @@ import { UsersTool } from './UsersTool';
 import { DictionaryTool } from './DictionaryTool';
 import { DataCompareTool } from './DataCompareTool';
 import { AdvancedObjectsTool } from './AdvancedObjectsTool';
+import { AgentContextTool } from './AgentContextTool';
 
 const TOOL_LIST = [
   { id: 'search', label: '数据库搜索', desc: '对象与数据全文查找', icon: <FileSearch size={14} /> },
@@ -40,6 +42,7 @@ const TOOL_LIST = [
   { id: 'users', label: '用户与权限', desc: '账号 / 角色 / 授权', icon: <KeyRound size={14} /> },
   { id: 'dictionary', label: '数据字典', desc: 'Markdown / DDL 导出', icon: <Database size={14} /> },
   { id: 'objects', label: '高级对象', desc: '触发器 / 函数 / 序列', icon: <Code2 size={14} /> },
+  { id: 'agentcontext', label: 'Agent 上下文', desc: '表启用 / 别名描述 / 关系 / 术语', icon: <BookMarked size={14} /> },
 ];
 
 export function ToolsHub() {
@@ -91,6 +94,7 @@ export function ToolsHub() {
             {active === 'users' ? <UsersTool /> : null}
             {active === 'dictionary' ? <DictionaryTool /> : null}
             {active === 'objects' ? <AdvancedObjectsTool /> : null}
+            {active === 'agentcontext' ? <AgentContextTool /> : null}
           </div>
         </div>
       </div>

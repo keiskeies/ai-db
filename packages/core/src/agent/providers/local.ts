@@ -2,6 +2,7 @@ import type { ColumnDef, IndexDef } from '../../sql/ddl';
 import { buildCount, buildMonthlySeriesExpr, buildSelectTable, defaultIndexName } from '../../sql/ddl';
 import { quoteIdent, quoteLiteral } from '../../sql/ident';
 import type { ConnectionConfig, DatabaseSchema, Engine, TableInfo } from '../../types';
+import { applyTableVisibility, expandTerms, findTableByAlias } from '../context';
 import { estimateTokens } from '../prompt';
 import type {
   AgentContextData,
@@ -29,6 +30,7 @@ export type LocalIntent =
   | 'audit'
   | 'quality'
   | 'chart'
+  | 'analyze'
   | 'raw_sql'
   | 'memory_write'
   | 'memory_search'
@@ -91,6 +93,9 @@ export function detectIntent(prompt: string): LocalIntent {
   if (/^(select|insert|update|delete|with)\b/i.test(stripCodeFence(prompt))) return 'raw_sql';
   if (/(巡检|体检|健康检查|数据库健康|审计数据库|audit\b)/.test(p)) return 'audit';
   if (/(空值|null值|重复|数据质量|quality|一致性|异常值|脏数据|duplicate)/.test(p)) return 'quality';
+  // 必须排在 chart 之前：「预测未来三个月的趋势」既要趋势更要外推，走 analyze 才有权威数字
+  if (/(预测|forecast|外推|接下来.*(多少|会)|未来)/.test(p)) return 'analyze';
+  if (/(合计|总和|求和|平均值|均值|环比|占比多少|最大.*最小|\bsum\b|\bavg\b)/.test(p)) return 'analyze';
   if (/(画图|图表|可视化|趋势|折线|柱状|饼图|chart|plot)/.test(p)) return 'chart';
   if (/(备份|backup)/.test(p)) return 'backup';
   if (/(导出|export)/.test(p)) return 'export';
@@ -152,11 +157,9 @@ function extractConnections(outcome: ToolOutcome | undefined): ConnectionConfig[
 
 function tablesFromContext(ctx: AgentContextData, conn?: ConnectionConfig): TableInfo[] {
   if (!ctx.databases?.length) return [];
-  if (conn?.database) {
-    const db = ctx.databases.find((d) => d.name === conn.database || d.name === 'main');
-    if (db) return db.tables;
-  }
-  return ctx.databases.flatMap((d) => d.tables);
+  return conn?.database
+    ? ctx.databases.find((d) => d.name === conn.database || d.name === 'main')?.tables ?? ctx.databases.flatMap((d) => d.tables)
+    : ctx.databases.flatMap((d) => d.tables);
 }
 
 function tablesFromInspect(outcome: ToolOutcome | undefined): TableInfo[] {
@@ -176,12 +179,18 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function findTable(prompt: string, tables: TableInfo[]): TableInfo | undefined {
-  const p = prompt.toLowerCase();
+function findTable(prompt: string, tables: TableInfo[], ctx?: AgentContextData): TableInfo | undefined {
+  // 先用术语词典展开简称，让「JS 的资产数」也能对上 sys_asset
+  const expanded = expandTerms(prompt, ctx?.glossary).toLowerCase();
   const byName = tables
-    .filter((t) => new RegExp(`(^|[^a-z0-9_])${escapeRegex(t.name.toLowerCase())}([^a-z0-9_]|$)`).test(p))
+    .filter((t) => new RegExp(`(^|[^a-z0-9_])${escapeRegex(t.name.toLowerCase())}([^a-z0-9_]|$)`).test(expanded))
     .sort((a, b) => b.name.length - a.name.length)[0];
   if (byName) return byName;
+  const byAlias = findTableByAlias(expanded, tables, ctx?.agentContext);
+  if (byAlias) {
+    const found = tables.find((t) => t.name === byAlias);
+    if (found) return found;
+  }
   const m = prompt.match(/(?:表|table)\s*[`"']?([A-Za-z_][A-Za-z0-9_]*)/i);
   if (m) {
     const found = tables.find((t) => t.name.toLowerCase() === m[1].toLowerCase());
@@ -446,6 +455,9 @@ export class LocalProvider implements LlmProvider {
       const fromInspect = tablesFromInspect(inspectOutcome);
       if (fromInspect.length) tables = fromInspect;
     }
+    // 用户禁用的表对离线推理器同样不可见，否则「表管理」在本地模式下形同虚设。
+    // 必须在两个来源合并之后过滤：inspect_schema 的返回里带着完整表清单。
+    tables = applyTableVisibility(tables, ctx.agentContext);
 
     // Fresh schema for listing / describe so the trace shows a real tool call.
     if (!inspectOutcome && ['list_tables', 'describe'].includes(intent)) {
@@ -465,7 +477,7 @@ export class LocalProvider implements LlmProvider {
       }
     }
 
-    const table = findTable(prompt, tables);
+    const table = findTable(prompt, tables, ctx);
 
     if (intent === 'list_tables') {
       if (!tables.length) {
@@ -665,6 +677,70 @@ export class LocalProvider implements LlmProvider {
       yield* callTool(
         mkCall('check_data_quality', { connectionId, database, table: table!.name }),
         `我检查 \`${table!.name}\` 的空值率、空字符串、区分度与重复主键。`,
+      );
+      return;
+    }
+
+    if (intent === 'analyze') {
+      const wantForecast = /(预测|forecast|外推|未来)/.test(prompt);
+      const toolName = wantForecast ? 'forecast_chart' : 'analyze_chart';
+      const action = getOutcome(outcomes, toolName);
+      if (action) {
+        if (!action.result.ok) {
+          yield* finish(errText(action.result));
+          return;
+        }
+        if (wantForecast) {
+          const d = action.result.data as { method?: string; note?: string; forecast?: Array<{ label: string; value: number; lower: number; upper: number }> };
+          const lines = (d.forecast ?? []).map((p) => `- ${p.label}：**${p.value.toLocaleString()}**（区间 ${p.lower.toLocaleString()} ~ ${p.upper.toLocaleString()}）`);
+          yield* finish(`按**${d.method === 'linear' ? '线性回归' : '移动平均'}**外推：\n\n${lines.join('\n') || '（没有可外推的数据）'}\n\n> ${d.note ?? ''}`);
+          return;
+        }
+        const d = action.result.data as {
+          x: string; y: string; rowCount: number; sum: number; avg: number; min: number; max: number; argmin: string; argmax: string;
+          topShare?: Array<{ label: string; value: number; share: number }>;
+          deltas?: Array<{ label: string; delta: number; ratio: number | null }>;
+        };
+        const top = (d.topShare ?? []).map((s) => `- ${s.label}：${s.value.toLocaleString()}（${(s.share * 100).toFixed(1)}%）`);
+        const recent = (d.deltas ?? []).slice(-3).map((item) => `- ${item.label}：${item.delta >= 0 ? '+' : ''}${item.delta.toLocaleString()}${item.ratio === null ? '' : `（${(item.ratio * 100).toFixed(1)}%）`}`);
+        yield* finish(
+          `\`${d.y}\` 按 \`${d.x}\` 的统计（${d.rowCount} 组，数字由 Bridge 计算，不是估算）：\n\n` +
+            `- 合计 **${d.sum.toLocaleString()}**，均值 ${d.avg.toLocaleString()}\n` +
+            `- 最大 ${d.argmax} = ${d.max.toLocaleString()}，最小 ${d.argmin} = ${d.min.toLocaleString()}` +
+            (top.length ? `\n\n占比前 ${top.length}：\n${top.join('\n')}` : '') +
+            (recent.length ? `\n\n最近环比：\n${recent.join('\n')}` : ''),
+        );
+        return;
+      }
+      if (!table) {
+        yield* finish('请指定要分析的表，例如：“统计 orders 的金额合计与占比”。');
+        return;
+      }
+      const q = (name: string) => quoteIdent(name, engine);
+      let sql: string;
+      let xField: string;
+      if (wantForecast) {
+        const timeColumn = (table.columns ?? []).find((c) => /(date|time)/i.test(c.type) || /(_at|date|time)/i.test(c.name));
+        if (!timeColumn) {
+          yield* finish(`\`${table.name}\` 没有时间列，无法做趋势预测。请换一张带时间字段的表。`);
+          return;
+        }
+        const expr = buildMonthlySeriesExpr(engine, timeColumn.name);
+        sql = `SELECT ${expr} AS ${q('period')}, COUNT(*) AS ${q('value')} FROM ${q(table.name)} GROUP BY ${expr} ORDER BY ${q('period')} LIMIT 24`;
+        xField = 'period';
+      } else {
+        const groupColumn = findMentionedColumn(prompt, table) ?? defaultGroupColumn(table);
+        if (!groupColumn) {
+          yield* finish(`\`${table.name}\` 没有适合分组的列，请指定列名。`);
+          return;
+        }
+        const metric = (table.columns ?? []).find((c) => /(cents|amount|total|price|qty)/i.test(c.name));
+        sql = `SELECT ${q(groupColumn)} AS ${q('label')}, ${metric ? `SUM(${q(metric.name)})` : 'COUNT(*)'} AS ${q('value')} FROM ${q(table.name)} GROUP BY ${q(groupColumn)} ORDER BY ${q('value')} DESC LIMIT 50`;
+        xField = 'label';
+      }
+      yield* callTool(
+        mkCall(toolName, { connectionId, database, sql, x: xField, y: 'value', ...(wantForecast ? { periods: 3 } : {}) }),
+        wantForecast ? `我对 \`${table.name}\` 的月度序列做确定性外推（不调模型算数）。` : `我在 Bridge 侧算好 \`${table.name}\` 的统计量，避免自己估算数字。`,
       );
       return;
     }

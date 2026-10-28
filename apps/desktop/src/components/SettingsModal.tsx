@@ -470,6 +470,15 @@ export function SettingsModal() {
                   {t('autoMemory')}（自动沉淀事实、偏好与会话摘要）
                 </label>
                 <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={form.agent.followUpSuggestions}
+                    onChange={(e) => setAgent({ followUpSuggestions: e.target.checked })}
+                    data-testid="settings-followups"
+                  />
+                  追问建议（每轮结束后按涉及的表推荐下一步问题，本地生成、不消耗 token）
+                </label>
+                <label className="checkbox">
                   <input type="checkbox" checked={form.agent.snapshotBeforeWrite} onChange={(e) => setAgent({ snapshotBeforeWrite: e.target.checked })} />
                   {t('snapshotBeforeWrite')}（破坏性操作前自动 SQL dump）
                 </label>

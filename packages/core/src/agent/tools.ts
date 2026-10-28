@@ -404,6 +404,47 @@ export const TOOLS: ToolDefinition[] = [
     },
     summarize: (a) => `${a.title ?? '生成图表'}（${a.type}）`,
   },
+  {
+    name: 'analyze_chart',
+    description:
+      'Execute a SELECT and return authoritative statistics (count/sum/avg/min/max/argmin/argmax, top-N share, period-over-period deltas) computed on the Bridge. Use this instead of eyeballing rows when the user asks how much / which is biggest / how it changed. The numbers in the result are ground truth — quote them, never recompute or estimate them yourself.',
+    risk: 'read',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connectionId', 'sql'],
+      properties: {
+        ...connectionProp,
+        ...databaseProp,
+        sql: { type: 'string', description: 'Aggregate SELECT; at most 500 rows are read' },
+        x: { type: 'string', description: 'Label column; defaults to the first non-numeric column' },
+        y: { type: 'string', description: 'Measure column; defaults to the first numeric column' },
+        topN: { type: 'number', description: 'How many top shares to return (1-20, default 5)' },
+      },
+    },
+    summarize: (a) => `统计分析（${String(a.sql).slice(0, 40)}…）`,
+  },
+  {
+    name: 'forecast_chart',
+    description:
+      'Execute a time-series SELECT and extrapolate the next N periods with a deterministic local algorithm (least-squares linear or moving average, auto-selected by |r|). Returns the method, slope/window, fit r, an approximate ±1.28σ band, and the original series. Requires at least 4 valid points; SQL NULLs are dropped, never treated as 0. Report the returned numbers verbatim and always pass along the note.',
+    risk: 'read',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connectionId', 'sql'],
+      properties: {
+        ...connectionProp,
+        ...databaseProp,
+        sql: { type: 'string', description: 'SELECT ordered by time, one row per period' },
+        x: { type: 'string', description: 'Time/label column' },
+        y: { type: 'string', description: 'Measure column' },
+        periods: { type: 'number', description: 'Periods to extrapolate (1-12, default 3)' },
+        method: { type: 'string', enum: ['auto', 'linear', 'moving_average'], description: 'Default auto' },
+      },
+    },
+    summarize: (a) => `预测未来 ${a.periods ?? 3} 期`,
+  },
 ];
 
 

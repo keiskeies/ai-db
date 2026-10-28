@@ -517,24 +517,21 @@ ${text}
 
           {resultTab === 'chart' ? (
             <div className="query-chart-panel">
-              <div className="tool-row" style={{ borderBottom: '1px solid var(--border-subtle)', padding: '6px 10px' }}>
-                <select className="select" style={{ width: 100 }} value={chartType} onChange={(e) => setChartType(e.target.value as 'bar' | 'line' | 'pie')}>
-                  <option value="bar">柱状图</option>
-                  <option value="line">折线图</option>
-                  <option value="pie">饼图</option>
-                </select>
-                <span className="muted" style={{ fontSize: 10 }}>X</span>
-                <select className="select" style={{ width: 150 }} value={chartX} onChange={(e) => setChartX(e.target.value)}>
-                  <option value="">自动</option>
-                  {set?.columns.map((column) => <option key={column.name} value={column.name}>{column.name}</option>)}
-                </select>
-                <span className="muted" style={{ fontSize: 10 }}>Y</span>
-                <select className="select" style={{ width: 150 }} value={chartY} onChange={(e) => setChartY(e.target.value)}>
-                  <option value="">自动</option>
-                  {set?.columns.map((column) => <option key={column.name} value={column.name}>{column.name}</option>)}
-                </select>
-              </div>
-              {chartSpec ? <ChartView chart={chartSpec} /> : <div className="dash-empty">当前结果没有可绘制的数值列。</div>}
+              {chartSpec ? (
+                <ChartView
+                  chart={chartSpec}
+                  typeOverride={chartType}
+                  onTypeChange={setChartType}
+                  maxPoints={60}
+                  columns={set?.columns.map((column) => column.name)}
+                  x={chartX}
+                  y={chartY}
+                  onX={setChartX}
+                  onY={setChartY}
+                />
+              ) : (
+                <div className="dash-empty">当前结果没有可绘制的数值列。</div>
+              )}
             </div>
           ) : null}
 

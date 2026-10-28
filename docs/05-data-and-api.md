@@ -108,6 +108,22 @@ CREATE TABLE IF NOT EXISTS jobs (
   last_run_at TEXT, last_status TEXT, last_error TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+
+-- Agent 业务上下文：表/列的启用状态与业务语义，以及手工维护的 JOIN 关系。
+-- 三类合表存储；术语与示例 SQL 不在此表，复用 memories(kind='glossary'|'sql_example')。
+CREATE TABLE IF NOT EXISTS agent_context (
+  id TEXT PRIMARY KEY,
+  connection_id TEXT NOT NULL,
+  database_name TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL CHECK (kind IN ('table','column','relation')),
+  table_name TEXT NOT NULL,
+  column_name TEXT,
+  ref_table TEXT, ref_column TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  alias TEXT, description TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_agent_ctx ON agent_context(connection_id, database_name, kind);
 ```
 
 ## 2. 领域 DTO（`@aidb/core`）
@@ -188,14 +204,21 @@ export interface QueryResult {
 | GET | `/agent/tools` | 工具清单 + JSON Schema（UI 展示） |
 | GET/POST | `/agent/sessions` | 会话列表 / 新建 |
 | GET/DELETE | `/agent/sessions/:id` | 会话详情（messages + tool_runs）/ 删除 |
+| PATCH | `/agent/sessions/:id` | 更新会话（title / connectionId / permissionMode / archived） |
 | POST | `/agent/sessions/:id/turns` | **SSE** 发起回合（`{text, mode, attachments, images, connectionId}`） |
 | POST | `/agent/sessions/:id/abort` | 中止 |
 | POST | `/agent/approvals/:id` | `{decision, scope}` 审批结果 |
-| GET | `/agent/memories` | 记忆列表/搜索（scope/kind/q） |
-| POST | `/agent/memories` · PUT/DELETE `/agent/memories/:id` | 记忆管理 |
+| GET | `/agent/memories` | 记忆列表/搜索（scope/kind/q/limit） |
+| POST | `/agent/memories` · PUT/DELETE `/agent/memories/:id` | 记忆管理（含 `glossary` / `sql_example`） |
 | POST | `/agent/models` | 按 `{kind, baseUrl, apiKey?}` 拉取服务商模型列表 → `{models, infos, endpoint}`，`infos` 带上下文窗口/输入模态/推理档位（缺省密钥时复用已存密钥） |
 | POST | `/agent/attachments` | `{mime, base64}` 上传聊天图片，落盘 `~/.aidb/attachments/` → `{attachment:{id,mime,bytes}}`（JPEG/PNG/GIF/WebP，单张 ≤8MB） |
 | GET | `/agent/attachments/:id` | 读取附件二进制；id 限定 `<uuid>.<ext>` 白名单，拒绝路径穿越 |
+| GET | `/agent/context` | `?connectionId&database` → `{entries, bundle, active}` 业务上下文 |
+| PUT | `/agent/context/entry` | upsert 表/列覆盖（enabled / alias / description） |
+| PUT | `/agent/context/relation` | upsert 手工 JOIN 关系（按四元组去重） |
+| POST | `/agent/context/bulk` | 批量启用/禁用表 |
+| DELETE | `/agent/context/entry/:id` · DELETE `/agent/context` | 删除单条 / 清空该连接（可带 database） |
+| GET | `/agent/suggest` | `?connectionId&database&limit=6` → `{suggestions}` 猜你想问；纯本地规则，不查数据、不调模型，离线模式同样可用 |
 | GET/PUT | `/settings` | 设置（密钥只写不读） |
 | POST | `/pair/start` | 桌面发起配对：`{code, expiresIn, qrPayload}` |
 | POST | `/pair/claim` | 移动端兑换：`{code, deviceName, platform}` → `{token, bridgeId}` |
@@ -221,6 +244,7 @@ type AgentEvent =
   | { type: 'approval_resolved'; approvalId: string; decision: 'allow'|'deny'; scope: 'once'|'session'|'always' }
   | { type: 'plan'; items: { id: string; text: string; status: 'todo'|'doing'|'done' }[] }
   | { type: 'memory_used'; memories: { id: string; title: string; kind: string }[] }
+  | { type: 'suggestions'; items: QuestionSuggestion[] }   // 回合结束后基于本轮实际涉及的表生成的追问建议
   | { type: 'usage'; tokensIn: number; tokensOut: number }
   | { type: 'done'; turnId: string; durationMs: number; summary?: string }
   | { type: 'aborted'; turnId: string; reason: string }

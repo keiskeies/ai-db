@@ -63,7 +63,7 @@ for (step = 0; step < maxSteps; step++) {
 
 **约束**：`maxSteps` 默认 12；同一工具相同参数连续失败 2 次 → 中止并解释；单工具超时 60s（查询 30s）；取消信号贯穿 Provider 与 Driver。
 
-## 4. 工具目录（22 个）
+## 4. 工具目录（24 个）
 
 风险等级：`read < write < ddl < destructive`。所有工具入参使用 JSON Schema（`additionalProperties: false`）。
 
@@ -90,7 +90,9 @@ for (step = 0; step < maxSteps; step++) {
 | 19 | `audit_database` | read | 数据库体检：缺主键、外键缺索引、重复索引、空表，返回可执行修复 SQL | `{ connectionId, database? }` |
 | 20 | `check_data_quality` | read | 表级数据质量：空值率、空串、区分度、重复主键 | `{ connectionId, table, columns? }` |
 | 21 | `render_chart` | read | 执行聚合 SQL 并在对话中渲染柱状/折线/饼图 | `{ connectionId, sql, type, title?, x?, y? }` |
-| 22 | `generate_data` | write | 按列语义/类型 + 外键生成并插入测试数据 | `{ connectionId, table, rows?, dryRun? }` |
+| 22 | `analyze_chart` | read | 执行聚合 SQL，在 Bridge 侧算好统计量（合计/均值/极值/TopN 占比/环比），模型只负责解读，不得自行重算 | `{ connectionId, sql, x?, y?, topN? }` |
+| 23 | `forecast_chart` | read | 时间序列外推：最小二乘或移动平均（按 \|r\| 自动选择），返回方法、斜率/窗口、拟合度、±1.28σ 粗略区间与原始序列；样本 <4 直接拒绝 | `{ connectionId, sql, x?, y?, periods?, method? }` |
+| 24 | `generate_data` | write | 按列语义/类型 + 外键生成并插入测试数据 | `{ connectionId, table, rows?, dryRun? }` |
 
 \* `run_sql` 风险按静态分类动态提升；`dryRun=true` 时 DDL 只返回将执行的 SQL（用于预览）。
 \** 导出写文件为 `write`，不触碰数据库。
@@ -166,6 +168,9 @@ type ToolResult = {
 | **情景记忆** | 会话摘要（目标、结论、关键 SQL、涉及表） | 长期，可衰减 | `memories(kind=episodic)` |
 | **语义记忆** | 库结构知识、业务口径、字段含义、用户偏好、环境事实 | 长期，可合并/遗忘 | `memories(kind=fact/schema/preference)` |
 | **程序记忆** | 可复用流程/查询模板/排查步骤（playbook） | 长期，可版本化 | `memories(kind=procedural)` + `snippets` |
+| **业务语义** | 术语词典（简称/黑话 → 业务含义）、示例 SQL（标准问题 → 标准答案） | 长期，用户在「Agent 上下文」面板维护 | `memories(kind=glossary/sql_example)` |
+
+> 业务语义类记忆是问数准确率的直接来源，检索时走**独立配额**（术语 ≤ 20 条、示例 SQL ≤ 3 条），不挤占情景记忆的 6 条名额；排序打分额外 +0.10 作为同分区内的 tie-break，词法相关度仍然优先。
 
 ### 7.2 作用域
 `global | connection:<id> | database:<id>/<db> | table:<id>/<db>/<table>`。检索时按当前连接/库加权，global 兜底；不同连接的同名表不串味。
@@ -181,11 +186,14 @@ type ToolResult = {
 ### 7.4 检索（混合）
 ```
 score = 0.55*lexical(BM25-ish) + 0.25*scopeMatch + 0.15*importance + 0.05*recency
+        + 0.10*(kind ∈ {glossary, sql_example})
 lexical = Σ idf(term) * tf 归一化（对 title+content+tags）
 recency = exp(-days/90)
 pinned → +0.3 且不衰减
 ```
 - 每次回合最多注入 6 条（约 1.2k tokens），按 token 预算裁剪；注入内容带 id，Agent 可 `memory_search` 深挖。
+- **分区召回**（`Store.recallForTurn`）：普通记忆 6 条（排除 glossary/sql_example）、术语 20 条、示例 SQL 3 条，三路独立打分。示例 SQL 单条截断 600 字符，术语单条截断 120 字符。
+- `memory_search` 工具不做分区过滤，仍可检索到全部七类。
 - 可选向量：配置嵌入 Provider 后，余弦相似度与词法加权（0.5/0.5）；未配置时纯词法。
 - `last_used_at/use_count` 更新用于衰减排序。
 
@@ -201,6 +209,7 @@ pinned → +0.3 且不衰减
   role, product rules, safety rules, tool-use conventions, plan rules
   connection context (engine, version, environment, readonly)
   schema snapshot (compressed: tables → columns/types/PK/FK; only attached/relevant/≤N tables)
+  business context (terms / join relations / example SQL) — 仅在用户配置过时出现
   permission mode + approval rules
   memory block (top-K, with ids and scope)
   formatting rules (SQL in code fences, describe results concisely, no invented data)
@@ -209,6 +218,8 @@ pinned → +0.3 且不衰减
 ```
 
 - **Schema 压缩**：默认只注入"数据库名 + 表名 + 行数估计"；`@table` 或 `inspect_schema` 后注入完整列信息；超过 60 表时仅注入与用户词面/记忆相关的表并提示可用 `search_objects`。
+- **业务上下文取舍（P1）**：用户可在工具箱「Agent 上下文」中禁用无关表/列，为表与字段配置业务别名和描述（含枚举值释义），并手工维护 JOIN 关系。`compressSchema(databases, focusTables, budget, bundle)` 据此过滤与标注：禁用的表整行剔除并追加一行隐藏计数提示，被标注的表优先占用明细预算，列输出形如 `status:VARCHAR(20)→订单状态[PAID=已支付，NEW=新建]`，用户描述优先于数据库原生 comment。
+- **零回归约定**：未配置任何覆盖项时 bundle 为 inactive，`compressSchema` 走与引入该机制前**逐字节相同**的分支（有集成测试断言）；`## Business context` 段落整段省略。
 - **工具结果摘要**：历史中的大结果替换为 `{summary, rowCount, preview(5)}`，完整结果仅保留最近 2 次，控制 token。
 - **压缩**：会话 > 阈值（默认 24k tokens）→ 生成摘要（保留目标、决策、schema 变更、未完成事项）写入 `sessions.summary`，丢弃早期工具大结果。
 
@@ -259,15 +270,38 @@ pinned → +0.3 且不衰减
 
 | 命令 | 行为 |
 |---|---|
-| `/explain` | 取当前编辑器 SQL 或选中表，调用 `explain_sql` 并用自然语言解读 |
-| `/optimize` | 分析 SQL + 索引，给出改写与索引建议（可一键应用 DDL） |
 | `/schema` | 生成当前库结构摘要（表、列、关系、可疑点） |
+| `/audit` | 数据库体检：缺主键、外键缺索引、重复索引、空表 + 修复 SQL |
+| `/quality` | 数据质量检查；**目标表取自已加载 schema 的第一张表**，无表时退化为通用措辞 |
+| `/chart` | 画图分析；先在已加载表里挑一张含分组列（status/state/type/category/level）的表，有分组列走柱状图，否则走近 12 个月折线图 |
+| `/explain` | 解释最近一次查询的执行计划，指出瓶颈并给出优化建议 |
+| `/optimize` | 分析 SQL + 索引，给出改写与索引建议（可一键应用 DDL） |
 | `/backup` | 调用 `backup_database` |
-| `/memory [query]` | 搜索记忆并展示 |
-| `/clear` | 清空当前会话上下文（保留会话） |
-| `/help` | 展示命令与工具列表 |
+| `/memory` | 打开记忆抽屉（不填充输入框） |
+| `/clear` | 新建会话（清空上下文） |
+
+`/quality` 与 `/chart` 的 prompt 是 `(tables: TableInfo[]) => string`，**在点击时**按当前连接的已加载 schema 现算，因此不会像早期实现那样把不存在的 `orders` 写死进模板。
 
 `@table`：输入框弹出库/表选择器；注入该表完整 schema 到本轮上下文，并在消息上显示可移除 chip。`@schema` 注入整库摘要。
+
+### 10.1 猜你想问与追问建议
+
+冷启动的最大障碍是"不知道该问什么"。两处入口都由 `packages/core/src/agent/suggest.ts` 的**纯本地规则**驱动：不查数据、不调模型、零 token 成本，离线 Local Reasoner 与云端 provider 表现一致。
+
+| 入口 | 触发 | 数据来源 |
+|---|---|---|
+| 猜你想问（空会话） | 选中连接后 `GET /agent/suggest` | 已加载 schema + 最近 50 条查询历史里出现过的表（加权） |
+| 继续问（回合结束） | `suggestions` SSE 事件 | **仅本轮真正涉及的表**（从 `tool_call` 的 `args.table` 与 `args.sql` 提取）+ 本轮用过的工具 |
+
+生成规则（`suggestQuestions`）：
+
+- `trend` 只在表**确实有时间列**时生成；度量列必须是数值型，且排除主键、自增、外键与标识列（`id/uuid/key/code/seq/sn/no` 结尾）——否则会出现"近 12 个月 events 的 user_id 趋势"这种无意义建议。
+- `group` 需要维度列（status/type/category/level/channel/region…）；`topn` 与 `relation` 需要**真实外键**，没有就不编。
+- `quality` 针对有空值风险的文本/时间列；本轮已调用 `check_data_quality` / `audit_database` 则不再推荐，已 `render_chart` 则不再推荐 trend（`suggestFollowUps` 的去重逻辑）。
+- 每条带 `reason`（为什么推荐）作为 chip 的 tooltip；按 kind 轮转取数，`maxPerKind=2`，默认 `limit=6`，避免六条全是同一种。
+- 业务上下文（P1）会同时收窄与改写措辞：被禁用的表不出现，配置了别名的表用别名。
+
+建议文案里的表名**逐字保留**（不做别名替换），因为 Local Reasoner 要靠表名把问题解析到具体的表。
 
 ## 11. 安全与防护
 
@@ -293,6 +327,9 @@ pinned → +0.3 且不衰减
 | A10 | 移动端 | 同一会话在桌面继续，工具卡/计划/记忆一致 |
 | A11 | "给数据库做一次体检" | 调用 audit_database，输出高风险问题与可执行修复 SQL |
 | A12 | "按 status 统计 orders 并画柱状图" | 调用 render_chart，对话内出现图表并可打开 SQL |
+| A13 | 选中连接后的空会话 | 出现 ≤6 条「猜你想问」，每条的表都真实存在、trend 不拿标识列当度量，点击原文填入输入框且不自动发送 |
+| A14 | 问完"orders 有多少行" | 回合结束后出现「继续问」chips，只围绕本轮涉及的表，且不重复本轮已做过的动作 |
+| A15 | 首次工具调用 | `run_sql` 直接使用系统提示里的 `id=`，不再先撞 `CONNECTION_NOT_FOUND` 再 `list_connections` 兜底 |
 
 ## 13. 系统提示（骨架）
 
@@ -303,6 +340,7 @@ and transparent: every tool call is visible to the user.
 
 Rules:
 - Never invent schema or data; inspect first when uncertain.
+- Every tool that takes connectionId must be passed the exact `id=` value from the Connection line; never the database name, file path or engine. Do not call list_connections to rediscover it.
 - Prefer read-only queries; add LIMIT to exploratory SELECTs.
 - For multi-step tasks, maintain a plan with update_plan.
 - Explain destructive changes and their blast radius before proposing them.
@@ -310,7 +348,7 @@ Rules:
 - Use memory_write for durable facts/preferences; do not store secrets.
 - Reply in the user's language; keep SQL in fenced code blocks.
 
-Connection: {engine} {version} @ {host}/{database} (env={environment}, readonly={readonly})
+Connection: id={id} name={name} engine={engine} database={database} host={host} (env={environment}, readonly={readonly})
 Permission mode: {mode}
 Schema: {compressed schema}
 Memories: {top-k memories}

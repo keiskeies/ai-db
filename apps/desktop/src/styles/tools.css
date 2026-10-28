@@ -90,3 +90,23 @@
 .mapping-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px 10px; max-height: 180px; overflow: auto; }
 .mapping-row { display: flex; align-items: center; gap: 6px; font-size: 10.5px; }
 .mapping-row .select { flex: 1; height: 24px; font-size: 10px; }
+
+/* ---------- Agent 业务上下文 ---------- */
+.ctx-grid { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 11px; }
+.ctx-grid th {
+  position: sticky; top: 0; z-index: 1;
+  text-align: left; font-weight: 600; font-size: 9.5px; letter-spacing: .04em;
+  color: var(--text-muted); text-transform: uppercase;
+  background: var(--bg-panel); border-bottom: 1px solid var(--border-subtle);
+  padding: 5px 6px; white-space: nowrap;
+}
+.ctx-grid td { padding: 3px 6px; border-bottom: 1px solid var(--border-subtle); vertical-align: middle; }
+.ctx-grid tbody tr:hover td { background: var(--bg-hover); }
+.ctx-grid tr.ctx-off td { opacity: .45; }
+.ctx-grid tr.ctx-off td:first-child { opacity: 1; }
+.ctx-grid .input { width: 100%; height: 22px; font-size: 10.5px; }
+.ctx-section { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 8px 9px; margin-bottom: 10px; background: var(--bg-panel); }
+.ctx-section-head { font-size: 10.5px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; }
+.ctx-section-form { display: flex; flex-direction: column; gap: 5px; margin-bottom: 7px; }
+.ctx-sql { font-family: var(--font-mono); font-size: 10.5px; line-height: 1.5; resize: vertical; min-height: 56px; }
+.ctx-pre { margin: 0; font-family: var(--font-mono); font-size: 9.5px; white-space: pre-wrap; word-break: break-word; color: var(--text-secondary); }

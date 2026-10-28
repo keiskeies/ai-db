@@ -25,6 +25,7 @@
     "build:desktop": "npm run build:core && npm --workspace apps/desktop run package",
     "build:mobile": "npm --workspace apps/mobile run export:web",
     "e2e": "node scripts/e2e.mjs",
+    "bench": "node --import tsx scripts/accuracy-bench.mjs",
     "verify:docs": "node scripts/verify-docs.mjs",
     "verify": "npm run verify:docs && npm run typecheck && npm test && npm run build && npm run e2e"
   },

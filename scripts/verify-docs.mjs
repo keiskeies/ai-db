@@ -19,6 +19,7 @@ const required = [
   'docs/04-ai-agent-design.md',
   'docs/05-data-and-api.md',
   'docs/06-delivery-and-verification.md',
+  'docs/08-agent-accuracy-plan.md',
 ];
 for (const f of required) existsSync(join(root, f)) ? ok(`exists ${f}`) : fail(`exists ${f}`, 'missing');
 
@@ -48,12 +49,12 @@ for (const [f, sections] of Object.entries(requiredSections)) {
   for (const s of sections) text.includes(s) ? ok(`${f} § ${s}`) : fail(`${f} § ${s}`, 'section missing');
 }
 
-// 4. Agent tool inventory (18) defined in 04
+// 4. Agent tool inventory (24) defined in 04
 const agentDoc = read('docs/04-ai-agent-design.md');
 const toolRows = [...agentDoc.matchAll(/^\|\s*\d+\s*\|\s*`([a-z_]+)`\s*\|\s*(read|write|ddl|destructive|动态\*|ddl\/destructive)\s*\|/gm)].map((m) => ({ name: m[1], risk: m[2] }));
-const expectedTools = ['list_connections','inspect_schema','search_objects','run_sql','explain_sql','sample_rows','profile_column','create_table','alter_table','drop_object','manage_index','export_result','import_csv','backup_database','get_query_history','update_plan','memory_write','memory_search','audit_database','check_data_quality','render_chart','generate_data'];
+const expectedTools = ['list_connections','inspect_schema','search_objects','run_sql','explain_sql','sample_rows','profile_column','create_table','alter_table','drop_object','manage_index','export_result','import_csv','backup_database','get_query_history','update_plan','memory_write','memory_search','audit_database','check_data_quality','render_chart','analyze_chart','forecast_chart','generate_data'];
 const names = toolRows.map((t) => t.name);
-if (names.length === 22) ok('22 agent tools documented'); else fail('22 agent tools documented', `found ${names.length}`);
+if (names.length === 24) ok('24 agent tools documented'); else fail('24 agent tools documented', `found ${names.length}`);
 for (const t of expectedTools) names.includes(t) ? ok(`tool ${t}`) : fail(`tool ${t}`, 'not in tool table');
 for (const t of new Set(names)) if (!expectedTools.includes(t)) fail('tool inventory', `unexpected tool ${t}`);
 
@@ -89,6 +90,17 @@ if (existsSync(toolFile)) {
   for (const n of names) if (!expectedTools.includes(n)) fail('code tool mismatch', n);
 } else {
   ok('code tool registry', 'not yet implemented (docs-only phase)');
+}
+
+// 10.1 声明了工具却没实现，运行期只会得到「未实现的工具」——契约脚本必须挡住
+const executorFile = join(root, 'apps/gateway/src/executor.ts');
+if (existsSync(executorFile)) {
+  const src = readFileSync(executorFile, 'utf8');
+  const dispatched = new Set([...src.matchAll(/case '([a-z_]+)':/g)].map((m) => m[1]));
+  for (const t of expectedTools) dispatched.has(t) ? ok(`executor tool ${t}`) : fail(`executor tool ${t}`, 'declared but never dispatched in executor.ts');
+  for (const c of dispatched) if (!expectedTools.includes(c)) fail('executor tool inventory', `unexpected case ${c}`);
+} else {
+  ok('executor dispatch', 'not yet implemented (docs-only phase)');
 }
 
 // report

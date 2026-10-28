@@ -1,4 +1,6 @@
 import type {
+  AgentContextBundle,
+  AgentContextEntry,
   AgentEvent,
   AgentMessage,
   AgentSessionMeta,
@@ -11,6 +13,7 @@ import type {
   Memory,
   ModelInfo,
   QueryBatchResult,
+  QuestionSuggestion,
   QueryResult,
   TableInfo,
 } from '@aidb/core';
@@ -249,16 +252,55 @@ export const api = {
   approve: (approvalId: string, decision: 'allow' | 'deny', scope: 'once' | 'session' | 'always') =>
     request<{ ok: boolean }>(`/agent/approvals/${approvalId}`, { method: 'POST', body: JSON.stringify({ decision, scope }) }),
 
-  memories: (params: { q?: string; kind?: string; includeArchived?: boolean } = {}) => {
+  memories: (params: { q?: string; kind?: string; includeArchived?: boolean; limit?: number } = {}) => {
     const q = new URLSearchParams();
     if (params.q) q.set('q', params.q);
     if (params.kind) q.set('kind', params.kind);
+    if (params.limit) q.set('limit', String(params.limit));
     if (params.includeArchived) q.set('includeArchived', '1');
     return request<{ memories: Memory[] }>(`/agent/memories?${q.toString()}`);
   },
   createMemory: (body: Record<string, unknown>) => request<{ memory: Memory; merged: boolean }>('/agent/memories', { method: 'POST', body: JSON.stringify(body) }),
   updateMemory: (id: string, body: Record<string, unknown>) => request<{ memory: Memory }>(`/agent/memories/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteMemory: (id: string) => request<void>(`/agent/memories/${id}`, { method: 'DELETE' }),
+
+  agentContext: (connectionId: string, database?: string) =>
+    request<{ entries: AgentContextEntry[]; bundle: AgentContextBundle; active: boolean }>(
+      `/agent/context?connectionId=${encodeURIComponent(connectionId)}${database ? `&database=${encodeURIComponent(database)}` : ''}`,
+    ),
+  putContextEntry: (body: {
+    connectionId: string;
+    database?: string;
+    kind: 'table' | 'column';
+    table: string;
+    column?: string;
+    enabled?: boolean;
+    alias?: string | null;
+    description?: string | null;
+  }) => request<{ entry: AgentContextEntry }>('/agent/context/entry', { method: 'PUT', body: JSON.stringify(body) }),
+  putContextRelation: (body: {
+    connectionId: string;
+    database?: string;
+    table: string;
+    column: string;
+    refTable: string;
+    refColumn: string;
+    description?: string | null;
+  }) => request<{ entry: AgentContextEntry }>('/agent/context/relation', { method: 'PUT', body: JSON.stringify(body) }),
+  bulkContextTables: (body: { connectionId: string; database?: string; tables: string[]; enabled: boolean }) =>
+    request<{ touched: number }>('/agent/context/bulk', { method: 'POST', body: JSON.stringify(body) }),
+  deleteContextEntry: (id: string) => request<void>(`/agent/context/entry/${id}`, { method: 'DELETE' }),
+  suggest: (params: { connectionId: string; database?: string; limit?: number }) => {
+    const q = new URLSearchParams({ connectionId: params.connectionId });
+    if (params.database) q.set('database', params.database);
+    if (params.limit) q.set('limit', String(params.limit));
+    return request<{ suggestions: QuestionSuggestion[] }>(`/agent/suggest?${q.toString()}`);
+  },
+  clearAgentContext: (connectionId: string, database?: string) =>
+    request<{ removed: number }>(
+      `/agent/context?connectionId=${encodeURIComponent(connectionId)}${database ? `&database=${encodeURIComponent(database)}` : ''}`,
+      { method: 'DELETE' },
+    ),
 
   updateSettings: (body: Record<string, unknown>) => request<{ settings: AppSettings }>('/settings', { method: 'PUT', body: JSON.stringify(body) }),
   searchDatabase: (body: { connectionId: string; database?: string; query: string; scope?: 'objects' | 'data' | 'all' }) =>

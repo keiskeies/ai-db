@@ -1,0 +1,34 @@
+[
+  {
+    "q": "库里一共有多少首音频",
+    "expectTables": ["m_audio"],
+    "notes": "名字直白，基线题：不该失败"
+  },
+  {
+    "q": "一共有多少本书",
+    "expectTables": ["m_book"],
+    "notes": "名字直白，基线题"
+  },
+  {
+    "q": "每个作者有多少张专辑，取前 5",
+    "expectTables": ["m_audio_album", "m_audio_author"],
+    "allowExtraTables": true,
+    "notes": "跨表题：m_audio_album.author_id → m_audio_author.id"
+  },
+  {
+    "q": "书架里被收藏次数最多的是哪本书",
+    "expectTables": ["m_book_shelf", "m_book"],
+    "allowExtraTables": true,
+    "notes": "跨表题：收藏关系在 m_book_shelf，书名在 m_book"
+  },
+  {
+    "q": "最近 30 天新增了多少音频",
+    "expectTables": ["m_audio"],
+    "notes": "时间列是 create_time"
+  },
+  {
+    "q": "m_sex 这张表是存什么的",
+    "expectTables": [],
+    "notes": "语义陷阱题：表名与列（height/size/sort/type/path/pinyin_name）完全对不上，没有业务上下文时模型只能靠猜——用来暴露幻觉，不判表选择"
+  }
+]

@@ -8,19 +8,29 @@ import {
   buildExplain,
   buildSelectTable,
   classifySql,
+  deltas,
   engineUsesSchema,
+  forecastSeries,
   getTool,
+  guessAxes,
+  isTimeSeries,
   looksLikeSecret,
   quoteIdent,
   resolveRisk,
+  round,
+  summarize,
+  toSeries,
+  topShare,
   type AlterOp,
   type AppSettings,
   type ColumnDef,
   type ConnectionConfig,
   type Engine,
+  type ForecastMethod,
   type IndexDef,
   type MemoryCandidate,
   type QueryResult,
+  type StatPoint,
   type TableInfo,
   type ToolCall,
   type ToolDefinition,
@@ -56,6 +66,8 @@ const DB_TOOLS = new Set([
   'audit_database',
   'check_data_quality',
   'render_chart',
+  'analyze_chart',
+  'forecast_chart',
   'generate_data',
 ]);
 
@@ -563,6 +575,25 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
         );
       }
 
+      case 'analyze_chart': {
+        const conn = this.requireConnection(call, ctx);
+        return this.analyzeChart(conn, this.databaseOf(call, conn), String(a.sql ?? ''), typeof a.x === 'string' ? a.x : undefined, typeof a.y === 'string' ? a.y : undefined, typeof a.topN === 'number' ? a.topN : undefined, started);
+      }
+
+      case 'forecast_chart': {
+        const conn = this.requireConnection(call, ctx);
+        return this.forecastChart(
+          conn,
+          this.databaseOf(call, conn),
+          String(a.sql ?? ''),
+          typeof a.x === 'string' ? a.x : undefined,
+          typeof a.y === 'string' ? a.y : undefined,
+          typeof a.periods === 'number' ? a.periods : undefined,
+          a.method === 'linear' || a.method === 'moving_average' || a.method === 'auto' ? (a.method as ForecastMethod) : undefined,
+          started,
+        );
+      }
+
       default:
         throw new DbError(`未实现的工具：${call.name}`, { code: 'UNKNOWN_TOOL' });
     }
@@ -764,6 +795,33 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
     });
   }
 
+  /**
+   * 跑一次 SELECT 并把结果解析成 (x, y) 序列，render_chart / analyze_chart / forecast_chart 共用。
+   * NULL 由 core 的 toSeries 丢弃：早期 render_chart 直接 Number(null) 会把空值画成 0 点。
+   */
+  private async chartSeries(conn: ConnectionConfig, database: string | undefined, sqlText: string, xName?: string, yName?: string) {
+    const sql = sqlText.trim();
+    if (!sql) throw new DbError('该工具需要 SQL');
+    const batch = await this.manager.query(conn.id, sql, {
+      database,
+      maxRows: 500,
+      allowMulti: false,
+      autoLimit: true,
+      actor: 'agent',
+    });
+    const set = batch.sets[0];
+    if (!set || !set.columns.length) throw new DbError('SQL 没有返回结果集');
+    const names = set.columns.map((column) => column.name);
+    const objects = set.rows.map((row) => Object.fromEntries(names.map((name, index) => [name, row[index]])));
+    const guessed = guessAxes(names, objects);
+    const x = xName ?? guessed?.x ?? names[0];
+    const y = yName ?? guessed?.y ?? names.find((name) => name !== x);
+    if (!x || !y || x === y) throw new DbError('无法确定 x/y 列，请显式传入');
+    if (!names.includes(x)) throw new DbError(`结果集中没有列 ${x}（可用列：${names.join(', ')}）`);
+    if (!names.includes(y)) throw new DbError(`结果集中没有列 ${y}（可用列：${names.join(', ')}）`);
+    return { sql, names, columns: set.columns, rows: set.rows, x, y, points: toSeries(objects, x, y) };
+  }
+
   private async renderChart(
     conn: ConnectionConfig,
     database: string | undefined,
@@ -774,42 +832,98 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
     yName: string | undefined,
     started: number,
   ): Promise<ToolResult> {
-    const sql = sqlText.trim();
-    if (!sql) throw new DbError('render_chart 需要 SQL');
-    const batch = await this.manager.query(conn.id, sql, {
-      database,
-      maxRows: 500,
-      allowMulti: false,
-      autoLimit: true,
-      actor: 'agent',
-    });
-    const set = batch.sets[0];
-    if (!set || !set.columns.length) throw new DbError('图表 SQL 没有返回结果集');
-    const names = set.columns.map((column) => column.name);
-    const xIndex = xName ? names.indexOf(xName) : 0;
-    let yIndex = yName ? names.indexOf(yName) : -1;
-    if (yIndex === -1) {
-      yIndex = set.columns.findIndex((_, index) => index !== xIndex && set.rows.some((row) => row[index] !== null && Number.isFinite(Number(row[index]))));
-    }
-    if (xIndex === -1 || yIndex === -1 || xIndex === yIndex) throw new DbError('无法确定图表的 x/y 列，请显式传入');
-    const series = set.rows
-      .slice(0, 24)
-      .map((row) => ({ label: String(row[xIndex] ?? '—'), value: Number(row[yIndex]) }))
-      .filter((point) => Number.isFinite(point.value));
+    const { sql, columns, rows, x, y, points } = await this.chartSeries(conn, database, sqlText, xName, yName);
+    const series = points.slice(0, 24).map((point) => ({ label: point.label || '—', value: point.value }));
     const chart = {
       type,
-      title: title ?? `${names[yIndex]} by ${names[xIndex]}`,
-      xLabel: names[xIndex],
-      yLabel: names[yIndex],
+      title: title ?? `${y} by ${x}`,
+      xLabel: x,
+      yLabel: y,
       sql,
       series,
     };
     return ok(started, `已生成${type === 'line' ? '折线' : type === 'pie' ? '饼' : '柱状'}图（${series.length} 个数据点）`, {
       chart,
-      columns: set.columns,
-      rows: set.rows,
+      columns,
+      rows,
       chartSql: sql,
     });
+  }
+
+  private async analyzeChart(
+    conn: ConnectionConfig,
+    database: string | undefined,
+    sqlText: string,
+    xName: string | undefined,
+    yName: string | undefined,
+    topN: number | undefined,
+    started: number,
+  ): Promise<ToolResult> {
+    const { sql, x, y, points } = await this.chartSeries(conn, database, sqlText, xName, yName);
+    if (!points.length) throw new DbError('没有可统计的有效数据点（全为 NULL 或空结果）', { code: 'EMPTY_SERIES' });
+    const stats = summarize(points)!;
+    const limit = Math.min(20, Math.max(1, Math.trunc(topN ?? 5)));
+    const timeSeries = isTimeSeries(points);
+    // 环比只保留最近 12 期：500 行全量塞给模型既贵又没人看。
+    const recent = timeSeries ? deltas(points).slice(-12) : [];
+    const data = {
+      x,
+      y,
+      rowCount: points.length,
+      sum: round(stats.sum),
+      avg: round(stats.avg),
+      min: stats.min,
+      max: stats.max,
+      argmin: stats.argmin,
+      argmax: stats.argmax,
+      topShare: topShare(points, limit).map((item) => ({ ...item, value: round(item.value), share: round(item.share, 4) })),
+      deltas: recent.map((item) => ({ ...item, value: round(item.value), delta: round(item.delta), ratio: item.ratio === null ? null : round(item.ratio, 4) })),
+      isTimeSeries: timeSeries,
+      sql,
+    };
+    return ok(
+      started,
+      `${points.length} 个数据点：合计 ${round(stats.sum)}，均值 ${round(stats.avg)}，最大 ${stats.argmax}=${stats.max}，最小 ${stats.argmin}=${stats.min}`,
+      data,
+    );
+  }
+
+  private async forecastChart(
+    conn: ConnectionConfig,
+    database: string | undefined,
+    sqlText: string,
+    xName: string | undefined,
+    yName: string | undefined,
+    periods: number | undefined,
+    method: ForecastMethod | undefined,
+    started: number,
+  ): Promise<ToolResult> {
+    const { sql, x, y, points } = await this.chartSeries(conn, database, sqlText, xName, yName);
+    const timeSeries = isTimeSeries(points);
+    const result = forecastSeries(points, {
+      periods,
+      method,
+      // 时间序列就用「第 N 期之后」，避免编造具体月份标签
+      labelFor: (index, all) => (timeSeries ? `第 ${index - all.length + 1} 期后` : `+${index - all.length + 1}`),
+    });
+    if (!result.ok) {
+      throw new DbError(result.message ?? '样本不足，无法预测', { code: result.code ?? 'FORECAST_FAILED' });
+    }
+    const chart = {
+      type: 'line' as const,
+      title: `${y} 预测（${result.method === 'linear' ? '线性回归' : '移动平均'}）`,
+      xLabel: x,
+      yLabel: y,
+      sql,
+      series: result.original.map((point: StatPoint) => ({ label: point.label || '—', value: point.value })),
+      forecast: result.forecast,
+      note: result.note,
+    };
+    return ok(
+      started,
+      `预测未来 ${result.forecast.length} 期（${result.method === 'linear' ? `线性回归，斜率 ${result.slope}` : `移动平均，窗口 ${result.window}`}，r=${result.r}）`,
+      { ...result, chart, chartSql: sql },
+    );
   }
 
 }

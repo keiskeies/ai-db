@@ -9,7 +9,10 @@ import {
   getModelProfile,
   historyTokenBudget,
   maxOutputTokensOf,
+  suggestFollowUps,
   supportsInput,
+  tablesFromSql,
+  type AgentContextBundle,
   type AgentEvent,
   type AgentMessageBlock,
   type AgentRunInput,
@@ -21,6 +24,7 @@ import {
   type PermissionMode,
   type ProviderImage,
   type ProviderMessage,
+  type QuestionSuggestion,
   type Risk,
   type ToolCall,
   type ToolResult,
@@ -188,7 +192,11 @@ export class AgentHost {
       }
     }
 
-    const memories = store.searchMemories(text, { connectionId: conn?.id, database: conn?.database, limit: 6 });
+    const recall = conn
+      ? store.recallForTurn(text, { connectionId: conn.id, database: conn.database })
+      : { memories: [] as Memory[], glossary: [] as Memory[], sqlExamples: [] as Memory[] };
+    const memories = recall.memories;
+    const businessContext = conn ? store.agentContextBundle(conn.id, conn.database) : undefined;
     const attachmentTables = (input.attachments ?? []).map(String).slice(0, 12);
     const compacted = compactHistory(history.slice(-24), historyTokenBudget(settings.agent, profile));
 
@@ -262,6 +270,9 @@ export class AgentHost {
           connection: conn,
           databases: schemas,
           memories: memoryContext,
+          glossary: recall.glossary,
+          sqlExamples: recall.sqlExamples,
+          context: businessContext,
           mode: run.mode,
           attachmentTables,
         });
@@ -290,7 +301,7 @@ export class AgentHost {
         environment: conn?.environment ?? 'dev',
         connectionReadonly: conn?.readonly ?? false,
         history: compacted,
-        context: { connection: conn, databases: schemas, memories, attachmentTables },
+        context: { connection: conn, databases: schemas, memories, agentContext: businessContext, glossary: recall.glossary, attachmentTables },
         sessionAllowed: new Set<string>(),
         alwaysAllowed: new Set<string>(),
         signal: controller.signal,
@@ -309,6 +320,9 @@ export class AgentHost {
         tokensOut: (previous?.tokensOut ?? 0) + result.usage.tokensOut,
         model: settings.agent.provider === 'local' ? 'local' : settings.agent.model,
       });
+      if (result.status === 'done' && settings.agent.followUpSuggestions) {
+        for (const item of this.followUps(blocks, schemas, businessContext)) emit({ type: 'suggestions', items: item });
+      }
       if (settings.agent.autoMemory) this.captureMemories(text, result.text, sessionId, conn);
     } catch (err: any) {
       status = 'error';
@@ -326,6 +340,24 @@ export class AgentHost {
     if (status === 'done' && usage.tokensIn + usage.tokensOut > 0) {
       // usage already emitted by the runtime; kept here for future analytics
     }
+  }
+
+  /**
+   * 追问建议：只看本轮真正调用过的工具与涉及的表，用本地规则生成。
+   * 对所有 provider 一视同仁，不依赖模型输出特定标签，也不产生额外 token 成本。
+   */
+  private followUps(blocks: AgentMessageBlock[], schemas: DatabaseSchema[] | undefined, bundle?: AgentContextBundle): QuestionSuggestion[][] {
+    const usedTools: string[] = [];
+    const touched = new Set<string>();
+    for (const block of blocks) {
+      if (block.type !== 'tool_call') continue;
+      if (block.tool) usedTools.push(block.tool);
+      const args = (block.args ?? {}) as Record<string, unknown>;
+      if (typeof args.table === 'string' && args.table.trim()) touched.add(args.table.trim());
+      if (typeof args.sql === 'string') for (const name of tablesFromSql(args.sql)) touched.add(name);
+    }
+    const items = suggestFollowUps({ schemas, tables: [...touched], usedTools, bundle, limit: 3 });
+    return items.length ? [items] : [];
   }
 
   private captureMemories(text: string, answer: string, sessionId: string, conn?: { id: string; database?: string }): void {

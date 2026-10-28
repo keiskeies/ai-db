@@ -1,5 +1,7 @@
-import { useId } from 'react';
-import { ArrowUpRight } from 'lucide-react';
+import { useRef, useState, type RefObject } from 'react';
+import { createPortal } from 'react-dom';
+import { ArrowUpRight, X } from 'lucide-react';
+import { ChartToolbar, type ChartType } from './ChartToolbar';
 
 export interface ChartSpec {
   type: 'bar' | 'line' | 'pie';
@@ -8,142 +10,342 @@ export interface ChartSpec {
   yLabel: string;
   sql?: string;
   series: Array<{ label: string; value: number }>;
+  /** forecast_chart 的外推段：虚线 + 半透明区间带，接在 series 之后 */
+  forecast?: Array<{ label: string; value: number; lower: number; upper: number }>;
+  /** forecast_chart 的方法说明，必须原样展示给用户 */
+  note?: string;
 }
 
 const COLORS = ['#5B8CFF', '#9A7BFF', '#2DD4BF', '#F5C451', '#FF6B81', '#60A5FA', '#34D399', '#F472B6'];
 
-export function ChartView({ chart, onOpenEditor }: { chart: ChartSpec; onOpenEditor?: (sql: string) => void }) {
-  const gradientId = useId().replace(/:/g, '');
-  const points = chart.series.slice(0, 12);
-  const total = points.reduce((sum, point) => sum + Math.max(0, point.value), 0);
-  const max = Math.max(...points.map((point) => point.value), 1);
+export interface ChartViewProps {
+  chart: ChartSpec;
+  onOpenEditor?: (sql: string) => void;
+  /** 外部（工具条）指定的类型，优先于 chart.type */
+  typeOverride?: ChartType;
+  /** 最多画多少个点，放大态给更大的值 */
+  maxPoints?: number;
+  zoomed?: boolean;
+  onExportCsv?: () => void;
+  onTypeChange?: (type: ChartType) => void;
+  /** 传了才在工具条里显示 X/Y 下拉（QueryView 用；Agent 侧的轴由 Bridge 决定） */
+  columns?: string[];
+  x?: string;
+  y?: string;
+  onX?: (value: string) => void;
+  onY?: (value: string) => void;
+}
 
-  if (chart.type === 'pie') {
-    let cursor = 0;
-    const stops = points
-      .map((point, index) => {
-        const start = total ? (cursor / total) * 360 : 0;
-        cursor += Math.max(0, point.value);
-        const end = total ? (cursor / total) * 360 : 0;
-        return `${COLORS[index % COLORS.length]} ${start}deg ${end}deg`;
-      })
-      .join(', ');
-    return (
-      <div className="chart-card">
-        <div className="chart-head">
-          <span>{chart.title}</span>
-          <span className="badge agent">PIE</span>
-        </div>
-        <div className="pie-row">
-          <div className="pie" style={{ background: `conic-gradient(${stops || '#223 0deg 360deg'})` }}>
-            <div className="pie-hole">
-              <span>{total.toLocaleString()}</span>
-              <em>{chart.yLabel}</em>
-            </div>
-          </div>
-          <div className="pie-legend">
-            {points.slice(0, 8).map((point, index) => (
-              <div key={point.label} className="pie-legend-row">
-                <span className="swatch" style={{ background: COLORS[index % COLORS.length] }} />
-                <span className="truncate">{point.label}</span>
-                <em>{point.value.toLocaleString()}</em>
-              </div>
-            ))}
-          </div>
-        </div>
-        {chart.sql ? (
-          <button className="chart-open" onClick={() => onOpenEditor?.(chart.sql!)}>
-            <ArrowUpRight size={11} /> 打开 SQL
-          </button>
-        ) : null}
-      </div>
-    );
-  }
+export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, zoomed = false, onExportCsv, onTypeChange, columns, x, y, onX, onY }: ChartViewProps) {
+  const [localType, setLocalType] = useState<ChartType>(chart.type);
+  const [exporting, setExporting] = useState(false);
+  const [zoomOpen, setZoomOpen] = useState(false);
+  const svgRef = useRef<SVGSVGElement>(null);
 
-  const width = 380;
-  const height = 176;
-  const pad = { left: 34, right: 10, top: 12, bottom: 28 };
-  const innerW = width - pad.left - pad.right;
-  const innerH = height - pad.top - pad.bottom;
-  const band = innerW / Math.max(points.length, 1);
-  const y = (value: number) => pad.top + innerH - (value / max) * innerH;
-  const linePath = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${pad.left + band * (index + 0.5)} ${y(point.value)}`).join(' ');
-  const areaPath = `${linePath} L ${pad.left + band * (points.length - 0.5)} ${pad.top + innerH} L ${pad.left + band * 0.5} ${pad.top + innerH} Z`;
-  const labelStep = Math.max(1, Math.ceil(points.length / 6));
+  const type = typeOverride ?? localType;
+  const setType = (next: ChartType) => {
+    setLocalType(next);
+    onTypeChange?.(next);
+  };
+
+  const toolbar = (
+    <ChartToolbar
+      type={type}
+      onType={setType}
+      columns={columns}
+      x={x}
+      y={y}
+      onX={onX}
+      onY={onY}
+      sql={chart.sql}
+      onExportCsv={onExportCsv}
+      onExportPng={() => void exportPng(svgRef, chart.title, setExporting)}
+      onZoom={zoomed ? undefined : () => setZoomOpen(true)}
+      exporting={exporting}
+    />
+  );
+
+  const body = type === 'pie' ? (
+    <PieBody chart={chart} maxPoints={maxPoints} />
+  ) : (
+    <AxisBody chart={chart} type={type} maxPoints={maxPoints} zoomed={zoomed} svgRef={svgRef} />
+  );
 
   return (
-    <div className="chart-card">
+    <div className="chart-card" data-testid="chart-card">
       <div className="chart-head">
-        <span>{chart.title}</span>
-        <span className="badge agent">{chart.type === 'line' ? 'LINE' : 'BAR'}</span>
+        <span className="truncate">{chart.title}</span>
+        <span className="badge agent">{type.toUpperCase()}</span>
       </div>
-      <svg viewBox={`0 0 ${width} ${height}`} className="chart-svg" role="img">
-        <defs>
-          <linearGradient id={`bar-${gradientId}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#5B8CFF" stopOpacity="0.95" />
-            <stop offset="100%" stopColor="#5B8CFF" stopOpacity="0.35" />
-          </linearGradient>
-          <linearGradient id={`area-${gradientId}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#9A7BFF" stopOpacity="0.35" />
-            <stop offset="100%" stopColor="#9A7BFF" stopOpacity="0.02" />
-          </linearGradient>
-        </defs>
-        {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
-          const gy = pad.top + innerH * ratio;
-          return (
-            <g key={ratio}>
-              <line x1={pad.left} x2={width - pad.right} y1={gy} y2={gy} className="chart-grid" />
-              <text x={pad.left - 5} y={gy + 3} textAnchor="end" className="chart-axis">
-                {Math.round(max * (1 - ratio)).toLocaleString()}
-              </text>
-            </g>
-          );
-        })}
-        {chart.type === 'bar'
-          ? points.map((point, index) => {
-              const barH = (point.value / max) * innerH;
-              return (
-                <rect
-                  key={point.label}
-                  x={pad.left + band * index + band * 0.2}
-                  y={pad.top + innerH - barH}
-                  width={band * 0.6}
-                  height={Math.max(1, barH)}
-                  rx={2}
-                  fill={`url(#bar-${gradientId})`}
-                >
-                  <title>{`${point.label}: ${point.value.toLocaleString()}`}</title>
-                </rect>
-              );
-            })
-          : null}
-        {chart.type === 'line' ? (
-          <>
-            <path d={areaPath} fill={`url(#area-${gradientId})`} />
-            <path d={linePath} fill="none" stroke="#9A7BFF" strokeWidth="2" />
-            {points.map((point, index) => (
-              <circle key={point.label} cx={pad.left + band * (index + 0.5)} cy={y(point.value)} r="2.6" fill="#9A7BFF">
-                <title>{`${point.label}: ${point.value.toLocaleString()}`}</title>
-              </circle>
-            ))}
-          </>
-        ) : null}
-        {points.map((point, index) =>
-          index % labelStep === 0 ? (
-            <text key={point.label} x={pad.left + band * (index + 0.5)} y={height - 9} textAnchor="middle" className="chart-axis">
-              {point.label.length > 8 ? `${point.label.slice(0, 8)}…` : point.label}
-            </text>
-          ) : null,
-        )}
-      </svg>
+      {toolbar}
+      {body}
+      {chart.note ? <div className="chart-note" data-testid="chart-note">{chart.note}</div> : null}
       <div className="chart-foot">
-        <span>{chart.xLabel} → {chart.yLabel}</span>
+        <span className="truncate">{chart.xLabel} → {chart.yLabel}</span>
         {chart.sql ? (
           <button className="chart-open" onClick={() => onOpenEditor?.(chart.sql!)}>
             <ArrowUpRight size={11} /> 打开 SQL
           </button>
         ) : null}
+      </div>
+      {zoomOpen ? (
+        createPortal(
+          <div className="chart-modal" role="dialog" aria-label={chart.title} onClick={() => setZoomOpen(false)}>
+            <div className="chart-modal-body" onClick={(e) => e.stopPropagation()}>
+              <button className="icon-btn chart-modal-close" title="关闭" data-testid="chart-zoom-close" onClick={() => setZoomOpen(false)}><X size={14} /></button>
+              <ChartView chart={chart} onOpenEditor={onOpenEditor} typeOverride={type} maxPoints={60} zoomed onExportCsv={onExportCsv} columns={columns} x={x} y={y} onX={onX} onY={onY} />
+            </div>
+          </div>,
+          document.body,
+        )
+      ) : null}
+    </div>
+  );
+}
+
+function PieBody({ chart, maxPoints }: { chart: ChartSpec; maxPoints: number }) {
+  const points = chart.series.slice(0, maxPoints);
+  const total = points.reduce((sum, point) => sum + Math.max(0, point.value), 0);
+  let cursor = 0;
+  const stops = points
+    .map((point, index) => {
+      const start = total ? (cursor / total) * 360 : 0;
+      cursor += Math.max(0, point.value);
+      const end = total ? (cursor / total) * 360 : 0;
+      return `${COLORS[index % COLORS.length]} ${start}deg ${end}deg`;
+    })
+    .join(', ');
+  return (
+    <div className="pie-row">
+      <div className="pie" style={{ background: `conic-gradient(${stops || '#223 0deg 360deg'})` }}>
+        <div className="pie-hole">
+          <span>{total.toLocaleString()}</span>
+          <em>{chart.yLabel}</em>
+        </div>
+      </div>
+      <div className="pie-legend">
+        {points.slice(0, 8).map((point, index) => (
+          <div key={point.label} className="pie-legend-row">
+            <span className="swatch" style={{ background: COLORS[index % COLORS.length] }} />
+            <span className="truncate">{point.label}</span>
+            <em>{point.value.toLocaleString()}</em>
+          </div>
+        ))}
       </div>
     </div>
   );
+}
+
+interface AxisBodyProps {
+  chart: ChartSpec;
+  type: ChartType;
+  maxPoints: number;
+  zoomed: boolean;
+  svgRef: RefObject<SVGSVGElement>;
+}
+
+function AxisBody({ chart, type, maxPoints, zoomed, svgRef }: AxisBodyProps) {
+  const id = useStableId();
+  const history = chart.series.slice(0, maxPoints);
+  const forecast = type === 'line' ? (chart.forecast ?? []).slice(0, 12) : [];
+  const all = [...history, ...forecast.map((p) => ({ label: p.label, value: p.value }))];
+
+  // 空序列必须早退：linePath 为空串时 areaPath 会退化成 " L …"，浏览器报
+  // "<path> attribute d: Expected moveto path command"，画出一堆垃圾路径。
+  if (!all.length) {
+    return <div className="dash-empty" data-testid="chart-empty">没有可绘制的数据点（结果集为空或全为 NULL）。</div>;
+  }
+
+  const width = zoomed ? 720 : 380;
+  const height = zoomed ? 320 : 176;
+  const pad = { left: 42, right: 12, top: 12, bottom: 28 };
+  const innerW = width - pad.left - pad.right;
+  const innerH = height - pad.top - pad.bottom;
+  const band = innerW / all.length;
+
+  const values = all.map((point) => point.value);
+  if (forecast.length) {
+    values.push(0);
+    for (const point of forecast) values.push(point.lower, point.upper);
+  }
+  const hi = Math.max(...values, 1);
+  const lo = Math.min(...values, 0);
+  const span = hi - lo || 1;
+  const y = (value: number) => pad.top + innerH - ((value - lo) / span) * innerH;
+  const cx = (index: number) => pad.left + band * (index + 0.5);
+
+  const linePath = history.map((point, index) => `${index === 0 ? 'M' : 'L'} ${cx(index)} ${y(point.value)}`).join(' ');
+  // 单点没有线段可闭合，只画点，不生成 area 路径
+  const areaPath = history.length > 1
+    ? `${linePath} L ${cx(history.length - 1)} ${y(lo)} L ${cx(0)} ${y(lo)} Z`
+    : '';
+
+  // 预测段：从最后一个历史点接出去，虚线 + 区间带
+  const anchor = history.length ? { x: cx(history.length - 1), y: y(history[history.length - 1].value) } : null;
+  const forecastPath = forecast
+    .map((point, index) => `${anchor && index === 0 ? `M ${anchor.x} ${anchor.y} L` : index === 0 ? 'M' : 'L'} ${cx(history.length + index)} ${y(point.value)}`)
+    .join(' ');
+  const bandPath = forecast.length
+    ? [
+        ...forecast.map((p, i) => `${i === 0 ? 'M' : 'L'} ${cx(history.length + i)} ${y(p.upper)}`),
+        ...[...forecast].reverse().map((p, i) => `L ${cx(history.length + forecast.length - 1 - i)} ${y(p.lower)}`),
+        'Z',
+      ].join(' ')
+    : '';
+
+  const labelStep = Math.max(1, Math.ceil(all.length / (zoomed ? 10 : 6)));
+
+  return (
+    <svg
+      ref={svgRef}
+      viewBox={`0 0 ${width} ${height}`}
+      className="chart-svg"
+      role="img"
+      aria-label={chart.title}
+      data-testid="chart-svg"
+    >
+      <defs>
+        <linearGradient id={`bar-${id}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#5B8CFF" stopOpacity="0.95" />
+          <stop offset="100%" stopColor="#5B8CFF" stopOpacity="0.35" />
+        </linearGradient>
+        <linearGradient id={`area-${id}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#9A7BFF" stopOpacity="0.35" />
+          <stop offset="100%" stopColor="#9A7BFF" stopOpacity="0.02" />
+        </linearGradient>
+      </defs>
+      {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+        const gy = pad.top + innerH * ratio;
+        return (
+          <g key={ratio}>
+            <line x1={pad.left} x2={width - pad.right} y1={gy} y2={gy} className="chart-grid" />
+            <text x={pad.left - 5} y={gy + 3} textAnchor="end" className="chart-axis">
+              {formatTick(lo + span * (1 - ratio))}
+            </text>
+          </g>
+        );
+      })}
+      {lo < 0 ? <line x1={pad.left} x2={width - pad.right} y1={y(0)} y2={y(0)} className="chart-zero" /> : null}
+      {type === 'bar'
+        ? history.map((point, index) => {
+            const top = y(Math.max(point.value, 0));
+            const bottom = y(Math.min(point.value, 0));
+            return (
+              <rect
+                key={`${point.label}-${index}`}
+                x={pad.left + band * index + band * 0.2}
+                y={top}
+                width={band * 0.6}
+                height={Math.max(1, bottom - top)}
+                rx={2}
+                fill={`url(#bar-${id})`}
+              >
+                <title>{`${point.label}: ${point.value.toLocaleString()}`}</title>
+              </rect>
+            );
+          })
+        : null}
+      {type === 'line' ? (
+        <>
+          {areaPath ? <path d={areaPath} fill={`url(#area-${id})`} /> : null}
+          {bandPath ? <path d={bandPath} fill="#F5C451" fillOpacity="0.18" stroke="none" data-testid="chart-forecast-band" /> : null}
+          {linePath ? <path d={linePath} fill="none" stroke="#9A7BFF" strokeWidth="2" /> : null}
+          {forecastPath ? (
+            <path d={forecastPath} fill="none" stroke="#F5C451" strokeWidth="2" strokeDasharray="4 3" data-testid="chart-forecast-line" />
+          ) : null}
+          {history.map((point, index) => (
+            <circle key={`${point.label}-${index}`} cx={cx(index)} cy={y(point.value)} r="2.6" fill="#9A7BFF">
+              <title>{`${point.label}: ${point.value.toLocaleString()}`}</title>
+            </circle>
+          ))}
+          {forecast.map((point, index) => (
+            <circle key={`f-${point.label}-${index}`} cx={cx(history.length + index)} cy={y(point.value)} r="2.6" fill="#F5C451">
+              <title>{`${point.label}: ${point.value.toLocaleString()}（区间 ${point.lower.toLocaleString()} ~ ${point.upper.toLocaleString()}）`}</title>
+            </circle>
+          ))}
+        </>
+      ) : null}
+      {all.map((point, index) =>
+        index % labelStep === 0 ? (
+          <text key={`l-${point.label}-${index}`} x={cx(index)} y={height - 9} textAnchor="middle" className="chart-axis">
+            {point.label.length > 8 ? `${point.label.slice(0, 8)}…` : point.label}
+          </text>
+        ) : null,
+      )}
+    </svg>
+  );
+}
+
+function formatTick(value: number): string {
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (abs >= 10_000) return `${(value / 1000).toFixed(0)}k`;
+  if (abs >= 100 || Number.isInteger(value)) return Math.round(value).toLocaleString();
+  return value.toFixed(1);
+}
+
+let idCounter = 0;
+function useStableId(): string {
+  const ref = useRef<string>('');
+  if (!ref.current) ref.current = `c${(idCounter += 1)}`;
+  return ref.current;
+}
+
+/**
+ * 导出 PNG。两个必须遵守的细节（headless Chrome 实测）：
+ * ① base64 走 btoa(unescape(encodeURIComponent(svg)))，直接 btoa 遇到中文坐标轴标签会抛 InvalidCharacterError；
+ * ② SVG 自身没有背景，drawImage 前要先 fillRect 底色，否则导出的是透明图。
+ * 另外 class 样式在独立 SVG 里不生效，导出前要把网格线/坐标轴的颜色内联成属性。
+ */
+async function exportPng(svgRef: RefObject<SVGSVGElement>, title: string, setExporting: (value: boolean) => void): Promise<void> {
+  const svg = svgRef.current;
+  if (!svg) return;
+  setExporting(true);
+  try {
+    const rect = svg.getBoundingClientRect();
+    const scale = 2;
+    const width = Math.max(1, Math.round(rect.width)) * scale;
+    const height = Math.max(1, Math.round(rect.height)) * scale;
+    const clone = svg.cloneNode(true) as SVGSVGElement;
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    clone.setAttribute('width', String(width));
+    clone.setAttribute('height', String(height));
+    const styles = getComputedStyle(document.documentElement);
+    const grid = (styles.getPropertyValue('--border-subtle') || '#2a2f3a').trim();
+    const axis = (styles.getPropertyValue('--text-muted') || '#8b93a7').trim();
+    const background = (styles.getPropertyValue('--bg-elevated') || '#14161c').trim();
+    clone.querySelectorAll<SVGLineElement>('.chart-grid').forEach((line) => line.setAttribute('stroke', grid));
+    clone.querySelectorAll<SVGTextElement>('.chart-axis').forEach((text) => {
+      text.setAttribute('fill', axis);
+      text.setAttribute('font-size', '9');
+      text.setAttribute('font-family', 'system-ui, sans-serif');
+    });
+    clone.querySelectorAll<SVGLineElement>('.chart-zero').forEach((line) => line.setAttribute('stroke', axis));
+
+    const source = new XMLSerializer().serializeToString(clone);
+    const url = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(source)))}`;
+    const image = new Image();
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error('SVG 渲染失败'));
+      image.src = url;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('无法创建 canvas 上下文');
+    context.fillStyle = background;
+    context.fillRect(0, 0, width, height);
+    context.drawImage(image, 0, 0, width, height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('PNG 编码失败');
+    const anchor = document.createElement('a');
+    anchor.href = URL.createObjectURL(blob);
+    anchor.download = `${(title || 'chart').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60)}.png`;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(anchor.href), 4000);
+  } finally {
+    setExporting(false);
+  }
 }
