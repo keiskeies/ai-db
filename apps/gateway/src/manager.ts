@@ -8,6 +8,7 @@ import {
   classifyRedis,
   classifySearch,
   classifyVector,
+  editsRecords,
   engineMeta,
   engineUsesSchema,
   formatStructuredQuery,
@@ -369,13 +370,13 @@ export class ConnectionManager {
     const conn = this.store.getConnection(connectionId);
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
     const meta = engineMeta(conn.engine);
-    if (meta.model !== 'document') {
-      throw new DbError(`${meta.label} 没有单文档读取接口`, { code: 'UNSUPPORTED_ENGINE' });
+    if (!editsRecords(conn.engine)) {
+      throw new DbError(`${meta.label} 没有单记录读取接口`, { code: 'UNSUPPORTED_ENGINE' });
     }
     if (!input.collection?.trim() || !input.id?.trim()) throw new DbError('collection 与 id 必填', { code: 'MQL_COLLECTION' });
     const driver = await this.driverFor(connectionId);
     if (!supportsDocumentRead(driver)) {
-      throw new DbError(`${meta.label} 驱动不支持单文档读取`, { code: 'UNSUPPORTED_ENGINE' });
+      throw new DbError(`${meta.label} 驱动不支持单记录读取`, { code: 'UNSUPPORTED_ENGINE' });
     }
     return driver.getDocument(input.collection.trim(), input.id.trim(), opts.database ?? conn.database);
   }

@@ -220,6 +220,21 @@ export class QdrantDriver implements VectorQueryDriver, DocumentWriteDriver, Obj
     return this.vectorSearch(query, opts);
   }
 
+  async getDocument(collection: string, id: string, _database?: string): Promise<{ id: string; document: string }> {
+    const target = collection.trim();
+    if (!target) throw new DbError('collection 不能为空', { code: 'VECTOR_COLLECTION' });
+    const pointId = /^\d+$/.test(id) ? Number(id) : id;
+    const response = await this.request<any>(
+      `/collections/${encodeURIComponent(target)}/points/${encodeURIComponent(String(pointId))}?with_vector=true&with_payload=true`,
+    );
+    const point = response?.result;
+    if (!point) throw new DbError(`向量点不存在：${id}`, { code: 'VECTOR_POINT_NOT_FOUND', status: 404 });
+    return {
+      id: String(point.id ?? id),
+      document: JSON.stringify({ id: point.id ?? id, vector: point.vector ?? null, payload: point.payload ?? {} }, null, 2),
+    };
+  }
+
   async upsertDocuments(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {
     if (!input.collection) throw new DbError('collection 不能为空', { code: 'VECTOR_COLLECTION' });
     if (!input.documents.length) throw new DbError('至少需要一个文档', { code: 'WRITE_DOCUMENT' });

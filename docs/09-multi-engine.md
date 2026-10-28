@@ -109,6 +109,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - 结果：id、score 与 payload/entity/properties 字段，`resultKind = 'vectors'`。
 - 文本检索：`text` 由网关调用 Embedding Provider 转成向量；未配置时可直接传 `vector`。
 - 写入：`upsert_document` 单条/批量、`import_documents` CSV 批量导入（id/vector 列可指定）、`delete_documents` 按 id 列表删除。
+- 编辑：Qdrant 与 Weaviate 的结果网格可双击整行打开编辑对话框，`GET /documents/get` 读回点/对象原文（含 vector 与 payload/properties），改完走 `upsert_document` 按 id 覆盖写回，向量保持原值；只读连接不开放该入口。Milvus 没有单点读回接口，不开放。
 - 建对象：对象树右键菜单「新建集合…／新建索引…」与 `create_collection` / `POST /objects/create` 支持 Qdrant 集合（维度+距离）、Elasticsearch/OpenSearch 索引（mapping 字段）、Weaviate class（属性）、MongoDB 集合、ArangoDB 文档集合或边集合（`edge=true`）；Milvus 需要完整字段与索引定义，明确拒绝。删对象走对象树右键「删除集合…／删除索引…」与 `delete_collection` / `POST /objects/drop`，覆盖同一批引擎，需要手输名字确认，只读连接返回 403。Qdrant 的 payload 索引通过 `GET /collections/{c}` 的 `payload_schema` 显示在「对象信息」里，建索引走 `PUT /collections/{c}/index?wait=true` + `field_schema`（老版的路径写法已被拒绝），删除走 `DELETE /collections/{c}/index/{field}`。不支持 SQL DDL 设计器与备份。
 - 字段：Weaviate 的 class 可以在对象信息面板追加 property（`POST /v1/schema/{class}/properties`，类型按 text/int/number/boolean/date 归一），Qdrant 与 Milvus 的 payload 是动态的，无需建字段。
 - 导出：查询结果可导出 CSV/JSON/XML（INSERT 脚本仅 SQL 引擎）。
@@ -134,6 +135,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - 查询：JSON `_search` DSL（`{index, query, body, size}`），默认 `match_all`。
 - 结果：`_id`、`_score`、`_source` 字段，`resultKind = 'documents'`。
 - 写入：`upsert_document` 批量索引、`import_documents` CSV 导入（id 列映射为 `_id`）、`delete_documents` 按 `_id` 删除；不支持 DDL 与备份。
+- 编辑：结果网格双击文档行打开编辑对话框，`GET /{index}/_doc/{id}` 读回 `_source` 原文，改完按 `_id` 整条索引写回；文档不存在（404 + `found:false`）与索引不存在分开报错；只读连接仍可读回但不可写回。
 - 字段：对象信息面板可给 mapping 追加字段（`PUT /{index}/_mapping`，类型白名单外的输入退回 keyword），Agent 的 `alter_table` 在同一条通道上只允许 `add_column`。
 - 导出：结果可导出 CSV/JSON/XML（INSERT 脚本仅 SQL 引擎）。
 

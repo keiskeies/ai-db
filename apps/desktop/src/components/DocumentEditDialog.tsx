@@ -4,7 +4,7 @@ import { api } from '../lib/api';
 import { useApp } from '../store';
 import { Modal, Spinner } from './ui';
 
-/** MongoDB 单文档编辑：读回 EJSON 原文，保存时由驱动把 $oid / $date 还原成 BSON 类型。 */
+/** 单条记录编辑：读回驱动原文（MongoDB 为 EJSON，向量/搜索为 JSON），保存时整体写回。 */
 export function DocumentEditDialog({
   connectionId,
   database,
@@ -74,7 +74,7 @@ export function DocumentEditDialog({
 
   return (
     <Modal
-      title={`编辑文档 · ${collection}`}
+      title={`编辑记录 · ${collection}`}
       icon={<FileCode2 size={15} />}
       onClose={onClose}
       wide

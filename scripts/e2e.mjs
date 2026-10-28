@@ -165,6 +165,16 @@ if (WEAVIATE_PORT) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ class: 'AidbUiClass', vectorizer: 'none', properties: [{ name: 'title', dataType: ['text'] }] }),
   });
+  await fetch(`${wvBase}/v1/batch/objects`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      objects: [
+        { class: 'AidbUiClass', id: 'd1d1d1d1-0000-4000-8000-000000000001', properties: { title: 'hello' }, vector: [0.1, 0.2] },
+        { class: 'AidbUiClass', id: 'd1d1d1d1-0000-4000-8000-000000000002', properties: { title: 'world' }, vector: [0.3, 0.4] },
+      ],
+    }),
+  });
 }
 if (NEO4J_PORT) {
   const neo4j = (await import('neo4j-driver')).default;
@@ -699,6 +709,17 @@ if (QDRANT_PORT) {
   await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 2, null, { timeout: 20000 });
   check('Qdrant delete by ids removes points', true);
 
+  await page.locator('[data-testid="query-result-grid"] tbody tr', { hasText: 'Ada' }).first().dblclick();
+  await page.waitForSelector('[data-testid="doc-edit-json"]', { timeout: 10000 });
+  const editedPoint = JSON.parse(await page.locator('[data-testid="doc-edit-json"]').inputValue());
+  editedPoint.payload.name = 'Ada Lovelace';
+  await page.fill('[data-testid="doc-edit-json"]', JSON.stringify(editedPoint, null, 2));
+  await page.click('[data-testid="doc-edit-save"]');
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
+  await page.waitForFunction(() => document.querySelector('[data-testid="query-result-grid"]')?.innerText.includes('Ada Lovelace'), null, { timeout: 25000 });
+  check('Qdrant point edited from the result grid keeps its vector', true);
+  await page.waitForTimeout(200);
+
   await page.locator('.tree-node.folder-node', { hasText: '向量集合' }).last().click({ button: 'right' });
   await page.click('text=新建集合…');
   await page.waitForSelector('[data-testid="create-object-name"]', { timeout: 10000 });
@@ -935,6 +956,17 @@ if (ES_PORT) {
   await page.waitForSelector('[data-testid="query-result-grid"] tbody tr', { timeout: 20000 });
   check('Elasticsearch search DSL returns documents', true);
 
+  await page.locator('[data-testid="query-result-grid"] tbody tr', { hasText: 'hello' }).first().dblclick();
+  await page.waitForSelector('[data-testid="doc-edit-json"]', { timeout: 10000 });
+  const editedEsDoc = JSON.parse(await page.locator('[data-testid="doc-edit-json"]').inputValue());
+  editedEsDoc.message = 'hello world';
+  await page.fill('[data-testid="doc-edit-json"]', JSON.stringify(editedEsDoc, null, 2));
+  await page.click('[data-testid="doc-edit-save"]');
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
+  await page.waitForFunction(() => document.querySelector('[data-testid="query-result-grid"]')?.innerText.includes('hello world'), null, { timeout: 25000 });
+  check('Elasticsearch document edited from the result grid', true);
+  await page.waitForTimeout(200);
+
   const openEsInfo = async () => {
     await page.locator('[title="索引 aidb_es_ui"]').click({ button: 'right' });
     await page.click('text=对象信息');
@@ -976,6 +1008,21 @@ if (WEAVIATE_PORT) {
   await page.locator('.conn-row', { hasText: 'Weaviate E2E' }).waitFor({ timeout: 15000 });
   await page.waitForSelector('[title="向量集合 AidbUiClass"]', { timeout: 25000 });
   check('Weaviate connection expands to classes', true);
+
+  await page.click('[title="向量集合 AidbUiClass"]');
+  await page.waitForSelector('[data-testid="query-run"]', { timeout: 10000 });
+  await page.locator('[data-testid="query-run"]').last().click();
+  await page.waitForSelector('[data-testid="query-result-grid"] tbody tr', { timeout: 20000 });
+  await page.locator('[data-testid="query-result-grid"] tbody tr', { hasText: 'hello' }).first().dblclick();
+  await page.waitForSelector('[data-testid="doc-edit-json"]', { timeout: 10000 });
+  const editedWv = JSON.parse(await page.locator('[data-testid="doc-edit-json"]').inputValue());
+  editedWv.properties.title = 'hello weaviate';
+  await page.fill('[data-testid="doc-edit-json"]', JSON.stringify(editedWv, null, 2));
+  await page.click('[data-testid="doc-edit-save"]');
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
+  await page.waitForFunction(() => document.querySelector('[data-testid="query-result-grid"]')?.innerText.includes('hello weaviate'), null, { timeout: 25000 });
+  check('Weaviate object edited from the result grid', true);
+  await page.waitForTimeout(200);
 
   await page.locator('[title="向量集合 AidbUiClass"]').click({ button: 'right' });
   await page.click('text=对象信息');

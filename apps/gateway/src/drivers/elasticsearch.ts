@@ -197,6 +197,33 @@ export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDri
     throw new DbError('搜索驱动不支持参数化 SQL', { code: 'SEARCH_ONLY' });
   }
 
+  async getDocument(collection: string, id: string, _database?: string): Promise<{ id: string; document: string }> {
+    const index = collection.trim();
+    if (!index) throw new DbError('索引名不能为空', { code: 'SEARCH_INDEX' });
+    // 文档不存在时 ES 回 404 + found:false，不能按网络错误处理。
+    let response: Response;
+    try {
+      response = await fetch(`${this.base()}/${encodeURIComponent(index)}/_doc/${encodeURIComponent(id)}`, {
+        headers: this.headers(),
+        signal: AbortSignal.timeout(30000),
+      });
+    } catch (err: any) {
+      throw new DbError(`${this.engine === 'opensearch' ? 'OpenSearch' : 'Elasticsearch'} 请求失败：${err?.message ?? '网络错误'}`, {
+        code: 'SEARCH_NETWORK',
+      });
+    }
+    const hit = (await response.json().catch(() => null)) as any;
+    if (response.status === 404 && hit?.found === false) {
+      throw new DbError(`文档不存在：${id}`, { code: 'SEARCH_DOC_NOT_FOUND', status: 404 });
+    }
+    if (!response.ok) {
+      const message = hit?.error?.reason ?? hit?.error?.root_cause?.[0]?.reason ?? `搜索服务返回 ${response.status}`;
+      throw new DbError(String(message), { code: `SEARCH_${response.status}` });
+    }
+    if (!hit?.found) throw new DbError(`文档不存在：${id}`, { code: 'SEARCH_DOC_NOT_FOUND', status: 404 });
+    return { id: String(hit._id ?? id), document: JSON.stringify({ _id: hit._id ?? id, ...(hit._source ?? {}) }) };
+  }
+
   async upsertDocuments(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {
     if (!input.collection) throw new DbError('index 不能为空', { code: 'SEARCH_INDEX' });
     if (!input.documents.length) throw new DbError('至少需要一个文档', { code: 'WRITE_DOCUMENT' });

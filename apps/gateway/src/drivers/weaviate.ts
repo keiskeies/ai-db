@@ -208,6 +208,22 @@ export class WeaviateDriver implements VectorQueryDriver, DocumentWriteDriver, O
     throw new DbError('Weaviate 不支持参数化 SQL，请使用向量查询', { code: 'VECTOR_ONLY' });
   }
 
+  async getDocument(collection: string, id: string, _database?: string): Promise<{ id: string; document: string }> {
+    const raw = collection.trim();
+    if (!raw) throw new DbError('class 名不能为空', { code: 'VECTOR_COLLECTION' });
+    const target = raw.charAt(0).toUpperCase() + raw.slice(1);
+    const object = await this.request<any>(`/v1/objects/${encodeURIComponent(target)}/${encodeURIComponent(id)}?include=vector`);
+    if (!object?.id) throw new DbError(`对象不存在：${id}`, { code: 'VECTOR_OBJECT_NOT_FOUND', status: 404 });
+    return {
+      id: String(object.id),
+      document: JSON.stringify(
+        { id: object.id, class: object.class ?? target, vector: object.vector ?? null, properties: object.properties ?? {} },
+        null,
+        2,
+      ),
+    };
+  }
+
   async upsertDocuments(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {
     if (!input.collection) throw new DbError('class 不能为空', { code: 'VECTOR_COLLECTION' });
     if (!input.documents.length) throw new DbError('至少需要一个文档', { code: 'WRITE_DOCUMENT' });

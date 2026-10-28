@@ -7,7 +7,7 @@ import { keymap } from '@codemirror/view';
 import { MSSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql as sqlLang } from '@codemirror/lang-sql';
 import { AlignLeft, BarChart3, Bookmark, Database, Download, FileDown, FilePlus, FileUp, History, ListChecks, Network, Play, Plus, Sparkles, Table2, TerminalSquare, Trash2, WandSparkles, Wrench } from 'lucide-react';
 import type { ConnectionConfig, QueryBatchResult } from '@aidb/core';
-import { engineMeta, writesDocuments } from '@aidb/core';
+import { engineMeta, editsRecords, writesDocuments } from '@aidb/core';
 import { api } from '../lib/api';
 import { formatDuration } from '../lib/format';
 import { formatSql } from '../lib/sqlFormat';
@@ -23,12 +23,13 @@ import { Spinner } from './ui';
 
 type QueryTab = Extract<Tab, { kind: 'query' }>;
 
-/** 结构化 MQL / 向量查询把集合名写在语句里。 */
+/** 结构化 MQL / 向量 / 搜索查询把集合名写在语句里（搜索索引叫 index）。 */
 function collectionOf(statement: string | undefined): string | null {
   if (!statement) return null;
   try {
-    const parsed = JSON.parse(statement) as { collection?: unknown };
-    return typeof parsed?.collection === 'string' && parsed.collection ? parsed.collection : null;
+    const parsed = JSON.parse(statement) as { collection?: unknown; index?: unknown };
+    const name = typeof parsed?.collection === 'string' ? parsed.collection : typeof parsed?.index === 'string' ? parsed.index : '';
+    return name || null;
   } catch {
     return null;
   }
@@ -86,6 +87,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const isSql = conn ? engineMeta(conn.engine).languages.includes('sql') : true;
   const canVector = conn ? engineMeta(conn.engine).model === 'vector' || engineMeta(conn.engine).dialect === 'postgres' : false;
   const canWriteDocuments = conn ? writesDocuments(conn.engine) : false;
+  const canEditRecords = conn ? editsRecords(conn.engine) : false;
   const [vectorOpen, setVectorOpen] = useState(false);
   const [writeOpen, setWriteOpen] = useState(false);
   const [keyDialog, setKeyDialog] = useState<string | null>(null);
@@ -632,7 +634,7 @@ ${text}
                           const value = set.rows[rowIndex]?.[0];
                           if (typeof value === 'string' && value) setKeyDialog(value);
                         }
-                      : conn && canWriteDocuments && !conn.readonly && set.resultKind === 'documents'
+                      : conn && canWriteDocuments && !conn.readonly && canEditRecords && (set.resultKind === 'documents' || set.resultKind === 'vectors')
                         ? (rowIndex) => {
                             const idIndex = set.columns.findIndex((column) => column.name === '_id' || column.name === 'id');
                             const id = idIndex >= 0 ? idOf(set.rows[rowIndex]?.[idIndex]) : '';

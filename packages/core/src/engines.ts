@@ -21,6 +21,8 @@ export interface EngineCapabilities {
   indexManage?: boolean;
   /** 可给已有对象追加字段（ES/OpenSearch 的 mapping、Weaviate 的 property）。 */
   fieldAdd?: boolean;
+  /** 结果网格可双击整条记录读取并写回（驱动实现了 DocumentReadDriver）。 */
+  recordEdit?: boolean;
 }
 
 export interface EngineMeta {
@@ -237,6 +239,7 @@ export const ENGINES: EngineMeta[] = [
       documentWrite: true,
       indexManage: true,
       objectLifecycle: true,
+      recordEdit: true,
     },
     defaultPort: 27017,
     fileBased: false,
@@ -426,6 +429,7 @@ export const ENGINES: EngineMeta[] = [
       documentWrite: true,
       indexManage: true,
       objectLifecycle: true,
+      recordEdit: true,
     },
     defaultPort: 6333,
     defaultDatabase: 'default',
@@ -484,6 +488,7 @@ export const ENGINES: EngineMeta[] = [
       documentWrite: true,
       objectLifecycle: true,
       fieldAdd: true,
+      recordEdit: true,
     },
     defaultPort: 8080,
     defaultDatabase: 'default',
@@ -640,6 +645,7 @@ export const ENGINES: EngineMeta[] = [
       documentWrite: true,
       objectLifecycle: true,
       fieldAdd: true,
+      recordEdit: true,
     },
     defaultPort: 9200,
     defaultUsername: 'elastic',
@@ -671,6 +677,7 @@ export const ENGINES: EngineMeta[] = [
       documentWrite: true,
       objectLifecycle: true,
       fieldAdd: true,
+      recordEdit: true,
     },
     defaultPort: 9200,
     defaultUsername: 'admin',
@@ -968,6 +975,11 @@ const WEAVIATE_FIELD_TYPES = ['text', 'int', 'number', 'boolean', 'date'];
 /** 该引擎能否给已有对象追加字段。 */
 export function addField(engine: Engine): boolean {
   return engineMeta(engine).capabilities.fieldAdd === true;
+}
+
+/** 结果网格能否双击打开整条记录编辑（先读回原文再整体写回）。 */
+export function editsRecords(engine: Engine): boolean {
+  return engineMeta(engine).capabilities.recordEdit === true;
 }
 
 /** 追加字段时可选的类型；不支持的引擎返回空数组。 */
