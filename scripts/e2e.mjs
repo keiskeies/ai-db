@@ -130,6 +130,7 @@ if (REDIS_PORT) {
   const client = new Redis({ host: '127.0.0.1', port: REDIS_PORT, lazyConnect: true });
   await client.connect();
   await client.set('aidb:e2e:key', 'hello');
+  await client.set('aidb:e2e:del', 'throwaway');
   if (REDIS_STACK) {
     await client.call('FT.DROPINDEX', 'aidb_e2e').catch(() => undefined);
     await client.call('JSON.SET', 'doc:1', '$', '{"name":"Ada"}');
@@ -436,6 +437,21 @@ if (REDIS_PORT) {
   check('Redis key detail opens on double click', /类型\s+\S+/.test(keyType), keyType);
   await page.locator('.modal-head .icon-btn').last().click();
   await page.waitForTimeout(200);
+
+  await page.locator('[data-testid="query-result-grid"] tbody tr', { hasText: 'aidb:e2e:del' }).first().dblclick();
+  await page.waitForSelector('[data-testid="redis-key-delete"]', { timeout: 10000 });
+  await page.click('[data-testid="redis-key-delete"]');
+  await page.fill('[data-testid="redis-key-confirm"]', 'aidb:e2e:del');
+  await page.click('[data-testid="redis-key-delete-submit"]');
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 10000 });
+  await page.locator('[data-testid="query-run"]').last().click();
+  await page.waitForFunction(
+    () => ![...document.querySelectorAll('[data-testid="query-result-grid"] tbody tr')].some((row) => row.textContent.includes('aidb:e2e:del')),
+    null,
+    { timeout: 20000 },
+  );
+  check('Redis key deleted from the key detail dialog', true);
+
   if (REDIS_STACK) {
     await page.waitForSelector('[title="搜索索引 aidb_e2e"]', { timeout: 20000 });
     check('Redis Stack exposes RediSearch indexes', true);
@@ -444,6 +460,14 @@ if (REDIS_PORT) {
     await page.waitForSelector('[data-testid="query-result-grid"] tbody tr', { timeout: 20000 });
     const searchRows = await page.locator('[data-testid="query-result-grid"] tbody tr').count();
     check('FT.SEARCH returns indexed documents', searchRows === 2, `${searchRows} rows`);
+
+    await page.locator('[title="搜索索引 aidb_e2e"]').click({ button: 'right' });
+    await page.click('text=删除索引…');
+    await page.waitForSelector('[data-testid="drop-object-confirm"]', { timeout: 10000 });
+    await page.fill('[data-testid="drop-object-confirm"]', 'aidb_e2e');
+    await page.click('[data-testid="drop-object-submit"]');
+    await page.waitForSelector('[title="搜索索引 aidb_e2e"]', { state: 'detached', timeout: 20000 });
+    check('RediSearch index dropped from the tree menu', true);
   }
   await page.screenshot({ path: join(shots, 'desktop-redis.png') });
 }

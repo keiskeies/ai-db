@@ -45,7 +45,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 | 时序 | TDengine | tdengine-http | tdengine | taosAdapter REST（6041）；超级表/子表浏览 + SQL；无网格编辑 |
 | 时序 | InfluxDB | influxdb-http | influxdb | InfluxDB 3 `/api/v3/query_sql`（DataFusion SQL）；measurement 浏览 + SQL + EXPLAIN；DDL 关闭 |
 | 文档 | MongoDB | mongodb | —（MQL） | 浏览 + 查询 + 结果；无 DDL/备份 |
-| 键值 | Redis | redis | —（命令） | 浏览 + 命令 + 结果；识别 Redis Stack 模块与 RediSearch 索引；无 DDL/备份 |
+| 键值 | Redis | redis | —（命令） | 浏览 + 命令 + 结果；识别 Redis Stack 模块与 RediSearch 索引；键可删除（UNLINK）、索引可删除（FT.DROPINDEX）；无 DDL/备份 |
 | 宽列 | Cassandra | cassandra | —（CQL） | keyspace/table 浏览 + CQL；无 JOIN/DDL 设计器 |
 | 宽列 | ScyllaDB | cassandra | —（CQL） | 复用 Cassandra 驱动与 CQL |
 | 图 | Neo4j | bolt | —（Cypher） | 标签/关系浏览 + Cypher + 计划 + 交互式图视图 |
@@ -87,7 +87,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 
 - 对象树：DB 索引 → `keys` 伪对象（`rowEstimate = DBSIZE`）；安装 RediSearch 时追加每个 `FT._LIST` 索引为“搜索索引”节点，点击即执行 `FT.SEARCH <index> * LIMIT 0 20`。
 - 模块：连接测试读取 `MODULE LIST`，版本串显示为 `Redis 7.4 · JSON/RediSearch/TimeSeries/Bloom`。
-- 浏览：`SCAN` 采样，不执行 `KEYS *`；双击键行打开键详情（TYPE / TTL / 规模 / 编码 + 按类型展开的取值，覆盖 string/hash/list/set/zset/stream/JSON/TimeSeries）。
+- 浏览：`SCAN` 采样，不执行 `KEYS *`；双击键行打开键详情（TYPE / TTL / 规模 / 编码 + 按类型展开的取值，覆盖 string/hash/list/set/zset/stream/JSON/TimeSeries），详情窗口内可删除该键（UNLINK，手输键名确认，只返回真实删除数）；「搜索索引」节点右键可删除索引（FT.DROPINDEX 只移除索引定义，文档保留）。
 - 查询：单条命令；支持 String / Hash / List / Set / ZSet / Stream 的常用读取命令。
 - 结果：`SCAN` 返回 key 列表；`HGETALL` 返回 field/value；`ZRANGE WITHSCORES` 返回 member/score；`INFO` 解析为 field/value；`FT.SEARCH` 兼容 RESP2 与 RESP3 map 两种回复，统一输出 key/score/字段列。
 - 安全：只读连接拦截写命令；`FLUSHALL` / `FLUSHDB` / `CONFIG SET` / `EVAL` / `FCALL` / `SHUTDOWN` / `DEBUG` / `MODULE` 等判为 destructive；未知命令按 write 处理。
@@ -170,7 +170,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 ## 7. UI 行为
 
 - 连接表单由 `EngineMeta` 驱动默认端口、默认用户名、默认数据库与限制；MongoDB/Redis/Neo4j 显示“数据库 / DB 索引”字段。
-- 对象树按查询语言渲染：SQL 连接（含 TDengine）显示表/视图与完整右键菜单；MongoDB 显示“集合”；Redis 显示“键空间”（安装 RediSearch 时追加“搜索索引”）；Cassandra/ScyllaDB 显示“表”；Neo4j/Memgraph/FalkorDB 显示“标签”、ArangoDB 显示“集合”；Qdrant/Milvus/Weaviate 显示“向量集合”；Elasticsearch/OpenSearch 显示“索引”。非关系型保留打开、查询、导出结果、AI 解释、刷新、复制；支持对象生命周期的引擎（Qdrant、Elasticsearch/OpenSearch、Weaviate、MongoDB、ArangoDB）在集合文件夹上多一项「新建集合…／新建索引…」，在集合节点上多一项「删除集合…／删除索引…」。
+- 对象树按查询语言渲染：SQL 连接（含 TDengine）显示表/视图与完整右键菜单；MongoDB 显示“集合”；Redis 显示“键空间”（安装 RediSearch 时追加“搜索索引”）；Cassandra/ScyllaDB 显示“表”；Neo4j/Memgraph/FalkorDB 显示“标签”、ArangoDB 显示“集合”；Qdrant/Milvus/Weaviate 显示“向量集合”；Elasticsearch/OpenSearch 显示“索引”。非关系型保留打开、查询、导出结果、AI 解释、刷新、复制；支持对象生命周期的引擎（Qdrant、Elasticsearch/OpenSearch、Weaviate、MongoDB、ArangoDB）在集合文件夹上多一项「新建集合…／新建索引…」，在集合节点上多一项「删除集合…／删除索引…」；Redis 的「搜索索引」节点同样提供「删除索引…」。
 - 查询窗口按语言切换：SQL 连接保留美化、EXPLAIN、查询构建器、图表、SQL 文件；MongoDB/Redis/Neo4j/向量库/搜索索引显示 JSON/命令/Cypher 提示并隐藏 SQL 专属按钮。
 - 图查询结果为 `resultKind=graph` 时，结果区提供“表格 / 图”切换；图视图为基础环形布局，悬停节点可查看属性。
 - PostgreSQL / Qdrant / Milvus 的查询工具栏提供“向量检索”面板：选择表/集合与向量字段，输入文本（走 Embedding）或向量 JSON、TopK，结果直接进入 DataGrid。
@@ -213,7 +213,7 @@ AIDB_TEST_MONGO_PORT=27018 AIDB_TEST_REDIS_PORT=6380 AIDB_TEST_NEO4J_PORT=7688 A
 NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSWORD=SYSDBA npm --workspace @aidb/gateway run test
 ```
 
-覆盖：驱动工厂协议别名路由、MongoDB、Redis（含 Redis Stack 模块与 RediSearch）、Neo4j/Memgraph/FalkorDB、ArangoDB、Cassandra/ScyllaDB、达梦、DuckDB、TDengine、InfluxDB、TimescaleDB 超表标注（均含本地 stub 或联机协议测试）、Qdrant/Milvus/Weaviate、pgvector + Embedding、Elasticsearch/OpenSearch，HTTP `/schema`、`/query`、`/vector/search` 管线、对象创建与删除（Qdrant / Elasticsearch / OpenSearch / Weaviate / MongoDB / ArangoDB）、非 SQL 连接的功能禁用。
+覆盖：驱动工厂协议别名路由、MongoDB、Redis（含 Redis Stack 模块与 RediSearch）、Neo4j/Memgraph/FalkorDB、ArangoDB、Cassandra/ScyllaDB、达梦、DuckDB、TDengine、InfluxDB、TimescaleDB 超表标注（均含本地 stub 或联机协议测试）、Qdrant/Milvus/Weaviate、pgvector + Embedding、Elasticsearch/OpenSearch，HTTP `/schema`、`/query`、`/vector/search` 管线、对象创建与删除（Qdrant / Elasticsearch / OpenSearch / Weaviate / MongoDB / ArangoDB）、Redis 键与 RediSearch 索引删除、非 SQL 连接的功能禁用。
 
 ## 9. 已知限制
 

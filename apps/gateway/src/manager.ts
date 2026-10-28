@@ -357,6 +357,65 @@ export class ConnectionManager {
     return driver.describeKey(key, opts.database ?? conn.database);
   }
 
+  /** 删除 Redis 键（UNLINK）；只读连接拒绝，返回真实删除数量。 */
+  async deleteKeys(connectionId: string, keys: string[], opts: QueryOptions): Promise<{ deleted: number }> {
+    const conn = this.store.getConnection(connectionId);
+    if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+    const meta = engineMeta(conn.engine);
+    if (conn.readonly) {
+      throw new DbError('只读连接不允许删除键', { code: 'READONLY', status: 403, hint: '在连接设置中关闭只读后才可删除' });
+    }
+    if (meta.model !== 'keyvalue') {
+      throw new DbError(`${meta.label} 没有键删除入口`, { code: 'UNSUPPORTED_ENGINE' });
+    }
+    const names = keys.map((key) => String(key ?? '').trim()).filter(Boolean);
+    if (!names.length) throw new DbError('至少要指定一个键', { code: 'REDIS_KEY' });
+    const driver = await this.driverFor(connectionId);
+    if (!supportsKeyDetail(driver)) {
+      throw new DbError(`${meta.label} 驱动不支持键删除`, { code: 'UNSUPPORTED_ENGINE' });
+    }
+    const started = Date.now();
+    const result = await driver.deleteKeys(names, opts.database ?? conn.database);
+    this.invalidate(connectionId);
+    this.store.addHistory({
+      connectionId,
+      database: opts.database ?? conn.database,
+      sql: JSON.stringify({ unlink: names.slice(0, 5), count: names.length, deleted: result.deleted }),
+      status: 'ok',
+      durationMs: Date.now() - started,
+    });
+    return result;
+  }
+
+  /** 删除 RediSearch 索引（FT.DROPINDEX），不触碰索引里的文档。 */
+  async dropIndex(connectionId: string, name: string, opts: QueryOptions): Promise<{ name: string; dropped: boolean }> {
+    const conn = this.store.getConnection(connectionId);
+    if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+    const meta = engineMeta(conn.engine);
+    if (conn.readonly) {
+      throw new DbError('只读连接不允许删除索引', { code: 'READONLY', status: 403, hint: '在连接设置中关闭只读后才可删除' });
+    }
+    if (meta.model !== 'keyvalue') {
+      throw new DbError(`${meta.label} 没有搜索索引`, { code: 'UNSUPPORTED_ENGINE' });
+    }
+    if (!name.trim()) throw new DbError('索引名不能为空', { code: 'REDIS_INDEX' });
+    const driver = await this.driverFor(connectionId);
+    if (!supportsKeyDetail(driver)) {
+      throw new DbError(`${meta.label} 驱动不支持删除索引`, { code: 'UNSUPPORTED_ENGINE' });
+    }
+    const started = Date.now();
+    const result = await driver.dropIndex(name.trim(), opts.database ?? conn.database);
+    this.invalidate(connectionId);
+    this.store.addHistory({
+      connectionId,
+      database: opts.database ?? conn.database,
+      sql: JSON.stringify({ dropIndex: result.name }),
+      status: 'ok',
+      durationMs: Date.now() - started,
+    });
+    return result;
+  }
+
   /** 向量/搜索引擎的对象创建（非 SQL DDL）：Qdrant 集合、ES/OpenSearch 索引、Weaviate class。 */
   async createObject(
     connectionId: string,

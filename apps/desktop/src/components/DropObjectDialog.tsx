@@ -21,7 +21,8 @@ export function DropObjectDialog({
   const notify = useApp((s) => s.notify);
   const loadSchema = useApp((s) => s.loadSchema);
   const meta = engineMeta(connection.engine);
-  const label = meta.model === 'search' ? '索引' : meta.model === 'vector' ? '集合 / class' : '集合';
+  const isIndex = meta.model === 'keyvalue';
+  const label = isIndex ? '搜索索引' : meta.model === 'search' ? '索引' : meta.model === 'vector' ? '集合 / class' : '集合';
   const [typed, setTyped] = useState('');
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +35,8 @@ export function DropObjectDialog({
     }
     setRunning(true);
     try {
-      await api.dropObject({ connectionId: connection.id, database, name });
+      if (isIndex) await api.dropRedisIndex({ connectionId: connection.id, database, name });
+      else await api.dropObject({ connectionId: connection.id, database, name });
       notify('success', `${label}已删除`, name);
       onClose();
       void loadSchema(connection.id, true, database).catch(() => undefined);
@@ -60,7 +62,11 @@ export function DropObjectDialog({
       }
     >
       <div style={{ fontSize: 12, marginBottom: 8 }}>
-        <b>{name}</b> 内的全部文档会被销毁，且不可恢复。
+        {isIndex ? (
+          <>移除 <b>{name}</b> 的索引定义（FT.DROPINDEX），已写入的文档保留。</>
+        ) : (
+          <><b>{name}</b> 内的全部文档会被销毁，且不可恢复。</>
+        )}
       </div>
       <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>
         输入对象名 <code>{name}</code> 以确认

@@ -96,6 +96,8 @@ export function supportsObjectCreate(driver: Driver): driver is ObjectCreateDriv
 /** 键值引擎的键详情（类型感知查看器）。 */
 export interface RedisKeyDriver extends Driver {
   describeKey(key: string, database?: string, limit?: number): Promise<RedisKeyDetail>;
+  deleteKeys(keys: string[], database?: string): Promise<{ deleted: number }>;
+  dropIndex(name: string, database?: string): Promise<{ name: string; dropped: boolean }>;
 }
 
 export function supportsKeyDetail(driver: Driver): driver is RedisKeyDriver {

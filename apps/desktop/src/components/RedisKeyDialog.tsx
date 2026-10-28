@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { RedisKeyDetail } from '@aidb/core';
 import { api } from '../lib/api';
+import { useApp } from '../store';
 import { DataGrid } from './DataGrid';
 import { Modal, Spinner } from './ui';
 
@@ -24,6 +25,27 @@ export function RedisKeyDialog({
   const [detail, setDetail] = useState<RedisKeyDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [typed, setTyped] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const connections = useApp((s) => s.connections);
+  const notify = useApp((s) => s.notify);
+  const conn = connections.find((item) => item.id === connectionId);
+
+  const remove = async () => {
+    setDeleting(true);
+    setError(null);
+    try {
+      const { result } = await api.deleteRedisKeys({ connectionId, database, keys: [keyName] });
+      notify('success', result.deleted ? '键已删除' : '键已不存在', keyName);
+      onClose();
+    } catch (err: any) {
+      setError(err?.message ?? '删除失败');
+      setConfirming(false);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -50,10 +72,39 @@ export function RedisKeyDialog({
       wide
       footer={
         <>
-          <button className="btn" onClick={() => void load()} disabled={loading} data-testid="redis-key-refresh">
+          <button className="btn" onClick={() => void load()} disabled={loading || deleting} data-testid="redis-key-refresh">
             刷新
           </button>
-          <button className="btn primary" onClick={onClose}>关闭</button>
+          {conn && !conn.readonly ? (
+            confirming ? (
+              <>
+                <input
+                  className="input"
+                  style={{ width: 170 }}
+                  value={typed}
+                  placeholder={`输入 ${keyName} 确认`}
+                  onChange={(event) => setTyped(event.target.value)}
+                  data-testid="redis-key-confirm"
+                />
+                <button
+                  className="btn danger"
+                  onClick={() => void remove()}
+                  disabled={deleting || typed.trim() !== keyName}
+                  data-testid="redis-key-delete-submit"
+                >
+                  {deleting ? <Spinner /> : null} 确认删除
+                </button>
+                <button className="btn" onClick={() => { setConfirming(false); setTyped(''); }} disabled={deleting}>
+                  取消
+                </button>
+              </>
+            ) : (
+              <button className="btn danger" onClick={() => setConfirming(true)} disabled={deleting} data-testid="redis-key-delete">
+                删除键
+              </button>
+            )
+          ) : null}
+          <button className="btn primary" onClick={onClose} disabled={deleting}>关闭</button>
         </>
       }
     >

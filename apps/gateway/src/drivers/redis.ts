@@ -538,6 +538,26 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
     };
   }
 
+  /** 删除键走 UNLINK：值很大时由后台线程回收，不阻塞主线程。 */
+  async deleteKeys(keys: string[], database?: string): Promise<{ deleted: number }> {
+    const names = keys.map((key) => key.trim()).filter(Boolean);
+    if (!names.length) throw new DbError('至少要指定一个键', { code: 'REDIS_KEY' });
+    const client = await this.ready(database);
+    return { deleted: Number(await client.unlink(...names)) };
+  }
+
+  async dropIndex(name: string, database?: string): Promise<{ name: string; dropped: boolean }> {
+    const target = name.trim();
+    if (!target) throw new DbError('索引名不能为空', { code: 'REDIS_INDEX' });
+    const client = await this.ready(database);
+    try {
+      await client.call('FT.DROPINDEX', target);
+    } catch (err: any) {
+      throw new DbError(err?.message ?? `删除索引失败：${target}`, { code: 'REDIS_DROP_INDEX' });
+    }
+    return { name: target, dropped: true };
+  }
+
   async executeQuery(query: StructuredQuery, opts: RunOptions = {}): Promise<QueryResult> {
     if (query.language !== 'redis') throw new DbError('Redis 驱动只接受命令查询', { code: 'REDIS_ONLY' });
     const command = query.command.trim().toUpperCase();

@@ -68,3 +68,37 @@ test('Redis key detail renders every supported type', { skip: !PORT }, async () 
     await driver.close();
   }
 });
+
+test('Redis 键删除走 UNLINK，RediSearch 索引删除保留文档', { skip: !PORT }, async () => {
+  const seed = new Redis({ host: '127.0.0.1', port: PORT!, lazyConnect: true });
+  await seed.connect();
+  await seed.del('aidb_k_del1', 'aidb_k_del2', 'aidb:del:h1');
+  await seed.set('aidb_k_del1', 'a');
+  await seed.set('aidb_k_del2', 'b');
+  await seed.hset('aidb:del:h1', 'name', 'Ada');
+  await seed.call('FT.CREATE', 'aidb_idx_del', 'ON', 'HASH', 'PREFIX', '1', 'aidb:del:', 'SCHEMA', 'name', 'TEXT').catch(() => undefined);
+  await seed.quit();
+
+  const driver = new RedisDriver({ host: '127.0.0.1', port: PORT!, database: '0' });
+  const probe = new Redis({ host: '127.0.0.1', port: PORT!, lazyConnect: true });
+  await probe.connect();
+  try {
+    await assert.rejects(() => driver.deleteKeys(['  ']), /至少要指定一个键/);
+    const deleted = await driver.deleteKeys(['aidb_k_del1', 'aidb_k_del2', 'aidb_k_never']);
+    assert.equal(deleted.deleted, 2, 'UNLINK 只统计真实存在的键');
+    assert.equal(await probe.exists('aidb_k_del1'), 0);
+
+    const indexes = (await probe.call('FT._LIST') as unknown[]).map(String);
+    assert.ok(indexes.includes('aidb_idx_del'), '测试前提：索引存在');
+    const dropped = await driver.dropIndex('aidb_idx_del', '0');
+    assert.deepEqual(dropped, { name: 'aidb_idx_del', dropped: true });
+    assert.ok(!(await probe.call('FT._LIST') as unknown[]).map(String).includes('aidb_idx_del'), '索引已从 FT._LIST 消失');
+    assert.equal(await probe.hget('aidb:del:h1', 'name'), 'Ada', 'FT.DROPINDEX 不删文档');
+
+    await assert.rejects(() => driver.dropIndex('  ', '0'), /索引名不能为空/);
+    await assert.rejects(() => driver.dropIndex('aidb_idx_missing', '0'), /unknown index|not found|索引/i);
+  } finally {
+    await probe.quit();
+    await driver.close();
+  }
+});
