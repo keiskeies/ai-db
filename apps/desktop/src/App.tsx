@@ -1,9 +1,14 @@
 import { useEffect, type ReactNode } from 'react';
+import type { ContextMenuItem } from './store';
 import {
   Archive,
   BarChart3,
   Bot,
   Boxes,
+  Clipboard,
+  Copy,
+  PanelLeft,
+  Scissors,
   Braces,
   Cable,
   Clock,
@@ -19,6 +24,8 @@ import {
 } from 'lucide-react';
 import { useApp } from './store';
 import { CommandPalette } from './components/CommandPalette';
+import { ContextMenuHost } from './components/ContextMenu';
+import { PaneSplitter } from './components/PaneSplitter';
 import { ConnectionModal } from './components/ConnectionModal';
 import { MemoryDrawer } from './components/MemoryDrawer';
 import { SettingsModal } from './components/SettingsModal';
@@ -48,6 +55,62 @@ function RibbonButton({
   );
 }
 
+async function pasteInto(editable: HTMLElement): Promise<void> {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (!text) return;
+    editable.focus();
+    if (editable instanceof HTMLInputElement || editable instanceof HTMLTextAreaElement) {
+      const start = editable.selectionStart ?? editable.value.length;
+      const end = editable.selectionEnd ?? start;
+      const proto = editable instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, 'value')!.set!;
+      setter.call(editable, editable.value.slice(0, start) + text + editable.value.slice(end));
+      editable.dispatchEvent(new Event('input', { bubbles: true }));
+      editable.setSelectionRange(start + text.length, start + text.length);
+      return;
+    }
+    document.execCommand('insertText', false, text);
+  } catch {
+    /* 剪贴板拒绝读取时保持原样 */
+  }
+}
+
+/** 没有专门菜单的区域走这套默认项，保证任何地方右键都有反应 */
+function buildDefaultMenu(target: HTMLElement): ContextMenuItem[] {
+  const state = useApp.getState();
+  const items: ContextMenuItem[] = [];
+  const selection = window.getSelection()?.toString().trim() ?? '';
+  const editable = target.closest('input, textarea, [contenteditable="true"]') as HTMLElement | null;
+
+  if (selection) items.push({ label: '复制所选', icon: <Copy size={12} />, onClick: () => void navigator.clipboard.writeText(selection).catch(() => undefined) });
+  if (editable) {
+    if (items.length) items.push({ sep: true });
+    items.push({ label: '剪切', icon: <Scissors size={12} />, onClick: () => document.execCommand('cut') });
+    items.push({ label: '复制', icon: <Copy size={12} />, onClick: () => document.execCommand('copy') });
+    items.push({ label: '粘贴', icon: <Clipboard size={12} />, onClick: () => void pasteInto(editable) });
+    items.push({
+      label: '全选',
+      onClick: () => {
+        if (editable instanceof HTMLInputElement || editable instanceof HTMLTextAreaElement) {
+          editable.select();
+          return;
+        }
+        const range = document.createRange();
+        range.selectNodeContents(editable);
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+      },
+    });
+  }
+  items.push({ sep: true });
+  items.push({ label: '刷新结构', onClick: () => { const id = state.activeConnectionId; if (id) void state.loadSchema(id, true); } });
+  items.push({ label: '新建查询', onClick: () => state.openQuery() });
+  items.push({ label: state.agentOpen ? '隐藏 AI 助手' : '显示 AI 助手', onClick: () => state.setAgentOpen(!state.agentOpen) });
+  return items;
+}
+
 export default function App() {
   const boot = useApp((s) => s.boot);
   const booted = useApp((s) => s.booted);
@@ -60,6 +123,11 @@ export default function App() {
   const tabs = useApp((s) => s.tabs);
   const agentOpen = useApp((s) => s.agentOpen);
   const setAgentOpen = useApp((s) => s.setAgentOpen);
+  const sidebarOpen = useApp((s) => s.sidebarOpen);
+  const toggleSidebar = useApp((s) => s.toggleSidebar);
+  const sidebarWidth = useApp((s) => s.sidebarWidth);
+  const setSidebarWidth = useApp((s) => s.setSidebarWidth);
+  const agentWidth = useApp((s) => s.agentWidth);
   const setSettingsOpen = useApp((s) => s.setSettingsOpen);
   const setPaletteOpen = useApp((s) => s.setPaletteOpen);
   const openTools = useApp((s) => s.openTools);
@@ -80,6 +148,18 @@ export default function App() {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light';
     document.documentElement.dataset.density = settings.density;
   }, [settings.theme, settings.density]);
+
+  useEffect(() => {
+    // 接管全局右键：组件自己开菜单时会 preventDefault，这里只兜底
+    const onContextMenu = (event: MouseEvent) => {
+      if (event.defaultPrevented) return;
+      event.preventDefault();
+      const target = event.target as HTMLElement;
+      useApp.getState().openContextMenu(event.clientX, event.clientY, buildDefaultMenu(target));
+    };
+    window.addEventListener('contextmenu', onContextMenu);
+    return () => window.removeEventListener('contextmenu', onContextMenu);
+  }, []);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -103,6 +183,9 @@ export default function App() {
         event.preventDefault();
         setAgentOpen(true);
         setTimeout(() => (document.querySelector('[data-testid="agent-input"]') as HTMLTextAreaElement | null)?.focus(), 40);
+      } else if (key === 'b') {
+        event.preventDefault();
+        useApp.getState().toggleSidebar();
       } else if (key === 't') {
         event.preventDefault();
         openQuery();
@@ -165,6 +248,15 @@ export default function App() {
           <span>搜索或执行命令…</span>
           <span className="kbd">⌘K</span>
         </button>
+        <button
+          data-testid="toggle-sidebar"
+          className="icon-btn"
+          title={sidebarOpen ? '隐藏连接栏 (⌘B)' : '显示连接栏 (⌘B)'}
+          onClick={toggleSidebar}
+          style={sidebarOpen ? undefined : { color: 'var(--text-muted)' }}
+        >
+          <PanelLeft size={15} />
+        </button>
         <button data-testid="agent-toggle" className="icon-btn" title={t('agent')} onClick={() => setAgentOpen(!agentOpen)} style={agentOpen ? { color: 'var(--agent)', background: 'var(--agent-soft)' } : undefined}>
           <Bot size={15} />
         </button>
@@ -208,8 +300,21 @@ export default function App() {
         <RibbonButton icon={<BarChart3 size={20} />} label="图表" onClick={() => openQuery()} />
       </div>
 
-      <div className="shell">
-        <Sidebar />
+      <div className="shell" style={{ ['--sidebar-w' as string]: `${sidebarWidth}px`, ['--agent-w' as string]: `${agentWidth}px` }}>
+        {sidebarOpen ? (
+          <>
+            <Sidebar />
+            <PaneSplitter
+              side="left"
+              width={sidebarWidth}
+              min={200}
+              max={460}
+              onChange={(width) => setSidebarWidth(width)}
+              onCommit={(width) => setSidebarWidth(width, true)}
+              testId="splitter-sidebar"
+            />
+          </>
+        ) : null}
         <Workspace />
       </div>
 
@@ -235,6 +340,7 @@ export default function App() {
       <ToolsHub />
       <ConnectionModal />
       <CommandPalette />
+      <ContextMenuHost />
       <Toasts />
     </div>
   );

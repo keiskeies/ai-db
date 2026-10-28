@@ -30,7 +30,7 @@ import {
 } from 'lucide-react';
 import type { ConnectionConfig, DatabaseSchema, TableInfo } from '@aidb/core';
 import { api } from '../lib/api';
-import { useApp } from '../store';
+import { useApp, type ContextMenuItem } from '../store';
 import { TableOpsDialog, type TableDialogKind } from './TableOpsDialog';
 import { DatabaseOpsDialog, type DatabaseDialogKind } from './DatabaseOpsDialog';
 import { TableInfoDialog } from './TableInfoDialog';
@@ -49,12 +49,6 @@ const ENV_LABEL: Record<string, string> = { dev: 'DEV', staging: 'STG', prod: 'P
 
 /** 每级缩进 12px；叶子行没有展开箭头，需多让出一个箭头位才能与同级文件夹的图标/文字对齐。 */
 const INDENT = { database: 22, folder: 34, folderLeaf: 55, tableLeaf: 67 };
-
-interface MenuState {
-  x: number;
-  y: number;
-  items: Array<{ label: string; icon: React.ReactNode; onClick: () => void; danger?: boolean; sep?: boolean }>;
-}
 
 export function quoteName(name: string, engine: string): string {
   if (engine === 'mysql') return `\`${name.replace(/`/g, '``')}\``;
@@ -85,25 +79,13 @@ export function Sidebar() {
   const refreshAll = useApp((s) => s.refreshAllSchemas);
   const openTools = useApp((s) => s.openTools);
   const setSettingsOpen = useApp((s) => s.setSettingsOpen);
+  const openContextMenu = useApp((s) => s.openContextMenu);
 
   const [query, setQuery] = useState('');
-  const [menu, setMenu] = useState<MenuState | null>(null);
   const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>({});
   const [tableDialog, setTableDialog] = useState<{ kind: TableDialogKind; conn: ConnectionConfig; schema: DatabaseSchema; table: TableInfo; withData?: boolean } | null>(null);
   const [dbDialog, setDbDialog] = useState<{ kind: DatabaseDialogKind; conn: ConnectionConfig; database: string } | null>(null);
   const [infoTable, setInfoTable] = useState<{ table: TableInfo; database?: string } | null>(null);
-
-  useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setMenu(null);
-    window.addEventListener('click', close);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('click', close);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [menu]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -124,10 +106,10 @@ export function Sidebar() {
     return [...map.entries()];
   }, [filtered]);
 
-  const openMenu = (e: React.MouseEvent, items: MenuState['items']) => {
+  const openMenu = (e: React.MouseEvent, items: ContextMenuItem[]) => {
     e.preventDefault();
     e.stopPropagation();
-    setMenu({ x: Math.min(e.clientX, window.innerWidth - 220), y: Math.min(e.clientY, window.innerHeight - 260), items });
+    openContextMenu(e.clientX, e.clientY, items);
   };
 
   const testConnection = async (conn: ConnectionConfig) => {
@@ -178,7 +160,7 @@ export function Sidebar() {
         style={{ paddingLeft: padding }}
         onClick={() => openData(conn.id, table.name, schema.name)}
         onContextMenu={(e) => {
-          const items: MenuState['items'] =
+          const items: ContextMenuItem[] =
             table.type === 'view'
               ? [
                   { label: t('data'), icon: <Table2 size={13} />, onClick: () => openData(conn.id, table.name, schema.name) },
@@ -520,27 +502,6 @@ export function Sidebar() {
           <RefreshCw size={14} />
         </button>
       </div>
-      {menu ? (
-        <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
-          {menu.items.map((item, index) =>
-            item.sep ? (
-              <div key={index} className="context-sep" />
-            ) : (
-              <button
-                key={index}
-                className={`context-item ${item.danger ? 'danger' : ''}`}
-                onClick={() => {
-                  setMenu(null);
-                  item.onClick();
-                }}
-              >
-                {item.icon}
-                {item.label}
-              </button>
-            ),
-          )}
-        </div>
-      ) : null}
       {tableDialog ? (
         <TableOpsDialog
           kind={tableDialog.kind}

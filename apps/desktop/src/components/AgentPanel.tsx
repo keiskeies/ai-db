@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowUpRight,
   AtSign,
@@ -109,10 +109,12 @@ function MiniTable({ data, max = 8 }: { data: { columns?: Array<{ name: string }
   );
 }
 
-function ResultView({ result, onOpenEditor }: { result: ToolResult; onOpenEditor?: (sql: string) => void }) {
+function ResultView({ result, onOpenEditor, showChart = true }: { result: ToolResult; onOpenEditor?: (sql: string) => void; showChart?: boolean }) {
   const data = result.data as Record<string, any> | undefined;
   const sql = typeof data?.sql === 'string' ? data.sql : undefined;
-  const chart = data?.chart as ChartSpec | undefined;
+  const chartData = data?.chart as ChartSpec | undefined;
+  // 图表已经提到结论区时，执行步骤里不再重复渲染
+  const chart = showChart ? chartData : undefined;
   const connectionId = useApp((s) => s.activeConnectionId);
   const notify = useApp((s) => s.notify);
   const detail = data?.columns && Array.isArray(data?.rows) ? data : undefined;
@@ -281,6 +283,7 @@ function ToolCard({
   summary,
   live,
   onOpenEditor,
+  chartMoved,
 }: {
   tool: string;
   args: unknown;
@@ -290,9 +293,10 @@ function ToolCard({
   summary?: string;
   live?: boolean;
   onOpenEditor?: (sql: string) => void;
+  chartMoved?: boolean;
 }) {
   const artifact = result?.data as Record<string, any> | undefined;
-  const hasArtifact = Boolean(artifact?.chart || (Array.isArray(artifact?.findings) && artifact.findings.length));
+  const hasArtifact = Boolean((artifact?.chart && !chartMoved) || (Array.isArray(artifact?.findings) && artifact.findings.length));
   const [open, setOpen] = useState(status === 'error' || status === 'awaiting' || hasArtifact);
   useEffect(() => {
     if (hasArtifact) setOpen(true);
@@ -316,7 +320,7 @@ function ToolCard({
           {result ? (
             <>
               <div className="tool-section-label">结果</div>
-              <ResultView result={result} onOpenEditor={onOpenEditor} />
+              <ResultView result={result} onOpenEditor={onOpenEditor} showChart={!chartMoved} />
             </>
           ) : (
             <div className="tool-section-label">{live ? '执行中…' : '无结果'}</div>
@@ -422,6 +426,7 @@ function AssistantBlocks({ blocks, messageId }: { blocks: AgentMessageBlock[]; m
       {blocks.map((block, index) => {
         if (block.type === 'tool_call') {
           const result = block.callId ? results.get(block.callId) : undefined;
+          const chartMoved = Boolean((result?.data as Record<string, any> | undefined)?.chart);
           return (
             <ToolCard
               key={`${messageId}_${block.callId ?? index}`}
@@ -430,6 +435,7 @@ function AssistantBlocks({ blocks, messageId }: { blocks: AgentMessageBlock[]; m
               risk={block.risk}
               status={result ? (result.ok ? 'ok' : 'error') : 'error'}
               result={result}
+              chartMoved={chartMoved}
               onOpenEditor={(sql) => openQuery(undefined, sql)}
             />
           );
@@ -438,6 +444,35 @@ function AssistantBlocks({ blocks, messageId }: { blocks: AgentMessageBlock[]; m
         return null;
       })}
     </>
+  );
+}
+
+/** 图表类工具的结果会被提到结论区，这里按调用顺序收集。 */
+function chartBlocks(blocks: AgentMessageBlock[]): Array<{ key: string; result: ToolResult }> {
+  const out: Array<{ key: string; result: ToolResult }> = [];
+  for (const block of blocks) {
+    if (block.type !== 'tool_result' || !block.callId) continue;
+    const result = block.result as ToolResult;
+    if ((result?.data as Record<string, any> | undefined)?.chart) out.push({ key: block.callId, result });
+  }
+  return out;
+}
+
+/**
+ * 执行过程单独折叠：步骤再多也不挤占结论，展开才看细节。
+ * 运行中强制展开，结束后默认收起。
+ */
+function ExecutionSection({ count, running, testId, children }: { count: number; running?: boolean; testId?: string; children: ReactNode }) {
+  return (
+    <details className={`execution${running ? ' running' : ''}`} data-testid={testId} open={running ? true : undefined}>
+      <summary>
+        <ChevronRight size={11} className="execution-chevron" />
+        执行过程
+        {count ? <span className="muted">· {count} 步</span> : null}
+        {running ? <span className="muted">· 执行中…</span> : null}
+      </summary>
+      <div className="execution-body">{children}</div>
+    </details>
   );
 }
 
@@ -699,10 +734,21 @@ export function AgentPanel() {
     }
     const toolCount = message.blocks.filter((b) => b.type === 'tool_call').length;
     const detailOpen = execOpen.has(message.id);
+    const artifacts = chartBlocks(message.blocks);
+    const hasExecution = toolCount > 0 || message.blocks.some((b) => b.type === 'thinking' || b.type === 'plan');
     return (
       <AssistantShell key={message.id}>
+        {hasExecution ? (
+          <ExecutionSection count={toolCount} testId="execution-section">
+            <AssistantBlocks blocks={message.blocks} messageId={message.id} />
+          </ExecutionSection>
+        ) : null}
         {message.content ? <Markdown>{message.content}</Markdown> : null}
-        <AssistantBlocks blocks={message.blocks} messageId={message.id} />
+        {artifacts.map((artifact) => (
+          <div className="agent-chart" data-testid="agent-chart" key={artifact.key}>
+            <ResultView result={artifact.result} onOpenEditor={(sql) => openQuery(undefined, sql)} />
+          </div>
+        ))}
         {toolCount ? (
           <div className="turn-end">
             {toolCount} 次工具调用
@@ -833,18 +879,30 @@ export function AgentPanel() {
           <>
             <UserMessage text={live.userText} images={live.userImages} />
             <AssistantShell>
-              {live.thinking ? (
-                <details className="thinking" open={!live.text && !live.tools.length}>
-                  <summary><Brain size={11} /> {t('thinking')}</summary>
-                  <div className="thinking-body">{live.thinking}</div>
-                </details>
-              ) : null}
-              {live.memories.length ? (
-                <div className="row gap-4" style={{ flexWrap: 'wrap' }}>
-                  {live.memories.map((m) => (
-                    <span key={m.id} className="memory-pill"><Brain size={9} /> {m.title}</span>
+              {live.thinking || live.tools.length || live.plan.length ? (
+                <ExecutionSection count={live.tools.length} running={busy} testId="execution-section-live">
+                  {live.thinking ? (
+                    <details className="thinking" open={!live.text && !live.tools.length}>
+                      <summary><Brain size={11} /> {t('thinking')}</summary>
+                      <div className="thinking-body">{live.thinking}</div>
+                    </details>
+                  ) : null}
+                  {live.tools.map((tool) => (
+                    <ToolCard
+                      key={tool.callId}
+                      tool={tool.tool}
+                      args={tool.args}
+                      risk={tool.risk}
+                      status={tool.status}
+                      result={tool.result}
+                      summary={tool.summary}
+                      live
+                      chartMoved={Boolean((tool.result?.data as Record<string, any> | undefined)?.chart)}
+                      onOpenEditor={(sql) => openQuery(undefined, sql)}
+                    />
                   ))}
-                </div>
+                  <PlanCard items={live.plan} />
+                </ExecutionSection>
               ) : null}
               {live.text ? (
                 <div className="prose">
@@ -857,21 +915,26 @@ export function AgentPanel() {
                   {live.status === 'awaiting' ? t('waitingApproval') : '正在处理…'}
                 </div>
               ) : null}
-              {live.tools.map((tool) => (
-                <ToolCard
-                  key={tool.callId}
-                  tool={tool.tool}
-                  args={tool.args}
-                  risk={tool.risk}
-                  status={tool.status}
-                  result={tool.result}
-                  summary={tool.summary}
-                  live
-                  onOpenEditor={(sql) => openQuery(undefined, sql)}
-                />
-              ))}
-              <PlanCard items={live.plan} />
+              {live.tools
+                .filter((tool) => (tool.result?.data as Record<string, any> | undefined)?.chart)
+                .map((tool) => (
+                  <div className="agent-chart" data-testid="agent-chart" key={`art_${tool.callId}`}>
+                    <ResultView result={tool.result!} onOpenEditor={(sql) => openQuery(undefined, sql)} />
+                  </div>
+                ))}
               {live.error ? <div className="risk-banner">{live.error}</div> : null}
+              {live.memories.length ? (
+                <details className="memory-refs" data-testid="live-memories">
+                  <summary>
+                    <Brain size={10} /> 参考 {live.memories.length} 条记忆
+                  </summary>
+                  <div className="memory-refs-list">
+                    {live.memories.map((m) => (
+                      <span key={m.id} className="memory-pill"><Brain size={9} /> {m.title}</span>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
               {!busy ? (
                 <div className="turn-end">
                   {live.status === 'aborted' ? t('aborted') : live.status === 'error' ? t('failed') : t('completed')} · {live.tools.length} 次工具 · {formatDuration(Date.now() - live.startedAt)}

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { ReactNode } from 'react';
 import type {
   AgentEvent,
   AgentMessage,
@@ -71,6 +72,34 @@ export interface ConnectionEditorState {
   connection?: ConnectionConfig;
 }
 
+export type ContextMenuItem =
+  | { sep: true; label?: string; icon?: ReactNode; danger?: boolean; disabled?: boolean; onClick?: () => void }
+  | { sep?: false; label: string; icon?: ReactNode; danger?: boolean; disabled?: boolean; onClick?: () => void };
+
+export interface ContextMenuState {
+  x: number;
+  y: number;
+  items: ContextMenuItem[];
+}
+
+const UI_KEY = 'aidb.ui';
+
+function readUiPrefs(): { sidebarOpen?: boolean; sidebarWidth?: number; agentWidth?: number } {
+  try {
+    return JSON.parse(localStorage.getItem(UI_KEY) ?? '{}');
+  } catch {
+    return {};
+  }
+}
+
+function saveUiPrefs(patch: { sidebarOpen?: boolean; sidebarWidth?: number; agentWidth?: number }): void {
+  try {
+    localStorage.setItem(UI_KEY, JSON.stringify({ ...readUiPrefs(), ...patch }));
+  } catch {
+    /* 隐私模式写不进去也不影响使用 */
+  }
+}
+
 interface AppStore {
   booted: boolean;
   bootError?: string;
@@ -88,6 +117,10 @@ interface AppStore {
   activeTabId: string;
   agentOpen: boolean;
   agentExpanded: boolean;
+  sidebarOpen: boolean;
+  sidebarWidth: number;
+  agentWidth: number;
+  contextMenu?: ContextMenuState;
   agentSessionId?: string;
   agentSessionMeta?: AgentSessionMeta;
   agentMessages: AgentMessage[];
@@ -136,6 +169,8 @@ interface AppStore {
   openDesign: (connectionId?: string, table?: string, database?: string) => void;
   openRelations: (connectionId?: string, database?: string) => void;
   closeTab: (id: string) => void;
+  closeOtherTabs: (id: string) => void;
+  closeAllTabs: () => void;
   setActiveTab: (id: string) => void;
   updateTab: (id: string, patch: Partial<Tab>) => void;
 
@@ -145,6 +180,11 @@ interface AppStore {
   deleteConnection: (id: string) => Promise<void>;
 
   setAgentOpen: (open: boolean) => void;
+  toggleSidebar: () => void;
+  setSidebarWidth: (width: number, persist?: boolean) => void;
+  setAgentWidth: (width: number, persist?: boolean) => void;
+  openContextMenu: (x: number, y: number, items: ContextMenuItem[]) => void;
+  closeContextMenu: () => void;
   setAgentExpanded: (expanded: boolean) => void;
   setAgentMode: (mode: PermissionMode) => void;
   setAgentDatabase: (database: string) => void;
@@ -210,6 +250,9 @@ export const useApp = create<AppStore>((set, get) => ({
   activeTabId: 'welcome',
   agentOpen: true,
   agentExpanded: false,
+  sidebarOpen: readUiPrefs().sidebarOpen ?? true,
+  sidebarWidth: readUiPrefs().sidebarWidth ?? 244,
+  agentWidth: readUiPrefs().agentWidth ?? 384,
   agentMessages: [],
   agentFollowUps: [],
   agentMode: 'ask',
@@ -419,6 +462,13 @@ export const useApp = create<AppStore>((set, get) => ({
     set({ tabs: next, activeTabId: activeTabId === id ? next[Math.max(0, index - 1)]?.id ?? next[0].id : activeTabId });
   },
 
+  closeOtherTabs: (id) => {
+    const keep = get().tabs.find((tab) => tab.id === id) ?? WELCOME;
+    set({ tabs: [keep], activeTabId: keep.id });
+  },
+
+  closeAllTabs: () => set({ tabs: [WELCOME], activeTabId: 'welcome' }),
+
   setActiveTab: (id) => {
     const tab = get().tabs.find((t) => t.id === id);
     set({ activeTabId: id, ...(tab && 'connectionId' in tab ? { activeConnectionId: tab.connectionId } : {}) });
@@ -474,6 +524,26 @@ export const useApp = create<AppStore>((set, get) => ({
 
   setAgentOpen: (open) => set({ agentOpen: open }),
   setAgentExpanded: (expanded) => set({ agentExpanded: expanded }),
+  toggleSidebar: () => {
+    const sidebarOpen = !get().sidebarOpen;
+    set({ sidebarOpen });
+    saveUiPrefs({ sidebarOpen });
+  },
+
+  setSidebarWidth: (width, persist) => {
+    set({ sidebarWidth: width });
+    if (persist) saveUiPrefs({ sidebarWidth: width });
+  },
+
+  setAgentWidth: (width, persist) => {
+    set({ agentWidth: width });
+    if (persist) saveUiPrefs({ agentWidth: width });
+  },
+
+  openContextMenu: (x, y, items) => set({ contextMenu: { x, y, items } }),
+
+  closeContextMenu: () => set((s) => (s.contextMenu ? { contextMenu: undefined } : {})),
+
   setAgentMode: (mode) => set({ agentMode: mode }),
 
   setAgentDatabase: (database) => {

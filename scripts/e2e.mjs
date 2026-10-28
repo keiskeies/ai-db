@@ -112,6 +112,28 @@ const ribbonModules = await page.locator('[data-testid="ribbon"] .ribbon-btn').c
 check('ribbon exposes Navicat modules', ribbonModules >= 12, `${ribbonModules} modules`);
 await page.screenshot({ path: join(shots, 'desktop-welcome.png') });
 
+// ---------------- 布局：折叠 / 拖宽 / 右键接管 ----------------
+const sidebarBox = await page.locator('.sidebar').boundingBox();
+await page.click('[data-testid="toggle-sidebar"]');
+await page.waitForTimeout(200);
+check('titlebar collapses the connection sidebar', (await page.locator('.sidebar').count()) === 0);
+await page.click('[data-testid="toggle-sidebar"]');
+await page.waitForTimeout(250);
+check('sidebar toggles back', (await page.locator('.sidebar').count()) === 1);
+const splitBox = await page.locator('[data-testid="splitter-sidebar"]').boundingBox();
+await page.mouse.move(splitBox.x + 2, splitBox.y + 60);
+await page.mouse.down();
+await page.mouse.move(splitBox.x + 62, splitBox.y + 60, { steps: 6 });
+await page.mouse.up();
+await page.waitForTimeout(250);
+const widened = (await page.locator('.sidebar').boundingBox()).width;
+check('sidebar is draggable wider', widened > sidebarBox.width + 30, `${Math.round(sidebarBox.width)} → ${Math.round(widened)}`);
+await page.mouse.click(780, 720, { button: 'right' });
+await page.waitForTimeout(250);
+check('right click opens the app menu instead of the browser one', (await page.locator('[data-testid="context-menu"]').count()) === 1);
+await page.keyboard.press('Escape');
+await page.waitForTimeout(150);
+
 await page.click('[data-testid="sidebar-new-connection"]');
 await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
 const engineOptions = await page.locator('[data-testid="connection-engine"] option').count();
@@ -204,6 +226,20 @@ const queryRows = await page.locator('[data-testid="query-result-grid"] tbody tr
 check('SQL editor runs with Ctrl+Enter', queryRows >= 4, `${queryRows} rows`);
 await page.screenshot({ path: join(shots, 'desktop-query.png') });
 
+await page.locator('[data-testid="tab-query"]').first().click({ button: 'right' });
+await page.waitForSelector('[data-testid="context-menu"]', { timeout: 5000 });
+const tabMenu = await page.locator('[data-testid="context-menu"]').innerText();
+check('tab context menu offers close variants', ['关闭', '关闭其它', '关闭全部'].every((label) => tabMenu.includes(label)), tabMenu.replace(/\s+/g, ' ').slice(0, 80));
+await page.keyboard.press('Escape');
+await page.waitForTimeout(150);
+
+await page.locator('[data-testid="query-result-grid"] tbody tr td').nth(1).click({ button: 'right' });
+await page.waitForSelector('[data-testid="context-menu"]', { timeout: 5000 });
+const cellMenu = await page.locator('[data-testid="context-menu"]').innerText();
+check('grid cell context menu copies values', /复制整行/.test(cellMenu) && /复制列名/.test(cellMenu), cellMenu.replace(/\s+/g, ' ').slice(0, 80));
+await page.keyboard.press('Escape');
+await page.waitForTimeout(150);
+
 await page.locator('.result-tab').filter({ hasText: '图表' }).click();
 await page.waitForSelector('.query-chart-panel .chart-card', { timeout: 10000 });
 check('query result renders a chart tab', true);
@@ -236,13 +272,17 @@ await page.screenshot({ path: join(shots, 'desktop-agent-ddl.png') });
 
 await page.fill('[data-testid="agent-input"]', '按 status 统计 orders 并画柱状图');
 await page.click('[data-testid="agent-send"]');
-await page.waitForSelector('.chart-card', { timeout: 25000 });
-check('agent renders a chart artifact', (await page.locator('.chart-card svg, .chart-card .pie').count()) > 0);
+await page.waitForSelector('[data-testid="agent-chart"] [data-testid="chart-card"]', { timeout: 25000 });
+check('agent renders a chart artifact', (await page.locator('[data-testid="agent-chart"] .chart-card svg, [data-testid="agent-chart"] .chart-card .pie').count()) > 0);
+const execSections = page.locator('[data-testid="execution-section"]');
+const lastExec = execSections.last();
+check('execution steps fold away by default', (await lastExec.evaluate((el) => el.hasAttribute('open'))) === false);
+check('chart is hoisted into the conclusion, not nested in a tool card', (await page.locator('.tool-card [data-testid="chart-card"]').count()) === 0 && (await page.locator('[data-testid="agent-chart"]').count()) > 0);
 await page.screenshot({ path: join(shots, 'desktop-chart.png') });
 
 // ---------------- P3 图表三 tab / 工具条 / PNG ----------------
 // 锚点用 chart-tabs 而不是 chart-card：切到「明细」时图表卡会卸载，用它定位会瞬间失效
-const chartToolCard = page.locator('.tool-card').filter({ has: page.locator('[data-testid="chart-tabs"]') }).first();
+const chartToolCard = page.locator('[data-testid="agent-chart"]').first();
 check('chart result offers 图表/明细/SQL tabs', (await chartToolCard.locator('[data-testid="chart-tabs"] button').count()) === 3, await chartToolCard.locator('[data-testid="chart-tabs"] button').allTextContents().then((t) => t.join('|')).catch(() => ''));
 await chartToolCard.locator('[data-testid="chart-tab-rows"]').click();
 check('明细 tab exposes the rows the tool already returned', (await chartToolCard.locator('.tool-table tbody tr').count()) > 0, `${await chartToolCard.locator('.tool-table tbody tr').count()} rows`);

@@ -1,5 +1,6 @@
 import { FileCode2, Network, Plus, Table2, TerminalSquare, Wrench, X } from 'lucide-react';
 import { useApp } from '../store';
+import { PaneSplitter } from './PaneSplitter';
 import { AgentPanel } from './AgentPanel';
 import { DataView } from './DataView';
 import { DesignView } from './DesignView';
@@ -22,6 +23,9 @@ export function Workspace() {
   const closeTab = useApp((s) => s.closeTab);
   const openQuery = useApp((s) => s.openQuery);
   const agentOpen = useApp((s) => s.agentOpen);
+  const agentWidth = useApp((s) => s.agentWidth);
+  const setAgentWidth = useApp((s) => s.setAgentWidth);
+  const openContextMenu = useApp((s) => s.openContextMenu);
   const t = useApp((s) => s.t);
 
   const active = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
@@ -35,6 +39,15 @@ export function Workspace() {
               key={tab.id}
               className={`tab ${tab.id === active?.id ? 'active' : ''}`}
               onClick={() => setActiveTab(tab.id)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                const others = tabs.filter((item) => item.id !== tab.id).length;
+                openContextMenu(e.clientX, e.clientY, [
+                  { label: '关闭', onClick: () => closeTab(tab.id) },
+                  { label: '关闭其它', disabled: others === 0, onClick: () => useApp.getState().closeOtherTabs(tab.id) },
+                  { label: '关闭全部', onClick: () => useApp.getState().closeAllTabs() },
+                ]);
+              }}
               title={tab.title}
               data-testid={`tab-${tab.kind}`}
             >
@@ -64,7 +77,20 @@ export function Workspace() {
         {active?.kind === 'design' ? <DesignView tab={active} /> : null}
         {active?.kind === 'relations' ? <RelationsView tab={active} /> : null}
       </main>
-      {agentOpen ? <AgentPanel /> : null}
+      {agentOpen ? (
+        <>
+          <PaneSplitter
+            side="right"
+            width={agentWidth}
+            min={320}
+            max={760}
+            onChange={(width) => setAgentWidth(width)}
+            onCommit={(width) => setAgentWidth(width, true)}
+            testId="splitter-agent"
+          />
+          <AgentPanel />
+        </>
+      ) : null}
     </>
   );
 }

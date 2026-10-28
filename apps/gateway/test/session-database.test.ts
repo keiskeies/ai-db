@@ -67,3 +67,20 @@ test('v3 老库升级后补出 database 列，旧会话不受影响', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('召回记忆按「类型+标题」去重，同一问题不会占满名额', () => {
+  const dir = tempDir();
+  try {
+    const store = new Store(join(dir, 'aidb.db'), 'secret');
+    const title = '近 3 个月下单人数的变化趋势';
+    for (const answer of ['答案 A：按月统计', '答案 B：按周统计', '答案 C：按日统计']) {
+      store.createMemory({ kind: 'episodic', title, content: `用户: ${title}\n助手: ${answer}`, scopeType: 'global', scopeKey: '*' });
+    }
+    const { memories } = store.recallForTurn(title, {});
+    const sameTitle = memories.filter((m) => m.title === title);
+    assert.equal(sameTitle.length, 1, `期望 1 条，实际 ${sameTitle.length}`);
+    store.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

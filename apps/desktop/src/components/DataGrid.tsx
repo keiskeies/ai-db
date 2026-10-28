@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, Copy, Trash2 } from 'lucide-react';
 import type { ResultField } from '@aidb/core';
 import { formatCell } from '../lib/format';
+import { useApp, type ContextMenuItem } from '../store';
 
 export interface DataGridProps {
   columns: ResultField[];
@@ -133,6 +134,23 @@ export function DataGrid({
                     className={`${formatted.kind === 'null' ? 'null' : ''} ${formatted.kind === 'number' ? 'num' : ''} ${editing ? 'editing' : ''}`}
                     title={display}
                     onDoubleClick={() => beginEdit(rowIndex, colIndex)}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      const cell = formatted.kind === 'null' ? '' : formatted.text;
+                      const line = row.map((value) => {
+                        const item = formatCell(value);
+                        return item.kind === 'null' ? '' : item.text;
+                      }).join('	');
+                      const items: ContextMenuItem[] = [
+                        { label: `复制「${col.name}」`, icon: <Copy size={12} />, onClick: () => void navigator.clipboard.writeText(cell).catch(() => undefined) },
+                        { label: '复制整行（制表符分隔）', onClick: () => void navigator.clipboard.writeText(line).catch(() => undefined) },
+                        { label: '复制列名', onClick: () => void navigator.clipboard.writeText(col.name).catch(() => undefined) },
+                      ];
+                      if (editable) {
+                        items.push({ label: '编辑此单元格', onClick: () => beginEdit(rowIndex, colIndex) });
+                      }
+                      useApp.getState().openContextMenu(event.clientX, event.clientY, items);
+                    }}
                   >
                     {editing ? (
                       <input

@@ -875,14 +875,32 @@ export class Store {
   ): Memory[] {
     const all = this.listMemories({ includeArchived: false, limit: 500 });
     const memories = filterKinds(all, ctx.kinds, ctx.excludeKinds);
+    const limit = ctx.limit ?? 8;
     if (!query.trim()) {
-      return memories
-        .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.importance - a.importance)
-        .slice(0, ctx.limit ?? 8);
+      return this.uniqueMemories(
+        memories.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.importance - a.importance),
+        limit,
+      );
     }
-    const ranked = rankMemories(query, memories, { connectionId: ctx.connectionId, database: ctx.database, limit: ctx.limit ?? 8 });
-    this.markMemoriesUsed(ranked.map((m) => m.id));
-    return ranked;
+    // 多取一些再按标题去重，否则同一个问题问过几次就会占满召回名额
+    const ranked = rankMemories(query, memories, { connectionId: ctx.connectionId, database: ctx.database, limit: limit * 3 });
+    const unique = this.uniqueMemories(ranked, limit);
+    this.markMemoriesUsed(unique.map((m) => m.id));
+    return unique;
+  }
+
+  /** 同一问题被反复提问会存成多条同标题的情景记忆；召回按「类型 + 标题」只留排序最前的那条。 */
+  private uniqueMemories(list: Memory[], limit: number): Memory[] {
+    const seen = new Set<string>();
+    const out: Memory[] = [];
+    for (const memory of list) {
+      const key = `${memory.kind}:${(memory.title ?? '').trim().toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(memory);
+      if (out.length >= limit) break;
+    }
+    return out;
   }
 
   /**

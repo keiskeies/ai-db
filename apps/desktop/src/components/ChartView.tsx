@@ -1,6 +1,7 @@
 import { useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowUpRight, X } from 'lucide-react';
+import { useApp, type ContextMenuItem } from '../store';
 import { ChartToolbar, type ChartType } from './ChartToolbar';
 
 export interface ChartSpec {
@@ -72,7 +73,17 @@ export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, z
   );
 
   return (
-    <div className="chart-card" data-testid="chart-card">
+    <div
+      className="chart-card"
+      data-testid="chart-card"
+      onContextMenu={(event) => {
+        event.preventDefault();
+        const items: ContextMenuItem[] = [{ label: '导出 PNG', onClick: () => void exportPng(svgRef, chart.title, setExporting) }];
+        if (onExportCsv) items.push({ label: '导出 CSV', onClick: onExportCsv });
+        if (chart.sql && onOpenEditor) items.push({ label: '打开 SQL', onClick: () => onOpenEditor(chart.sql!) });
+        useApp.getState().openContextMenu(event.clientX, event.clientY, items);
+      }}
+    >
       <div className="chart-head">
         <span className="truncate">{chart.title}</span>
         <span className="badge agent">{type.toUpperCase()}</span>

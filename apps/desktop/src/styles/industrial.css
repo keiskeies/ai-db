@@ -47,8 +47,8 @@ body {
 .kbd { font-size: 9px; padding: 1px 4px; border-color: var(--border-subtle); background: var(--bg-app); }
 
 .sidebar {
-  width: 244px;
-  flex-basis: 244px;
+  width: var(--sidebar-w, 244px);
+  flex-basis: var(--sidebar-w, 244px);
   background: color-mix(in srgb, var(--bg-panel) 94%, transparent);
 }
 .sidebar-head { padding: 8px 8px 7px; gap: 6px; }
@@ -158,8 +158,8 @@ body {
 
 /* Agent panel: compact, dense */
 .agent-panel {
-  width: 384px;
-  flex-basis: 384px;
+  width: var(--agent-w, 384px);
+  flex-basis: var(--agent-w, 384px);
   background: color-mix(in srgb, var(--bg-panel) 96%, transparent);
 }
 .agent-panel::before {
