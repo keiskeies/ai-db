@@ -79,7 +79,7 @@ test('CSV import writes Qdrant points with id, vector and typed payload', { skip
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ limit: 10, with_payload: true }),
-  }).then((res) => res.json());
+  }).then((res) => res.json() as any);
   const byId = new Map<number, Record<string, unknown>>(scroll.result.points.map((point: any) => [point.id, point.payload]));
   assert.equal(byId.get(1)?.title, 'alpha');
   assert.equal(byId.get(1)?.score, 3);
@@ -143,7 +143,7 @@ test('CSV import indexes Elasticsearch documents by id', { skip: !ES_PORT }, asy
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ query: { match_all: {} } }),
-  }).then((res) => res.json());
+  }).then((res) => res.json() as any);
   const ids = (search.hits?.hits ?? []).map((hit: any) => hit._id).sort();
   assert.deepEqual(ids, ['a1', 'a2']);
   const first = (search.hits.hits as any[]).find((hit) => hit._id === 'a1');

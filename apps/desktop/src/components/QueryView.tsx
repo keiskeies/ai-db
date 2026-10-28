@@ -57,7 +57,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const conn = connections.find((c) => c.id === tab.connectionId);
   const isSql = conn ? engineMeta(conn.engine).languages.includes('sql') : true;
   const canVector = conn ? engineMeta(conn.engine).model === 'vector' || engineMeta(conn.engine).dialect === 'postgres' : false;
-  const canWriteDocuments = conn ? ['vector', 'search'].includes(engineMeta(conn.engine).model) : false;
+  const canWriteDocuments = conn ? ['vector', 'search', 'document'].includes(engineMeta(conn.engine).model) : false;
   const [vectorOpen, setVectorOpen] = useState(false);
   const [writeOpen, setWriteOpen] = useState(false);
 

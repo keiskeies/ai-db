@@ -369,6 +369,24 @@ if (MONGO_PORT) {
   const mongoRows = await page.locator('[data-testid="query-result-grid"] tbody tr').count();
   check('Mongo MQL query returns documents', mongoRows === 3, `${mongoRows} rows`);
   check('Mongo query hides SQL-only actions', (await page.locator('.query-actions').getByText('美化 SQL').count()) === 0);
+
+  await page.click('[data-testid="open-document-write"]');
+  await page.waitForSelector('[data-testid="document-write-json"]', { timeout: 10000 });
+  await page.fill('[data-testid="document-write-collection"]', 'widgets');
+  await page.fill('[data-testid="document-write-json"]', JSON.stringify([{ _id: '64b0c0d0e0f0a0b0c0d0e0f0', name: 'Gamma', weight: 9 }]));
+  await page.click('[data-testid="document-write-submit"]');
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 4, null, { timeout: 25000 });
+  check('MongoDB document write appears in the result grid', true);
+
+  await page.click('[data-testid="open-document-write"]');
+  await page.waitForSelector('[data-testid="document-mode-delete"]', { timeout: 10000 });
+  await page.fill('[data-testid="document-write-collection"]', 'widgets');
+  await page.click('[data-testid="document-mode-delete"]');
+  await page.fill('[data-testid="document-delete-ids"]', '64b0c0d0e0f0a0b0c0d0e0f0');
+  await page.click('[data-testid="document-write-submit"]');
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 3, null, { timeout: 25000 });
+  check('MongoDB delete by id removes the document', true);
+
   await page.screenshot({ path: join(shots, 'desktop-mongodb.png') });
 }
 

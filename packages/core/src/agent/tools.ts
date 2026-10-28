@@ -177,7 +177,7 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: 'upsert_document',
     description:
-      'Create or replace documents/points in a Qdrant, Weaviate, Milvus collection or an Elasticsearch/OpenSearch index. Pass one document or a documents array (max 500). Vector collections need a vector field; ids live inside each document (use _id for Elasticsearch).',
+      'Create or replace documents in a MongoDB collection, a Qdrant/Weaviate/Milvus collection or an Elasticsearch/OpenSearch index. Pass one document or a documents array (max 500). Vector engines need a vector field; ids live inside each document (_id for MongoDB and Elasticsearch).',
     risk: 'write',
     inputSchema: {
       type: 'object',
@@ -196,7 +196,7 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: 'import_documents',
     description:
-      'Bulk-import a CSV into a Qdrant/Weaviate/Milvus collection or an Elasticsearch/OpenSearch index (max 5000 rows). Header names become fields; idColumn maps the id field and vectorColumn parses arrays like "[0.1,0.2]" for vector collections.',
+      'Bulk-import a CSV into a MongoDB collection, a Qdrant/Weaviate/Milvus collection or an Elasticsearch/OpenSearch index (max 5000 rows). Header names become fields; idColumn maps the id field and vectorColumn parses arrays like "[0.1,0.2]" for vector collections.',
     risk: 'write',
     inputSchema: {
       type: 'object',
@@ -219,7 +219,7 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: 'delete_documents',
     description:
-      'Delete documents/points by an explicit id list from a Qdrant, Weaviate, Milvus collection or an Elasticsearch/OpenSearch index. Always confirm the ids with a read query first.',
+      'Delete documents by an explicit id list from a MongoDB collection, a Qdrant/Weaviate/Milvus collection or an Elasticsearch/OpenSearch index. Always confirm the ids with a read query first.',
     risk: 'destructive',
     inputSchema: {
       type: 'object',

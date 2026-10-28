@@ -1,7 +1,15 @@
-import { MongoClient } from 'mongodb';
+import { MongoClient, ObjectId } from 'mongodb';
 import type { Collection, Document, Filter, Sort } from 'mongodb';
 import type { ColumnInfo, Engine, MqlQuery, QueryResult, StructuredQuery, TableInfo } from '@aidb/core';
-import type { Driver, DriverTestResult, RunOptions, StructuredQueryDriver } from './types';
+import type {
+  DeleteDocumentsInput,
+  DocumentWriteDriver,
+  DriverTestResult,
+  RunOptions,
+  StructuredQueryDriver,
+  WriteDocumentInput,
+  WriteDocumentResult,
+} from './types';
 import { DbError } from './types';
 
 export interface MongoOptions {
@@ -161,7 +169,7 @@ export function normalizeMql(value: unknown): MqlQuery {
   return query;
 }
 
-export class MongoDriver implements StructuredQueryDriver {
+export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver {
   engine: Engine = 'mongodb';
   private client?: MongoClient;
   private connected?: Promise<MongoClient>;
@@ -340,6 +348,52 @@ export class MongoDriver implements StructuredQueryDriver {
 
   async runParams(): Promise<QueryResult> {
     throw new DbError('MongoDB 不支持参数化 SQL，请使用结构化 MQL 查询', { code: 'MQL_ONLY' });
+  }
+
+  /** 24 位十六进制字符串按 ObjectId 处理，其它主键原样保留。 */
+  private toId(value: unknown): unknown {
+    const text = typeof value === 'string' ? value.trim() : '';
+    if (/^[0-9a-fA-F]{24}$/.test(text)) return new ObjectId(text);
+    return value;
+  }
+
+  async upsertDocuments(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {
+    if (!input.collection) throw new DbError('集合名不能为空', { code: 'MQL_COLLECTION' });
+    if (!input.documents.length) throw new DbError('至少需要一个文档', { code: 'WRITE_DOCUMENT' });
+    const coll = await this.collection(input.collection, opts.database);
+    const ids: string[] = [];
+    for (const document of input.documents) {
+      const payload: Record<string, unknown> = { ...document };
+      const rawId = payload._id ?? payload.id;
+      delete payload.id;
+      try {
+        if (rawId === undefined || rawId === null || String(rawId).trim() === '') {
+          const inserted = await coll.insertOne(payload as Document);
+          ids.push(String(inserted.insertedId));
+        } else {
+          const _id = this.toId(rawId);
+          await coll.replaceOne({ _id } as Filter<Document>, { ...payload, _id } as Document, { upsert: true });
+          ids.push(String(rawId));
+        }
+      } catch (err: any) {
+        if (err instanceof DbError) throw err;
+        throw new DbError(err?.message ?? 'MongoDB 写入失败', { code: err?.codeName ?? 'MONGO_WRITE' });
+      }
+    }
+    return { ids, upserted: ids.length };
+  }
+
+  async deleteDocuments(input: DeleteDocumentsInput, opts: RunOptions = {}): Promise<{ deleted: number }> {
+    if (!input.collection) throw new DbError('集合名不能为空', { code: 'MQL_COLLECTION' });
+    if (!input.ids.length) throw new DbError('ids 不能为空', { code: 'WRITE_IDS' });
+    const coll = await this.collection(input.collection, opts.database);
+    try {
+      const result = await coll.deleteMany({ _id: { $in: input.ids.map((id) => this.toId(id)) } } as Filter<Document>);
+      return { deleted: result.deletedCount };
+    } catch (err: any) {
+      if (err instanceof DbError) throw err;
+      throw new DbError(err?.message ?? 'MongoDB 删除失败', { code: err?.codeName ?? 'MONGO_DELETE' });
+    }
   }
 
   async close(): Promise<void> {

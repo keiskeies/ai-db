@@ -80,6 +80,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - 查询：结构化 JSON MQL，`op` = `find | aggregate | count | distinct`；支持 `filter / pipeline / projection / sort / limit / skip / field`。
 - 结果：文档行；嵌套值 JSON 序列化，`ResultField.kind = 'json'`；`resultKind = 'documents'`。
 - 安全：只读连接拦截 `$out`、`$merge`、`$where`、`$function`、`$accumulator` 及系统诊断管道；聚合管道默认追加 `$limit`。
+- 写入：`upsert_document`（有 `_id` 则覆盖，24 位十六进制自动转 ObjectId）、`import_documents` CSV 批量导入、`delete_documents` 按 `_id` 删除；只读连接一律拒绝。
 - 不支持：DDL 设计器、结构同步、数据对比、SQL dump、用户权限、SQL 体检/图表工具。
 
 ### Redis
@@ -154,9 +155,9 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 | `run_redis` | 单条 Redis 命令 |
 | `run_cypher` | Neo4j / Memgraph / FalkorDB Cypher 查询（支持 `$params`） |
 | `run_aql` | ArangoDB AQL 查询（支持 `@bindVar` 与 `@@collection`） |
-| `upsert_document` | 批量写入向量点/搜索文档（Qdrant / Weaviate / Milvus / ES / OpenSearch） |
+| `upsert_document` | 批量写入文档/向量点（MongoDB / Qdrant / Weaviate / Milvus / ES / OpenSearch） |
 | `delete_documents` | 按 id 列表删除向量点/搜索文档 |
-| `import_documents` | CSV 批量导入向量点/搜索文档 |
+| `import_documents` | CSV 批量导入文档/向量点 |
 | `run_cql` | Cassandra / ScyllaDB CQL（支持 `?` 参数） |
 | `vector_search` | pgvector / Qdrant / Milvus / Weaviate 向量检索（text 走 Embedding） |
 | `search_index` | Elasticsearch / OpenSearch `_search` JSON DSL |

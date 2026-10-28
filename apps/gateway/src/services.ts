@@ -300,7 +300,8 @@ export async function importDocuments(
   if (opts.idColumn && idIndex < 0) throw new DbError(`找不到 id 列：${opts.idColumn}`, { code: 'CSV_MAPPING' });
   if (opts.vectorColumn && vectorIndex < 0) throw new DbError(`找不到 vector 列：${opts.vectorColumn}`, { code: 'CSV_MAPPING' });
 
-  const isSearch = engineMeta(conn.engine).model === 'search';
+  const model = engineMeta(conn.engine).model;
+  const idKey = model === 'search' || model === 'document' ? '_id' : 'id';
   const documents: Record<string, unknown>[] = [];
   const errors: string[] = [];
   dataRows.forEach((row, offset) => {
@@ -313,8 +314,7 @@ export async function importDocuments(
         errors.push(`第 ${line} 行：id 为空`);
         return;
       }
-      if (isSearch) document._id = raw;
-      else document.id = raw;
+      document[idKey] = raw;
     }
     if (vectorIndex >= 0) {
       const vector = parseVectorCell(row[vectorIndex]);

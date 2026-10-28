@@ -7,6 +7,7 @@ import { useApp } from '../store';
 import { Modal, Spinner } from './ui';
 
 const TEMPLATES: Record<string, Record<string, unknown>> = {
+  mongodb: { name: 'hello', kind: 'demo' },
   qdrant: { id: 1, vector: [0.1, 0.2, 0.3], payload: { title: 'hello' } },
   weaviate: { properties: { title: 'hello' }, vector: [0.1, 0.2, 0.3] },
   milvus: { id: 1, vector: [0.1, 0.2, 0.3], title: 'hello' },
@@ -124,7 +125,7 @@ export function DocumentWritePanel({
 
   return (
     <Modal
-      title={isSearch ? '文档写入' : '向量点写入'}
+      title={meta.model === 'vector' ? '向量点写入' : '文档写入'}
       icon={mode === 'write' ? <FilePlus size={15} /> : <Trash2 size={15} />}
       onClose={onClose}
       footer={
@@ -165,7 +166,7 @@ export function DocumentWritePanel({
       {mode === 'write' ? (
         <>
           <div className="muted" style={{ fontSize: 11, margin: '10px 0 6px' }}>
-            {isSearch
+            {isSearch || connection.engine === 'mongodb'
               ? '粘贴一个 JSON 对象或对象数组（批量）；用 _id 指定文档 ID。'
               : connection.engine === 'qdrant'
                 ? '数组元素需含 vector 与可选 payload；Qdrant 的 id 必须是整数或 UUID。'
