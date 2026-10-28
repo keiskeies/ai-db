@@ -392,7 +392,8 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'export_result',
-    description: 'Export a query result or a whole table to CSV, JSON or SQL INSERT file in the exports directory.',
+    description:
+      'Export a query result to a CSV, JSON, XML or SQL INSERT file in the exports directory. SQL connections may pass table; non-SQL connections (MongoDB, Redis, graph, vector, search) must pass the same statement text used in the query window, and SQL INSERT output is refused there.',
     risk: 'write',
     inputSchema: {
       type: 'object',

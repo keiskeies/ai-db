@@ -49,7 +49,7 @@ import {
 import type { GatewayConfig } from './config';
 import { DbError } from './drivers';
 import type { ConnectionManager } from './manager';
-import { dumpDatabase, importCsv, writeExportFile } from './services';
+import { assertExportable, dumpDatabase, exportNeedsStatement, importCsv, writeExportFile } from './services';
 import { generateData } from './features/generate';
 import type { Store } from './store';
 
@@ -100,7 +100,6 @@ const SQL_ONLY_TOOLS = new Set([
   'alter_table',
   'drop_object',
   'manage_index',
-  'export_result',
   'import_csv',
   'backup_database',
   'audit_database',
@@ -730,12 +729,14 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
       case 'export_result': {
         const conn = this.requireConnection(call, ctx);
         const database = this.databaseOf(call, conn);
-        const format = ['csv', 'json', 'sql'].includes(String(a.format)) ? (String(a.format) as 'csv' | 'json' | 'sql') : 'csv';
+        const format = (['csv', 'json', 'sql', 'xml'].includes(String(a.format)) ? String(a.format) : 'csv') as 'csv' | 'json' | 'sql' | 'xml';
+        assertExportable(conn.engine, format);
         const limit = Math.min(200000, Math.max(1, Number(a.limit) || 10000));
         let sql: string;
         let tableName: string | undefined;
         if (typeof a.sql === 'string' && a.sql.trim()) sql = a.sql;
         else if (typeof a.table === 'string' && a.table) {
+          if (!isSqlEngine(conn.engine)) exportNeedsStatement(conn.engine);
           const { table } = await this.manager.findTable(conn.id, database, a.table);
           tableName = table.name;
           sql = buildSelectTable(conn.engine, table.name, { schema: this.schemaFor(conn, table), limit });

@@ -106,14 +106,15 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - 查询：JSON，`op = scroll` 浏览；提供 `vector` 或 `text` 时执行相似度检索；Qdrant 支持命名向量 `field`。
 - 结果：id、score 与 payload/entity/properties 字段，`resultKind = 'vectors'`。
 - 文本检索：`text` 由网关调用 Embedding Provider 转成向量；未配置时可直接传 `vector`。
-- 不支持：SQL、DDL、备份、写入/删除（后续）。
+- 写入：`upsert_document` 支持单条与批量（向量点需 `vector`），`delete_documents` 按 id 列表删除；不支持 DDL、备份与 SQL 工具。
+- 导出：查询结果可导出 CSV/JSON/XML（INSERT 脚本仅 SQL 引擎）。
 
 ### Cassandra / ScyllaDB
 
 - 对象树：keyspace → table；列、主键/分区键/clustering key。
 - 查询：CQL 控制台，支持 `?` 参数；无 JOIN。
 - 结果：普通行结果；`resultKind` 缺省为表格。
-- 不支持：SQL 工具、DDL 设计器、备份、JOIN、写入网格（后续）。
+- 不支持：SQL 工具、DDL 设计器、备份、JOIN、网格编辑（CQL 写入通过控制台语句执行）。
 
 ### TDengine
 
@@ -128,7 +129,8 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - 对象树：索引 → mapping 字段，展示文档数/health。
 - 查询：JSON `_search` DSL（`{index, query, body, size}`），默认 `match_all`。
 - 结果：`_id`、`_score`、`_source` 字段，`resultKind = 'documents'`。
-- 不支持：SQL、DDL、写入/删除（后续）。
+- 写入：`upsert_document` 批量索引文档，`delete_documents` 按 `_id` 删除；不支持 DDL 与备份。
+- 导出：结果可导出 CSV/JSON/XML（INSERT 脚本仅 SQL 引擎）。
 
 ## 5. 安全模型
 
@@ -144,7 +146,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 
 ## 6. Agent 工具
 
-新增六个工具，工具总数 30：
+工具总数 33：
 
 | 工具 | 作用 |
 |---|---|
@@ -163,7 +165,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 ## 7. UI 行为
 
 - 连接表单由 `EngineMeta` 驱动默认端口、默认用户名、默认数据库与限制；MongoDB/Redis/Neo4j 显示“数据库 / DB 索引”字段。
-- 对象树按查询语言渲染：SQL 连接（含 TDengine）显示表/视图与完整右键菜单；MongoDB 显示“集合”；Redis 显示“键空间”；Cassandra/ScyllaDB 显示“表”；Neo4j/Memgraph/FalkorDB 显示“标签”、ArangoDB 显示“集合”；Qdrant/Milvus/Weaviate 显示“向量集合”；Elasticsearch/OpenSearch 显示“索引”。非关系型只保留打开、查询、AI 解释、刷新、复制。
+- 对象树按查询语言渲染：SQL 连接（含 TDengine）显示表/视图与完整右键菜单；MongoDB 显示“集合”；Redis 显示“键空间”（安装 RediSearch 时追加“搜索索引”）；Cassandra/ScyllaDB 显示“表”；Neo4j/Memgraph/FalkorDB 显示“标签”、ArangoDB 显示“集合”；Qdrant/Milvus/Weaviate 显示“向量集合”；Elasticsearch/OpenSearch 显示“索引”。非关系型保留打开、查询、导出结果、AI 解释、刷新、复制。
 - 查询窗口按语言切换：SQL 连接保留美化、EXPLAIN、查询构建器、图表、SQL 文件；MongoDB/Redis/Neo4j/向量库/搜索索引显示 JSON/命令/Cypher 提示并隐藏 SQL 专属按钮。
 - 图查询结果为 `resultKind=graph` 时，结果区提供“表格 / 图”切换；图视图为基础环形布局，悬停节点可查看属性。
 - PostgreSQL / Qdrant / Milvus 的查询工具栏提供“向量检索”面板：选择表/集合与向量字段，输入文本（走 Embedding）或向量 JSON、TopK，结果直接进入 DataGrid。

@@ -493,11 +493,11 @@ ${text}
             <Sparkles size={12} /> 向量检索
           </button>
         ) : null}
+        <button className="icon-btn" title="导出当前语句结果（CSV）" onClick={() => void exportResult()} data-testid="query-export">
+          <Download size={13} />
+        </button>
         {isSql ? (
           <>
-            <button className="icon-btn" title="导出结果" onClick={() => void exportResult()}>
-              <Download size={13} />
-            </button>
             <button className="icon-btn" title="执行整个脚本（允许多语句）" onClick={() => void runScript()} disabled={running}>
               <ListChecks size={13} />
             </button>

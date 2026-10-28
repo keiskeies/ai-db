@@ -36,7 +36,7 @@ import { pairingCode, hashToken, randomToken, safeEqual } from './crypto';
 import { readAttachment, saveAttachment } from './attachments';
 import type { GatewayConfig } from './config';
 import type { ConnectionManager } from './manager';
-import { auditCsv, coerceValue, dumpDatabase, importCsv, writeExportFile } from './services';
+import { assertExportable, auditCsv, coerceValue, dumpDatabase, exportNeedsStatement, importCsv, writeExportFile } from './services';
 import type { Store } from './store';
 import type { AgentHost } from './agentHost';
 import type { JobScheduler } from './scheduler';
@@ -710,14 +710,15 @@ export function createApiRouter(deps: ApiDeps): Router {
       if (!connectionId) throw Object.assign(new Error('connectionId 必填'), { code: 'INVALID_INPUT', status: 400 });
       const conn = store.getConnection(connectionId);
       if (!conn) throw Object.assign(new Error('连接不存在'), { code: 'CONNECTION_NOT_FOUND', status: 404 });
-      assertSqlEngine(conn);
       const database = str(body.database);
       const format = (['csv', 'json', 'sql', 'xml'].includes(String(body.format)) ? String(body.format) : 'csv') as 'csv' | 'json' | 'sql' | 'xml';
+      assertExportable(conn.engine, format);
       const limit = num(body.limit, 10000, 1, 200000);
       let sql: string;
       let tableName: string | undefined;
       if (str(body.sql)) sql = String(body.sql);
       else if (str(body.table)) {
+        if (!isSqlEngine(conn.engine)) exportNeedsStatement(conn.engine);
         const { table } = await manager.findTable(connectionId, database, String(body.table));
         tableName = table.name;
         sql = buildSelectTable(conn.engine, table.name, { schema: engineUsesSchema(conn.engine) ? table.schema : undefined, limit });

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
-import { createReadStream, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -606,6 +606,21 @@ if (ARANGO_PORT) {
   await page.click('[data-testid="graph-zoom-in"]');
   const graphZoom = await page.locator('[data-testid="graph-view"]').getAttribute('data-zoom');
   check('ArangoDB graph zoom control changes scale', graphZoom === '120%', String(graphZoom));
+
+  const exportDir = join(home, 'exports');
+  const beforeExport = readdirSync(exportDir).length;
+  await page.click('[data-testid="query-export"]');
+  let exportedFile = '';
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const files = readdirSync(exportDir);
+    if (files.length > beforeExport) {
+      exportedFile = files[files.length - 1];
+      break;
+    }
+    await new Promise((resolveTick) => setTimeout(resolveTick, 250));
+  }
+  const exportedCsv = exportedFile ? await readFile(join(exportDir, exportedFile), 'utf8') : '';
+  check('ArangoDB export writes CSV from the query window', exportedFile.endsWith('.csv') && /person\/ada/.test(exportedCsv), exportedFile);
 }
 
 if (INFLUXDB_PORT) {

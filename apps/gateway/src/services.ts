@@ -4,7 +4,9 @@ import {
   buildCreateIndex,
   buildCreateTable,
   buildInsert,
+  engineMeta,
   engineUsesSchema,
+  isSqlEngine,
   quoteIdent,
   quoteLiteral,
   quoteQualified,
@@ -20,6 +22,21 @@ import type { ConnectionManager } from './manager';
 import type { Store } from './store';
 
 export type ExportFormat = 'csv' | 'json' | 'sql' | 'xml';
+
+/** INSERT 脚本依赖 SQL 方言；非 SQL 引擎只能导出行数据。 */
+export function assertExportable(engine: Engine, format: ExportFormat): void {
+  if (format === 'sql' && !isSqlEngine(engine)) {
+    throw new DbError(`${engineMeta(engine).label} 不支持导出为 INSERT 脚本`, { code: 'UNSUPPORTED_ENGINE', hint: '请改用 CSV / JSON / XML' });
+  }
+}
+
+/** 非 SQL 引擎没有「整表 SELECT」，导出必须由调用方给出语句。 */
+export function exportNeedsStatement(engine: Engine): never {
+  throw new DbError(`${engineMeta(engine).label} 导出需要查询语句`, {
+    code: 'INVALID_INPUT',
+    hint: '请先在查询窗口执行一条语句，再导出结果',
+  });
+}
 
 function escapeCsv(value: unknown): string {
   const text = value === null || value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
