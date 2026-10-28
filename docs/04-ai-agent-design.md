@@ -63,7 +63,7 @@ for (step = 0; step < maxSteps; step++) {
 
 **约束**：`maxSteps` 默认 12；同一工具相同参数连续失败 2 次 → 中止并解释；单工具超时 60s（查询 30s）；取消信号贯穿 Provider 与 Driver。
 
-## 4. 工具目录（34 个）
+## 4. 工具目录（35 个）
 
 风险等级：`read < write < ddl < destructive`。所有工具入参使用 JSON Schema（`additionalProperties: false`）。
 
@@ -100,6 +100,7 @@ for (step = 0; step < maxSteps; step++) {
 | 29 | `search_index` | read | Elasticsearch/OpenSearch `_search` JSON DSL | `{ connectionId, database?, index, query?, body?, size? }` |
 | 30 | `run_cql` | 动态* | Cassandra/ScyllaDB CQL，支持 `?` 参数 | `{ connectionId, database?, query, params?, maxRows? }` |
 | 31 | `run_aql` | 动态* | ArangoDB AQL；支持 `@bindVar` 与 `@@collection`，只读连接拒绝写操作 | `{ connectionId, database?, query, params?, maxRows? }` |
+| 35 | `create_collection` | ddl | 创建向量集合（Qdrant 需维度/距离）或搜索索引 / Weaviate class（字段列表）；Milvus 明确拒绝 | `{ connectionId, database?, name, dimension?, distance?, fields?[] }` |
 | 32 | `upsert_document` | write | 写入 MongoDB 文档、Qdrant/Weaviate/Milvus 向量点或 Elasticsearch/OpenSearch 文档（`document` 单条或 `documents` 批量，ID 写在文档里） | `{ connectionId, database?, collection, document?, documents? }` |
 | 33 | `delete_documents` | destructive | 按明确 id 列表删除 MongoDB 文档 / 向量点 / 搜索文档，删除前必须先用查询确认范围 | `{ connectionId, database?, collection, ids[] }` |
 | 34 | `import_documents` | write | CSV 批量导入 MongoDB 文档 / 向量点 / 搜索文档（≤5000 行，列名即字段，id/vector 列单独指定） | `{ connectionId, database?, collection, csv?/path?, hasHeader?, delimiter?, idColumn?, vectorColumn? }` |

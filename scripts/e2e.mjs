@@ -82,7 +82,7 @@ const api = async (path, init = {}) => {
 const boot = (await api('/bootstrap')).body;
 const demo = boot.connections.find((c) => c.engine === 'sqlite');
 check('bridge bootstrap', Boolean(demo), demo?.name);
-check('34 agent tools', boot.tools.length === 34, String(boot.tools.length));
+check('35 agent tools', boot.tools.length === 35, String(boot.tools.length));
 
 const MONGO_PORT = process.env.AIDB_TEST_MONGO_PORT ? Number(process.env.AIDB_TEST_MONGO_PORT) : undefined;
 const REDIS_PORT = process.env.AIDB_TEST_REDIS_PORT ? Number(process.env.AIDB_TEST_REDIS_PORT) : undefined;
@@ -558,6 +558,15 @@ if (QDRANT_PORT) {
   await page.click('[data-testid="document-write-submit"]');
   await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 2, null, { timeout: 20000 });
   check('Qdrant delete by ids removes points', true);
+
+  await page.locator('.tree-node.folder-node', { hasText: '向量集合' }).last().click({ button: 'right' });
+  await page.click('text=新建集合…');
+  await page.waitForSelector('[data-testid="create-object-name"]', { timeout: 10000 });
+  await page.fill('[data-testid="create-object-name"]', 'aidb_uicreated');
+  await page.fill('[data-testid="create-object-dimension"]', '2');
+  await page.click('[data-testid="create-object-submit"]');
+  await page.waitForSelector('[title="向量集合 aidb_uicreated"]', { timeout: 20000 });
+  check('Qdrant collection created from the tree menu', true);
 }
 
 if (TDENGINE_PORT) {

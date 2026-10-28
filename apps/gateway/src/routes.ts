@@ -569,6 +569,62 @@ export function createApiRouter(deps: ApiDeps): Router {
     }),
   );
 
+  router.post(
+    '/objects/create',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const connectionId = str(body.connectionId);
+      const name = str(body.name);
+      if (!connectionId || !name) {
+        throw Object.assign(new Error('connectionId 与 name 必填'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      const database = str(body.database);
+      const settings = store.getSettings();
+      const fields = Array.isArray(body.fields)
+        ? (body.fields as Array<Record<string, unknown>>)
+            .map((field) => ({ name: String(field.name ?? '').trim(), type: String(field.type ?? 'keyword').trim() }))
+            .filter((field) => field.name)
+        : [];
+      try {
+        const result = await manager.createObject(
+          connectionId,
+          {
+            name,
+            dimension: body.dimension === undefined || body.dimension === null || body.dimension === '' ? undefined : Number(body.dimension),
+            distance: str(body.distance),
+            fields,
+          },
+          { database, timeoutMs: settings.queryTimeoutMs, actor: 'user' },
+        );
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'objects.create',
+          sql: JSON.stringify({ name, dimension: body.dimension, distance: str(body.distance), fields }),
+          risk: 'ddl',
+          approval: 'manual',
+          status: 'ok',
+        });
+        const schemas = await manager.schema(connectionId, database);
+        res.json({ result, schemas });
+      } catch (err: any) {
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'objects.create',
+          sql: JSON.stringify({ name, dimension: body.dimension, distance: str(body.distance), fields }),
+          risk: 'ddl',
+          approval: 'manual',
+          status: 'error',
+          meta: { error: err.message },
+        });
+        throw err;
+      }
+    }),
+  );
+
   router.get(
     '/data',
     ah(async (req, res) => {

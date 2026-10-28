@@ -75,6 +75,7 @@ const DB_TOOLS = new Set([
   'upsert_document',
   'delete_documents',
   'import_documents',
+  'create_collection',
   'explain_sql',
   'sample_rows',
   'profile_column',
@@ -457,6 +458,30 @@ export class ToolExecutor {
           messages: batch.messages,
           durationMs: batch.durationMs,
         });
+      }
+
+      case 'create_collection': {
+        const conn = this.requireConnection(call, ctx);
+        const name = String(a.name ?? '').trim();
+        if (!name) throw new DbError('name 不能为空', { code: 'OBJECT_NAME' });
+        const fields = Array.isArray(a.fields)
+          ? (a.fields as Array<Record<string, unknown>>).map((field) => ({
+              name: String(field.name ?? '').trim(),
+              type: String(field.type ?? 'keyword').trim(),
+            }))
+          : [];
+        const settings = this.getSettings();
+        const result = await this.manager.createObject(
+          conn.id,
+          {
+            name,
+            dimension: a.dimension === undefined ? undefined : Number(a.dimension),
+            distance: typeof a.distance === 'string' ? a.distance : undefined,
+            fields,
+          },
+          { database: this.databaseOf(call, conn), timeoutMs: settings.queryTimeoutMs, actor: 'agent' },
+        );
+        return ok(started, `已创建${result.kind === 'index' ? '索引' : '集合'} ${result.name}`, result);
       }
 
       case 'upsert_document': {

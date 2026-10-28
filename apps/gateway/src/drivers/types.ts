@@ -68,6 +68,28 @@ export function supportsDocumentWrite(driver: Driver): driver is DocumentWriteDr
   );
 }
 
+export interface CreateObjectField {
+  name: string;
+  type: string;
+}
+
+export interface CreateObjectInput {
+  name: string;
+  /** 向量集合维度；搜索索引与 Weaviate class 可省略。 */
+  dimension?: number;
+  distance?: string;
+  fields?: CreateObjectField[];
+}
+
+/** 向量/搜索驱动的对象创建入口（非 SQL DDL，专用对话框使用）。 */
+export interface ObjectCreateDriver extends Driver {
+  createObject(input: CreateObjectInput, opts?: RunOptions): Promise<{ name: string; kind: string }>;
+}
+
+export function supportsObjectCreate(driver: Driver): driver is ObjectCreateDriver {
+  return typeof (driver as ObjectCreateDriver).createObject === 'function';
+}
+
 export interface ConnectionRecord {
   config: import('@aidb/core').ConnectionConfig;
   secret: import('@aidb/core').ConnectionSecret;

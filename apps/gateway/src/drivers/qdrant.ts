@@ -1,7 +1,7 @@
 import type { ColumnInfo, Engine, QueryResult, StructuredQuery, TableInfo, VectorQuery } from '@aidb/core';
 import { randomUUID } from 'node:crypto';
 import { vectorQueryFromArgs } from '@aidb/core';
-import type { DeleteDocumentsInput, DocumentWriteDriver, DriverTestResult, RunOptions, VectorQueryDriver, WriteDocumentInput, WriteDocumentResult } from './types';
+import type { CreateObjectInput, DeleteDocumentsInput, DocumentWriteDriver, DriverTestResult, ObjectCreateDriver, RunOptions, VectorQueryDriver, WriteDocumentInput, WriteDocumentResult } from './types';
 import { DbError } from './types';
 
 export interface QdrantOptions {
@@ -59,7 +59,7 @@ function pointsToResult(
   };
 }
 
-export class QdrantDriver implements VectorQueryDriver, DocumentWriteDriver {
+export class QdrantDriver implements VectorQueryDriver, DocumentWriteDriver, ObjectCreateDriver {
   engine: Engine = 'qdrant';
 
   constructor(private opts: QdrantOptions) {}
@@ -242,6 +242,22 @@ export class QdrantDriver implements VectorQueryDriver, DocumentWriteDriver {
 
   async runParams(): Promise<QueryResult> {
     throw new DbError('Qdrant 不支持参数化 SQL，请使用向量查询', { code: 'VECTOR_ONLY' });
+  }
+
+  async createObject(input: CreateObjectInput, opts: RunOptions = {}): Promise<{ name: string; kind: string }> {
+    const name = input.name.trim();
+    if (!name) throw new DbError('集合名不能为空', { code: 'VECTOR_COLLECTION' });
+    const dimension = Math.trunc(Number(input.dimension ?? 0));
+    if (!Number.isFinite(dimension) || dimension < 1 || dimension > 65536) {
+      throw new DbError('向量维度需要在 1-65536 之间', { code: 'VECTOR_DIMENSION' });
+    }
+    const distance = ['Cosine', 'Euclid', 'Dot', 'Manhattan'].includes(String(input.distance)) ? String(input.distance) : 'Cosine';
+    await this.request(
+      `/collections/${encodeURIComponent(name)}`,
+      { method: 'PUT', body: JSON.stringify({ vectors: { size: dimension, distance } }) },
+      opts.timeoutMs ?? 30000,
+    );
+    return { name, kind: 'collection' };
   }
 
   async close(): Promise<void> {

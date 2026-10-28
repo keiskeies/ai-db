@@ -36,7 +36,7 @@ import {
 import type { GatewayConfig } from './config';
 import { createDriver, DbError, type Driver } from './drivers';
 import { normalizeMql } from './drivers/mongodb';
-import { supportsDocumentWrite, supportsStructuredQuery, supportsVectorSearch } from './drivers/types';
+import { supportsDocumentWrite, supportsObjectCreate, supportsStructuredQuery, supportsVectorSearch } from './drivers/types';
 import { embedText } from './embeddings';
 import type { Store } from './store';
 
@@ -338,6 +338,45 @@ export class ConnectionManager {
   /** 批量写入历史只留摘要，避免把整批文档塞进历史表。 */
   private describeBatch(collection: string, count: number, ids: string[]): string {
     return JSON.stringify({ collection, count, ids: ids.slice(0, 5) });
+  }
+
+  /** 向量/搜索引擎的对象创建（非 SQL DDL）：Qdrant 集合、ES/OpenSearch 索引、Weaviate class。 */
+  async createObject(
+    connectionId: string,
+    input: { name: string; dimension?: number; distance?: string; fields?: Array<{ name: string; type: string }> },
+    opts: QueryOptions,
+  ): Promise<{ name: string; kind: string }> {
+    const conn = this.store.getConnection(connectionId);
+    if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+    const meta = engineMeta(conn.engine);
+    if (conn.readonly) {
+      throw new DbError('只读连接不允许创建集合/索引', { code: 'READONLY', status: 403, hint: '在连接设置中关闭只读后才可建对象' });
+    }
+    if (!['vector', 'search'].includes(meta.model)) {
+      throw new DbError(`${meta.label} 暂不支持通过本界面创建对象`, {
+        code: 'UNSUPPORTED_ENGINE',
+        hint: 'Milvus 需要完整字段与索引定义，请使用 SDK 或 REST 建集合',
+      });
+    }
+    if (!input.name?.trim()) throw new DbError('名称不能为空', { code: 'OBJECT_NAME' });
+    const driver = await this.driverFor(connectionId);
+    if (!supportsObjectCreate(driver)) {
+      throw new DbError(`${meta.label} 驱动不支持创建对象`, { code: 'UNSUPPORTED_ENGINE' });
+    }
+    const started = Date.now();
+    const result = await driver.createObject(
+      { name: input.name.trim(), dimension: input.dimension, distance: input.distance, fields: input.fields ?? [] },
+      { database: opts.database, timeoutMs: opts.timeoutMs },
+    );
+    this.invalidate(connectionId);
+    this.store.addHistory({
+      connectionId,
+      database: opts.database ?? conn.database,
+      sql: JSON.stringify({ createObject: result, dimension: input.dimension, distance: input.distance, fields: (input.fields ?? []).length }),
+      status: 'ok',
+      durationMs: Date.now() - started,
+    });
+    return result;
   }
 
   async writeDocuments(

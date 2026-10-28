@@ -175,6 +175,35 @@ export const TOOLS: ToolDefinition[] = [
     summarize: (a) => `向量检索 ${a.collection ?? ''}${a.field ? ` · ${a.field}` : ''}`.trim(),
   },
   {
+    name: 'create_collection',
+    description:
+      'Create a vector collection (Qdrant: needs dimension, optional distance Cosine/Euclid/Dot/Manhattan), an Elasticsearch/OpenSearch index (optional field list with mapping types), or a Weaviate class (property list). Milvus and SQL engines are refused: use their DDL paths.',
+    risk: 'ddl',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connectionId', 'name'],
+      properties: {
+        ...connectionProp,
+        ...databaseProp,
+        name: { type: 'string', description: 'Collection, index or class name' },
+        dimension: { type: 'integer', minimum: 1, maximum: 65536, description: 'Vector dimension (Qdrant only)' },
+        distance: { type: 'string', enum: ['Cosine', 'Euclid', 'Dot', 'Manhattan'] },
+        fields: {
+          type: 'array',
+          maxItems: 200,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['name', 'type'],
+            properties: { name: { type: 'string' }, type: { type: 'string' } },
+          },
+        },
+      },
+    },
+    summarize: (a) => `创建集合 ${a.name ?? ''}`.trim(),
+  },
+  {
     name: 'upsert_document',
     description:
       'Create or replace documents in a MongoDB collection, a Qdrant/Weaviate/Milvus collection or an Elasticsearch/OpenSearch index. Pass one document or a documents array (max 500). Vector engines need a vector field; ids live inside each document (_id for MongoDB and Elasticsearch).',

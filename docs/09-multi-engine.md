@@ -107,7 +107,8 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - 查询：JSON，`op = scroll` 浏览；提供 `vector` 或 `text` 时执行相似度检索；Qdrant 支持命名向量 `field`。
 - 结果：id、score 与 payload/entity/properties 字段，`resultKind = 'vectors'`。
 - 文本检索：`text` 由网关调用 Embedding Provider 转成向量；未配置时可直接传 `vector`。
-- 写入：`upsert_document` 单条/批量、`import_documents` CSV 批量导入（id/vector 列可指定）、`delete_documents` 按 id 列表删除；不支持 DDL、备份与 SQL 工具。
+- 写入：`upsert_document` 单条/批量、`import_documents` CSV 批量导入（id/vector 列可指定）、`delete_documents` 按 id 列表删除。
+- 建对象：Qdrant / Elasticsearch / OpenSearch / Weaviate 支持通过对象树菜单或 `create_collection` 创建集合/索引/class；Milvus 需要完整字段与索引定义，界面明确拒绝。不支持 SQL DDL 设计器与备份。
 - 导出：查询结果可导出 CSV/JSON/XML（INSERT 脚本仅 SQL 引擎）。
 
 ### Cassandra / ScyllaDB
@@ -147,7 +148,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 
 ## 6. Agent 工具
 
-工具总数 34：
+工具总数 35：
 
 | 工具 | 作用 |
 |---|---|
@@ -158,6 +159,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 | `upsert_document` | 批量写入文档/向量点（MongoDB / Qdrant / Weaviate / Milvus / ES / OpenSearch） |
 | `delete_documents` | 按 id 列表删除向量点/搜索文档 |
 | `import_documents` | CSV 批量导入文档/向量点 |
+| `create_collection` | 创建向量集合 / 搜索索引 / Weaviate class |
 | `run_cql` | Cassandra / ScyllaDB CQL（支持 `?` 参数） |
 | `vector_search` | pgvector / Qdrant / Milvus / Weaviate 向量检索（text 走 Embedding） |
 | `search_index` | Elasticsearch / OpenSearch `_search` JSON DSL |

@@ -215,6 +215,15 @@ export const api = {
     text?: string;
     topK?: number;
   }) => request<{ result: QueryResult }>('/vector/search', { method: 'POST', body: JSON.stringify(body) }),
+  createObject: (body: {
+    connectionId: string;
+    database?: string;
+    name: string;
+    dimension?: number;
+    distance?: string;
+    fields?: Array<{ name: string; type: string }>;
+  }) =>
+    request<{ result: { name: string; kind: string }; schemas: unknown[] }>('/objects/create', { method: 'POST', body: JSON.stringify(body) }),
   upsertDocuments: (body: { connectionId: string; database?: string; collection: string; documents: Record<string, unknown>[] }) =>
     request<{ result: { ids: string[]; upserted: number } }>('/documents/upsert', { method: 'POST', body: JSON.stringify(body) }),
   deleteDocuments: (body: { connectionId: string; database?: string; collection: string; ids: string[] }) =>

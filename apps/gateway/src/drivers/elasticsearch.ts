@@ -1,6 +1,6 @@
 import type { ColumnInfo, Engine, QueryResult, SearchQuery, StructuredQuery, TableInfo } from '@aidb/core';
 import { searchQueryFromArgs } from '@aidb/core';
-import type { DeleteDocumentsInput, DocumentWriteDriver, DriverTestResult, RunOptions, WriteDocumentInput, WriteDocumentResult } from './types';
+import type { CreateObjectInput, DeleteDocumentsInput, DocumentWriteDriver, DriverTestResult, ObjectCreateDriver, RunOptions, WriteDocumentInput, WriteDocumentResult } from './types';
 import { DbError } from './types';
 
 export interface ElasticsearchOptions {
@@ -41,6 +41,8 @@ function valueOf(hit: Record<string, any>, key: string): unknown {
   return current;
 }
 
+const ES_TYPES = new Set(['text', 'keyword', 'boolean', 'long', 'integer', 'short', 'double', 'float', 'date', 'ip', 'nested', 'object', 'geo_point', 'binary']);
+
 function hitsToResult(hits: Array<Record<string, any>>, started: number, statement: string, truncated: boolean): QueryResult {
   const keys: string[] = [];
   const seen = new Set<string>();
@@ -70,7 +72,7 @@ function hitsToResult(hits: Array<Record<string, any>>, started: number, stateme
   };
 }
 
-export class ElasticsearchDriver implements DocumentWriteDriver {
+export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDriver {
   engine: Engine;
 
   constructor(private opts: ElasticsearchOptions, engine: Engine = 'elasticsearch') {
@@ -217,6 +219,23 @@ export class ElasticsearchDriver implements DocumentWriteDriver {
       opts.timeoutMs ?? 30000,
     );
     return { deleted: Number(response?.deleted ?? input.ids.length) };
+  }
+
+  async createObject(input: CreateObjectInput, opts: RunOptions = {}): Promise<{ name: string; kind: string }> {
+    const name = input.name.trim();
+    if (!name) throw new DbError('索引名不能为空', { code: 'SEARCH_INDEX' });
+    const properties: Record<string, unknown> = {};
+    for (const field of input.fields ?? []) {
+      const field_ = field.name.trim();
+      if (!field_) continue;
+      properties[field_] = { type: ES_TYPES.has(String(field.type).toLowerCase()) ? String(field.type).toLowerCase() : 'keyword' };
+    }
+    await this.request(
+      `/${encodeURIComponent(name)}`,
+      { method: 'PUT', body: JSON.stringify(Object.keys(properties).length ? { mappings: { properties } } : {}) },
+      opts.timeoutMs ?? 30000,
+    );
+    return { name, kind: 'index' };
   }
 
   async close(): Promise<void> {

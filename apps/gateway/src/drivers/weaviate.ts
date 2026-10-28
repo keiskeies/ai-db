@@ -1,6 +1,6 @@
 import type { ColumnInfo, Engine, QueryResult, StructuredQuery, TableInfo, VectorQuery } from '@aidb/core';
 import { vectorQueryFromArgs } from '@aidb/core';
-import type { DeleteDocumentsInput, DocumentWriteDriver, DriverTestResult, RunOptions, VectorQueryDriver, WriteDocumentInput, WriteDocumentResult } from './types';
+import type { CreateObjectInput, DeleteDocumentsInput, DocumentWriteDriver, DriverTestResult, ObjectCreateDriver, RunOptions, VectorQueryDriver, WriteDocumentInput, WriteDocumentResult } from './types';
 import { DbError } from './types';
 
 export interface WeaviateOptions {
@@ -9,6 +9,21 @@ export interface WeaviateOptions {
   apiKey?: string;
   ssl?: boolean;
 }
+
+const WEAVIATE_TYPES: Record<string, string> = {
+  text: 'text',
+  string: 'text',
+  keyword: 'text',
+  int: 'int',
+  integer: 'int',
+  long: 'int',
+  number: 'number',
+  float: 'number',
+  double: 'number',
+  bool: 'boolean',
+  boolean: 'boolean',
+  date: 'date',
+};
 
 function scalar(value: unknown): unknown {
   if (value === null || value === undefined) return null;
@@ -57,7 +72,7 @@ function objectsToResult(
   };
 }
 
-export class WeaviateDriver implements VectorQueryDriver, DocumentWriteDriver {
+export class WeaviateDriver implements VectorQueryDriver, DocumentWriteDriver, ObjectCreateDriver {
   engine: Engine = 'weaviate';
 
   constructor(private opts: WeaviateOptions) {}
@@ -217,6 +232,21 @@ export class WeaviateDriver implements VectorQueryDriver, DocumentWriteDriver {
       deleted += 1;
     }
     return { deleted };
+  }
+
+  async createObject(input: CreateObjectInput, opts: RunOptions = {}): Promise<{ name: string; kind: string }> {
+    const raw = input.name.trim();
+    if (!raw) throw new DbError('class 名不能为空', { code: 'VECTOR_COLLECTION' });
+    const name = raw.charAt(0).toUpperCase() + raw.slice(1);
+    const properties = (input.fields ?? [])
+      .filter((field) => field.name.trim())
+      .map((field) => ({ name: field.name.trim(), dataType: [WEAVIATE_TYPES[field.type.toLowerCase()] ?? 'text'] }));
+    await this.request(
+      '/v1/schema',
+      { method: 'POST', body: JSON.stringify({ class: name, vectorizer: 'none', properties }) },
+      opts.timeoutMs ?? 30000,
+    );
+    return { name, kind: 'class' };
   }
 
   async close(): Promise<void> {
