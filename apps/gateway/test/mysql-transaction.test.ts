@@ -9,6 +9,8 @@ import { createGateway } from '../src/server';
 const PORT = process.env.AIDB_TEST_MYSQL_PORT ? Number(process.env.AIDB_TEST_MYSQL_PORT) : undefined;
 const PASSWORD = process.env.AIDB_TEST_MYSQL_PASSWORD ?? 'testpass';
 const DB = 'aidb_tx';
+const PG_PORT = process.env.AIDB_TEST_PG_TX_PORT ? Number(process.env.AIDB_TEST_PG_TX_PORT) : undefined;
+const PG_PASSWORD = process.env.AIDB_TEST_PG_TX_PASSWORD ?? 'testpass';
 
 async function harness() {
   const home = mkdtempSync(join(tmpdir(), 'aidb-tx-'));
@@ -121,6 +123,55 @@ test('MySQL 跨请求事务：提交保留、回滚撤销、只读与非 MySQL �
   });
   assert.equal(ro.status, 403);
   assert.equal((ro.body as any).error.code, 'READONLY');
+
+  await run('DROP TABLE IF EXISTS tx_probe');
+});
+
+test('PostgreSQL 跨请求事务：提交保留、回滚撤销', { skip: !PG_PORT }, async () => {
+  const env = await harness();
+  after(env.close);
+  const created = await env.api<{ connection: { id: string } }>('/connections', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: 'pg-tx',
+      engine: 'postgresql',
+      host: '127.0.0.1',
+      port: PG_PORT,
+      user: 'postgres',
+      password: PG_PASSWORD,
+      database: 'aidb_tx',
+      groupName: 'live',
+      color: 'blue',
+      environment: 'dev',
+      readonly: false,
+    }),
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const connectionId = created.body.connection.id;
+
+  const run = (sql: string, sessionId?: string) =>
+    env.api<{ batch: { sets: Array<{ rows: unknown[][] }> } }>('/query', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId, database: 'aidb_tx', sql, sessionId }),
+    });
+
+  await run('DROP TABLE IF EXISTS tx_probe');
+  await run('CREATE TABLE tx_probe (id INT PRIMARY KEY, note VARCHAR(32))');
+  await run("INSERT INTO tx_probe VALUES (1, 'seed')");
+
+  assert.equal((await env.api('/tx/begin', { method: 'POST', body: JSON.stringify({ connectionId, sessionId: 'pg-commit', database: 'aidb_tx' }) })).status, 200);
+  await run("INSERT INTO tx_probe VALUES (2, 'committed')", 'pg-commit');
+  assert.equal((await env.api('/tx/commit', { method: 'POST', body: JSON.stringify({ sessionId: 'pg-commit' }) })).status, 200);
+  const afterCommit = await run('SELECT id FROM tx_probe ORDER BY id');
+  assert.deepEqual(afterCommit.body.batch.sets[0].rows.map((row) => row[0]), [1, 2], '提交后新行可见');
+
+  assert.equal((await env.api('/tx/begin', { method: 'POST', body: JSON.stringify({ connectionId, sessionId: 'pg-rollback', database: 'aidb_tx' }) })).status, 200);
+  await run("INSERT INTO tx_probe VALUES (3, 'rolled-back')", 'pg-rollback');
+  assert.equal((await env.api('/tx/rollback', { method: 'POST', body: JSON.stringify({ sessionId: 'pg-rollback' }) })).status, 200);
+  const afterRollback = await run('SELECT id FROM tx_probe ORDER BY id');
+  assert.deepEqual(afterRollback.body.batch.sets[0].rows.map((row) => row[0]), [1, 2], '回滚后新行不存在');
+
+  assert.equal((await env.api('/tx/commit', { method: 'POST', body: JSON.stringify({ sessionId: 'pg-rollback' }) })).status, 404);
 
   await run('DROP TABLE IF EXISTS tx_probe');
 });

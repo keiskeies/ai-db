@@ -921,7 +921,7 @@ export class ConnectionManager {
     if (!supportsTransaction(driver)) {
       throw new DbError(`${engineMeta(conn.engine).label} 暂不支持跨请求事务`, {
         code: 'UNSUPPORTED_ENGINE',
-        hint: '目前只有 MySQL 支持 begin/commit/rollback',
+        hint: '目前 MySQL 与 PostgreSQL 支持 begin/commit/rollback',
       });
     }
     return { conn, driver };

@@ -216,7 +216,7 @@
 | 数据库内查找 | 打开全局数据库搜索 |
 | 命令列 / 运行 SQL 文件 | 打开查询窗口 |
 
-> 事务：MySQL 连接支持 Navicat 式的跨请求事务（`POST /tx/begin` / `/tx/commit` / `/tx/rollback`，事务内的 `/query` 带上 `sessionId` 即走被固定的那条连接）；其它引擎的单元格编辑仍即时提交。
+> 事务：MySQL 与 PostgreSQL 连接支持 Navicat 式的跨请求事务（`POST /tx/begin` / `/tx/commit` / `/tx/rollback`，事务内的 `/query` 带上 `sessionId` 即走被固定的那条连接）；其它引擎的单元格编辑仍即时提交。
 
 ## 8.8 非关系型引擎（v0.4-dev）
 

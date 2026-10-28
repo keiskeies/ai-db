@@ -42,6 +42,8 @@ const SYSTEM_SCHEMAS = `('pg_catalog','information_schema')`;
 export class PostgresDriver implements Driver {
   engine: Engine;
   private pools = new Map<string, Pool>();
+  /** 跨请求事务：会话 id → 被固定的池内 client。 */
+  private txClients = new Map<string, import('pg').PoolClient>();
 
   constructor(private opts: PgOptions, engine: Engine = 'postgresql') {
     this.engine = engine;
@@ -216,25 +218,81 @@ export class PostgresDriver implements Driver {
         values: params,
         query_timeout: opts.timeoutMs,
       } as any)) as import('pg').QueryResult<Record<string, unknown>>;
-      const columns = (res.fields ?? []).map((f) => ({ name: f.name, type: OIDS[f.dataTypeID] ?? String(f.dataTypeID) }));
-      const all = res.rows as Array<Record<string, unknown>>;
-      const limit = opts.maxRows && opts.maxRows > 0 ? opts.maxRows : all.length;
-      const rows = all.slice(0, limit);
-      return {
-        columns,
-        rows: toRowArray(columns, rows),
-        rowCount: rows.length,
-        affected: res.rowCount ?? undefined,
-        durationMs: Date.now() - started,
-        truncated: all.length > rows.length,
-        statement: sql,
-      };
+      return this.toResult(res, started, sql, opts.maxRows);
     } catch (err: any) {
       throw new DbError(err.message ?? 'PostgreSQL 执行失败', { code: err.code ?? 'PG_ERROR' });
     }
   }
 
+  private toResult(res: import('pg').QueryResult<Record<string, unknown>>, started: number, sql: string, maxRows?: number): QueryResult {
+    const columns = (res.fields ?? []).map((f) => ({ name: f.name, type: OIDS[f.dataTypeID] ?? String(f.dataTypeID) }));
+    const all = res.rows as Array<Record<string, unknown>>;
+    const limit = maxRows && maxRows > 0 ? maxRows : all.length;
+    const rows = all.slice(0, limit);
+    return {
+      columns,
+      rows: toRowArray(columns, rows),
+      rowCount: rows.length,
+      affected: res.rowCount ?? undefined,
+      durationMs: Date.now() - started,
+      truncated: all.length > rows.length,
+      statement: sql,
+    };
+  }
+
+  /** 开启跨请求事务：从连接池签出一条 client 固定住，后续语句都走它。 */
+  async beginTransaction(sessionId: string, database?: string): Promise<void> {
+    if (this.txClients.has(sessionId)) throw new DbError('该会话已有进行中的事务', { code: 'TX_ACTIVE' });
+    const client = await this.pool(database).connect();
+    try {
+      await client.query('BEGIN');
+    } catch (err: any) {
+      client.release();
+      throw new DbError(err?.message ?? '开启事务失败', { code: 'TX_BEGIN' });
+    }
+    this.txClients.set(sessionId, client);
+  }
+
+  async runInTransaction(sessionId: string, sql: string, params: unknown[], opts: RunOptions = {}): Promise<QueryResult> {
+    const client = this.txClients.get(sessionId);
+    if (!client) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
+    const started = Date.now();
+    try {
+      const res = (await client.query({ text: sql, values: params, query_timeout: opts.timeoutMs } as any)) as import('pg').QueryResult<Record<string, unknown>>;
+      return this.toResult(res, started, sql, opts.maxRows);
+    } catch (err: any) {
+      throw new DbError(err.message ?? 'PostgreSQL 事务执行失败', { code: err.code ?? 'PG_ERROR' });
+    }
+  }
+
+  async commitTransaction(sessionId: string): Promise<void> {
+    await this.finishTransaction(sessionId, 'COMMIT');
+  }
+
+  async rollbackTransaction(sessionId: string): Promise<void> {
+    await this.finishTransaction(sessionId, 'ROLLBACK');
+  }
+
+  private async finishTransaction(sessionId: string, command: 'COMMIT' | 'ROLLBACK'): Promise<void> {
+    const client = this.txClients.get(sessionId);
+    if (!client) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
+    this.txClients.delete(sessionId);
+    try {
+      await client.query(command);
+    } catch (err: any) {
+      throw new DbError(err?.message ?? `${command === 'COMMIT' ? '提交' : '回滚'}事务失败`, {
+        code: command === 'COMMIT' ? 'TX_COMMIT' : 'TX_ROLLBACK',
+      });
+    } finally {
+      client.release();
+    }
+  }
+
+  /** 连接被回收前先回滚，避免事务悬挂占着连接。 */
   async close(): Promise<void> {
+    for (const [sessionId] of this.txClients) {
+      await this.finishTransaction(sessionId, 'ROLLBACK').catch(() => undefined);
+    }
     await Promise.all([...this.pools.values()].map((p) => p.end().catch(() => undefined)));
     this.pools.clear();
   }
