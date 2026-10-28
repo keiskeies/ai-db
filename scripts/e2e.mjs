@@ -94,6 +94,8 @@ const QDRANT_PORT = process.env.AIDB_TEST_QDRANT_PORT ? Number(process.env.AIDB_
 const MILVUS_PORT = process.env.AIDB_TEST_MILVUS_PORT ? Number(process.env.AIDB_TEST_MILVUS_PORT) : undefined;
 const DUCKDB_E2E = process.env.AIDB_TEST_DUCKDB === '1';
 const TDENGINE_PORT = process.env.AIDB_TEST_TDENGINE_PORT ? Number(process.env.AIDB_TEST_TDENGINE_PORT) : undefined;
+const FALKORDB_PORT = process.env.AIDB_TEST_FALKORDB_PORT ? Number(process.env.AIDB_TEST_FALKORDB_PORT) : undefined;
+const FALKORDB_GRAPH = 'aidb_e2e';
 if (MONGO_PORT) {
   const { MongoClient } = await import('mongodb');
   const client = new MongoClient(`mongodb://127.0.0.1:${MONGO_PORT}`, { serverSelectionTimeoutMS: 5000 });
@@ -193,6 +195,18 @@ if (TDENGINE_PORT) {
   await sql("INSERT INTO d1 USING meters TAGS ('beijing') VALUES (NOW, 10.3)", 'aidb_e2e');
   await sql("INSERT INTO d2 USING meters TAGS ('shanghai') VALUES (NOW, 12.1)", 'aidb_e2e');
 }
+if (FALKORDB_PORT) {
+  const { Redis } = await import('ioredis');
+  const client = new Redis({ host: '127.0.0.1', port: FALKORDB_PORT, lazyConnect: true });
+  await client.connect();
+  await client.call('GRAPH.QUERY', FALKORDB_GRAPH, 'MATCH (n) DETACH DELETE n');
+  await client.call(
+    'GRAPH.QUERY',
+    FALKORDB_GRAPH,
+    "CYPHER a='Ada' b='Linus' CREATE (:Person {name: $a})-[:KNOWS {since: 2020}]->(:Person {name: $b})",
+  );
+  await client.quit();
+}
 const duckdbPath = join(home, 'duckdb-e2e.duckdb');
 if (DUCKDB_E2E) {
   const created = await api('/connections', {
@@ -267,7 +281,7 @@ await page.waitForTimeout(150);
 await page.click('[data-testid="sidebar-new-connection"]');
 await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
 const engineOptions = await page.locator('[data-testid="connection-engine"] option').count();
-check('connection form lists 37 engines', engineOptions === 37, String(engineOptions));
+check('connection form lists 38 engines', engineOptions === 38, String(engineOptions));
 await page.screenshot({ path: join(shots, 'desktop-connection-engines.png') });
 await page.locator('.modal-head .icon-btn').click();
 await page.waitForTimeout(200);
@@ -426,6 +440,30 @@ if (TDENGINE_PORT) {
   check('TDengine data grid returns rows', tdRows === 2, `${tdRows} rows`);
 }
 
+if (FALKORDB_PORT) {
+  await page.click('[data-testid="sidebar-new-connection"]');
+  await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
+  await page.fill('[data-testid="connection-name"]', 'FalkorDB E2E');
+  await page.selectOption('[data-testid="connection-engine"]', 'falkordb');
+  await page.fill('[data-testid="connection-host"]', '127.0.0.1');
+  await page.fill('[data-testid="connection-port"]', String(FALKORDB_PORT));
+  await page.fill('[data-testid="connection-database"]', FALKORDB_GRAPH);
+  await page.click('[data-testid="connection-save"]');
+  const falkorRow = page.locator('.conn-row', { hasText: 'FalkorDB E2E' });
+  await falkorRow.waitFor({ timeout: 15000 });
+  await page.waitForSelector('[title="节点标签 Person"]', { timeout: 25000 });
+  check('FalkorDB connection expands to labels', true);
+  await page.click('[title="节点标签 Person"]');
+  await page.locator('[data-testid="query-run"]').last().click();
+  await page.waitForSelector('[data-testid="query-result-grid"] tbody tr', { timeout: 20000 });
+  const falkorRows = await page.locator('[data-testid="query-result-grid"] tbody tr').count();
+  check('FalkorDB Cypher query returns nodes', falkorRows === 2, `${falkorRows} rows`);
+  await page.click('[data-testid="result-mode-graph"]');
+  await page.waitForSelector('[data-testid="graph-view"]', { timeout: 10000 });
+  const falkorNodes = await page.locator('[data-testid="graph-node"]').count();
+  check('FalkorDB graph view renders nodes', falkorNodes === 2, `${falkorNodes} nodes`);
+}
+
 if (DUCKDB_E2E) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
@@ -443,7 +481,7 @@ if (DUCKDB_E2E) {
   check('DuckDB data grid returns rows', duckRows === 2, `${duckRows} rows`);
 }
 
-if (MONGO_PORT || REDIS_PORT || NEO4J_PORT || DM_PORT || QDRANT_PORT || DUCKDB_E2E || TDENGINE_PORT) {
+if (MONGO_PORT || REDIS_PORT || NEO4J_PORT || DM_PORT || QDRANT_PORT || DUCKDB_E2E || TDENGINE_PORT || FALKORDB_PORT) {
   // 恢复初始工作区：bootstrap 会把 active connection 指回 demo，并重新出现欢迎页
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });

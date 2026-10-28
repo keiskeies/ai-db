@@ -4,6 +4,7 @@ import { CassandraDriver } from './cassandra';
 import { DmDriver } from './dm';
 import { DuckdbDriver } from './duckdb';
 import { ElasticsearchDriver } from './elasticsearch';
+import { FalkorDriver } from './falkordb';
 import { MongoDriver } from './mongodb';
 import { MilvusDriver } from './milvus';
 import { MysqlDriver } from './mysql';
@@ -202,6 +203,17 @@ export async function createDriver(config: ConnectionConfig, secret: ConnectionS
         host: connectHost,
         port: connectPort,
         apiKey: secret.password,
+        ssl: config.ssl,
+      });
+      return { driver, close: () => closeWithTunnel(driver) };
+    }
+    case 'falkordb': {
+      const driver = new FalkorDriver({
+        host: connectHost,
+        port: connectPort,
+        username: config.username,
+        password: secret.password,
+        database: config.database || meta.defaultDatabase,
         ssl: config.ssl,
       });
       return { driver, close: () => closeWithTunnel(driver) };

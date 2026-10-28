@@ -354,8 +354,8 @@ export class ToolExecutor {
 
       case 'run_cypher': {
         const conn = this.requireConnection(call, ctx);
-        if (conn.engine !== 'neo4j' && conn.engine !== 'memgraph') {
-          throw new DbError('run_cypher 仅用于 Neo4j/Memgraph 连接', { code: 'UNSUPPORTED_ENGINE', hint: 'SQL 连接请使用 run_sql' });
+        if (!engineMeta(conn.engine).languages.includes('cypher')) {
+          throw new DbError('run_cypher 仅用于 Neo4j/Memgraph/FalkorDB 连接', { code: 'UNSUPPORTED_ENGINE', hint: 'SQL 连接请使用 run_sql' });
         }
         const query = cypherQueryFromArgs(a);
         if (!query.text.trim()) throw new DbError('Cypher 不能为空', { code: 'CYPHER_EMPTY' });
@@ -465,7 +465,7 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
         if (!tableName) throw new DbError('table 不能为空');
         const { table } = await this.manager.findTable(conn.id, database, tableName);
         const limit = Math.min(100, Math.max(1, Number(a.limit) || 10));
-        if (conn.engine === 'neo4j') {
+        if (engineMeta(conn.engine).languages.includes('cypher')) {
           const label = table.name.replace(/`/g, '``');
           const text =
             table.kind === 'edge_label'
