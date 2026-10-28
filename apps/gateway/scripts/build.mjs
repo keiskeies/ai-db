@@ -10,7 +10,7 @@ await build({
   target: 'node22',
   outfile: 'dist/index.js',
   sourcemap: true,
-  external: ['ssh2', 'pg-native', 'cpu-features', 'bufferutil', 'utf-8-validate'],
+  external: ['ssh2', 'pg-native', 'cpu-features', 'bufferutil', 'utf-8-validate', '@duckdb/node-bindings', '@duckdb/node-bindings-*'],
   banner: {
     js: "import { createRequire as __aidbCreateRequire } from 'node:module';\nconst require = __aidbCreateRequire(import.meta.url);",
   },

@@ -36,7 +36,18 @@ export interface CypherQuery {
   params?: Record<string, unknown>;
 }
 
-export type StructuredQuery = MqlQuery | RedisQuery | CypherQuery;
+export interface VectorQuery {
+  language: 'vector';
+  collection: string;
+  op?: 'search' | 'scroll';
+  vector?: number[];
+  text?: string;
+  topK: number;
+  filter?: Record<string, unknown>;
+  field?: string;
+}
+
+export type StructuredQuery = MqlQuery | RedisQuery | CypherQuery | VectorQuery;
 
 export function queryLanguageOf(query: StructuredQuery): QueryLanguage {
   return query.language;
@@ -45,6 +56,7 @@ export function queryLanguageOf(query: StructuredQuery): QueryLanguage {
 export function formatStructuredQuery(query: StructuredQuery): string {
   if (query.language === 'mql') return JSON.stringify(query);
   if (query.language === 'cypher') return query.text;
+  if (query.language === 'vector') return JSON.stringify(query);
   return [query.command, ...(query.args ?? [])].join(' ');
 }
 
@@ -85,6 +97,23 @@ export function cypherQueryFromArgs(args: Record<string, unknown>): CypherQuery 
       ? (args.params as Record<string, unknown>)
       : undefined;
   return { language: 'cypher', text, params };
+}
+
+export function vectorQueryFromArgs(args: Record<string, unknown>): VectorQuery {
+  const vector = Array.isArray(args.vector)
+    ? args.vector.map((value) => Number(value)).filter((value) => Number.isFinite(value))
+    : undefined;
+  const query: VectorQuery = {
+    language: 'vector',
+    collection: typeof args.collection === 'string' ? args.collection : '',
+    topK: Math.max(1, Math.min(1000, Number(args.topK) || 10)),
+  };
+  if (vector && vector.length) query.vector = vector;
+  if (typeof args.text === 'string' && args.text.trim()) query.text = args.text.trim();
+  if (typeof args.field === 'string' && args.field.trim()) query.field = args.field.trim();
+  if (args.filter && typeof args.filter === 'object' && !Array.isArray(args.filter)) query.filter = args.filter as Record<string, unknown>;
+  if (args.op === 'scroll' || args.op === 'search') query.op = args.op;
+  return query;
 }
 
 const MQL_RISK: Record<string, QueryKind> = {
@@ -235,9 +264,16 @@ export function classifyRedis(query: RedisQuery): QuerySafety {
 /** 供 manager / agent 共用的只读拒绝文案。 */
 export function readonlyViolationForQuery(query: StructuredQuery): string | null {
   const safety =
-    query.language === 'mql' ? classifyMql(query) : query.language === 'redis' ? classifyRedis(query) : classifyCypher(query);
+    query.language === 'mql'
+      ? classifyMql(query)
+      : query.language === 'redis'
+        ? classifyRedis(query)
+        : query.language === 'cypher'
+          ? classifyCypher(query)
+          : classifyVector(query);
   if (safety.kind === 'read') return null;
-  const label = query.language === 'mql' ? 'MongoDB 写操作' : query.language === 'redis' ? (query as RedisQuery).command : 'Cypher 写操作';
+  const label =
+    query.language === 'mql' ? 'MongoDB 写操作' : query.language === 'redis' ? (query as RedisQuery).command : query.language === 'cypher' ? 'Cypher 写操作' : '向量写操作';
   return `只读连接不允许执行 ${label}${safety.reason ? `（${safety.reason}）` : ''}`;
 }
 
@@ -314,6 +350,19 @@ export function classifyCypher(query: CypherQuery): QuerySafety {
     if ((procedure.startsWith('DB.') || procedure.startsWith('DBMS.')) && !CYPHER_READ_PROCEDURE.test(procedure)) {
       return { risk: 'write', kind: 'write', reason: `CALL ${procedure}` };
     }
+  }
+  return { risk: 'read', kind: 'read' };
+}
+
+export function classifyVector(query: VectorQuery): QuerySafety {
+  if (!query.collection || !query.collection.trim()) {
+    return { risk: 'destructive', kind: 'destructive', reason: '向量集合名不能为空' };
+  }
+  if (!Number.isFinite(query.topK) || query.topK < 1 || query.topK > 1000) {
+    return { risk: 'destructive', kind: 'destructive', reason: 'topK 必须在 1-1000 之间' };
+  }
+  if (query.vector && query.vector.some((value) => !Number.isFinite(value))) {
+    return { risk: 'destructive', kind: 'destructive', reason: '向量必须全部是有限数值' };
   }
   return { risk: 'read', kind: 'read' };
 }

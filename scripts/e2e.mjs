@@ -82,7 +82,7 @@ const api = async (path, init = {}) => {
 const boot = (await api('/bootstrap')).body;
 const demo = boot.connections.find((c) => c.engine === 'sqlite');
 check('bridge bootstrap', Boolean(demo), demo?.name);
-check('27 agent tools', boot.tools.length === 27, String(boot.tools.length));
+check('28 agent tools', boot.tools.length === 28, String(boot.tools.length));
 
 const MONGO_PORT = process.env.AIDB_TEST_MONGO_PORT ? Number(process.env.AIDB_TEST_MONGO_PORT) : undefined;
 const REDIS_PORT = process.env.AIDB_TEST_REDIS_PORT ? Number(process.env.AIDB_TEST_REDIS_PORT) : undefined;
@@ -90,6 +90,9 @@ const NEO4J_PORT = process.env.AIDB_TEST_NEO4J_PORT ? Number(process.env.AIDB_TE
 const NEO4J_PASSWORD = process.env.AIDB_TEST_NEO4J_PASSWORD ?? 'testpass';
 const DM_PORT = process.env.AIDB_TEST_DM_PORT ? Number(process.env.AIDB_TEST_DM_PORT) : undefined;
 const DM_PASSWORD = process.env.AIDB_TEST_DM_PASSWORD ?? 'SYSDBA';
+const QDRANT_PORT = process.env.AIDB_TEST_QDRANT_PORT ? Number(process.env.AIDB_TEST_QDRANT_PORT) : undefined;
+const MILVUS_PORT = process.env.AIDB_TEST_MILVUS_PORT ? Number(process.env.AIDB_TEST_MILVUS_PORT) : undefined;
+const DUCKDB_E2E = process.env.AIDB_TEST_DUCKDB === '1';
 if (MONGO_PORT) {
   const { MongoClient } = await import('mongodb');
   const client = new MongoClient(`mongodb://127.0.0.1:${MONGO_PORT}`, { serverSelectionTimeoutMS: 5000 });
@@ -156,6 +159,37 @@ if (DM_PORT) {
   });
   await api(`/connections/${id}`, { method: 'DELETE' });
 }
+if (QDRANT_PORT) {
+  const base = `http://127.0.0.1:${QDRANT_PORT}`;
+  await fetch(`${base}/collections/aidb_e2e`, { method: 'DELETE' }).catch(() => undefined);
+  await fetch(`${base}/collections/aidb_e2e`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ vectors: { size: 3, distance: 'Cosine' } }),
+  });
+  await fetch(`${base}/collections/aidb_e2e/points?wait=true`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      points: [
+        { id: 1, vector: [1, 0, 0], payload: { name: 'Ada' } },
+        { id: 2, vector: [0, 1, 0], payload: { name: 'Linus' } },
+      ],
+    }),
+  });
+}
+const duckdbPath = join(home, 'duckdb-e2e.duckdb');
+if (DUCKDB_E2E) {
+  const created = await api('/connections', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'duckdb-seed', engine: 'duckdb', database: duckdbPath, groupName: 'seed', color: 'orange', environment: 'dev', readonly: false }),
+  });
+  if (created.status !== 201) throw new Error(`DuckDB seed connection failed: ${JSON.stringify(created.body)}`);
+  const id = created.body.connection.id;
+  await api('/query', { method: 'POST', body: JSON.stringify({ connectionId: id, sql: 'CREATE OR REPLACE TABLE DUCK_E2E (ID INTEGER, NAME VARCHAR)' }) });
+  await api('/query', { method: 'POST', body: JSON.stringify({ connectionId: id, sql: "INSERT INTO DUCK_E2E VALUES (1, 'Ada'), (2, 'Linus')" }) });
+  await api(`/connections/${id}`, { method: 'DELETE' });
+}
 
 // Mobile static server
 const mime = { '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ttf': 'font/ttf' };
@@ -218,7 +252,7 @@ await page.waitForTimeout(150);
 await page.click('[data-testid="sidebar-new-connection"]');
 await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
 const engineOptions = await page.locator('[data-testid="connection-engine"] option').count();
-check('connection form lists 27 engines', engineOptions === 27, String(engineOptions));
+check('connection form lists 30 engines', engineOptions === 30, String(engineOptions));
 await page.screenshot({ path: join(shots, 'desktop-connection-engines.png') });
 await page.locator('.modal-head .icon-btn').click();
 await page.waitForTimeout(200);
@@ -321,7 +355,56 @@ if (DM_PORT) {
   check('DM data grid returns rows', dmRows === 2, `${dmRows} rows`);
 }
 
-if (MONGO_PORT || REDIS_PORT || NEO4J_PORT || DM_PORT) {
+if (QDRANT_PORT) {
+  await page.click('[data-testid="sidebar-new-connection"]');
+  await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
+  await page.fill('[data-testid="connection-name"]', 'Qdrant E2E');
+  await page.selectOption('[data-testid="connection-engine"]', 'qdrant');
+  await page.fill('[data-testid="connection-host"]', '127.0.0.1');
+  await page.fill('[data-testid="connection-port"]', String(QDRANT_PORT));
+  await page.fill('[data-testid="connection-database"]', 'default');
+  await page.click('[data-testid="connection-save"]');
+  const qdrantRow = page.locator('.conn-row', { hasText: 'Qdrant E2E' });
+  await qdrantRow.waitFor({ timeout: 15000 });
+  await page.waitForSelector('[title="向量集合 aidb_e2e"]', { timeout: 25000 });
+  check('Qdrant connection expands to collections', true);
+  await page.click('[title="向量集合 aidb_e2e"]');
+  await page.waitForSelector('[data-testid="query-run"]', { timeout: 10000 });
+  await page.locator('[data-testid="query-run"]').last().click();
+  await page.waitForSelector('[data-testid="query-result-grid"] tbody tr', { timeout: 20000 });
+  const qdrantRows = await page.locator('[data-testid="query-result-grid"] tbody tr').count();
+  check('Qdrant scroll returns points', qdrantRows === 2, `${qdrantRows} rows`);
+
+  await page.click('[data-testid="open-vector-search"]');
+  await page.waitForSelector('[data-testid="vector-search-run"]', { timeout: 10000 });
+  await page.fill('[data-testid="vector-search-vector"]', '[1, 0, 0]');
+  await page.fill('[data-testid="vector-search-topk"]', '2');
+  await page.click('[data-testid="vector-search-run"]');
+  await page.waitForSelector('[data-testid="vector-result-grid"] tbody tr', { timeout: 20000 });
+  const vectorRows = await page.locator('[data-testid="vector-result-grid"] tbody tr').count();
+  check('Qdrant vector search returns results', vectorRows === 2, `${vectorRows} rows`);
+  await page.locator('.modal-head .icon-btn').last().click();
+  await page.waitForTimeout(200);
+}
+
+if (DUCKDB_E2E) {
+  await page.click('[data-testid="sidebar-new-connection"]');
+  await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
+  await page.fill('[data-testid="connection-name"]', 'DuckDB E2E');
+  await page.selectOption('[data-testid="connection-engine"]', 'duckdb');
+  await page.fill('[data-testid="connection-database"]', duckdbPath);
+  await page.click('[data-testid="connection-save"]');
+  const duckRow = page.locator('.conn-row', { hasText: 'DuckDB E2E' });
+  await duckRow.waitFor({ timeout: 15000 });
+  await page.waitForSelector('[title="TABLE DUCK_E2E"]', { timeout: 25000 });
+  check('DuckDB connection expands to tables', true);
+  await page.click('[title="TABLE DUCK_E2E"]');
+  await page.waitForSelector('[data-testid="data-grid"] tbody tr', { timeout: 20000 });
+  const duckRows = await page.locator('[data-testid="data-grid"] tbody tr').count();
+  check('DuckDB data grid returns rows', duckRows === 2, `${duckRows} rows`);
+}
+
+if (MONGO_PORT || REDIS_PORT || NEO4J_PORT || DM_PORT || QDRANT_PORT || DUCKDB_E2E) {
   // 恢复初始工作区：bootstrap 会把 active connection 指回 demo，并重新出现欢迎页
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });

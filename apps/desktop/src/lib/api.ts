@@ -206,6 +206,15 @@ export const api = {
 
   query: (body: { connectionId: string; sql: string; database?: string; limit?: number; allowMulti?: boolean }) =>
     request<{ batch: QueryBatchResult }>('/query', { method: 'POST', body: JSON.stringify(body) }),
+  vectorSearch: (body: {
+    connectionId: string;
+    database?: string;
+    collection: string;
+    field?: string;
+    vector?: number[];
+    text?: string;
+    topK?: number;
+  }) => request<{ result: QueryResult }>('/vector/search', { method: 'POST', body: JSON.stringify(body) }),
   data: (params: { connectionId: string; table: string; database?: string; limit?: number; offset?: number; orderBy?: string; orderDir?: string; where?: string }) => {
     const q = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== null && value !== '') q.set(key, String(value));

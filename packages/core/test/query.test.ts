@@ -4,6 +4,7 @@ import {
   classifyCypher,
   classifyMql,
   classifyRedis,
+  classifyVector,
   cypherQueryFromArgs,
   formatStructuredQuery,
   mqlQueryFromArgs,
@@ -86,4 +87,13 @@ test('Cypher classification distinguishes reads, writes, DDL and destructive cla
   assert.equal(readonlyViolationForQuery({ language: 'cypher', text: 'MATCH (n) RETURN n' }), null);
   assert.match(String(readonlyViolationForQuery({ language: 'cypher', text: 'MATCH (n) DELETE n' })), /只读/);
   assert.deepEqual(cypherQueryFromArgs({ query: 'RETURN 1', params: { x: 1 } }), { language: 'cypher', text: 'RETURN 1', params: { x: 1 } });
+});
+
+test('vector queries are validated and read-only', () => {
+  assert.equal(classifyVector({ language: 'vector', collection: 'docs', vector: [1, 0], topK: 5 }).kind, 'read');
+  assert.equal(classifyVector({ language: 'vector', collection: 'docs', op: 'scroll', topK: 20 }).kind, 'read');
+  assert.equal(classifyVector({ language: 'vector', collection: '', topK: 5 }).kind, 'destructive');
+  assert.equal(classifyVector({ language: 'vector', collection: 'docs', topK: 0 }).kind, 'destructive');
+  assert.equal(classifyVector({ language: 'vector', collection: 'docs', vector: [1, Number.NaN], topK: 5 }).kind, 'destructive');
+  assert.equal(readonlyViolationForQuery({ language: 'vector', collection: 'docs', vector: [1, 0], topK: 5 }), null);
 });

@@ -376,6 +376,7 @@ export function buildDeleteMany(engine: Engine, table: string, keyColumns: strin
 export function buildExplain(engine: Engine, sql: string, analyze = false): string {
   const d = dialectOf(engine);
   const clean = sql.replace(/;\s*$/, '');
+  if (engine === 'duckdb') return `EXPLAIN ${clean}`;
   if (d === 'sqlite') return `EXPLAIN QUERY PLAN ${clean}`;
   if (isMysqlLike(d)) return engine === 'mysql' ? `EXPLAIN FORMAT=JSON ${clean}` : `EXPLAIN ${clean}`;
   if (isPgLike(d)) return `EXPLAIN (FORMAT JSON${analyze ? ', ANALYZE' : ''}) ${clean}`;

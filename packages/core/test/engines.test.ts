@@ -51,7 +51,8 @@ test('engine registry is internally consistent', () => {
   assert.equal(new Set(ENGINES.map((meta) => meta.label)).size, ENGINES.length, '引擎 label 必须唯一');
   for (const meta of ENGINES) {
     assert.ok(isEngine(meta.id));
-    assert.equal(meta.fileBased, meta.transport === 'sqlite-file', `${meta.id} fileBased 与 transport 不一致`);
+    const fileBasedTransport = meta.transport === 'sqlite-file' || meta.transport === 'duckdb-file';
+    assert.equal(meta.fileBased, fileBasedTransport, `${meta.id} fileBased 与 transport 不一致`);
     if (meta.fileBased) {
       assert.equal(meta.defaultPort, undefined, `${meta.id} 文件库不应有端口`);
       assert.equal(meta.supportsSsh, false, `${meta.id} 文件库不应支持 SSH`);

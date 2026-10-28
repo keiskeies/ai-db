@@ -26,6 +26,7 @@ import {
   summarize,
   toSeries,
   topShare,
+  vectorQueryFromArgs,
   type AlterOp,
   type AppSettings,
   type ColumnDef,
@@ -64,6 +65,7 @@ const DB_TOOLS = new Set([
   'run_mql',
   'run_redis',
   'run_cypher',
+  'vector_search',
   'explain_sql',
   'sample_rows',
   'profile_column',
@@ -360,6 +362,20 @@ export class ToolExecutor {
           messages: batch.messages,
           durationMs: batch.durationMs,
         });
+      }
+
+      case 'vector_search': {
+        const conn = this.requireConnection(call, ctx);
+        const query = vectorQueryFromArgs(a);
+        if (!query.collection) throw new DbError('collection 不能为空', { code: 'VECTOR_COLLECTION' });
+        const settings = this.getSettings();
+        const result = await this.manager.vectorSearch(conn.id, query, {
+          database: this.databaseOf(call, conn),
+          maxRows: query.topK,
+          timeoutMs: settings.queryTimeoutMs,
+          actor: 'agent',
+        });
+        return ok(started, `返回 ${result.rowCount} 个向量结果`, { ...result });
       }
 
       case 'explain_sql': {

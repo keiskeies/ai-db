@@ -6,7 +6,7 @@
 
 | 能力域 | Navicat 对应 | AiDB v0.3 | 说明 / 差异 |
 |---|---|---|---|
-| 连接管理 | Connection | ✅ | 9 种关系型（含达梦 DM8）+ MongoDB + Redis + Neo4j + 15 种国产协议别名；颜色、只读、SSH 隧道、测试连接 |
+| 连接管理 | Connection | ✅ | 10 种关系型（含达梦 DM8、DuckDB）+ MongoDB + Redis + Neo4j + Qdrant + Milvus + 15 种国产协议别名；颜色、只读、SSH 隧道、测试连接 |
 | 对象浏览器 | 导航窗格 | ✅ | 库→表/视图→列/索引/外键；搜索、右键、刷新、懒加载 |
 | 数据网格 | 表数据查看器 | ✅ | 分页/排序/过滤/编辑/增删行/复制/导出；虚拟滚动 |
 | SQL 编辑器 | 查询编辑器 | ✅ | 多标签、高亮、执行选区、多结果集、历史、EXPLAIN、格式化 |
@@ -224,10 +224,12 @@
 | MongoDB | document | database → collection/view；采样 30 条推断字段（含一层嵌套字段） | JSON MQL：find / aggregate / count / distinct；支持 filter / pipeline / projection / sort / limit / skip | 文档行，嵌套值为 JSON 单元格 | 禁用 DDL 设计器、结构同步、数据对比、dump、审计体检、图表 |
 | Redis | keyvalue | DB 索引 → keys 伪对象；SCAN 浏览，不执行 `KEYS *` | 单条命令控制台；SCAN / HGETALL / ZRANGE 等类型化结果 | key/value、field/value、member/score 等 | 禁用 DDL、结构同步、备份、SQL 工具 |
 | Neo4j | graph | database → 节点标签 / 关系类型；采样 30 个节点/关系推断属性 | Cypher 控制台；支持 `$params`；`EXPLAIN` / `PROFILE` 计划以 JSON 返回 | 节点/关系/路径为 JSON 单元格，`resultKind=graph` | 禁用 SQL 工具、DDL、结构同步、备份、图渲染（后续） |
+| Qdrant | vector | collection → 维度 / 距离 / payload 字段 | JSON：`scroll` 浏览或 `vector` / `text` 检索 | id/score/payload 行，`resultKind=vectors` | 禁用 SQL/DDL；文本检索需 Embedding |
+| Milvus | vector | collection → field schema / 维度 | JSON：`scroll` 查询或 `vector` / `text` 检索 | id/score/entity 行，`resultKind=vectors` | 禁用 SQL/DDL；文本检索需 Embedding |
 
 协议别名：金仓 / openGauss / GaussDB / 瀚高 / Vastbase / IvorySQL 复用 PostgreSQL 驱动与方言；OceanBase / TiDB / PolarDB / TDSQL / GBase 8a / Doris / StarRocks / GreatSQL / GoldenDB 复用 MySQL 驱动与方言。openGauss/GaussDB 默认 sha256 认证需实例改为 md5 或使用兼容认证；Doris/StarRocks/GBase 8a 的 DDL 能力按 `EngineMeta.capabilities` 关闭设计器。
 
-安全：只读连接在网关侧按语言分类拦截；MongoDB 拦截 `$where` / `$function` / `$accumulator` / `$out` / `$merge` 等，Redis 拦截 `FLUSHALL` / `CONFIG SET` / `EVAL` / `SHUTDOWN` 等，Neo4j 拦截 `CREATE` / `MERGE` / `SET` / `DELETE` / `REMOVE` / `LOAD CSV` 与写型 `CALL`。非 SQL 连接上的 SQL 专属 Agent 工具返回 `UNSUPPORTED_ENGINE`，并提示改用 `run_mql` / `run_redis` / `run_cypher`。
+安全：只读连接在网关侧按语言分类拦截；MongoDB 拦截 `$where` / `$function` / `$accumulator` / `$out` / `$merge` 等，Redis 拦截 `FLUSHALL` / `CONFIG SET` / `EVAL` / `SHUTDOWN` 等，Neo4j 拦截 `CREATE` / `MERGE` / `SET` / `DELETE` / `REMOVE` / `LOAD CSV` 与写型 `CALL`，向量检索只允许读。非 SQL 连接上的 SQL 专属 Agent 工具返回 `UNSUPPORTED_ENGINE`，并提示改用 `run_mql` / `run_redis` / `run_cypher` / `vector_search`。
 
 ## 9. AI Agent（摘要，详见 04）
 

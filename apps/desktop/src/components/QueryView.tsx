@@ -14,6 +14,7 @@ import { formatSql } from '../lib/sqlFormat';
 import { useApp, type Tab } from '../store';
 import { ChartView, type ChartSpec } from './ChartView';
 import { DataGrid } from './DataGrid';
+import { VectorSearchPanel } from './VectorSearchPanel';
 import { Spinner } from './ui';
 
 type QueryTab = Extract<Tab, { kind: 'query' }>;
@@ -53,6 +54,8 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const openTools = useApp((s) => s.openTools);
   const conn = connections.find((c) => c.id === tab.connectionId);
   const isSql = conn ? engineMeta(conn.engine).languages.includes('sql') : true;
+  const canVector = conn ? engineMeta(conn.engine).model === 'vector' || engineMeta(conn.engine).dialect === 'postgres' : false;
+  const [vectorOpen, setVectorOpen] = useState(false);
 
   const [sql, setSql] = useState(tab.sql);
   const [batch, setBatch] = useState<QueryBatchResult | null>(null);
@@ -462,10 +465,17 @@ ${text}
               ? 'MongoDB：使用 JSON 结构化查询（collection / op / filter / pipeline）'
               : conn && engineMeta(conn.engine).languages.includes('cypher')
                 ? 'Neo4j：输入 Cypher，例如 MATCH (n) RETURN n LIMIT 100'
-                : 'Redis：输入单条命令，例如 SCAN 0 COUNT 100 或 HGETALL user:1'}
+                : conn && engineMeta(conn.engine).model === 'vector'
+                  ? '向量库：输入 JSON，例如 {"collection":"docs","vector":[...],"topK":5}；scroll 可浏览全部点'
+                  : 'Redis：输入单条命令，例如 SCAN 0 COUNT 100 或 HGETALL user:1'}
           </span>
         )}
         <div className="spacer" />
+        {canVector ? (
+          <button className="btn small ai" onClick={() => setVectorOpen(true)} data-testid="open-vector-search">
+            <Sparkles size={12} /> 向量检索
+          </button>
+        ) : null}
         {isSql ? (
           <>
             <button className="icon-btn" title="导出结果" onClick={() => void exportResult()}>
@@ -640,6 +650,7 @@ ${text}
           ) : null}
         </div>
       </div>
+      {vectorOpen && conn ? <VectorSearchPanel connection={conn} database={tab.database} onClose={() => setVectorOpen(false)} /> : null}
     </div>
   );
 }

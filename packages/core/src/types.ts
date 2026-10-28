@@ -11,6 +11,9 @@ export type Engine =
   | 'redis'
   | 'neo4j'
   | 'dm'
+  | 'qdrant'
+  | 'milvus'
+  | 'duckdb'
   | 'kingbase'
   | 'opengauss'
   | 'gaussdb'
@@ -43,7 +46,8 @@ export type Transport =
   | 'bolt'
   | 'dm'
   | 'qdrant-http'
-  | 'milvus-grpc'
+  | 'milvus-http'
+  | 'duckdb-file'
   | 'weaviate-http';
 
 /** SQL 方言；协议别名（金仓、TiDB 等）复用已有方言。 */
@@ -371,6 +375,14 @@ export interface AgentSettings {
   hasApiKey?: boolean;
 }
 
+export interface EmbeddingSettings {
+  provider: 'none' | 'openai' | 'ollama';
+  baseUrl: string;
+  model: string;
+  apiKey?: string;
+  hasApiKey?: boolean;
+}
+
 export interface AppSettings {
   theme: 'dark' | 'light' | 'system';
   density: 'compact' | 'comfortable';
@@ -380,6 +392,7 @@ export interface AppSettings {
   allowMultiStatement: boolean;
   autoLimit: boolean;
   agent: AgentSettings;
+  embedding: EmbeddingSettings;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -401,6 +414,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
     followUpSuggestions: true,
     snapshotBeforeWrite: true,
     compactionThreshold: 24000,
+  },
+  embedding: {
+    provider: 'none',
+    baseUrl: 'https://api.openai.com/v1',
+    model: 'text-embedding-3-small',
   },
 };
 

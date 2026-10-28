@@ -2,7 +2,7 @@
 
 AI 原生、全平台数据库工作台。Navicat 式的完整数据库操作 + Claude Code 式的 AI 搭档。
 
-支持 **Windows · macOS · Linux · Android · iOS**。内置一个可全权操作数据库的 AI Agent：27 个工具、四级权限、四层记忆、工具轨迹可视化、审批与审计；外加 11 个模块的 Navicat 级工具箱。
+支持 **Windows · macOS · Linux · Android · iOS**。内置一个可全权操作数据库的 AI Agent：28 个工具、四级权限、四层记忆、工具轨迹可视化、审批与审计；外加 11 个模块的 Navicat 级工具箱。
 
 ![Desktop](docs/screenshots/desktop-welcome.png)
 ![Toolbox](docs/screenshots/desktop-toolbox.png)
@@ -16,8 +16,8 @@ AI 原生、全平台数据库工作台。Navicat 式的完整数据库操作 + 
 - **表右键菜单**：打开、设计、新建、重命名、复制（结构 / 结构+数据）、查看 DDL、维护、对象信息、设置权限、导入 / 导出向导、清空、截断、删除、逆向到模型。
 
 ### 数据库工作台
-- **连接管理**：**27 种引擎** — 关系型 SQLite / MySQL / MariaDB / PostgreSQL / CockroachDB / SQL Server / Oracle / ClickHouse / 达梦 DM8，文档型 MongoDB，键值型 Redis，图数据库 Neo4j，以及金仓 / openGauss / GaussDB / OceanBase / TiDB / PolarDB / TDSQL / GBase 8a / Doris / StarRocks / 瀚高 / Vastbase / IvorySQL / GreatSQL / GoldenDB 等国产库（协议别名复用 PG/MySQL 驱动；达梦走官方 dmdb）；SSH 隧道、环境标签（DEV / STG / PROD）、只读模式、AES-256-GCM 加密凭据、测试连接。详见 [多引擎架构](docs/09-multi-engine.md)。
-- **非关系型工作台**：MongoDB 集合浏览 + 采样字段推断 + JSON MQL（find / aggregate / count / distinct）+ 文档结果；Redis DB 索引、SCAN 键浏览、命令控制台与类型化结果；Neo4j 节点标签 / 关系类型浏览 + Cypher 控制台；非 SQL 引擎的 DDL、结构同步、备份等 SQL 专属功能会明确禁用。
+- **连接管理**：**30 种引擎** — 关系型 SQLite / MySQL / MariaDB / PostgreSQL / CockroachDB / SQL Server / Oracle / ClickHouse / 达梦 DM8 / DuckDB，文档型 MongoDB，键值型 Redis，图数据库 Neo4j，向量数据库 Qdrant / Milvus，以及金仓 / openGauss / GaussDB / OceanBase / TiDB / PolarDB / TDSQL / GBase 8a / Doris / StarRocks / 瀚高 / Vastbase / IvorySQL / GreatSQL / GoldenDB 等国产库（协议别名复用 PG/MySQL 驱动；达梦走官方 dmdb）；SSH 隧道、环境标签（DEV / STG / PROD）、只读模式、AES-256-GCM 加密凭据、测试连接。详见 [多引擎架构](docs/09-multi-engine.md)。
+- **非关系型与向量工作台**：MongoDB 集合浏览 + 采样字段推断 + JSON MQL（find / aggregate / count / distinct）+ 文档结果；Redis DB 索引、SCAN 键浏览、命令控制台与类型化结果；Neo4j 节点标签 / 关系类型浏览 + Cypher 控制台；Qdrant / Milvus 集合浏览 + 向量检索；pgvector 关系表向量检索 + Embedding 配置。非 SQL 引擎的 DDL、结构同步、备份等 SQL 专属功能会明确禁用。
 - **对象浏览器**：连接 → 库 / Schema → 表 / 视图 → 列 / 索引 / 外键，搜索、右键菜单、懒加载；表和视图分组展示。
 - **数据网格**：行号、分页、排序、WHERE 过滤、**可视化筛选构建器**、**排序对话框**、**文本视图**、双击编辑、新增/删除行、**行多选**、**复制 / 粘贴 / 复制行 / 批量删除**、**查找替换**、主键安全定位、记录区间与页码；**CSV 导入向导**（分隔符 / 表头 / 预览 / 列映射），导出 CSV / JSON / SQL / XML。
 - **SQL 工作台**：CodeMirror 6、按方言高亮（含国产协议别名）、**连接 / 数据库下拉**、Ctrl/⌘+Enter 执行、多结果集、消息面板、查询历史、EXPLAIN、**保存 / 打开 SQL 文件**、**查询创建工具**、**美化 SQL**、**SQL 片段库**、**结果图表**（柱状 / 折线 / 饼图），以及 **AI 解释 / AI 优化** 一键送入 Agent。MongoDB / Redis 连接自动切换为 JSON / 命令模式，并隐藏 SQL 专属工具。
@@ -63,7 +63,7 @@ AI 原生、全平台数据库工作台。Navicat 式的完整数据库操作 + 
 
 ### AI Agent（核心差异）
 - **Claude Code 式对话**：`❯` 输入、`⏺` 工具卡、参数 / 结果 / SQL 可折叠、Todo 计划、结束统计、思考过程、`@table` 引用、斜杠命令、中断。
-- **27 个数据库工具**：结构检查、搜索、SQL / MQL / Cypher / Redis 命令、执行计划、样例、列画像、**数据库体检**、**数据质量检查**、**图表生成**、建表、改表、删表、索引、导入、导出、备份、历史、计划、记忆写入 / 检索。
+- **28 个数据库工具**：结构检查、搜索、SQL / MQL / Cypher / Redis 命令 / 向量检索、执行计划、样例、列画像、**数据库体检**、**数据质量检查**、**图表生成**、建表、改表、删表、索引、导入、导出、备份、历史、计划、记忆写入 / 检索。
 - **SQL Copilot**：编辑器内一键“AI 解释 / AI 优化”，自动把选中 SQL 送入 Agent，输出改写 SQL、精确索引 DDL 与验证查询。
 - **审计闭环**：体检/质量发现的每条问题都附带可执行 SQL，可一键打开到编辑器；写操作前自动备份，审批结果全部落审计。
 - **四级权限**：只读 / 询问 / 自动 / 全自动；只读连接服务端强制；生产环境破坏性操作强制审批；会话级 / 连接级 Allow 规则。

@@ -24,6 +24,8 @@ extraResources:
     to: gateway/node_modules/bcrypt-pbkdf
   - from: ../../node_modules/tweetnacl
     to: gateway/node_modules/tweetnacl
+  - from: ../../node_modules/@duckdb
+    to: gateway/node_modules/@duckdb
 asar: true
 win:
   target:

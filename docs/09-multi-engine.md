@@ -16,7 +16,7 @@ v0.3 的 8 个关系型引擎已经覆盖 DB-Engines 前四（Oracle / MySQL / S
 type Engine = 'mongodb' | 'redis' | 'kingbase' | /* ... */;
 type DataModel = 'relational' | 'document' | 'keyvalue' | 'vector' | 'graph' | 'widecolumn' | 'search' | 'timeseries';
 type Transport = 'sqlite-file' | 'mysql' | 'postgres' | 'tds' | 'oracle' | 'clickhouse-http'
-               | 'mongodb' | 'redis' | 'bolt' | 'dm' | 'qdrant-http' | 'milvus-grpc' | 'weaviate-http';
+               | 'mongodb' | 'redis' | 'bolt' | 'dm' | 'qdrant-http' | 'milvus-http' | 'duckdb-file' | 'weaviate-http';
 type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickhouse' | 'dm';
 ```
 
@@ -29,7 +29,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 
 核心定义在 [`packages/core/src/engines.ts`](../packages/core/src/engines.ts)、[`packages/core/src/types.ts`](../packages/core/src/types.ts)。SQL 方言函数统一通过 `dialectOf(engine)` 归一化，因此金仓、TiDB 等别名不需要复制 `ddl.ts` / `ident.ts`。
 
-## 3. 接入矩阵（27 种）
+## 3. 接入矩阵（30 种）
 
 | 分组 | 引擎 | Transport | Dialect | 能力 |
 |---|---|---|---|---|
@@ -39,10 +39,13 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 | 关系型 | SQL Server | tds | mssql | 无自动 EXPLAIN |
 | 关系型 | Oracle | oracle | oracle | thin 模式；无 SSL |
 | 关系型 | 达梦 DM8 | dm | dm | 浏览 + 查询 + DDL；DES-CFB 登录加密需 legacy OpenSSL |
+| 关系型 | DuckDB | duckdb-file | sqlite | 浏览 + SQL + 数据编辑；DDL 设计器关闭 |
 | 分析型 | ClickHouse | clickhouse-http | clickhouse | 无结构同步/数据对比 |
 | 文档 | MongoDB | mongodb | —（MQL） | 浏览 + 查询 + 结果；无 DDL/备份 |
 | 键值 | Redis | redis | —（命令） | 浏览 + 命令 + 结果；无 DDL/备份 |
 | 图 | Neo4j | bolt | —（Cypher） | 标签/关系浏览 + Cypher + 计划；无 DDL/备份；图渲染后续 |
+| 向量 | Qdrant | qdrant-http | —（JSON） | 集合/维度/payload 浏览 + scroll/向量检索 |
+| 向量 | Milvus | milvus-http | —（JSON） | collection/schema 浏览 + query/向量检索 |
 | 国产 PG 系 | 金仓 KingbaseES | postgres | postgres | 全功能；默认端口 54321 |
 | 国产 PG 系 | openGauss / GaussDB | postgres | postgres | 全功能；注意 sha256 认证 |
 | 国产 PG 系 | 瀚高 / Vastbase / IvorySQL | postgres | postgres | 全功能 |
@@ -79,6 +82,14 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - 安全：只读连接拦截 `CREATE` / `MERGE` / `SET` / `DELETE` / `DETACH DELETE` / `REMOVE` / `LOAD CSV` / `FOREACH` 及写型 `CALL`（APOC/GDS/非只读 DB 过程）。
 - 不支持：DDL、备份、SQL 工具、图可视化渲染（当前以表格/JSON 展示）。
 
+### Qdrant / Milvus
+
+- 对象树：collection（Qdrant 采样 payload 字段；Milvus 读取 field schema）。
+- 查询：JSON，`op = scroll` 浏览；提供 `vector` 或 `text` 时执行相似度检索；Qdrant 支持命名向量 `field`。
+- 结果：id、score 与 payload/entity 字段，`resultKind = 'vectors'`。
+- 文本检索：`text` 由网关调用 Embedding Provider 转成向量；未配置时可直接传 `vector`。
+- 不支持：SQL、DDL、备份、写入/删除（后续）。
+
 ## 5. 安全模型
 
 只读在网关侧强制执行，不依赖 UI：
@@ -87,27 +98,30 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - MQL：`classifyMql` 递归扫描 filter/pipeline/projection/sort，按 `$where` / `$function` / `$out` / `$merge` 等提升风险。
 - Redis：`classifyRedis` 按命令表与子命令（CONFIG / ACL / CLUSTER / MEMORY / FUNCTION）分类。
 - Cypher：`classifyCypher` 先屏蔽字符串/注释/反引号，再识别写子句与写型过程；`EXPLAIN` 为只读，`PROFILE` 按内部语句定级。
+- 向量：`classifyVector` 校验 collection/topK/向量数值，只允许只读检索；pgvector 走 `<=>` 相似度查询，Qdrant/Milvus 走各自 REST 检索。
 - Agent：`resolveRisk` 对 `run_mql` / `run_redis` 动态取风险；审批弹窗展示结构化查询。
 - SQL 专属工具在非 SQL 连接上返回 `UNSUPPORTED_ENGINE`；HTTP 的 DDL / 数据编辑 / 结构同步 / 监控 / 用户 / 备份等路由同样拒绝。
 
 ## 6. Agent 工具
 
-新增三个工具，工具总数 27：
+新增四个工具，工具总数 28：
 
 | 工具 | 作用 |
 |---|---|
 | `run_mql` | MongoDB 结构化查询（find/aggregate/count/distinct） |
 | `run_redis` | 单条 Redis 命令 |
 | `run_cypher` | Neo4j Cypher 查询（支持 `$params`） |
+| `vector_search` | pgvector / Qdrant / Milvus 向量检索（text 走 Embedding） |
 
 系统提示会注入 `model=` 与 `queryLanguage=`，并按连接语言切换规则：SQL 连接保留审计/图表/EXPLAIN 等规则；MongoDB/Redis/Neo4j 连接改为对应查询规则，并明确禁止输出 SQL。
 
 ## 7. UI 行为
 
 - 连接表单由 `EngineMeta` 驱动默认端口、默认用户名、默认数据库与限制；MongoDB/Redis/Neo4j 显示“数据库 / DB 索引”字段。
-- 对象树按数据模型渲染：关系型显示表/视图与完整右键菜单；MongoDB 显示“集合”；Redis 显示“键空间”；Neo4j 显示“标签”。非关系型只保留打开、查询、AI 解释、刷新、复制。
-- 查询窗口按语言切换：SQL 连接保留美化、EXPLAIN、查询构建器、图表、SQL 文件；MongoDB/Redis/Neo4j 显示 JSON/命令/Cypher 提示并隐藏 SQL 专属按钮。
-- `openData` 对非关系型自动改为打开查询标签：MongoDB 预填 `{collection, op:'find', filter:{}, limit:100}`，Redis 预填 `SCAN 0 COUNT 100`，Neo4j 预填 `MATCH (n) RETURN n LIMIT 100`。
+- 对象树按数据模型渲染：关系型显示表/视图与完整右键菜单；MongoDB 显示“集合”；Redis 显示“键空间”；Neo4j 显示“标签”；Qdrant/Milvus 显示“向量集合”。非关系型只保留打开、查询、AI 解释、刷新、复制。
+- 查询窗口按语言切换：SQL 连接保留美化、EXPLAIN、查询构建器、图表、SQL 文件；MongoDB/Redis/Neo4j/向量库显示 JSON/命令/Cypher 提示并隐藏 SQL 专属按钮。
+- PostgreSQL / Qdrant / Milvus 的查询工具栏提供“向量检索”面板：选择表/集合与向量字段，输入文本（走 Embedding）或向量 JSON、TopK，结果直接进入 DataGrid。
+- `openData` 对非关系型自动改为打开查询标签：MongoDB 预填 `{collection, op:'find', filter:{}, limit:100}`，Redis 预填 `SCAN 0 COUNT 100`，Neo4j 预填 `MATCH (n) RETURN n LIMIT 100`，Qdrant/Milvus 预填 `{collection, op:'scroll', topK:20}`。
 
 ## 8. 测试
 
@@ -125,15 +139,18 @@ npm run build
 docker run -d --rm --name aidb-test-mongo -p 27018:27017 mongo:7
 docker run -d --rm --name aidb-test-redis -p 6380:6379 redis:7-alpine
 docker run -d --rm --name aidb-test-neo4j -p 7688:7687 -e NEO4J_AUTH=neo4j/testpass neo4j:5
+docker run -d --rm --name aidb-test-pgvector -p 5434:5432 -e POSTGRES_PASSWORD=test -e POSTGRES_DB=aidb pgvector/pgvector:pg16
+docker run -d --rm --name aidb-test-qdrant -p 6335:6333 qdrant/qdrant
+# Milvus standalone 需要 etcd + minio，参考官方 docker compose；示例映射 19531:19530
 
 # 达梦 DM8：官方未提供轻量镜像，可用社区镜像初始化后运行（示例）
 # docker run ... sizx/dm8，dminit + dmserver，映射 5237:5236
 
-AIDB_TEST_MONGO_PORT=27018 AIDB_TEST_REDIS_PORT=6380 AIDB_TEST_NEO4J_PORT=7688 AIDB_TEST_NEO4J_PASSWORD=testpass npm --workspace @aidb/gateway run test
+AIDB_TEST_MONGO_PORT=27018 AIDB_TEST_REDIS_PORT=6380 AIDB_TEST_NEO4J_PORT=7688 AIDB_TEST_NEO4J_PASSWORD=testpass AIDB_TEST_PGVECTOR_PORT=5434 AIDB_TEST_QDRANT_PORT=6335 AIDB_TEST_MILVUS_PORT=19531 npm --workspace @aidb/gateway run test
 NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSWORD=SYSDBA npm --workspace @aidb/gateway run test
 ```
 
-覆盖：驱动工厂协议别名路由、MongoDB 采样/查找/聚合/count/distinct、Redis SET/GET/HGETALL/SCAN/INFO、Neo4j 标签/关系推断与 Cypher/EXPLAIN、达梦建表/参数化查询/schema 推断、HTTP `/schema` 与 `/query` 管线、非 SQL 连接的功能禁用。
+覆盖：驱动工厂协议别名路由、MongoDB 采样/查找/聚合/count/distinct、Redis SET/GET/HGETALL/SCAN/INFO、Neo4j 标签/关系推断与 Cypher/EXPLAIN、达梦建表/参数化查询/schema 推断、DuckDB 建表/参数化查询/schema 推断、Qdrant/Milvus 集合/向量检索、pgvector 相似度检索与 Embedding、HTTP `/schema`、`/query`、`/vector/search` 管线、非 SQL 连接的功能禁用。
 
 ## 9. 已知限制
 
@@ -143,14 +160,17 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 - openGauss/GaussDB 的 sha256 认证与标准 `pg` 驱动不兼容；当前要求实例改用 md5 或使用兼容认证，后续可补 SASL/侧车。
 - 国产分析型（Doris/StarRocks/GBase 8a）只保证查询与浏览，DDL 设计器按能力位关闭。
 - 达梦 dmdb 使用 DES-CFB 登录加密，Node 18+ 需要 `--openssl-legacy-provider`；桌面端 Bridge 与 `npm start` 已内置该参数，独立部署请自行添加。DM 方言沿用 Oracle 兼容类型与 `LIMIT` 分页，复杂 PL/SQL、系统表差异仍需按实例验证。
-- 向量库尚未接入；`Transport` 已预留 `qdrant-http` / `milvus-grpc` / `weaviate-http`，下一步按 P1 接入 pgvector、Qdrant/Milvus。Neo4j 已接入浏览与 Cypher，图渲染仍待补。
+- DuckDB 使用 sqlite 方言的引号/占位符/LIMIT，DDL 设计器关闭；DuckDB 原生模块已随 gateway 打包，但桌面端优先使用系统 Node，回退到 Electron Node 时需按 ABI 验证二进制。
+- Qdrant/Milvus 文本检索依赖 Embedding Provider；Qdrant 的 API Key 填在密码字段，Milvus 的 Token 也填在密码字段。当前只支持浏览/检索，不支持写入与删除。
+- pgvector 只支持 PostgreSQL 方言；相似度分数按 `1 - cosine_distance` 返回，metric 以索引定义为准。
+- Weaviate 与图可视化渲染尚未接入；其余 P1 项已完成。
 
 ## 10. 后续路线
 
 | 阶段 | 内容 |
 |---|---|
-| P1 | Neo4j（已完成：浏览 + Cypher + 计划）、达梦 DM8（已完成：dmdb + DM 方言，真实实例已验证）、pgvector 能力面板、Qdrant / Milvus 只读检索、DuckDB、embedding provider |
-| P2 | Elasticsearch / OpenSearch、Cassandra / ScyllaDB、TDengine / InfluxDB、Memgraph / FalkorDB / ArangoDB、图渲染、Redis Stack |
+| P1 | 已完成：Neo4j、达梦 DM8、DuckDB、Qdrant、Milvus、pgvector + Embedding；Weaviate、图渲染仍待补 |
+| P2 | Elasticsearch / OpenSearch、Cassandra / ScyllaDB、TDengine / InfluxDB、Memgraph / FalkorDB / ArangoDB、Redis Stack |
 | P3 | 云数仓（Snowflake / BigQuery / Redshift / Databricks）、Db2 / SAP HANA、无 Node 驱动的国产库（神通 / GBase 8s / 崖山 / 虚谷） |
 
 ## 11. 关键文件
@@ -158,7 +178,9 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 - 类型与注册：[`packages/core/src/types.ts`](../packages/core/src/types.ts)、[`packages/core/src/engines.ts`](../packages/core/src/engines.ts)
 - 结构化查询与安全：[`packages/core/src/query.ts`](../packages/core/src/query.ts)
 - 驱动接口：[`apps/gateway/src/drivers/types.ts`](../apps/gateway/src/drivers/types.ts)、[`apps/gateway/src/drivers/index.ts`](../apps/gateway/src/drivers/index.ts)
-- MongoDB / Redis / Neo4j / 达梦：[`apps/gateway/src/drivers/mongodb.ts`](../apps/gateway/src/drivers/mongodb.ts)、[`redis.ts`](../apps/gateway/src/drivers/redis.ts)、[`neo4j.ts`](../apps/gateway/src/drivers/neo4j.ts)、[`dm.ts`](../apps/gateway/src/drivers/dm.ts)
+- 向量/图/嵌入式：[`apps/gateway/src/drivers/qdrant.ts`](../apps/gateway/src/drivers/qdrant.ts)、[`milvus.ts`](../apps/gateway/src/drivers/milvus.ts)、[`duckdb.ts`](../apps/gateway/src/drivers/duckdb.ts)、[`embeddings.ts`](../apps/gateway/src/embeddings.ts)
+- 向量 UI：[`apps/desktop/src/components/VectorSearchPanel.tsx`](../apps/desktop/src/components/VectorSearchPanel.tsx)
+- MongoDB / Redis / Neo4j / 达梦：[`mongodb.ts`](../apps/gateway/src/drivers/mongodb.ts)、[`redis.ts`](../apps/gateway/src/drivers/redis.ts)、[`neo4j.ts`](../apps/gateway/src/drivers/neo4j.ts)、[`dm.ts`](../apps/gateway/src/drivers/dm.ts)
 - 网关执行管线：[`apps/gateway/src/manager.ts`](../apps/gateway/src/manager.ts)
 - Agent 工具：[`packages/core/src/agent/tools.ts`](../packages/core/src/agent/tools.ts)、[`apps/gateway/src/executor.ts`](../apps/gateway/src/executor.ts)
 - UI：[`apps/desktop/src/components/ConnectionModal.tsx`](../apps/desktop/src/components/ConnectionModal.tsx)、[`Sidebar.tsx`](../apps/desktop/src/components/Sidebar.tsx)、[`QueryView.tsx`](../apps/desktop/src/components/QueryView.tsx)

@@ -153,6 +153,28 @@ export const TOOLS: ToolDefinition[] = [
     summarize: (a) => `Cypher ${String(a.query ?? '').replace(/\s+/g, ' ').slice(0, 60)}`,
   },
   {
+    name: 'vector_search',
+    description:
+      'Search a vector collection/table by vector or text. For PostgreSQL/pgvector specify field (vector column). For Qdrant/Milvus field selects a named vector. Text requires an embedding provider; otherwise pass vector.',
+    risk: 'read',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connectionId', 'collection'],
+      properties: {
+        ...connectionProp,
+        ...databaseProp,
+        collection: { type: 'string', description: 'Collection or table name' },
+        field: { type: 'string', description: 'Vector column/field (required for pgvector)' },
+        vector: { type: 'array', items: { type: 'number' }, description: 'Query vector' },
+        text: { type: 'string', description: 'Text to embed and search' },
+        topK: { type: 'integer', minimum: 1, maximum: 1000 },
+        filter: { type: 'object', description: 'Backend-specific filter' },
+      },
+    },
+    summarize: (a) => `向量检索 ${a.collection ?? ''}${a.field ? ` · ${a.field}` : ''}`.trim(),
+  },
+  {
     name: 'explain_sql',
     description: 'Get the query execution plan (EXPLAIN) for a SQL statement.',
     risk: 'read',

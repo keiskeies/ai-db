@@ -1,11 +1,14 @@
 import { engineDefaultPort, engineMeta, type ConnectionConfig, type ConnectionSecret } from '@aidb/core';
 import { ClickHouseDriver } from './clickhouse';
 import { DmDriver } from './dm';
+import { DuckdbDriver } from './duckdb';
 import { MongoDriver } from './mongodb';
+import { MilvusDriver } from './milvus';
 import { MysqlDriver } from './mysql';
 import { Neo4jDriver } from './neo4j';
 import { OracleDriver } from './oracle';
 import { PostgresDriver } from './postgres';
+import { QdrantDriver } from './qdrant';
 import { RedisDriver } from './redis';
 import { SqliteDriver } from './sqlite';
 import { SqlServerDriver } from './sqlserver';
@@ -23,6 +26,11 @@ export async function createDriver(config: ConnectionConfig, secret: ConnectionS
   if (meta.transport === 'sqlite-file') {
     if (!config.database) throw new DbError('SQLite 连接缺少文件路径', { code: 'NO_SQLITE_PATH' });
     const driver = new SqliteDriver(config.database, config.readonly);
+    return { driver, close: () => driver.close() };
+  }
+  if (meta.transport === 'duckdb-file') {
+    if (!config.database) throw new DbError('DuckDB 连接缺少文件路径', { code: 'NO_DUCKDB_PATH' });
+    const driver = new DuckdbDriver(config.database, config.readonly);
     return { driver, close: () => driver.close() };
   }
 
@@ -149,8 +157,24 @@ export async function createDriver(config: ConnectionConfig, secret: ConnectionS
       });
       return { driver, close: () => closeWithTunnel(driver) };
     }
-    case 'qdrant-http':
-    case 'milvus-grpc':
+    case 'qdrant-http': {
+      const driver = new QdrantDriver({
+        host: connectHost,
+        port: connectPort,
+        apiKey: secret.password,
+        ssl: config.ssl,
+      });
+      return { driver, close: () => closeWithTunnel(driver) };
+    }
+    case 'milvus-http': {
+      const driver = new MilvusDriver({
+        host: connectHost,
+        port: connectPort,
+        token: secret.password,
+        ssl: config.ssl,
+      });
+      return { driver, close: () => closeWithTunnel(driver) };
+    }
     case 'weaviate-http':
       throw new DbError(`${meta.label} 驱动尚未接入`, { code: 'UNSUPPORTED_ENGINE' });
     default:

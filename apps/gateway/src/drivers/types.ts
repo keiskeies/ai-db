@@ -1,4 +1,4 @@
-import type { Engine, QueryResult, StructuredQuery, TableInfo } from '@aidb/core';
+import type { Engine, QueryResult, StructuredQuery, TableInfo, VectorQuery } from '@aidb/core';
 
 export interface RunOptions {
   maxRows?: number;
@@ -30,6 +30,14 @@ export interface StructuredQueryDriver extends Driver {
 
 export function supportsStructuredQuery(driver: Driver): driver is StructuredQueryDriver {
   return typeof (driver as StructuredQueryDriver).executeQuery === 'function';
+}
+
+export interface VectorQueryDriver extends StructuredQueryDriver {
+  vectorSearch(query: VectorQuery, opts?: RunOptions): Promise<QueryResult>;
+}
+
+export function supportsVectorSearch(driver: Driver): driver is VectorQueryDriver {
+  return typeof (driver as VectorQueryDriver).vectorSearch === 'function';
 }
 
 export interface ConnectionRecord {

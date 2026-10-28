@@ -207,11 +207,11 @@ export function ConnectionModal() {
             </div>
           </div>
 
-          {engine === 'sqlite' ? (
+          {engineMeta(engine).fileBased ? (
             <div className="field full">
               <label>{t('filePath')}</label>
-              <input className="input mono" value={database} onChange={(e) => setDatabase(e.target.value)} placeholder={t('sqliteHint')} data-testid="connection-database" />
-              <span className="hint">支持绝对路径；示例库位于 AiDB 数据目录下。</span>
+              <input className="input mono" value={database} onChange={(e) => setDatabase(e.target.value)} placeholder={engine === 'duckdb' ? 'D:/data/analytics.duckdb' : t('sqliteHint')} data-testid="connection-database" />
+              <span className="hint">{engine === 'duckdb' ? 'DuckDB 文件不存在时会自动创建；也可使用 :memory:。' : '支持绝对路径；示例库位于 AiDB 数据目录下。'}</span>
             </div>
           ) : (
             <>

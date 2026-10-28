@@ -99,6 +99,8 @@ export function SettingsModal() {
   if (!open) return null;
 
   const setAgent = (patch: Partial<AppSettings['agent']>) => setForm((prev) => ({ ...prev, agent: { ...prev.agent, ...patch } }));
+  const setEmbedding = (patch: Partial<AppSettings['embedding']>) =>
+    setForm((prev) => ({ ...prev, embedding: { ...prev.embedding, ...patch } }));
 
   /** 当前模型的能力档案；未配置时为 undefined，编辑器按空值渲染。 */
   const profile = getModelProfile(form.agent);
@@ -298,7 +300,8 @@ export function SettingsModal() {
             ) : null}
 
             {tab === 'agent' ? (
-              <div className="settings-section settings-section-wide">
+              <>
+                <div className="settings-section settings-section-wide">
                 <h3>{t('agentSettings')}</h3>
                 <div className="field">
                   <label>服务商快捷配置</label>
@@ -484,6 +487,46 @@ export function SettingsModal() {
                 </label>
                 <p className="desc">权限策略：只读 → 拒绝写；询问 → 写/DDL 需确认；自动 → 仅破坏性需确认；全自动 → 全部放行（生产环境破坏性操作仍需确认）。所有调用写入审计。</p>
               </div>
+                <div className="settings-section settings-section-wide">
+                  <h3>向量检索（Embedding）</h3>
+                  <p className="desc">pgvector / Qdrant / Milvus 的文本检索需要 Embedding 服务；也可以直接传入向量。</p>
+                  <div className="form-grid">
+                    <div className="field">
+                      <label>Provider</label>
+                      <select className="select" value={form.embedding.provider} onChange={(e) => setEmbedding({ provider: e.target.value as AppSettings['embedding']['provider'] })} data-testid="settings-embedding-provider">
+                        <option value="none">未配置</option>
+                        <option value="openai">OpenAI 兼容 /embeddings</option>
+                        <option value="ollama">Ollama /api/embeddings</option>
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label>Model</label>
+                      <input className="input" value={form.embedding.model} onChange={(e) => setEmbedding({ model: e.target.value })} placeholder="text-embedding-3-small" disabled={form.embedding.provider === 'none'} />
+                    </div>
+                    <div className="field full">
+                      <label>Base URL</label>
+                      <input
+                        className="input mono"
+                        value={form.embedding.baseUrl}
+                        onChange={(e) => setEmbedding({ baseUrl: e.target.value })}
+                        placeholder="https://api.openai.com/v1"
+                        disabled={form.embedding.provider === 'none'}
+                      />
+                    </div>
+                    <div className="field full">
+                      <label>API Key {form.embedding.hasApiKey ? <span className="badge read">已配置</span> : null}</label>
+                      <input
+                        className="input mono"
+                        type="password"
+                        value={form.embedding.apiKey ?? ''}
+                        onChange={(e) => setEmbedding({ apiKey: e.target.value })}
+                        placeholder={form.embedding.hasApiKey ? '已保存，留空保持不变' : form.embedding.provider === 'ollama' ? '本地 Ollama 可留空' : 'sk-...'}
+                        disabled={form.embedding.provider === 'none'}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </>
             ) : null}
 
             {tab === 'bridge' ? (

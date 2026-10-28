@@ -496,18 +496,28 @@ export class Store {
       ...DEFAULT_SETTINGS,
       ...stored,
       agent: { ...DEFAULT_SETTINGS.agent, ...(stored.agent ?? {}) },
+      embedding: { ...DEFAULT_SETTINGS.embedding, ...(stored.embedding ?? {}) },
     };
     const enc = this.getSetting('agentApiKey');
     const decrypted = this.box.decrypt<{ apiKey: string }>(enc);
     if (decrypted?.apiKey) merged.agent.apiKey = decrypted.apiKey;
     if (process.env.AIDB_API_KEY) merged.agent.apiKey = process.env.AIDB_API_KEY;
     merged.agent.hasApiKey = Boolean(merged.agent.apiKey);
+    const embeddingEnc = this.getSetting('embeddingApiKey');
+    const embeddingKey = this.box.decrypt<{ apiKey: string }>(embeddingEnc);
+    if (embeddingKey?.apiKey) merged.embedding.apiKey = embeddingKey.apiKey;
+    if (process.env.AIDB_EMBEDDING_API_KEY) merged.embedding.apiKey = process.env.AIDB_EMBEDDING_API_KEY;
+    merged.embedding.hasApiKey = Boolean(merged.embedding.apiKey);
     return merged;
   }
 
   publicSettings(): AppSettings {
     const settings = this.getSettings();
-    return { ...settings, agent: { ...settings.agent, apiKey: undefined, hasApiKey: Boolean(settings.agent.apiKey) } };
+    return {
+      ...settings,
+      agent: { ...settings.agent, apiKey: undefined, hasApiKey: Boolean(settings.agent.apiKey) },
+      embedding: { ...settings.embedding, apiKey: undefined, hasApiKey: Boolean(settings.embedding.apiKey) },
+    };
   }
 
   saveSettings(next: AppSettings): AppSettings {
@@ -522,12 +532,28 @@ export class Store {
       apiKey = incomingKey;
       keyChanged = true;
     }
+    const incomingEmbeddingKey = next.embedding?.apiKey;
+    let embeddingKey = current.embedding.apiKey;
+    let embeddingKeyChanged = false;
+    if (incomingEmbeddingKey === '__CLEAR__') {
+      embeddingKey = undefined;
+      embeddingKeyChanged = true;
+    } else if (incomingEmbeddingKey !== undefined && incomingEmbeddingKey !== '') {
+      embeddingKey = incomingEmbeddingKey;
+      embeddingKeyChanged = true;
+    }
     const sanitized: AppSettings = {
       ...next,
       agent: { ...next.agent, apiKey: undefined, hasApiKey: Boolean(apiKey ?? process.env.AIDB_API_KEY) },
+      embedding: {
+        ...next.embedding,
+        apiKey: undefined,
+        hasApiKey: Boolean(embeddingKey ?? process.env.AIDB_EMBEDDING_API_KEY),
+      },
     };
     this.setSetting('app', JSON.stringify(sanitized));
     if (keyChanged) this.setAgentApiKey(apiKey);
+    if (embeddingKeyChanged) this.setEmbeddingApiKey(embeddingKey);
     return this.getSettings();
   }
 
@@ -1330,5 +1356,10 @@ export class Store {
   private setAgentApiKey(apiKey: string | undefined): void {
     if (apiKey) this.setSetting('agentApiKey', this.box.encrypt({ apiKey }));
     else this.exec("DELETE FROM settings WHERE key = 'agentApiKey'");
+  }
+
+  private setEmbeddingApiKey(apiKey: string | undefined): void {
+    if (apiKey) this.setSetting('embeddingApiKey', this.box.encrypt({ apiKey }));
+    else this.exec("DELETE FROM settings WHERE key = 'embeddingApiKey'");
   }
 }

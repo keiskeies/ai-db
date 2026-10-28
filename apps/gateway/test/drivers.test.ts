@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import type { ConnectionConfig } from '@aidb/core';
 import { createDriver } from '../src/drivers';
 import { DmDriver } from '../src/drivers/dm';
+import { DuckdbDriver } from '../src/drivers/duckdb';
+import { MilvusDriver } from '../src/drivers/milvus';
 import { MongoDriver } from '../src/drivers/mongodb';
 import { Neo4jDriver } from '../src/drivers/neo4j';
+import { QdrantDriver } from '../src/drivers/qdrant';
 import { RedisDriver } from '../src/drivers/redis';
 import { MysqlDriver } from '../src/drivers/mysql';
 import { PostgresDriver } from '../src/drivers/postgres';
@@ -57,6 +60,22 @@ test('driver factory creates MongoDB and Redis drivers without connecting', asyn
   assert.equal(neo4j.driver.engine, 'neo4j');
   assert.ok(neo4j.driver instanceof Neo4jDriver);
   await neo4j.close();
+
+  const qdrant = await createDriver(config('qdrant', 6333));
+  assert.equal(qdrant.driver.engine, 'qdrant');
+  assert.ok(qdrant.driver instanceof QdrantDriver);
+  await qdrant.close();
+
+  const milvus = await createDriver(config('milvus', 19530));
+  assert.equal(milvus.driver.engine, 'milvus');
+  assert.ok(milvus.driver instanceof MilvusDriver);
+  await milvus.close();
+
+  const duckdbConfig = { ...config('duckdb', 0), database: 'C:/tmp/aidb-driver-test.duckdb' };
+  const duckdb = await createDriver(duckdbConfig);
+  assert.equal(duckdb.driver.engine, 'duckdb');
+  assert.ok(duckdb.driver instanceof DuckdbDriver);
+  await duckdb.close();
 });
 
 test('MongoDB, Redis and Neo4j reject SQL/positional parameters before dialing', async () => {

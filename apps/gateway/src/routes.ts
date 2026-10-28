@@ -348,6 +348,68 @@ export function createApiRouter(deps: ApiDeps): Router {
     }),
   );
 
+  router.post(
+    '/vector/search',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const connectionId = str(body.connectionId);
+      const collection = str(body.collection);
+      if (!connectionId || !collection) {
+        throw Object.assign(new Error('connectionId 与 collection 必填'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      const vector = Array.isArray(body.vector) ? (body.vector as unknown[]).map(Number).filter((value) => Number.isFinite(value)) : undefined;
+      const text = str(body.text);
+      const field = str(body.field);
+      const filter = body.filter && typeof body.filter === 'object' && !Array.isArray(body.filter) ? (body.filter as Record<string, unknown>) : undefined;
+      const query = {
+        language: 'vector' as const,
+        collection,
+        topK: Math.max(1, Math.min(1000, Number(body.topK) || 10)),
+        op: body.op === 'scroll' ? ('scroll' as const) : undefined,
+        ...(vector?.length ? { vector } : {}),
+        ...(text ? { text } : {}),
+        ...(field ? { field } : {}),
+        ...(filter ? { filter } : {}),
+      };
+      const settings = store.getSettings();
+      const started = Date.now();
+      try {
+        const result = await manager.vectorSearch(connectionId, query, {
+          database: str(body.database),
+          maxRows: query.topK,
+          timeoutMs: settings.queryTimeoutMs,
+          actor: 'user',
+        });
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database: str(body.database),
+          tool: 'vector.search',
+          sql: JSON.stringify(query),
+          risk: 'read',
+          approval: 'manual',
+          status: 'ok',
+          durationMs: Date.now() - started,
+        });
+        res.json({ result });
+      } catch (err: any) {
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database: str(body.database),
+          tool: 'vector.search',
+          sql: JSON.stringify(query),
+          risk: 'read',
+          approval: 'manual',
+          status: 'error',
+          durationMs: Date.now() - started,
+          meta: { error: err.message },
+        });
+        throw err;
+      }
+    }),
+  );
+
   router.get(
     '/data',
     ah(async (req, res) => {
@@ -654,6 +716,7 @@ export function createApiRouter(deps: ApiDeps): Router {
       const body = obj(req.body, 'body');
       const current = store.getSettings();
       const agentBody = (body.agent ?? {}) as Partial<AppSettings['agent']>;
+      const embeddingBody = (body.embedding ?? {}) as Partial<AppSettings['embedding']>;
       const merged: AppSettings = {
         ...current,
         ...body,
@@ -661,6 +724,11 @@ export function createApiRouter(deps: ApiDeps): Router {
           ...current.agent,
           ...agentBody,
           apiKey: agentBody.apiKey,
+        },
+        embedding: {
+          ...current.embedding,
+          ...embeddingBody,
+          apiKey: embeddingBody.apiKey,
         },
       };
       store.saveSettings(merged);

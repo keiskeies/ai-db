@@ -175,13 +175,16 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       ? '- Use run_mql with structured JSON (find/aggregate/count/distinct). Never emit SQL for this connection; filters and pipelines are JSON objects. Fields in ## Schema are inferred from a sample and may be missing in some documents.'
       : language === 'cypher'
         ? '- Use run_cypher with Cypher. Pass values as $params instead of string interpolation. Read-only connections reject write clauses and write procedures. Prefer MATCH ... RETURN with a bounded LIMIT; node/relationship results are returned as JSON cells.'
-        : '- Use run_redis for one Redis command at a time. Prefer SCAN over KEYS; do not use EVAL, CONFIG, FLUSHALL or SHUTDOWN. Values are returned as rows; explain the key type when relevant.';
+        : language === 'vector'
+          ? '- Use vector_search with a vector or text (text requires an embedding provider). For Qdrant/Milvus use collection and optional named field; for pgvector also pass field (the vector column). topK is capped at 1000.'
+          : '- Use run_redis for one Redis command at a time. Prefer SCAN over KEYS; do not use EVAL, CONFIG, FLUSHALL or SHUTDOWN. Values are returned as rows; explain the key type when relevant.';
   const sqlOnlyRules = isSql
     ? `- For audits or data-quality questions, call audit_database / check_data_quality first. Report concrete counts (rows checked, null ratios, duplicates) and provide exact, executable repair SQL — not generic advice.
 - For trend/distribution/visual questions, call render_chart with a bounded aggregate SQL instead of describing a chart in words.
 - For "how much / which is the biggest / how did it change" questions, call analyze_chart; for "what happens next / forecast / 预测" questions, call forecast_chart. Their numbers are computed on the Bridge and are authoritative: quote them verbatim, never recompute, re-aggregate or estimate arithmetic yourself. Always pass a forecast's note (method, slope or window, r, caveats) through to the user.
 - Totals, deltas, ratios and shares must come from one aggregate SQL or an analyze_chart result. Never add monthly numbers up by hand, extrapolate or estimate: if a summary number is missing, run another query for it. When two numbers disagree, the query wins and you must say so.
 - For optimization, give (1) the rewritten SQL, (2) the exact CREATE INDEX DDL, (3) an EXPLAIN-based reason, and (4) a verification query.
+- For pgvector similarity on a PostgreSQL connection, use vector_search with field set to the vector column instead of writing <=> SQL by hand.
 - After schema/data changes, run a verification query and report the observed result.`
     : '';
 

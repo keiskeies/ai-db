@@ -41,6 +41,7 @@ export function toolSignature(call: ToolCall): string {
   else if (call.name === 'run_mql' && typeof call.args.collection === 'string') target = call.args.collection;
   else if (call.name === 'run_redis' && typeof call.args.command === 'string') target = call.args.command;
   else if (call.name === 'run_cypher' && typeof call.args.query === 'string') target = call.args.query.slice(0, 40);
+  else if (call.name === 'vector_search' && typeof call.args.collection === 'string') target = call.args.collection;
   else if (call.args.index && typeof call.args.index === 'object') {
     const idx = call.args.index as Record<string, unknown>;
     if (typeof idx.name === 'string') target = idx.name;

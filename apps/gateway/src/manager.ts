@@ -3,12 +3,16 @@ import {
   classifyCypher,
   classifyMql,
   classifyRedis,
+  classifyVector,
   engineMeta,
   engineUsesSchema,
   formatStructuredQuery,
   parseRedisCommandLine,
+  quoteIdent,
+  quoteQualified,
   readonlyViolation,
   splitStatements,
+  vectorQueryFromArgs,
   type AppSettings,
   type ConnectionConfig,
   type ConnectionSecret,
@@ -20,11 +24,13 @@ import {
   type RedisQuery,
   type StructuredQuery,
   type TableInfo,
+  type VectorQuery,
 } from '@aidb/core';
 import type { GatewayConfig } from './config';
 import { createDriver, DbError, type Driver } from './drivers';
 import { normalizeMql } from './drivers/mongodb';
-import { supportsStructuredQuery } from './drivers/types';
+import { supportsStructuredQuery, supportsVectorSearch } from './drivers/types';
+import { embedText } from './embeddings';
 import type { Store } from './store';
 
 interface CachedDriver {
@@ -171,15 +177,33 @@ export class ConnectionManager {
       }
       return { language: 'cypher', text: trimmed };
     }
+    if (conn.engine === 'qdrant' || conn.engine === 'milvus') {
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        throw new DbError('向量查询需要 JSON，例如 {"collection":"docs","vector":[...],"topK":5}', { code: 'VECTOR_PARSE' });
+      }
+      const query = vectorQueryFromArgs(parsed);
+      if (!query.op) query.op = query.vector?.length || query.text ? 'search' : 'scroll';
+      return query;
+    }
     throw new DbError(`${engineMeta(conn.engine).label} 暂不支持查询`, { code: 'UNSUPPORTED_ENGINE' });
   }
 
   private async executeStructured(connectionId: string, conn: ConnectionConfig, query: StructuredQuery, opts: QueryOptions): Promise<QueryBatchResult> {
     if (conn.readonly) {
       const safety =
-        query.language === 'mql' ? classifyMql(query as MqlQuery) : query.language === 'redis' ? classifyRedis(query as RedisQuery) : classifyCypher(query as CypherQuery);
+        query.language === 'mql'
+          ? classifyMql(query as MqlQuery)
+          : query.language === 'redis'
+            ? classifyRedis(query as RedisQuery)
+            : query.language === 'cypher'
+              ? classifyCypher(query as CypherQuery)
+              : classifyVector(query as VectorQuery);
       if (safety.kind !== 'read') {
-        const label = query.language === 'mql' ? 'MongoDB 写操作' : query.language === 'redis' ? (query as RedisQuery).command : 'Cypher 写操作';
+        const label =
+          query.language === 'mql' ? 'MongoDB 写操作' : query.language === 'redis' ? (query as RedisQuery).command : query.language === 'cypher' ? 'Cypher 写操作' : '向量写操作';
         throw new DbError(`只读连接不允许执行 ${label}${safety.reason ? `（${safety.reason}）` : ''}`, {
           code: 'READONLY',
           status: 403,
@@ -193,7 +217,12 @@ export class ConnectionManager {
     }
     const started = Date.now();
     try {
-      const result = await driver.executeQuery(query, {
+      let effective = query;
+      if (query.language === 'vector' && query.text && !query.vector?.length) {
+        const vector = await embedText(this.settings(), query.text);
+        effective = { ...query, vector };
+      }
+      const result = await driver.executeQuery(effective, {
         database: opts.database,
         maxRows: opts.maxRows,
         timeoutMs: opts.timeoutMs,
@@ -228,6 +257,83 @@ export class ConnectionManager {
     const conn = this.store.getConnection(connectionId);
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
     return this.executeStructured(connectionId, conn, query, opts);
+  }
+
+  async vectorSearch(connectionId: string, query: VectorQuery, opts: QueryOptions): Promise<QueryResult> {
+    const conn = this.store.getConnection(connectionId);
+    if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+    const meta = engineMeta(conn.engine);
+    const topK = Math.max(1, Math.min(1000, Number(query.topK) || 10));
+    let vector = query.vector;
+    if (!vector?.length && query.text) vector = await embedText(this.settings(), query.text);
+    const started = Date.now();
+    const driver = await this.driverFor(connectionId);
+
+    if (meta.model === 'vector') {
+      if (!supportsVectorSearch(driver)) {
+        throw new DbError(`${meta.label} 驱动不支持向量检索`, { code: 'UNSUPPORTED_ENGINE' });
+      }
+      try {
+        const result = await driver.vectorSearch({ ...query, topK, vector }, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs });
+        this.store.addHistory({
+          connectionId,
+          database: opts.database ?? conn.database,
+          sql: formatStructuredQuery(query),
+          status: 'ok',
+          durationMs: result.durationMs,
+          rowCount: result.rowCount,
+        });
+        return result;
+      } catch (err: any) {
+        this.store.addHistory({
+          connectionId,
+          database: opts.database ?? conn.database,
+          sql: formatStructuredQuery(query),
+          status: 'error',
+          durationMs: Date.now() - started,
+          error: err?.message ?? '向量检索失败',
+        });
+        throw err instanceof DbError ? err : new DbError(err?.message ?? '向量检索失败');
+      }
+    }
+
+    if (meta.dialect === 'postgres') {
+      if (!query.field) throw new DbError('pgvector 检索需要指定向量列 field', { code: 'VECTOR_FIELD' });
+      if (!vector?.length) throw new DbError('pgvector 检索需要 vector 或 text', { code: 'VECTOR_REQUIRED' });
+      const { table } = await this.findTable(connectionId, opts.database, query.collection);
+      const column = (table.columns ?? []).find((item) => item.name.toLowerCase() === query.field!.toLowerCase());
+      if (!column || !/^vector/i.test(column.type)) {
+        throw new DbError(`列 ${query.field} 不是 vector 类型`, { code: 'VECTOR_FIELD' });
+      }
+      const target = quoteQualified([table.schema, table.name], conn.engine);
+      const vectorColumn = quoteIdent(column.name, conn.engine);
+      const literal = `[${vector.join(',')}]`;
+      const sql = `SELECT *, 1 - (${vectorColumn} <=> $1::vector) AS score FROM ${target} ORDER BY ${vectorColumn} <=> $1::vector LIMIT ${topK}`;
+      try {
+        const result = await driver.runParams(sql, [literal], { database: opts.database, maxRows: topK, timeoutMs: opts.timeoutMs });
+        this.store.addHistory({
+          connectionId,
+          database: opts.database ?? conn.database,
+          sql,
+          status: 'ok',
+          durationMs: result.durationMs,
+          rowCount: result.rowCount,
+        });
+        return result;
+      } catch (err: any) {
+        this.store.addHistory({
+          connectionId,
+          database: opts.database ?? conn.database,
+          sql,
+          status: 'error',
+          durationMs: Date.now() - started,
+          error: err?.message ?? '向量检索失败',
+        });
+        throw err instanceof DbError ? err : new DbError(err?.message ?? '向量检索失败');
+      }
+    }
+
+    throw new DbError(`${meta.label} 不支持向量检索`, { code: 'UNSUPPORTED_ENGINE' });
   }
 
   async query(connectionId: string, sql: string, opts: QueryOptions): Promise<QueryBatchResult> {
