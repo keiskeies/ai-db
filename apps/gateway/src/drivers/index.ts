@@ -5,6 +5,7 @@ import { DmDriver } from './dm';
 import { DuckdbDriver } from './duckdb';
 import { ElasticsearchDriver } from './elasticsearch';
 import { FalkorDriver } from './falkordb';
+import { InfluxdbDriver } from './influxdb';
 import { MongoDriver } from './mongodb';
 import { MilvusDriver } from './milvus';
 import { MysqlDriver } from './mysql';
@@ -224,6 +225,16 @@ export async function createDriver(config: ConnectionConfig, secret: ConnectionS
         port: connectPort,
         user: config.username ?? 'root',
         password: secret.password,
+        database: config.database || meta.defaultDatabase,
+        ssl: config.ssl,
+      });
+      return { driver, close: () => closeWithTunnel(driver) };
+    }
+    case 'influxdb-http': {
+      const driver = new InfluxdbDriver({
+        host: connectHost,
+        port: connectPort,
+        token: secret.password,
         database: config.database || meta.defaultDatabase,
         ssl: config.ssl,
       });

@@ -16,8 +16,8 @@ v0.3 的 8 个关系型引擎已经覆盖 DB-Engines 前四（Oracle / MySQL / S
 type Engine = 'mongodb' | 'redis' | 'kingbase' | /* ... */;
 type DataModel = 'relational' | 'document' | 'keyvalue' | 'vector' | 'graph' | 'widecolumn' | 'search' | 'timeseries';
 type Transport = 'sqlite-file' | 'mysql' | 'postgres' | 'tds' | 'oracle' | 'clickhouse-http'
-               | 'mongodb' | 'redis' | 'bolt' | 'cassandra' | 'dm' | 'qdrant-http' | 'milvus-http' | 'weaviate-http' | 'duckdb-file' | 'elasticsearch-http' | 'tdengine-http';
-type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickhouse' | 'dm' | 'tdengine';
+               | 'mongodb' | 'redis' | 'bolt' | 'cassandra' | 'dm' | 'qdrant-http' | 'milvus-http' | 'weaviate-http' | 'duckdb-file' | 'elasticsearch-http' | 'tdengine-http' | 'falkordb' | 'influxdb-http';
+type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickhouse' | 'dm' | 'tdengine' | 'influxdb';
 ```
 
 | 层 | 作用 | 扩展方式 |
@@ -29,7 +29,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 
 核心定义在 [`packages/core/src/engines.ts`](../packages/core/src/engines.ts)、[`packages/core/src/types.ts`](../packages/core/src/types.ts)。SQL 方言函数统一通过 `dialectOf(engine)` 归一化，因此金仓、TiDB 等别名不需要复制 `ddl.ts` / `ident.ts`。
 
-## 3. 接入矩阵（38 种）
+## 3. 接入矩阵（39 种）
 
 | 分组 | 引擎 | Transport | Dialect | 能力 |
 |---|---|---|---|---|
@@ -42,6 +42,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 | 关系型 | DuckDB | duckdb-file | sqlite | 浏览 + SQL + 数据编辑；DDL 设计器关闭 |
 | 分析型 | ClickHouse | clickhouse-http | clickhouse | 无结构同步/数据对比 |
 | 时序 | TDengine | tdengine-http | tdengine | taosAdapter REST（6041）；超级表/子表浏览 + SQL；无网格编辑 |
+| 时序 | InfluxDB | influxdb-http | influxdb | InfluxDB 3 `/api/v3/query_sql`（DataFusion SQL）；measurement 浏览 + SQL + EXPLAIN；DDL 关闭 |
 | 文档 | MongoDB | mongodb | —（MQL） | 浏览 + 查询 + 结果；无 DDL/备份 |
 | 键值 | Redis | redis | —（命令） | 浏览 + 命令 + 结果；无 DDL/备份 |
 | 宽列 | Cassandra | cassandra | —（CQL） | keyspace/table 浏览 + CQL；无 JOIN/DDL 设计器 |
@@ -180,16 +181,17 @@ docker run -d --rm --name aidb-test-weaviate -p 8081:8080 -e AUTHENTICATION_ANON
 docker run -d --rm --name aidb-test-es -p 9203:9200 -e discovery.type=single-node -e xpack.security.enabled=false -e ES_JAVA_OPTS='-Xms512m -Xmx512m' docker.elastic.co/elasticsearch/elasticsearch:8.15.0
 docker run -d --rm --name aidb-test-tdengine -p 6042:6041 tdengine/tdengine:3.2.3.0
 docker run -d --rm --name aidb-test-falkor -p 6382:6379 falkordb/falkordb:latest
+docker run -d --rm --name aidb-test-influx -p 8184:8181 influxdb:3-core influxdb3 serve --node-id=aidb --object-store=memory --without-auth
 # Milvus standalone 需要 etcd + minio，参考官方 docker compose；示例映射 19531:19530
 
 # 达梦 DM8：官方未提供轻量镜像，可用社区镜像初始化后运行（示例）
 # docker run ... sizx/dm8，dminit + dmserver，映射 5237:5236
 
-AIDB_TEST_MONGO_PORT=27018 AIDB_TEST_REDIS_PORT=6380 AIDB_TEST_NEO4J_PORT=7688 AIDB_TEST_NEO4J_PASSWORD=testpass AIDB_TEST_MEMGRAPH_PORT=7689 AIDB_TEST_CASSANDRA_PORT=9043 AIDB_TEST_PGVECTOR_PORT=5434 AIDB_TEST_QDRANT_PORT=6335 AIDB_TEST_WEAVIATE_PORT=8081 AIDB_TEST_ELASTICSEARCH_PORT=9203 AIDB_TEST_MILVUS_PORT=19531 AIDB_TEST_TDENGINE_PORT=6042 AIDB_TEST_FALKORDB_PORT=6382 npm --workspace @aidb/gateway run test
+AIDB_TEST_MONGO_PORT=27018 AIDB_TEST_REDIS_PORT=6380 AIDB_TEST_NEO4J_PORT=7688 AIDB_TEST_NEO4J_PASSWORD=testpass AIDB_TEST_MEMGRAPH_PORT=7689 AIDB_TEST_CASSANDRA_PORT=9043 AIDB_TEST_PGVECTOR_PORT=5434 AIDB_TEST_QDRANT_PORT=6335 AIDB_TEST_WEAVIATE_PORT=8081 AIDB_TEST_ELASTICSEARCH_PORT=9203 AIDB_TEST_MILVUS_PORT=19531 AIDB_TEST_TDENGINE_PORT=6042 AIDB_TEST_FALKORDB_PORT=6382 AIDB_TEST_INFLUXDB_PORT=8184 npm --workspace @aidb/gateway run test
 NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSWORD=SYSDBA npm --workspace @aidb/gateway run test
 ```
 
-覆盖：驱动工厂协议别名路由、MongoDB、Redis、Neo4j/Memgraph/FalkorDB、Cassandra/ScyllaDB、达梦、DuckDB、TDengine（含本地 stub 协议测试）、Qdrant/Milvus/Weaviate、pgvector + Embedding、Elasticsearch/OpenSearch，HTTP `/schema`、`/query`、`/vector/search` 管线、非 SQL 连接的功能禁用。
+覆盖：驱动工厂协议别名路由、MongoDB、Redis、Neo4j/Memgraph/FalkorDB、Cassandra/ScyllaDB、达梦、DuckDB、TDengine、InfluxDB（均含本地 stub 协议测试）、Qdrant/Milvus/Weaviate、pgvector + Embedding、Elasticsearch/OpenSearch，HTTP `/schema`、`/query`、`/vector/search` 管线、非 SQL 连接的功能禁用。
 
 ## 9. 已知限制
 
@@ -208,6 +210,7 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 - Weaviate 检索使用 GraphQL `nearVector`；文本检索需先经 Embedding，未配置时请传向量。
 - TDengine 走 taosAdapter REST：无参数化查询、无网格编辑；对象树最多列出 500 个表，超大库请用 SQL 过滤。
 - FalkorDB 通过 Redis 协议执行 `GRAPH.QUERY`：参数以 `CYPHER k=v` 前缀内联（驱动已做字面量转义），属性/统计信息来自 `GRAPH.QUERY` 的第二、三段返回；无多图事务与索引管理 UI。
+- InfluxDB 3 的 SQL 接口只读，且只有 `iox`/`system`/`information_schema` 三个 schema；建库写数据需用 `influxdb3` CLI 或行协议 API。InfluxDB 1.x/2.x 的 Flux/InfluxQL 端点不同，当前只保证 3.x。
 - 复杂图布局/交互、向量/搜索写入仍待补；当前图视图为基础环形布局。
 
 ## 10. 后续路线
@@ -215,7 +218,7 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 | 阶段 | 内容 |
 |---|---|
 | P1 | 已完成：Neo4j、达梦 DM8、DuckDB、Qdrant、Milvus、pgvector + Embedding |
-| P2 | 已完成：Memgraph、Cassandra/ScyllaDB、Weaviate、Elasticsearch/OpenSearch、TDengine、FalkorDB、基础图视图、向量/搜索只读；待补：复杂图布局、向量/搜索写入、InfluxDB、ArangoDB、Redis Stack |
+| P2 | 已完成：Memgraph、Cassandra/ScyllaDB、Weaviate、Elasticsearch/OpenSearch、TDengine、FalkorDB、InfluxDB、基础图视图、向量/搜索只读；待补：复杂图布局、向量/搜索写入、ArangoDB、Redis Stack |
 | P3 | 云数仓（Snowflake / BigQuery / Redshift / Databricks）、Db2 / SAP HANA、无 Node 驱动的国产库（神通 / GBase 8s / 崖山 / 虚谷） |
 
 ## 11. 关键文件

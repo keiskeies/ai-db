@@ -382,6 +382,7 @@ export function buildExplain(engine: Engine, sql: string, analyze = false): stri
   if (isPgLike(d)) return `EXPLAIN (FORMAT JSON${analyze ? ', ANALYZE' : ''}) ${clean}`;
   if (d === 'clickhouse') return `EXPLAIN ${clean}`;
   if (d === 'dm') return `EXPLAIN ${clean}`;
+  if (d === 'influxdb') return `EXPLAIN ${clean}`;
   if (d === 'oracle') return `EXPLAIN PLAN FOR ${clean}`;
   throw new Error('SQL Server 暂不支持自动 EXPLAIN：请在 SSMS 中查看实际执行计划，或使用 SET SHOWPLAN_ALL');
 }
@@ -458,6 +459,7 @@ export function buildMonthlySeriesExpr(engine: Engine, column: string): string {
   if (isPgLike(d)) return `to_char(${col}, 'YYYY-MM')`;
   if (d === 'oracle' || d === 'dm') return `to_char(${col}, 'YYYY-MM')`;
   if (d === 'tdengine') return `TO_CHAR(${col}, 'YYYY-MM')`;
+  if (d === 'influxdb') return `date_format(${col}, '%Y-%m')`;
   if (d === 'clickhouse') return `formatDateTime(${col}, '%Y-%m')`;
   return `FORMAT(${col}, 'yyyy-MM')`;
 }

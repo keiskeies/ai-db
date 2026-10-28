@@ -96,6 +96,8 @@ const DUCKDB_E2E = process.env.AIDB_TEST_DUCKDB === '1';
 const TDENGINE_PORT = process.env.AIDB_TEST_TDENGINE_PORT ? Number(process.env.AIDB_TEST_TDENGINE_PORT) : undefined;
 const FALKORDB_PORT = process.env.AIDB_TEST_FALKORDB_PORT ? Number(process.env.AIDB_TEST_FALKORDB_PORT) : undefined;
 const FALKORDB_GRAPH = 'aidb_e2e';
+const INFLUXDB_PORT = process.env.AIDB_TEST_INFLUXDB_PORT ? Number(process.env.AIDB_TEST_INFLUXDB_PORT) : undefined;
+const INFLUXDB_DB = 'aidb_e2e';
 if (MONGO_PORT) {
   const { MongoClient } = await import('mongodb');
   const client = new MongoClient(`mongodb://127.0.0.1:${MONGO_PORT}`, { serverSelectionTimeoutMS: 5000 });
@@ -195,6 +197,13 @@ if (TDENGINE_PORT) {
   await sql("INSERT INTO d1 USING meters TAGS ('beijing') VALUES (NOW, 10.3)", 'aidb_e2e');
   await sql("INSERT INTO d2 USING meters TAGS ('shanghai') VALUES (NOW, 12.1)", 'aidb_e2e');
 }
+if (INFLUXDB_PORT) {
+  const write = await fetch(`http://127.0.0.1:${INFLUXDB_PORT}/api/v3/write_lp?db=${INFLUXDB_DB}&precision=nanosecond`, {
+    method: 'POST',
+    body: ['cpu,host=a value=1.0 1700000000000000000', 'cpu,host=b value=2.0 1700000060000000000'].join('\n'),
+  });
+  if (write.status !== 204) throw new Error(`InfluxDB seed failed: ${write.status} ${await write.text()}`);
+}
 if (FALKORDB_PORT) {
   const { Redis } = await import('ioredis');
   const client = new Redis({ host: '127.0.0.1', port: FALKORDB_PORT, lazyConnect: true });
@@ -281,7 +290,7 @@ await page.waitForTimeout(150);
 await page.click('[data-testid="sidebar-new-connection"]');
 await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
 const engineOptions = await page.locator('[data-testid="connection-engine"] option').count();
-check('connection form lists 38 engines', engineOptions === 38, String(engineOptions));
+check('connection form lists 39 engines', engineOptions === 39, String(engineOptions));
 await page.screenshot({ path: join(shots, 'desktop-connection-engines.png') });
 await page.locator('.modal-head .icon-btn').click();
 await page.waitForTimeout(200);
@@ -464,6 +473,25 @@ if (FALKORDB_PORT) {
   check('FalkorDB graph view renders nodes', falkorNodes === 2, `${falkorNodes} nodes`);
 }
 
+if (INFLUXDB_PORT) {
+  await page.click('[data-testid="sidebar-new-connection"]');
+  await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
+  await page.fill('[data-testid="connection-name"]', 'InfluxDB E2E');
+  await page.selectOption('[data-testid="connection-engine"]', 'influxdb');
+  await page.fill('[data-testid="connection-host"]', '127.0.0.1');
+  await page.fill('[data-testid="connection-port"]', String(INFLUXDB_PORT));
+  await page.fill('[data-testid="connection-database"]', INFLUXDB_DB);
+  await page.click('[data-testid="connection-save"]');
+  const influxRow = page.locator('.conn-row', { hasText: 'InfluxDB E2E' });
+  await influxRow.waitFor({ timeout: 15000 });
+  await page.waitForSelector('[title="TABLE cpu"]', { timeout: 30000 });
+  check('InfluxDB connection expands to measurements', true);
+  await page.click('[title="TABLE cpu"]');
+  await page.waitForSelector('[data-testid="data-grid"] tbody tr', { timeout: 20000 });
+  const influxRows = await page.locator('[data-testid="data-grid"] tbody tr').count();
+  check('InfluxDB data grid returns rows', influxRows === 2, `${influxRows} rows`);
+}
+
 if (DUCKDB_E2E) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
@@ -481,7 +509,7 @@ if (DUCKDB_E2E) {
   check('DuckDB data grid returns rows', duckRows === 2, `${duckRows} rows`);
 }
 
-if (MONGO_PORT || REDIS_PORT || NEO4J_PORT || DM_PORT || QDRANT_PORT || DUCKDB_E2E || TDENGINE_PORT || FALKORDB_PORT) {
+if (MONGO_PORT || REDIS_PORT || NEO4J_PORT || DM_PORT || QDRANT_PORT || DUCKDB_E2E || TDENGINE_PORT || FALKORDB_PORT || INFLUXDB_PORT) {
   // 恢复初始工作区：bootstrap 会把 active connection 指回 demo，并重新出现欢迎页
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });

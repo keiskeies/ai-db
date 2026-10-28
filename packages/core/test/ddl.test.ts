@@ -14,6 +14,7 @@ const MONTHLY_FN: Record<DialectId, string> = {
   clickhouse: 'formatDateTime',
   dm: 'to_char',
   tdengine: 'TO_CHAR',
+  influxdb: 'date_format',
 };
 
 test('buildMonthlySeriesExpr has dialect-correct SQL for every SQL engine', () => {

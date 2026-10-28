@@ -109,7 +109,7 @@ export class ConnectionManager {
   async schema(connectionId: string, database?: string, refresh = false, ttlMs = 30000): Promise<DatabaseSchema[]> {
     const conn = this.store.getConnection(connectionId);
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
-    const dbKey = database ?? conn.database ?? (conn.engine === 'sqlite' ? 'main' : conn.engine === 'redis' ? '0' : conn.engine === 'neo4j' ? 'neo4j' : conn.engine === 'memgraph' ? 'memgraph' : conn.engine === 'falkordb' ? (conn.database || 'aidb') : conn.engine === 'elasticsearch' || conn.engine === 'opensearch' ? 'default' : conn.engine === 'cassandra' || conn.engine === 'scylla' ? 'system' : '');
+    const dbKey = database ?? conn.database ?? (conn.engine === 'sqlite' ? 'main' : conn.engine === 'redis' ? '0' : conn.engine === 'neo4j' ? 'neo4j' : conn.engine === 'memgraph' ? 'memgraph' : conn.engine === 'falkordb' ? (conn.database || 'aidb') : conn.engine === 'influxdb' ? (conn.database || 'aidb') : conn.engine === 'elasticsearch' || conn.engine === 'opensearch' ? 'default' : conn.engine === 'cassandra' || conn.engine === 'scylla' ? 'system' : '');
     const cached = this.store.getSchemaCache(connectionId, dbKey);
     if (!refresh && cached && Date.now() - new Date(cached.fetchedAt).getTime() < ttlMs) {
       try {
@@ -130,7 +130,7 @@ export class ConnectionManager {
       if (!groups.size) groups.set(dbKey || 'public', []);
       schemas = [...groups.entries()].map(([name, list]) => ({ name, tables: list }));
     } else {
-      const fallback = conn.engine === 'mongodb' ? 'default' : conn.engine === 'redis' ? '0' : conn.engine === 'neo4j' ? 'neo4j' : conn.engine === 'memgraph' ? 'memgraph' : conn.engine === 'falkordb' ? (conn.database || 'aidb') : conn.engine === 'elasticsearch' || conn.engine === 'opensearch' ? 'default' : 'main';
+      const fallback = conn.engine === 'mongodb' ? 'default' : conn.engine === 'redis' ? '0' : conn.engine === 'neo4j' ? 'neo4j' : conn.engine === 'memgraph' ? 'memgraph' : conn.engine === 'falkordb' ? (conn.database || 'aidb') : conn.engine === 'influxdb' ? (conn.database || 'aidb') : conn.engine === 'elasticsearch' || conn.engine === 'opensearch' ? 'default' : 'main';
       schemas = [{ name: dbKey || fallback, tables }];
     }
     this.store.setSchemaCache(connectionId, dbKey, schemas);
