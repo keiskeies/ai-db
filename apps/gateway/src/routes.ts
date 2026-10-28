@@ -769,6 +769,90 @@ export function createApiRouter(deps: ApiDeps): Router {
   );
 
   router.post(
+    '/redis/key/ttl',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const connectionId = str(body.connectionId);
+      const key = str(body.key);
+      if (!connectionId || !key) throw Object.assign(new Error('connectionId 与 key 必填'), { code: 'INVALID_INPUT', status: 400 });
+      const database = str(body.database);
+      const seconds = body.seconds === null || body.seconds === undefined || body.seconds === '' ? null : Number(body.seconds);
+      if (seconds !== null && (!Number.isFinite(seconds) || seconds < 1)) {
+        throw Object.assign(new Error('seconds 需要是正整数秒，或 null 表示移除过期'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      try {
+        const result = await manager.setKeyTtl(connectionId, key, seconds, { database, actor: 'user' });
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'redis.key.ttl',
+          sql: JSON.stringify({ key, seconds }),
+          risk: 'write',
+          approval: 'manual',
+          status: 'ok',
+          meta: { ttl: result.ttl },
+        });
+        res.json({ result });
+      } catch (err: any) {
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'redis.key.ttl',
+          sql: JSON.stringify({ key, seconds }),
+          risk: 'write',
+          approval: 'manual',
+          status: 'error',
+          meta: { error: err.message },
+        });
+        throw err;
+      }
+    }),
+  );
+
+  router.post(
+    '/redis/key/rename',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const connectionId = str(body.connectionId);
+      const key = str(body.key);
+      const to = str(body.to);
+      if (!connectionId || !key || !to) {
+        throw Object.assign(new Error('connectionId、key 与 to 必填'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      const database = str(body.database);
+      try {
+        const result = await manager.renameKey(connectionId, key, to, { database, actor: 'user' });
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'redis.key.rename',
+          sql: JSON.stringify({ from: key, to }),
+          risk: 'destructive',
+          approval: 'manual',
+          status: 'ok',
+        });
+        res.json({ result });
+      } catch (err: any) {
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'redis.key.rename',
+          sql: JSON.stringify({ from: key, to }),
+          risk: 'destructive',
+          approval: 'manual',
+          status: 'error',
+          meta: { error: err.message },
+        });
+        throw err;
+      }
+    }),
+  );
+
+  router.post(
     '/redis/keys/delete',
     ah(async (req, res) => {
       const body = obj(req.body, 'body');

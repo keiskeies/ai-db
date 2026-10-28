@@ -226,6 +226,10 @@ export const api = {
     for (const [key, value] of Object.entries(params)) if (value) q.set(key, String(value));
     return request<{ detail: { id: string; document: string } }>(`/documents/get?${q.toString()}`);
   },
+  setKeyTtl: (body: { connectionId: string; database?: string; key: string; seconds: number | null }) =>
+    request<{ result: { key: string; ttl: number } }>('/redis/key/ttl', { method: 'POST', body: JSON.stringify(body) }),
+  renameKey: (body: { connectionId: string; database?: string; key: string; to: string }) =>
+    request<{ result: { from: string; to: string } }>('/redis/key/rename', { method: 'POST', body: JSON.stringify(body) }),
   deleteRedisKeys: (body: { connectionId: string; database?: string; keys: string[] }) =>
     request<{ result: { deleted: number } }>('/redis/keys/delete', { method: 'POST', body: JSON.stringify(body) }),
   dropRedisIndex: (body: { connectionId: string; database?: string; name: string }) =>

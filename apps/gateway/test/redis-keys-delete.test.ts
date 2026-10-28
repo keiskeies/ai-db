@@ -122,3 +122,86 @@ test('HTTP 接口删除键、拒绝只读连接，并能为 RediSearch 索引删
   assert.ok(tools.includes('redis.keys.delete'), '键删除留下审计');
   assert.ok(tools.includes('redis.index.drop'), '索引删除留下审计');
 });
+
+test('HTTP 设置/移除 TTL 与重命名键', { skip: !PORT }, async () => {
+  const seed = new Redis({ host: '127.0.0.1', port: PORT!, lazyConnect: true });
+  await seed.connect();
+  try {
+    await seed.del('aidb_ttl', 'aidb_rn_from', 'aidb_rn_to', 'aidb_rn_moved');
+    await seed.set('aidb_ttl', '1');
+    await seed.set('aidb_rn_from', 'a');
+    await seed.set('aidb_rn_to', 'taken');
+  } finally {
+    await seed.quit();
+  }
+
+  const env = await gateway();
+  after(env.close);
+  const writable = await env.connect('redis-ttl-write', false);
+  const readonly = await env.connect('redis-ttl-readonly', true);
+
+  const blocked = await env.api<{ error: { code: string } }>('/redis/key/ttl', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: readonly, database: '0', key: 'aidb_ttl', seconds: 60 }),
+  });
+  assert.equal(blocked.status, 403);
+  assert.equal(blocked.body.error.code, 'READONLY');
+
+  const bad = await env.api('/redis/key/ttl', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: writable, database: '0', key: 'aidb_ttl', seconds: 0 }),
+  });
+  assert.equal(bad.status, 400, '0 秒不是合法 TTL');
+
+  const set = await env.api<{ result: { ttl: number } }>('/redis/key/ttl', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: writable, database: '0', key: 'aidb_ttl', seconds: 600 }),
+  });
+  assert.equal(set.status, 200, JSON.stringify(set.body));
+  assert.ok(set.body.result.ttl > 500 && set.body.result.ttl <= 600, `TTL 应接近 600，实际 ${set.body.result.ttl}`);
+
+  const detail = await env.api<{ detail: { ttl: number } }>(`/redis/key?connectionId=${writable}&database=0&key=aidb_ttl`);
+  assert.ok(detail.body.detail.ttl > 500, '详情里的 TTL 同步');
+
+  const cleared = await env.api<{ result: { ttl: number } }>('/redis/key/ttl', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: writable, database: '0', key: 'aidb_ttl', seconds: null }),
+  });
+  assert.equal(cleared.body.result.ttl, -1, 'PERSIST 后永不过期');
+
+  const missing = await env.api<{ error: { code: string } }>('/redis/key/ttl', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: writable, database: '0', key: 'aidb_ttl_ghost', seconds: 60 }),
+  });
+  assert.equal(missing.body.error.code, 'REDIS_KEY_NOT_FOUND', '给不存在的键设 TTL 会报错而不是静默成功');
+
+  const taken = await env.api<{ error: { code: string } }>('/redis/key/rename', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: writable, database: '0', key: 'aidb_rn_from', to: 'aidb_rn_to' }),
+  });
+  assert.equal(taken.status, 409, JSON.stringify(taken.body));
+  assert.equal(taken.body.error.code, 'REDIS_RENAME_TAKEN');
+
+  const renamed = await env.api<{ result: { from: string; to: string } }>('/redis/key/rename', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: writable, database: '0', key: 'aidb_rn_from', to: 'aidb_rn_moved' }),
+  });
+  assert.equal(renamed.status, 200, JSON.stringify(renamed.body));
+  const gone = await env.api(`/redis/key?connectionId=${writable}&database=0&key=aidb_rn_from`);
+  assert.equal(gone.status, 404);
+  const moved = await env.api<{ detail: { key: string } }>(`/redis/key?connectionId=${writable}&database=0&key=aidb_rn_moved`);
+  assert.equal(moved.body.detail.key, 'aidb_rn_moved');
+
+  const audits = await env.api<{ entries: Array<{ tool: string; risk: string }> }>(`/audit?connectionId=${writable}&limit=30`);
+  const byTool = new Map((audits.body.entries ?? []).map((entry) => [entry.tool, entry.risk]));
+  assert.equal(byTool.get('redis.key.ttl'), 'write');
+  assert.equal(byTool.get('redis.key.rename'), 'destructive');
+
+  const cleanup = new Redis({ host: '127.0.0.1', port: PORT!, lazyConnect: true });
+  await cleanup.connect();
+  try {
+    await cleanup.del('aidb_ttl', 'aidb_rn_to', 'aidb_rn_moved');
+  } finally {
+    await cleanup.quit();
+  }
+});

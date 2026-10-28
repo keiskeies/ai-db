@@ -223,7 +223,7 @@
 | 引擎 | 模型 | 对象浏览 | 查询 | 结果 | SQL 专属功能 |
 |---|---|---|---|---|---|
 | MongoDB | document | database → collection/view；采样 30 条推断字段（含一层嵌套字段）；右键「对象信息」显示并可管理 `$listIndexes` 读到的索引（新建：字段 / 唯一 / 稀疏 / TTL；删除需手输索引名，`_id_` 拒删） | JSON MQL：find / aggregate / count / distinct；支持 filter / pipeline / projection / sort / limit / skip；文档写入 / CSV 导入 / 按 _id 删除；结果网格双击行可编辑整条文档（EJSON 往返，ObjectId / Date 保真） | 文档行，嵌套值为 JSON 单元格 | 禁用 DDL 设计器、结构同步、数据对比、dump、审计体检、图表 |
-| Redis | keyvalue | DB 索引 → keys 伪对象 + RediSearch 索引；SCAN 浏览，不执行 `KEYS *`；双击键行打开类型感知详情，详情内可删除键（UNLINK），索引节点可删除索引（FT.DROPINDEX，文档保留） | 单条命令控制台；SCAN / HGETALL / ZRANGE / FT.SEARCH 等类型化结果 | key/value、field/value、member/score、索引文档行；详情含 TTL / 规模 / 编码 | 禁用 DDL、结构同步、备份、SQL 工具；Redis Stack 模块自动识别 |
+| Redis | keyvalue | DB 索引 → keys 伪对象 + RediSearch 索引；SCAN 浏览，不执行 `KEYS *`；双击键行打开类型感知详情，详情内可删除键（UNLINK），在详情里设置 / 移除过期时间（EXPIRE / PERSIST）与重命名键（RENAME，目标名已存在则拒绝），索引节点可删除索引（FT.DROPINDEX，文档保留） | 单条命令控制台；SCAN / HGETALL / ZRANGE / FT.SEARCH 等类型化结果 | key/value、field/value、member/score、索引文档行；详情含 TTL / 规模 / 编码 | 禁用 DDL、结构同步、备份、SQL 工具；Redis Stack 模块自动识别 |
 | Neo4j | graph | database → 节点标签 / 关系类型；采样 30 个节点/关系推断属性 | Cypher 控制台；支持 `$params`；`EXPLAIN` / `PROFILE` 计划以 JSON 返回 | 节点/关系/路径为 JSON 单元格，`resultKind=graph`；支持表格/图视图（力导向布局、缩放平移、拖动节点、属性面板、搜索高亮） | 禁用 SQL 工具、DDL、结构同步、备份；超大图（>140 节点）自动退回环形布局 |
 | Qdrant | vector | collection → 维度 / 距离 / payload 字段；对象树菜单可新建 / 删除集合；「对象信息」列出 payload 索引并可按字段建删（keyword / integer / float / text / bool / geo） | JSON：`scroll` 浏览或 `vector` / `text` 检索；批量写入、CSV 导入与按 id 删除 | id/score/payload 行，`resultKind=vectors` | 禁用 SQL 工具与 SQL DDL 设计器；文本检索需 Embedding |
 | Milvus | vector | collection → field schema / 维度 | JSON：`scroll` 查询或 `vector` / `text` 检索；批量写入与按 id 删除 | id/score/entity 行，`resultKind=vectors` | 禁用 SQL/DDL 与建集合（需要完整字段定义）；文本检索需 Embedding |
@@ -238,7 +238,7 @@
 
 协议别名：金仓 / openGauss / GaussDB / 瀚高 / Vastbase / IvorySQL 复用 PostgreSQL 驱动与方言；OceanBase / TiDB / PolarDB / TDSQL / GBase 8a / Doris / StarRocks / GreatSQL / GoldenDB 复用 MySQL 驱动与方言。openGauss/GaussDB 默认 sha256 认证需实例改为 md5 或使用兼容认证；Doris/StarRocks/GBase 8a 的 DDL 能力按 `EngineMeta.capabilities` 关闭设计器。
 
-安全：只读连接在网关侧按语言分类拦截；MongoDB、Redis、Neo4j/Memgraph/FalkorDB、ArangoDB、Cassandra/ScyllaDB、向量检索与搜索 DSL 均有独立分类器；非 SQL 连接上的 SQL 专属 Agent 工具返回 `UNSUPPORTED_ENGINE`，并提示改用 `run_mql` / `run_redis` / `run_cypher` / `run_aql` / `run_cql` / `vector_search` / `search_index`；`manage_index` 是唯一按能力开放的例外，在 MongoDB 集合上建删索引。
+安全：只读连接在网关侧按语言分类拦截；MongoDB、Redis、Neo4j/Memgraph/FalkorDB、ArangoDB、Cassandra/ScyllaDB、向量检索与搜索 DSL 均有独立分类器；非 SQL 连接上的 SQL 专属 Agent 工具返回 `UNSUPPORTED_ENGINE`，并提示改用 `run_mql` / `run_redis` / `run_cypher` / `run_aql` / `run_cql` / `vector_search` / `search_index`；`manage_index` 与 `alter_table` 是按能力开放的例外：前者在声明 `indexManage` 的引擎上建删索引（MongoDB 集合、Qdrant payload 字段、ArangoDB），后者只在声明 `fieldAdd` 的引擎上追加字段（Elasticsearch/OpenSearch mapping、Weaviate 类属性），其它结构性变更仍拒绝。
 
 ## 9. AI Agent（摘要，详见 04）
 

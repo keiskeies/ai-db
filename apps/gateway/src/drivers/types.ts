@@ -98,6 +98,8 @@ export interface RedisKeyDriver extends Driver {
   describeKey(key: string, database?: string, limit?: number): Promise<RedisKeyDetail>;
   deleteKeys(keys: string[], database?: string): Promise<{ deleted: number }>;
   dropIndex(name: string, database?: string): Promise<{ name: string; dropped: boolean }>;
+  setTtl(key: string, seconds: number | null, database?: string): Promise<{ key: string; ttl: number }>;
+  renameKey(from: string, to: string, database?: string): Promise<{ from: string; to: string }>;
 }
 
 export function supportsKeyDetail(driver: Driver): driver is RedisKeyDriver {

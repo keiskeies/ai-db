@@ -40,6 +40,7 @@ import {
 import type { GatewayConfig } from './config';
 import { createDriver, DbError, type Driver } from './drivers';
 import { normalizeMql } from './drivers/mongodb';
+import type { RedisKeyDriver } from './drivers/types';
 import { supportsCollectionIndexes, supportsDocumentRead, supportsDocumentWrite, supportsFieldAdd, supportsKeyDetail, supportsObjectCreate, supportsStructuredQuery, supportsVectorSearch } from './drivers/types';
 import { embedText } from './embeddings';
 import type { Store } from './store';
@@ -543,6 +544,56 @@ export class ConnectionManager {
       connectionId,
       database: opts.database ?? conn.database,
       sql: JSON.stringify({ addField: { object: input.object, name: result.name, type: result.type } }),
+      status: 'ok',
+      durationMs: Date.now() - started,
+    });
+    return result;
+  }
+
+  private async keyDriver(connectionId: string): Promise<{ conn: ConnectionConfig; driver: RedisKeyDriver }> {
+    const conn = this.store.getConnection(connectionId);
+    if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+    const meta = engineMeta(conn.engine);
+    if (conn.readonly) {
+      throw new DbError('只读连接不允许修改键', { code: 'READONLY', status: 403, hint: '在连接设置中关闭只读后才可改键' });
+    }
+    if (meta.model !== 'keyvalue') {
+      throw new DbError(`${meta.label} 没有键写入接口`, { code: 'UNSUPPORTED_ENGINE' });
+    }
+    const driver = await this.driverFor(connectionId);
+    if (!supportsKeyDetail(driver)) {
+      throw new DbError(`${meta.label} 驱动不支持键操作`, { code: 'UNSUPPORTED_ENGINE' });
+    }
+    return { conn, driver };
+  }
+
+  /** 设置或移除键的过期时间（EXPIRE / PERSIST）。 */
+  async setKeyTtl(connectionId: string, key: string, seconds: number | null, opts: QueryOptions): Promise<{ key: string; ttl: number }> {
+    const { conn, driver } = await this.keyDriver(connectionId);
+    if (!key.trim()) throw new DbError('键名不能为空', { code: 'REDIS_KEY' });
+    const started = Date.now();
+    const result = await driver.setTtl(key, seconds, opts.database ?? conn.database);
+    this.store.addHistory({
+      connectionId,
+      database: opts.database ?? conn.database,
+      sql: JSON.stringify({ keyTtl: { key: result.key, seconds } }),
+      status: 'ok',
+      durationMs: Date.now() - started,
+    });
+    return result;
+  }
+
+  /** 重命名键；目标名已存在时由驱动拒绝。 */
+  async renameKey(connectionId: string, from: string, to: string, opts: QueryOptions): Promise<{ from: string; to: string }> {
+    const { conn, driver } = await this.keyDriver(connectionId);
+    if (!to.trim()) throw new DbError('目标键名不能为空', { code: 'REDIS_RENAME' });
+    const started = Date.now();
+    const result = await driver.renameKey(from, to, opts.database ?? conn.database);
+    this.invalidate(connectionId);
+    this.store.addHistory({
+      connectionId,
+      database: opts.database ?? conn.database,
+      sql: JSON.stringify({ renameKey: result }),
       status: 'ok',
       durationMs: Date.now() - started,
     });

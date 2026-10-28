@@ -558,6 +558,36 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
     return { name: target, dropped: true };
   }
 
+  /** seconds 为 null 时移除过期时间（PERSIST）。 */
+  async setTtl(key: string, seconds: number | null, database?: string): Promise<{ key: string; ttl: number }> {
+    const name = key.trim();
+    if (!name) throw new DbError('键名不能为空', { code: 'REDIS_KEY' });
+    const client = await this.ready(database);
+    if (seconds === null) {
+      await client.persist(name);
+    } else {
+      if (!Number.isFinite(seconds) || seconds < 1) throw new DbError('TTL 需要是正整数秒', { code: 'REDIS_TTL' });
+      const ok = await client.expire(name, Math.floor(seconds));
+      if (!ok) throw new DbError(`键不存在，未设置 TTL：${name}`, { code: 'REDIS_KEY_NOT_FOUND', status: 404 });
+    }
+    return { key: name, ttl: Number(await client.ttl(name)) };
+  }
+
+  async renameKey(from: string, to: string, database?: string): Promise<{ from: string; to: string }> {
+    const source = from.trim();
+    const target = to.trim();
+    if (!source || !target) throw new DbError('原键名与目标键名必填', { code: 'REDIS_KEY' });
+    if (source === target) throw new DbError('目标键名与原键名相同', { code: 'REDIS_RENAME' });
+    const client = await this.ready(database);
+    if (await client.exists(target)) throw new DbError(`键已存在：${target}`, { code: 'REDIS_RENAME_TAKEN', status: 409 });
+    try {
+      await client.rename(source, target);
+    } catch (err: any) {
+      throw new DbError(err?.message ?? `重命名失败：${source}`, { code: 'REDIS_RENAME' });
+    }
+    return { from: source, to: target };
+  }
+
   async executeQuery(query: StructuredQuery, opts: RunOptions = {}): Promise<QueryResult> {
     if (query.language !== 'redis') throw new DbError('Redis 驱动只接受命令查询', { code: 'REDIS_ONLY' });
     const command = query.command.trim().toUpperCase();

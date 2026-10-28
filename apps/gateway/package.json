@@ -9,7 +9,7 @@
     "start": "node --openssl-legacy-provider dist/index.js",
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test \"test/*.test.ts\""
+    "test": "node --import tsx --test --test-timeout=60000 \"test/*.test.ts\""
   },
   "dependencies": {
     "@aidb/core": "*",
