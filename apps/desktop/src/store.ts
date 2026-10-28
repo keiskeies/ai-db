@@ -383,7 +383,9 @@ export const useApp = create<AppStore>((set, get) => ({
       const sql =
         model === 'document'
           ? JSON.stringify({ collection: table, op: 'find', filter: {}, limit: 100 }, null, 2)
-          : model === 'graph'
+          : conn && engineMeta(conn.engine).languages.includes('aql')
+            ? `FOR d IN ${table} LIMIT 100 RETURN d`
+            : model === 'graph'
             ? 'MATCH (n) RETURN n LIMIT 100'
             : model === 'vector'
               ? JSON.stringify({ collection: table, op: 'scroll', topK: 20 }, null, 2)

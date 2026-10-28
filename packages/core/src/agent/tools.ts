@@ -214,6 +214,25 @@ export const TOOLS: ToolDefinition[] = [
     summarize: (a) => `CQL ${String(a.query ?? '').replace(/\s+/g, ' ').slice(0, 60)}`,
   },
   {
+    name: 'run_aql',
+    description:
+      'Run an AQL (ArangoDB Query Language) statement on an ArangoDB connection. Use @bindVar names with the params object for values, and @@collection for collection names. Bound FOR ... LIMIT queries return documents as JSON cells; traversals with edges render as a graph.',
+    risk: 'dynamic',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connectionId', 'query'],
+      properties: {
+        ...connectionProp,
+        ...databaseProp,
+        query: { type: 'string', description: 'AQL statement, e.g. FOR d IN person LIMIT 10 RETURN d' },
+        params: { type: 'object', description: 'Bind variables, e.g. {"@collection":"person","minAge":18}' },
+        maxRows: { type: 'integer', minimum: 1, maximum: 5000 },
+      },
+    },
+    summarize: (a) => `AQL ${String(a.query ?? '').replace(/\s+/g, ' ').slice(0, 60)}`,
+  },
+  {
     name: 'explain_sql',
     description: 'Get the query execution plan (EXPLAIN) for a SQL statement.',
     risk: 'read',

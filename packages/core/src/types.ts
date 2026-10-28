@@ -37,7 +37,8 @@ export type Engine =
   | 'goldendb'
   | 'tdengine'
   | 'falkordb'
-  | 'influxdb';
+  | 'influxdb'
+  | 'arangodb';
 
 /** 数据模型，决定对象树、编辑器语言和结果渲染方式。 */
 export type DataModel = 'relational' | 'document' | 'keyvalue' | 'vector' | 'graph' | 'widecolumn' | 'search' | 'timeseries';
@@ -62,12 +63,13 @@ export type Transport =
   | 'weaviate-http'
   | 'tdengine-http'
   | 'falkordb'
-  | 'influxdb-http';
+  | 'influxdb-http'
+  | 'arangodb-http';
 
 /** SQL 方言；协议别名（金仓、TiDB 等）复用已有方言。 */
 export type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickhouse' | 'dm' | 'tdengine' | 'influxdb';
 
-export type QueryLanguage = 'sql' | 'mql' | 'redis' | 'cypher' | 'vector' | 'search' | 'cql';
+export type QueryLanguage = 'sql' | 'mql' | 'redis' | 'cypher' | 'vector' | 'search' | 'cql' | 'aql';
 
 export type DbObjectKind = 'table' | 'view' | 'collection' | 'key' | 'node_label' | 'edge_label' | 'vector_collection' | 'index';
 

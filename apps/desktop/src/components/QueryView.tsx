@@ -466,7 +466,9 @@ ${text}
           <span className="muted" style={{ fontSize: 11 }}>
             {conn && engineMeta(conn.engine).languages.includes('mql')
               ? 'MongoDB：使用 JSON 结构化查询（collection / op / filter / pipeline）'
-              : conn && engineMeta(conn.engine).languages.includes('cypher')
+              : conn && engineMeta(conn.engine).languages.includes('aql')
+                ? 'ArangoDB：输入 AQL，例如 FOR d IN person LIMIT 100 RETURN d'
+                : conn && engineMeta(conn.engine).languages.includes('cypher')
                 ? 'Neo4j：输入 Cypher，例如 MATCH (n) RETURN n LIMIT 100'
                 : conn && engineMeta(conn.engine).model === 'vector'
                   ? '向量库：输入 JSON，例如 {"collection":"docs","vector":[...],"topK":5}；scroll 可浏览全部点'

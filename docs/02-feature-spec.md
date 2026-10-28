@@ -6,7 +6,7 @@
 
 | 能力域 | Navicat 对应 | AiDB v0.3 | 说明 / 差异 |
 |---|---|---|---|
-| 连接管理 | Connection | ✅ | 10 种关系型（含达梦 DM8、DuckDB）+ TDengine/InfluxDB + MongoDB + Redis + Cassandra/ScyllaDB + Neo4j/Memgraph/FalkorDB + Qdrant/Milvus/Weaviate + Elasticsearch/OpenSearch + 15 种国产协议别名；颜色、只读、SSH 隧道、测试连接 |
+| 连接管理 | Connection | ✅ | 10 种关系型（含达梦 DM8、DuckDB）+ TDengine/InfluxDB + MongoDB + Redis + Cassandra/ScyllaDB + Neo4j/Memgraph/FalkorDB/ArangoDB + Qdrant/Milvus/Weaviate + Elasticsearch/OpenSearch + 15 种国产协议别名；颜色、只读、SSH 隧道、测试连接 |
 | 对象浏览器 | 导航窗格 | ✅ | 库→表/视图→列/索引/外键；搜索、右键、刷新、懒加载 |
 | 数据网格 | 表数据查看器 | ✅ | 分页/排序/过滤/编辑/增删行/复制/导出；虚拟滚动 |
 | SQL 编辑器 | 查询编辑器 | ✅ | 多标签、高亮、执行选区、多结果集、历史、EXPLAIN、格式化 |
@@ -232,11 +232,12 @@
 | Cassandra / ScyllaDB | widecolumn | keyspace → table；列、主键/分区键 | CQL 控制台，支持 `?` 参数；无 JOIN | 行结果 | 禁用 SQL/DDL 设计器；不支持 JOIN |
 | TDengine | timeseries | database → 超级表/子表；列、TAG | SQL 控制台，REST 6041；单语句 | 行结果 | 网格编辑关闭（时序数据不支持 UPDATE 语义） |
 | InfluxDB | timeseries | database → measurement；列类型来自 information_schema | SQL 控制台（InfluxDB 3 /api/v3/query_sql，DataFusion）；EXPLAIN 可用 | 行结果 | DDL 与网格编辑关闭；写入走行协议 API |
+| ArangoDB | graph | database → 文档集合 / 边集合；采样 30 个文档推断属性 | AQL 控制台（HTTP `/_api/cursor`）；支持 `@bindVar` 与 `@@collection` | 文档 JSON 行；带边/路径的结果渲染图视图 | 禁用 SQL/DDL；REMOVE 无 FILTER 视为破坏性 |
 | Elasticsearch / OpenSearch | search | 索引 → mapping 字段 | JSON `_search` DSL | `_id`/`_score`/`_source` 行，`resultKind=documents` | 禁用 SQL/DDL；只读检索 |
 
 协议别名：金仓 / openGauss / GaussDB / 瀚高 / Vastbase / IvorySQL 复用 PostgreSQL 驱动与方言；OceanBase / TiDB / PolarDB / TDSQL / GBase 8a / Doris / StarRocks / GreatSQL / GoldenDB 复用 MySQL 驱动与方言。openGauss/GaussDB 默认 sha256 认证需实例改为 md5 或使用兼容认证；Doris/StarRocks/GBase 8a 的 DDL 能力按 `EngineMeta.capabilities` 关闭设计器。
 
-安全：只读连接在网关侧按语言分类拦截；MongoDB、Redis、Neo4j/Memgraph/FalkorDB、Cassandra/ScyllaDB、向量检索与搜索 DSL 均有独立分类器；非 SQL 连接上的 SQL 专属 Agent 工具返回 `UNSUPPORTED_ENGINE`，并提示改用 `run_mql` / `run_redis` / `run_cypher` / `run_cql` / `vector_search` / `search_index`。
+安全：只读连接在网关侧按语言分类拦截；MongoDB、Redis、Neo4j/Memgraph/FalkorDB、ArangoDB、Cassandra/ScyllaDB、向量检索与搜索 DSL 均有独立分类器；非 SQL 连接上的 SQL 专属 Agent 工具返回 `UNSUPPORTED_ENGINE`，并提示改用 `run_mql` / `run_redis` / `run_cypher` / `run_aql` / `run_cql` / `vector_search` / `search_index`。
 
 ## 9. AI Agent（摘要，详见 04）
 

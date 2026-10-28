@@ -1,6 +1,6 @@
 # AiDB Studio — 产品设计总览
 
-> 版本：v0.4-dev · 日期：2026-10-28 · 状态：多引擎扩展进行中（39 种引擎：10 种关系型，含达梦 DM8/DuckDB；时序 TDengine/InfluxDB；MongoDB/Redis；Cassandra/ScyllaDB；图 Neo4j/Memgraph/FalkorDB；Qdrant/Milvus/Weaviate；Elasticsearch/OpenSearch；15 种国产协议别名）
+> 版本：v0.4-dev · 日期：2026-10-28 · 状态：多引擎扩展进行中（40 种引擎：10 种关系型，含达梦 DM8/DuckDB；时序 TDengine/InfluxDB；MongoDB/Redis；Cassandra/ScyllaDB；图 Neo4j/Memgraph/FalkorDB/ArangoDB；Qdrant/Milvus/Weaviate；Elasticsearch/OpenSearch；15 种国产协议别名）
 
 ## 1. 产品定位
 

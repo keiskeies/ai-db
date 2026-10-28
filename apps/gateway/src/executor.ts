@@ -1,4 +1,5 @@
 import {
+  aqlQueryFromArgs,
   buildAlterTable,
   buildCount,
   buildCreateIndex,
@@ -70,6 +71,7 @@ const DB_TOOLS = new Set([
   'vector_search',
   'search_index',
   'run_cql',
+  'run_aql',
   'explain_sql',
   'sample_rows',
   'profile_column',
@@ -199,7 +201,9 @@ export class ToolExecutor {
         throw new DbError(`${engineMeta(conn.engine).label} 不支持 ${call.name}`, {
           code: 'UNSUPPORTED_ENGINE',
           hint:
-            engineMeta(conn.engine).model === 'document'
+            engineMeta(conn.engine).languages.includes('aql')
+              ? '请使用 run_aql 执行 AQL'
+              : engineMeta(conn.engine).model === 'document'
               ? '请使用 run_mql 执行 MongoDB 查询'
               : engineMeta(conn.engine).model === 'keyvalue'
                 ? '请使用 run_redis 执行 Redis 命令'
@@ -431,6 +435,28 @@ export class ToolExecutor {
         });
       }
 
+      case 'run_aql': {
+        const conn = this.requireConnection(call, ctx);
+        if (!engineMeta(conn.engine).languages.includes('aql')) {
+          throw new DbError('run_aql 仅用于 ArangoDB 连接', { code: 'UNSUPPORTED_ENGINE', hint: 'SQL 连接请使用 run_sql' });
+        }
+        const query = aqlQueryFromArgs(a);
+        if (!query.text.trim()) throw new DbError('AQL 不能为空', { code: 'AQL_EMPTY' });
+        const settings = this.getSettings();
+        const batch = await this.manager.queryStructured(conn.id, query, {
+          database: this.databaseOf(call, conn),
+          maxRows: Math.min(5000, Math.max(1, Number(a.maxRows) || settings.defaultLimit)),
+          timeoutMs: settings.queryTimeoutMs,
+          actor: 'agent',
+        });
+        const last = batch.sets[0];
+        return ok(started, `返回 ${last?.rowCount ?? 0} 行`, {
+          ...last,
+          messages: batch.messages,
+          durationMs: batch.durationMs,
+        });
+      }
+
       case 'explain_sql': {
         const conn = this.requireConnection(call, ctx);
         const sql = String(a.sql ?? '').trim();
@@ -472,6 +498,21 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
               ? `MATCH ()-[r:\`${label}\`]->() RETURN r LIMIT ${limit}`
               : `MATCH (n:\`${label}\`) RETURN n LIMIT ${limit}`;
           const batch = await this.manager.queryStructured(conn.id, { language: 'cypher', text }, {
+            database,
+            maxRows: limit,
+            timeoutMs: this.getSettings().queryTimeoutMs,
+            actor: 'agent',
+          });
+          const result = batch.sets[0];
+          if (result && a.maskSensitive !== false) {
+            const sensitive = result.columns.map((c) => SENSITIVE.test(c.name));
+            result.rows = result.rows.map((row) => row.map((v, i) => (sensitive[i] && v !== null ? '••••' : v)));
+          }
+          return ok(started, `读取 ${result?.rowCount ?? 0} 行样例`, { object: table.name, ...result });
+        }
+        if (engineMeta(conn.engine).languages.includes('aql')) {
+          const text = `FOR d IN @@collection LIMIT ${limit} RETURN d`;
+          const batch = await this.manager.queryStructured(conn.id, { language: 'aql', text, params: { '@collection': table.name } }, {
             database,
             maxRows: limit,
             timeoutMs: this.getSettings().queryTimeoutMs,

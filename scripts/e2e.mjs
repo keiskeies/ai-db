@@ -82,7 +82,7 @@ const api = async (path, init = {}) => {
 const boot = (await api('/bootstrap')).body;
 const demo = boot.connections.find((c) => c.engine === 'sqlite');
 check('bridge bootstrap', Boolean(demo), demo?.name);
-check('30 agent tools', boot.tools.length === 30, String(boot.tools.length));
+check('31 agent tools', boot.tools.length === 31, String(boot.tools.length));
 
 const MONGO_PORT = process.env.AIDB_TEST_MONGO_PORT ? Number(process.env.AIDB_TEST_MONGO_PORT) : undefined;
 const REDIS_PORT = process.env.AIDB_TEST_REDIS_PORT ? Number(process.env.AIDB_TEST_REDIS_PORT) : undefined;
@@ -98,6 +98,9 @@ const FALKORDB_PORT = process.env.AIDB_TEST_FALKORDB_PORT ? Number(process.env.A
 const FALKORDB_GRAPH = 'aidb_e2e';
 const INFLUXDB_PORT = process.env.AIDB_TEST_INFLUXDB_PORT ? Number(process.env.AIDB_TEST_INFLUXDB_PORT) : undefined;
 const INFLUXDB_DB = 'aidb_e2e';
+const ARANGO_PORT = process.env.AIDB_TEST_ARANGO_PORT ? Number(process.env.AIDB_TEST_ARANGO_PORT) : undefined;
+const ARANGO_DB = 'aidb_e2e';
+const ARANGO_PASSWORD = process.env.AIDB_TEST_ARANGO_PASSWORD ?? 'testpass';
 if (MONGO_PORT) {
   const { MongoClient } = await import('mongodb');
   const client = new MongoClient(`mongodb://127.0.0.1:${MONGO_PORT}`, { serverSelectionTimeoutMS: 5000 });
@@ -204,6 +207,32 @@ if (INFLUXDB_PORT) {
   });
   if (write.status !== 204) throw new Error(`InfluxDB seed failed: ${write.status} ${await write.text()}`);
 }
+if (ARANGO_PORT) {
+  const base = `http://127.0.0.1:${ARANGO_PORT}`;
+  const auth = { authorization: `Basic ${Buffer.from(`root:${ARANGO_PASSWORD}`).toString('base64')}`, 'content-type': 'application/json' };
+  const arango = async (path, init = {}) => {
+    const res = await fetch(`${base}${path}`, { ...init, headers: { ...auth, ...(init.headers ?? {}) } });
+    const text = await res.text();
+    return { status: res.status, body: text ? JSON.parse(text) : {} };
+  };
+  await arango('/_db/_system/_api/database', { method: 'POST', body: JSON.stringify({ name: ARANGO_DB }) });
+  for (const name of ['knows', 'person']) {
+    await arango(`/_db/${ARANGO_DB}/_api/collection/${name}`, { method: 'DELETE' });
+  }
+  await arango(`/_db/${ARANGO_DB}/_api/collection`, { method: 'POST', body: JSON.stringify({ name: 'person' }) });
+  await arango(`/_db/${ARANGO_DB}/_api/collection`, { method: 'POST', body: JSON.stringify({ name: 'knows', type: 3 }) });
+  await arango(`/_db/${ARANGO_DB}/_api/document/person`, {
+    method: 'POST',
+    body: JSON.stringify([
+      { _key: 'ada', name: 'Ada' },
+      { _key: 'linus', name: 'Linus' },
+    ]),
+  });
+  await arango(`/_db/${ARANGO_DB}/_api/document/knows`, {
+    method: 'POST',
+    body: JSON.stringify([{ _key: 'k1', _from: 'person/ada', _to: 'person/linus', since: 2020 }]),
+  });
+}
 if (FALKORDB_PORT) {
   const { Redis } = await import('ioredis');
   const client = new Redis({ host: '127.0.0.1', port: FALKORDB_PORT, lazyConnect: true });
@@ -290,7 +319,7 @@ await page.waitForTimeout(150);
 await page.click('[data-testid="sidebar-new-connection"]');
 await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
 const engineOptions = await page.locator('[data-testid="connection-engine"] option').count();
-check('connection form lists 39 engines', engineOptions === 39, String(engineOptions));
+check('connection form lists 40 engines', engineOptions === 40, String(engineOptions));
 await page.screenshot({ path: join(shots, 'desktop-connection-engines.png') });
 await page.locator('.modal-head .icon-btn').click();
 await page.waitForTimeout(200);
@@ -473,6 +502,36 @@ if (FALKORDB_PORT) {
   check('FalkorDB graph view renders nodes', falkorNodes === 2, `${falkorNodes} nodes`);
 }
 
+
+if (ARANGO_PORT) {
+  await page.click('[data-testid="sidebar-new-connection"]');
+  await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
+  await page.fill('[data-testid="connection-name"]', 'ArangoDB E2E');
+  await page.selectOption('[data-testid="connection-engine"]', 'arangodb');
+  await page.fill('[data-testid="connection-host"]', '127.0.0.1');
+  await page.fill('[data-testid="connection-port"]', String(ARANGO_PORT));
+  await page.fill('[data-testid="connection-database"]', ARANGO_DB);
+  await page.fill('[data-testid="connection-username"]', 'root');
+  await page.fill('[data-testid="connection-password"]', ARANGO_PASSWORD);
+  await page.click('[data-testid="connection-save"]');
+  const arangoRow = page.locator('.conn-row', { hasText: 'ArangoDB E2E' });
+  await arangoRow.waitFor({ timeout: 15000 });
+  await page.waitForSelector('[title="文档集合 person"]', { timeout: 25000 });
+  check('ArangoDB connection expands to collections', true);
+  await page.click('[title="文档集合 person"]');
+  await page.locator('[data-testid="query-run"]').last().click();
+  await page.waitForSelector('[data-testid="query-result-grid"] tbody tr', { timeout: 20000 });
+  const arangoRows = await page.locator('[data-testid="query-result-grid"] tbody tr').count();
+  check('ArangoDB AQL query returns documents', arangoRows === 2, `${arangoRows} rows`);
+  await page.click('[title="边集合 knows"]');
+  await page.locator('[data-testid="query-run"]').last().click();
+  await page.waitForSelector('[data-testid="query-result-grid"] tbody tr', { timeout: 20000 });
+  await page.click('[data-testid="result-mode-graph"]');
+  await page.waitForSelector('[data-testid="graph-view"]', { timeout: 10000 });
+  const arangoNodes = await page.locator('[data-testid="graph-node"]').count();
+  check('ArangoDB graph view renders edges', arangoNodes === 2, `${arangoNodes} nodes`);
+}
+
 if (INFLUXDB_PORT) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
@@ -509,7 +568,7 @@ if (DUCKDB_E2E) {
   check('DuckDB data grid returns rows', duckRows === 2, `${duckRows} rows`);
 }
 
-if (MONGO_PORT || REDIS_PORT || NEO4J_PORT || DM_PORT || QDRANT_PORT || DUCKDB_E2E || TDENGINE_PORT || FALKORDB_PORT || INFLUXDB_PORT) {
+if (MONGO_PORT || REDIS_PORT || NEO4J_PORT || DM_PORT || QDRANT_PORT || DUCKDB_E2E || TDENGINE_PORT || FALKORDB_PORT || INFLUXDB_PORT || ARANGO_PORT) {
   // 恢复初始工作区：bootstrap 会把 active connection 指回 demo，并重新出现欢迎页
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });

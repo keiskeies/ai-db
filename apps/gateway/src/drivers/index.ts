@@ -1,4 +1,5 @@
 import { engineDefaultPort, engineMeta, type ConnectionConfig, type ConnectionSecret } from '@aidb/core';
+import { ArangoDriver } from './arangodb';
 import { ClickHouseDriver } from './clickhouse';
 import { CassandraDriver } from './cassandra';
 import { DmDriver } from './dm';
@@ -235,6 +236,17 @@ export async function createDriver(config: ConnectionConfig, secret: ConnectionS
         host: connectHost,
         port: connectPort,
         token: secret.password,
+        database: config.database || meta.defaultDatabase,
+        ssl: config.ssl,
+      });
+      return { driver, close: () => closeWithTunnel(driver) };
+    }
+    case 'arangodb-http': {
+      const driver = new ArangoDriver({
+        host: connectHost,
+        port: connectPort,
+        user: config.username || meta.defaultUsername,
+        password: secret.password,
         database: config.database || meta.defaultDatabase,
         ssl: config.ssl,
       });

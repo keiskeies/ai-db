@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  aqlQueryFromArgs,
+  classifyAql,
   classifyCql,
   classifyCypher,
   classifyMql,
@@ -129,4 +131,23 @@ test('vector queries are validated and read-only', () => {
   assert.equal(classifyVector({ language: 'vector', collection: 'docs', topK: 0 }).kind, 'destructive');
   assert.equal(classifyVector({ language: 'vector', collection: 'docs', vector: [1, Number.NaN], topK: 5 }).kind, 'destructive');
   assert.equal(readonlyViolationForQuery({ language: 'vector', collection: 'docs', vector: [1, 0], topK: 5 }), null);
+});
+
+test('AQL classification covers reads, writes, DDL and destructive operations', () => {
+  assert.equal(classifyAql({ language: 'aql', text: 'FOR d IN person LIMIT 10 RETURN d' }).kind, 'read');
+  assert.equal(classifyAql({ language: 'aql', text: 'FOR d IN person FILTER d.name == "INSERT" RETURN d' }).kind, 'read');
+  assert.equal(classifyAql({ language: 'aql', text: 'RETURN LENGTH(person)' }).kind, 'read');
+  assert.equal(classifyAql({ language: 'aql', text: 'INSERT { name: "Ada" } INTO person' }).kind, 'write');
+  assert.equal(classifyAql({ language: 'aql', text: 'UPDATE { _key: "ada" } WITH { age: 37 } IN person' }).kind, 'write');
+  assert.equal(classifyAql({ language: 'aql', text: 'REPLACE { _key: "ada", name: "Ada" } IN person' }).kind, 'write');
+  assert.equal(classifyAql({ language: 'aql', text: 'UPSERT { _key: "ada" } INSERT { name: "Ada" } UPDATE { age: 37 } IN person' }).kind, 'write');
+  assert.equal(classifyAql({ language: 'aql', text: 'FOR d IN person FILTER d.age < 18 REMOVE d IN person' }).kind, 'write');
+  assert.equal(classifyAql({ language: 'aql', text: 'FOR d IN person REMOVE d IN person' }).kind, 'destructive');
+  assert.equal(classifyAql({ language: 'aql', text: 'FOR d IN person TRUNCATE person' }).kind, 'destructive');
+  assert.equal(classifyAql({ language: 'aql', text: 'COLLECTION("person")' }).kind, 'ddl');
+  assert.equal(classifyAql({ language: 'aql', text: '' }).kind, 'destructive');
+  assert.equal(readonlyViolationForQuery({ language: 'aql', text: 'FOR d IN person RETURN d' }), null);
+  assert.match(String(readonlyViolationForQuery({ language: 'aql', text: 'INSERT { name: "Ada" } INTO person' })), /只读/);
+  assert.deepEqual(aqlQueryFromArgs({ query: 'RETURN @x', params: { x: 1 } }), { language: 'aql', text: 'RETURN @x', params: { x: 1 } });
+  assert.equal(formatStructuredQuery({ language: 'aql', text: 'FOR d IN person RETURN d' }), 'FOR d IN person RETURN d');
 });

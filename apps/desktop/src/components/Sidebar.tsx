@@ -160,16 +160,20 @@ export function Sidebar() {
     const isVector = meta.model === 'vector';
     const isSearch = meta.model === 'search';
     const isWide = meta.model === 'widecolumn';
+    const isAql = meta.languages.includes('aql');
     const isEdge = table.kind === 'edge_label';
-    const objectLabel = isMongo ? '集合' : isGraph ? (isEdge ? '关系类型' : '节点标签') : isVector ? '向量集合' : isSearch ? '索引' : isWide ? '表' : '键空间';
-    const openLabel = isMongo ? '打开集合' : isGraph ? (isEdge ? '打开关系类型' : '打开节点标签') : isVector ? '浏览集合' : isSearch ? '打开索引' : isWide ? '打开表' : '浏览键';
-    const newQueryLabel = isMongo ? '新建 MQL 查询' : isGraph ? '新建 Cypher 查询' : isVector ? '新建向量查询' : isSearch ? '新建搜索查询' : isWide ? '新建 CQL 查询' : '命令列';
+    const objectLabel = isAql ? (isEdge ? '边集合' : '文档集合') : isMongo ? '集合' : isGraph ? (isEdge ? '关系类型' : '节点标签') : isVector ? '向量集合' : isSearch ? '索引' : isWide ? '表' : '键空间';
+    const openLabel = isAql ? (isEdge ? '打开边集合' : '打开集合') : isMongo ? '打开集合' : isGraph ? (isEdge ? '打开关系类型' : '打开节点标签') : isVector ? '浏览集合' : isSearch ? '打开索引' : isWide ? '打开表' : '浏览键';
+    const newQueryLabel = isAql ? '新建 AQL 查询' : isMongo ? '新建 MQL 查询' : isGraph ? '新建 Cypher 查询' : isVector ? '新建向量查询' : isSearch ? '新建搜索查询' : isWide ? '新建 CQL 查询' : '命令列';
     const vectorQuery = JSON.stringify({ collection: table.name, op: 'scroll', topK: 20 }, null, 2);
     const searchQuery = JSON.stringify({ index: table.name, query: { match_all: {} }, size: 100 }, null, 2);
     const cqlQuery = `SELECT * FROM "${schema.name}"."${table.name}" LIMIT 100;`;
-    const newQueryText = isMongo ? '' : isGraph ? 'MATCH (n) RETURN n LIMIT 100' : isVector ? vectorQuery : isSearch ? searchQuery : isWide ? cqlQuery : 'SCAN 0 COUNT 100';
+    const aqlQuery = `FOR d IN \`${table.name.replace(/`/g, '')}\` LIMIT 100 RETURN d`;
+    const newQueryText = isAql ? aqlQuery : isMongo ? '' : isGraph ? 'MATCH (n) RETURN n LIMIT 100' : isVector ? vectorQuery : isSearch ? searchQuery : isWide ? cqlQuery : 'SCAN 0 COUNT 100';
     const open = () => {
-      if (isMongo) {
+      if (isAql) {
+        openQuery(conn.id, aqlQuery, table.name, schema.name);
+      } else if (isMongo) {
         openQuery(
           conn.id,
           JSON.stringify({ collection: table.name, op: 'find', filter: {}, limit: 100 }, null, 2),
@@ -206,7 +210,9 @@ export function Sidebar() {
           prefillAgent(
             isMongo
               ? `解释集合 ${table.name} 的字段、索引与典型用途，并给出 3 个 MQL 查询示例。`
-              : isGraph
+              : isAql
+                ? `解释${objectLabel} ${table.name} 的属性和关系，并给出 3 个 AQL 查询示例。`
+                : isGraph
                 ? `解释${objectLabel} ${table.name} 的属性和关系，并给出 3 个 Cypher 查询示例。`
                 : isVector
                   ? `解释向量集合 ${table.name} 的维度、距离与 payload 字段，并给出向量检索示例。`
@@ -503,7 +509,9 @@ export function Sidebar() {
                                             conn.id,
                                             engineMeta(conn.engine).languages.includes('mql')
                                               ? '{\n  "collection": "",\n  "op": "find",\n  "filter": {}\n}'
-                                              : engineMeta(conn.engine).languages.includes('cypher')
+                                              : engineMeta(conn.engine).languages.includes('aql')
+                                                ? 'FOR d IN @@collection LIMIT 100 RETURN d'
+                                                : engineMeta(conn.engine).languages.includes('cypher')
                                                 ? 'MATCH (n) RETURN n LIMIT 100'
                                                 : engineMeta(conn.engine).model === 'vector'
                                                   ? '{\n  "collection": "",\n  "op": "scroll",\n  "topK": 20\n}'
@@ -594,7 +602,7 @@ export function Sidebar() {
                                               ) : (
                                                 <Database size={13} style={{ color: 'var(--accent)' }} />
                                               )}
-                                              <span className="node-label">{model === 'document' ? '集合' : model === 'graph' ? '标签' : model === 'vector' ? '向量集合' : model === 'search' ? '索引' : model === 'widecolumn' ? '表' : '键空间'}</span>
+                                              <span className="node-label">{engineMeta(conn.engine).languages.includes('aql') ? '集合' : model === 'document' ? '集合' : model === 'graph' ? '标签' : model === 'vector' ? '向量集合' : model === 'search' ? '索引' : model === 'widecolumn' ? '表' : '键空间'}</span>
                                               <span className="tree-count">{tables.length}</span>
                                             </div>
                                             {tablesOpen ? tables.map((table) => renderTable(conn, schema, table, INDENT.tableLeaf)) : null}
@@ -606,7 +614,9 @@ export function Sidebar() {
                                                   conn.id,
                                                   model === 'document'
                                                     ? '{\n  "collection": "",\n  "op": "find",\n  "filter": {}\n}'
-                                                    : model === 'graph'
+                                                    : engineMeta(conn.engine).languages.includes('aql')
+                                                      ? 'FOR d IN @@collection LIMIT 100 RETURN d'
+                                                      : model === 'graph'
                                                       ? 'MATCH (n) RETURN n LIMIT 100'
                                                       : model === 'vector'
                                                         ? '{\n  "collection": "",\n  "op": "scroll",\n  "topK": 20\n}'
