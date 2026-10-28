@@ -1,4 +1,5 @@
 import { MongoClient, ObjectId } from 'mongodb';
+import { EJSON } from 'bson';
 import type { Collection, Document, Filter, Sort } from 'mongodb';
 import type { ColumnInfo, Engine, IndexInfo, MqlQuery, QueryResult, StructuredQuery, TableInfo } from '@aidb/core';
 import type {
@@ -6,6 +7,7 @@ import type {
   CollectionIndexInput,
   CreateObjectInput,
   DeleteDocumentsInput,
+  DocumentReadDriver,
   DocumentWriteDriver,
   DriverTestResult,
   ObjectCreateDriver,
@@ -26,6 +28,19 @@ export interface MongoOptions {
 }
 
 const SYSTEM_DATABASES = new Set(['admin', 'local', 'config']);
+
+/** 编辑对话框写回的文档带 EJSON 标记，还原成真正的 BSON 类型再存。 */
+function decodeEjson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(decodeEjson);
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record);
+    if (keys.length === 1 && typeof record.$oid === 'string') return new ObjectId(record.$oid);
+    if (keys.length === 1 && typeof record.$date === 'string') return new Date(record.$date);
+    return Object.fromEntries(Object.entries(record).map(([key, item]) => [key, decodeEjson(item)]));
+  }
+  return value;
+}
 
 function bsonKind(value: unknown): string {
   if (value === null || value === undefined) return 'null';
@@ -195,7 +210,7 @@ export function normalizeMql(value: unknown): MqlQuery {
   return query;
 }
 
-export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver, ObjectCreateDriver, CollectionIndexDriver {
+export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver, DocumentReadDriver, ObjectCreateDriver, CollectionIndexDriver {
   engine: Engine = 'mongodb';
   private client?: MongoClient;
   private connected?: Promise<MongoClient>;
@@ -381,11 +396,13 @@ export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver, 
     throw new DbError('MongoDB 不支持参数化 SQL，请使用结构化 MQL 查询', { code: 'MQL_ONLY' });
   }
 
-  /** 24 位十六进制字符串按 ObjectId 处理，其它主键原样保留。 */
+  /** 24 位十六进制字符串按 ObjectId 处理，EJSON 的 { $oid } 也认，其它主键原样保留。 */
   private toId(value: unknown): unknown {
-    const text = typeof value === 'string' ? value.trim() : '';
+    const record = value && typeof value === 'object' && !(value instanceof Date) ? (value as Record<string, unknown>) : null;
+    const raw = record && typeof record.$oid === 'string' ? record.$oid : value;
+    const text = typeof raw === 'string' ? raw.trim() : '';
     if (/^[0-9a-fA-F]{24}$/.test(text)) return new ObjectId(text);
-    return value;
+    return raw;
   }
 
   async createObject(input: CreateObjectInput, opts: RunOptions = {}): Promise<{ name: string; kind: string }> {
@@ -445,13 +462,22 @@ export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver, 
     return { name, dropped: true };
   }
 
+  /** 编辑用：按 _id 取回单个文档，返回 EJSON 文本以保住 ObjectId / Date 类型。 */
+  async getDocument(collection: string, id: string, database?: string): Promise<{ id: string; document: string }> {
+    if (!collection.trim()) throw new DbError('集合名不能为空', { code: 'MQL_COLLECTION' });
+    const coll = await this.collection(collection, database);
+    const doc = await coll.findOne({ _id: this.toId(id) } as Filter<Document>);
+    if (!doc) throw new DbError(`文档不存在：${id}`, { code: 'MQL_DOC_NOT_FOUND', status: 404 });
+    return { id: String(doc._id ?? ''), document: EJSON.stringify(doc, { relaxed: true }) };
+  }
+
   async upsertDocuments(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {
     if (!input.collection) throw new DbError('集合名不能为空', { code: 'MQL_COLLECTION' });
     if (!input.documents.length) throw new DbError('至少需要一个文档', { code: 'WRITE_DOCUMENT' });
     const coll = await this.collection(input.collection, opts.database);
     const ids: string[] = [];
     for (const document of input.documents) {
-      const payload: Record<string, unknown> = { ...document };
+      const payload: Record<string, unknown> = decodeEjson(document) as Record<string, unknown>;
       const rawId = payload._id ?? payload.id;
       delete payload.id;
       try {

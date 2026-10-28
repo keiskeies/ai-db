@@ -221,6 +221,11 @@ export const api = {
     for (const [key, value] of Object.entries(params)) if (value) q.set(key, String(value));
     return request<{ detail: RedisKeyDetail }>(`/redis/key?${q.toString()}`);
   },
+  documentGet: (params: { connectionId: string; database?: string; collection: string; id: string }) => {
+    const q = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) if (value) q.set(key, String(value));
+    return request<{ detail: { id: string; document: string } }>(`/documents/get?${q.toString()}`);
+  },
   deleteRedisKeys: (body: { connectionId: string; database?: string; keys: string[] }) =>
     request<{ result: { deleted: number } }>('/redis/keys/delete', { method: 'POST', body: JSON.stringify(body) }),
   dropRedisIndex: (body: { connectionId: string; database?: string; name: string }) =>

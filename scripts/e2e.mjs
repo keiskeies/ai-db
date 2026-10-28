@@ -424,6 +424,17 @@ if (MONGO_PORT) {
   await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 3, null, { timeout: 25000 });
   check('MongoDB delete by id removes the document', true);
 
+  await page.locator('[data-testid="query-result-grid"] tbody tr', { hasText: 'gamma' }).first().dblclick();
+  await page.waitForSelector('[data-testid="doc-edit-json"]', { timeout: 10000 });
+  const editedDoc = JSON.parse(await page.locator('[data-testid="doc-edit-json"]').inputValue());
+  editedDoc.name = 'delta';
+  await page.fill('[data-testid="doc-edit-json"]', JSON.stringify(editedDoc, null, 2));
+  await page.click('[data-testid="doc-edit-save"]');
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
+  await page.waitForFunction(() => document.querySelector('[data-testid="query-result-grid"]')?.innerText.includes('delta'), null, { timeout: 25000 });
+  check('MongoDB document edited from the result grid', true);
+  await page.waitForTimeout(200);
+
   await page.locator('[title="集合 widgets"]').click({ button: 'right' });
   await page.click('text=对象信息');
   await page.locator('[data-testid="object-info-index-name"]', { hasText: '_id_' }).first().waitFor({ timeout: 10000 });

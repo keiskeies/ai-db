@@ -143,6 +143,15 @@ export function supportsFieldAdd(driver: Driver): driver is FieldAddDriver {
   return typeof (driver as FieldAddDriver).createField === 'function';
 }
 
+/** 文档型驱动的单读取：编辑对话框需要原文而不是表格单元格的字符串化结果。 */
+export interface DocumentReadDriver extends Driver {
+  getDocument(collection: string, id: string, database?: string): Promise<{ id: string; document: string }>;
+}
+
+export function supportsDocumentRead(driver: Driver): driver is DocumentReadDriver {
+  return typeof (driver as DocumentReadDriver).getDocument === 'function';
+}
+
 export interface ConnectionRecord {
   config: import('@aidb/core').ConnectionConfig;
   secret: import('@aidb/core').ConnectionSecret;

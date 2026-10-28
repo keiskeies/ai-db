@@ -17,10 +17,37 @@ import { DataGrid } from './DataGrid';
 import { GraphView } from './GraphView';
 import { VectorSearchPanel } from './VectorSearchPanel';
 import { DocumentWritePanel } from './DocumentWritePanel';
+import { DocumentEditDialog } from './DocumentEditDialog';
 import { RedisKeyDialog } from './RedisKeyDialog';
 import { Spinner } from './ui';
 
 type QueryTab = Extract<Tab, { kind: 'query' }>;
+
+/** 结构化 MQL / 向量查询把集合名写在语句里。 */
+function collectionOf(statement: string | undefined): string | null {
+  if (!statement) return null;
+  try {
+    const parsed = JSON.parse(statement) as { collection?: unknown };
+    return typeof parsed?.collection === 'string' && parsed.collection ? parsed.collection : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 网格里的主键单元格可能是 {"$oid":"…"} 的 JSON 字符串。 */
+function idOf(cell: unknown): string {
+  if (cell === undefined || cell === null) return '';
+  const text = typeof cell === 'string' ? cell : String(cell);
+  if (text.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(text) as { $oid?: unknown };
+      return typeof parsed?.$oid === 'string' ? parsed.$oid : '';
+    } catch {
+      return '';
+    }
+  }
+  return text;
+}
 
 // 语法着色的暖色版本：默认高亮是给浅色底调的，放在铸铁底上又冷又灰
 const sqlHighlight = (dark: boolean) =>
@@ -62,6 +89,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const [vectorOpen, setVectorOpen] = useState(false);
   const [writeOpen, setWriteOpen] = useState(false);
   const [keyDialog, setKeyDialog] = useState<string | null>(null);
+  const [docEdit, setDocEdit] = useState<{ collection: string; id: string } | null>(null);
 
   const [sql, setSql] = useState(tab.sql);
   const [batch, setBatch] = useState<QueryBatchResult | null>(null);
@@ -604,7 +632,14 @@ ${text}
                           const value = set.rows[rowIndex]?.[0];
                           if (typeof value === 'string' && value) setKeyDialog(value);
                         }
-                      : undefined
+                      : conn && canWriteDocuments && !conn.readonly && set.resultKind === 'documents'
+                        ? (rowIndex) => {
+                            const idIndex = set.columns.findIndex((column) => column.name === '_id' || column.name === 'id');
+                            const id = idIndex >= 0 ? idOf(set.rows[rowIndex]?.[idIndex]) : '';
+                            const collection = collectionOf(set.statement) ?? collectionOf(sql);
+                            if (id && collection) setDocEdit({ collection, id });
+                          }
+                        : undefined
                   }
                 />
               )
@@ -708,6 +743,16 @@ ${text}
       {vectorOpen && conn ? <VectorSearchPanel connection={conn} database={tab.database} onClose={() => setVectorOpen(false)} /> : null}
       {keyDialog && conn ? (
         <RedisKeyDialog connectionId={conn.id} database={tab.database} keyName={keyDialog} onClose={() => setKeyDialog(null)} />
+      ) : null}
+      {docEdit && conn ? (
+        <DocumentEditDialog
+          connectionId={conn.id}
+          database={tab.database}
+          collection={docEdit.collection}
+          docId={docEdit.id}
+          onSaved={() => void run()}
+          onClose={() => setDocEdit(null)}
+        />
       ) : null}
       {writeOpen && conn ? (
         <DocumentWritePanel

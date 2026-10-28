@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MongoClient } from 'mongodb';
+import { MongoClient, ObjectId } from 'mongodb';
 import { MongoDriver } from '../src/drivers/mongodb';
 import { supportsDocumentWrite } from '../src/drivers/types';
 
@@ -72,6 +72,47 @@ test('MongoDB documents import from CSV through the write channel', { skip: !MON
     assert.deepEqual(listed.rows.map((row) => row.find((cell) => String(cell) === 'Beta' || String(cell) === 'Alpha')), ['Beta', 'Alpha']);
     const deleted = await driver.deleteDocuments({ collection: 'imported', ids: ['1', '2'] });
     assert.equal(deleted.deleted, 2);
+  } finally {
+    await driver.close();
+  }
+});
+
+test('MongoDB 单文档读回 EJSON、写回不丢 BSON 类型', { skip: !MONGO_PORT }, async () => {
+  const docId = '64b0c0d0e0f0a0b0c0d0e0f1';
+  const admin = new MongoClient(`mongodb://127.0.0.1:${MONGO_PORT}`, { serverSelectionTimeoutMS: 5000 });
+  await admin.connect();
+  await admin.db(DB).collection('editing').deleteMany({});
+  await admin.db(DB).collection('editing').insertOne({
+    _id: new ObjectId(docId),
+    name: 'Ada',
+    at: new Date('2026-03-04T05:06:07.000Z'),
+  });
+  await admin.close();
+
+  const driver = new MongoDriver({ host: '127.0.0.1', port: MONGO_PORT!, database: DB });
+  try {
+    const detail = await driver.getDocument('editing', docId);
+    assert.equal(detail.id, docId);
+    assert.match(detail.document, /\$oid/, '主键以 EJSON 形式返回');
+    assert.match(detail.document, /\$date/, '日期以 EJSON 形式返回');
+
+    const parsed = JSON.parse(detail.document) as Record<string, unknown> & { name: string };
+    parsed.name = 'Ada Lovelace';
+    const written = await driver.upsertDocuments({ collection: 'editing', documents: [parsed] });
+    assert.deepEqual(written.ids, [docId]);
+
+    const typed = await driver.executeQuery({
+      language: 'mql',
+      collection: 'editing',
+      op: 'aggregate',
+      pipeline: [{ $project: { name: 1, idType: { $type: '$_id' }, dateType: { $type: '$at' } } }],
+    });
+    assert.equal(typed.rowCount, 1, '写回是覆盖而不是新增');
+    assert.equal(String(typed.rows[0][typed.columns.findIndex((column) => column.name === 'name')]), 'Ada Lovelace');
+    assert.equal(String(typed.rows[0][typed.columns.findIndex((column) => column.name === 'idType')]), 'objectId');
+    assert.equal(String(typed.rows[0][typed.columns.findIndex((column) => column.name === 'dateType')]), 'date');
+
+    await assert.rejects(() => driver.getDocument('editing', '64b0c0d0e0f0a0b0c0d0e0f2'), /文档不存在/);
   } finally {
     await driver.close();
   }

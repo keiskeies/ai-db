@@ -744,6 +744,20 @@ export function createApiRouter(deps: ApiDeps): Router {
   );
 
   router.get(
+    '/documents/get',
+    ah(async (req, res) => {
+      const connectionId = str(req.query.connectionId);
+      const collection = str(req.query.collection);
+      const id = str(req.query.id);
+      if (!connectionId || !collection || !id) {
+        throw Object.assign(new Error('connectionId、collection 与 id 必填'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      const detail = await manager.documentDetail(connectionId, { collection, id }, { database: str(req.query.database) });
+      res.json({ detail });
+    }),
+  );
+
+  router.get(
     '/redis/key',
     ah(async (req, res) => {
       const connectionId = str(req.query.connectionId);

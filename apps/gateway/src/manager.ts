@@ -40,7 +40,7 @@ import {
 import type { GatewayConfig } from './config';
 import { createDriver, DbError, type Driver } from './drivers';
 import { normalizeMql } from './drivers/mongodb';
-import { supportsCollectionIndexes, supportsDocumentWrite, supportsFieldAdd, supportsKeyDetail, supportsObjectCreate, supportsStructuredQuery, supportsVectorSearch } from './drivers/types';
+import { supportsCollectionIndexes, supportsDocumentRead, supportsDocumentWrite, supportsFieldAdd, supportsKeyDetail, supportsObjectCreate, supportsStructuredQuery, supportsVectorSearch } from './drivers/types';
 import { embedText } from './embeddings';
 import type { Store } from './store';
 
@@ -357,6 +357,26 @@ export class ConnectionManager {
       throw new DbError(`${meta.label} 驱动不支持键详情`, { code: 'UNSUPPORTED_ENGINE' });
     }
     return driver.describeKey(key, opts.database ?? conn.database);
+  }
+
+  /** 文档引擎的单文档读取（编辑对话框用，返回 EJSON 原文）。 */
+  async documentDetail(
+    connectionId: string,
+    input: { collection: string; id: string },
+    opts: { database?: string } = {},
+  ): Promise<{ id: string; document: string }> {
+    const conn = this.store.getConnection(connectionId);
+    if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+    const meta = engineMeta(conn.engine);
+    if (meta.model !== 'document') {
+      throw new DbError(`${meta.label} 没有单文档读取接口`, { code: 'UNSUPPORTED_ENGINE' });
+    }
+    if (!input.collection?.trim() || !input.id?.trim()) throw new DbError('collection 与 id 必填', { code: 'MQL_COLLECTION' });
+    const driver = await this.driverFor(connectionId);
+    if (!supportsDocumentRead(driver)) {
+      throw new DbError(`${meta.label} 驱动不支持单文档读取`, { code: 'UNSUPPORTED_ENGINE' });
+    }
+    return driver.getDocument(input.collection.trim(), input.id.trim(), opts.database ?? conn.database);
   }
 
   /** 删除 Redis 键（UNLINK）；只读连接拒绝，返回真实删除数量。 */
