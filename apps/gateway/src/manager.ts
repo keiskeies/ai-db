@@ -11,6 +11,7 @@ import {
   engineUsesSchema,
   formatStructuredQuery,
   managesObjects,
+  managesIndexes,
   parseRedisCommandLine,
   quoteIdent,
   quoteQualified,
@@ -38,7 +39,7 @@ import {
 import type { GatewayConfig } from './config';
 import { createDriver, DbError, type Driver } from './drivers';
 import { normalizeMql } from './drivers/mongodb';
-import { supportsDocumentWrite, supportsKeyDetail, supportsObjectCreate, supportsStructuredQuery, supportsVectorSearch } from './drivers/types';
+import { supportsCollectionIndexes, supportsDocumentWrite, supportsKeyDetail, supportsObjectCreate, supportsStructuredQuery, supportsVectorSearch } from './drivers/types';
 import { embedText } from './embeddings';
 import type { Store } from './store';
 
@@ -410,6 +411,78 @@ export class ConnectionManager {
       connectionId,
       database: opts.database ?? conn.database,
       sql: JSON.stringify({ dropIndex: result.name }),
+      status: 'ok',
+      durationMs: Date.now() - started,
+    });
+    return result;
+  }
+
+  /** 文档型引擎的索引创建/删除（非 SQL DDL）。 */
+  async createCollectionIndex(
+    connectionId: string,
+    input: { collection: string; name?: string; columns: string[]; unique?: boolean; sparse?: boolean; expireAfterSeconds?: number },
+    opts: QueryOptions,
+  ): Promise<{ name: string; created: boolean }> {
+    const conn = this.store.getConnection(connectionId);
+    if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+    const meta = engineMeta(conn.engine);
+    if (conn.readonly) {
+      throw new DbError('只读连接不允许创建索引', { code: 'READONLY', status: 403, hint: '在连接设置中关闭只读后才可建索引' });
+    }
+    if (!managesIndexes(conn.engine)) {
+      throw new DbError(`${meta.label} 暂不支持在此创建索引`, { code: 'UNSUPPORTED_ENGINE', hint: '请使用该引擎自身的索引命令' });
+    }
+    if (!input.collection?.trim()) throw new DbError('collection 不能为空', { code: 'MQL_COLLECTION' });
+    if (!input.columns.some((column) => column.trim())) throw new DbError('索引至少需要一个字段', { code: 'MQL_INDEX' });
+    const driver = await this.driverFor(connectionId);
+    if (!supportsCollectionIndexes(driver)) {
+      throw new DbError(`${meta.label} 驱动不支持索引管理`, { code: 'UNSUPPORTED_ENGINE' });
+    }
+    const started = Date.now();
+    const result = await driver.createIndex(
+      { ...input, collection: input.collection.trim() },
+      { database: opts.database, timeoutMs: opts.timeoutMs },
+    );
+    this.invalidate(connectionId);
+    this.store.addHistory({
+      connectionId,
+      database: opts.database ?? conn.database,
+      sql: JSON.stringify({ createIndex: { collection: input.collection, name: result.name, columns: input.columns, unique: input.unique, sparse: input.sparse, ttl: input.expireAfterSeconds } }),
+      status: 'ok',
+      durationMs: Date.now() - started,
+    });
+    return result;
+  }
+
+  async dropCollectionIndex(
+    connectionId: string,
+    input: { collection: string; name: string },
+    opts: QueryOptions,
+  ): Promise<{ name: string; dropped: boolean }> {
+    const conn = this.store.getConnection(connectionId);
+    if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+    const meta = engineMeta(conn.engine);
+    if (conn.readonly) {
+      throw new DbError('只读连接不允许删除索引', { code: 'READONLY', status: 403, hint: '在连接设置中关闭只读后才可删除索引' });
+    }
+    if (!managesIndexes(conn.engine)) {
+      throw new DbError(`${meta.label} 暂不支持在此删除索引`, { code: 'UNSUPPORTED_ENGINE', hint: '请使用该引擎自身的索引命令' });
+    }
+    if (!input.collection?.trim() || !input.name?.trim()) throw new DbError('collection 与索引名必填', { code: 'MQL_INDEX' });
+    const driver = await this.driverFor(connectionId);
+    if (!supportsCollectionIndexes(driver)) {
+      throw new DbError(`${meta.label} 驱动不支持索引管理`, { code: 'UNSUPPORTED_ENGINE' });
+    }
+    const started = Date.now();
+    const result = await driver.dropIndex({ collection: input.collection.trim(), name: input.name.trim() }, {
+      database: opts.database,
+      timeoutMs: opts.timeoutMs,
+    });
+    this.invalidate(connectionId);
+    this.store.addHistory({
+      connectionId,
+      database: opts.database ?? conn.database,
+      sql: JSON.stringify({ dropIndex: { collection: input.collection, name: result.name } }),
       status: 'ok',
       durationMs: Date.now() - started,
     });

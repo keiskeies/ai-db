@@ -609,6 +609,97 @@ export function createApiRouter(deps: ApiDeps): Router {
     }),
   );
 
+  router.post(
+    '/indexes/create',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const connectionId = str(body.connectionId);
+      const collection = str(body.collection);
+      const columns = Array.isArray(body.columns) ? (body.columns as unknown[]).map((column) => String(column ?? '')).filter(Boolean) : [];
+      if (!connectionId || !collection || !columns.length) {
+        throw Object.assign(new Error('connectionId、collection 与 columns 必填'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      const database = str(body.database);
+      const ttl = Number(body.expireAfterSeconds ?? 0);
+      const spec = {
+        collection,
+        name: str(body.name) || undefined,
+        columns,
+        unique: body.unique === true,
+        sparse: body.sparse === true,
+        expireAfterSeconds: Number.isFinite(ttl) && ttl > 0 ? Math.floor(ttl) : undefined,
+      };
+      try {
+        const result = await manager.createCollectionIndex(connectionId, spec, { database, actor: 'user' });
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'indexes.create',
+          sql: JSON.stringify(spec),
+          risk: 'ddl',
+          approval: 'manual',
+          status: 'ok',
+        });
+        res.json({ result });
+      } catch (err: any) {
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'indexes.create',
+          sql: JSON.stringify(spec),
+          risk: 'ddl',
+          approval: 'manual',
+          status: 'error',
+          meta: { error: err.message },
+        });
+        throw err;
+      }
+    }),
+  );
+
+  router.post(
+    '/indexes/drop',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const connectionId = str(body.connectionId);
+      const collection = str(body.collection);
+      const name = str(body.name);
+      if (!connectionId || !collection || !name) {
+        throw Object.assign(new Error('connectionId、collection 与 name 必填'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      const database = str(body.database);
+      try {
+        const result = await manager.dropCollectionIndex(connectionId, { collection, name }, { database, actor: 'user' });
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'indexes.drop',
+          sql: JSON.stringify({ collection, name }),
+          risk: 'destructive',
+          approval: 'manual',
+          status: 'ok',
+        });
+        res.json({ result });
+      } catch (err: any) {
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'indexes.drop',
+          sql: JSON.stringify({ collection, name }),
+          risk: 'destructive',
+          approval: 'manual',
+          status: 'error',
+          meta: { error: err.message },
+        });
+        throw err;
+      }
+    }),
+  );
+
   router.get(
     '/redis/key',
     ah(async (req, res) => {

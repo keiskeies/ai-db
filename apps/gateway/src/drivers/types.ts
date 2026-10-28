@@ -104,6 +104,28 @@ export function supportsKeyDetail(driver: Driver): driver is RedisKeyDriver {
   return typeof (driver as RedisKeyDriver).describeKey === 'function';
 }
 
+/** 文档型驱动的结构化索引管理：不走 SQL DDL。 */
+export interface CollectionIndexInput {
+  collection: string;
+  name?: string;
+  columns: string[];
+  unique?: boolean;
+  sparse?: boolean;
+  expireAfterSeconds?: number;
+}
+
+export interface CollectionIndexDriver extends Driver {
+  createIndex(input: CollectionIndexInput, opts?: RunOptions): Promise<{ name: string; created: boolean }>;
+  dropIndex(input: { collection: string; name: string }, opts?: RunOptions): Promise<{ name: string; dropped: boolean }>;
+}
+
+export function supportsCollectionIndexes(driver: Driver): driver is CollectionIndexDriver {
+  return (
+    typeof (driver as CollectionIndexDriver).createIndex === 'function' &&
+    typeof (driver as CollectionIndexDriver).dropIndex === 'function'
+  );
+}
+
 export interface ConnectionRecord {
   config: import('@aidb/core').ConnectionConfig;
   secret: import('@aidb/core').ConnectionSecret;

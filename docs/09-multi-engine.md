@@ -76,7 +76,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 ### MongoDB
 
 - 对象树：database → collection / view。
-- 结构：采样 30 条文档推断字段，嵌套对象展开一层（如 `meta.city`）；`_id` 标为主键；不保证覆盖所有文档。索引通过 `$listIndexes` 读取，右键「对象信息」列出 `_id_`（主键）、唯一索引、TTL（`expireAfterSeconds` 归入说明列）等，方法列取 `type`（text / 2dsphere…）否则按 unique 判定。
+- 结构：采样 30 条文档推断字段，嵌套对象展开一层（如 `meta.city`）；`_id` 标为主键；不保证覆盖所有文档。索引通过 `$listIndexes` 读取，右键「对象信息」列出 `_id_`（主键）、唯一索引、TTL（`expireAfterSeconds` 归入说明列）等，方法列取 `type`（text / 2dsphere…）否则按 unique 判定；同一面板可直接新建索引（字段 + 唯一 / 稀疏 / TTL）与删除索引（手输索引名确认，`_id_` 拒删），走 `POST /indexes/create` 与 `POST /indexes/drop`，只读连接返回 403。
 - 查询：结构化 JSON MQL，`op` = `find | aggregate | count | distinct`；支持 `filter / pipeline / projection / sort / limit / skip / field`。
 - 结果：文档行；嵌套值 JSON 序列化，`ResultField.kind = 'json'`；`resultKind = 'documents'`。
 - 安全：只读连接拦截 `$out`、`$merge`、`$where`、`$function`、`$accumulator` 及系统诊断管道；聚合管道默认追加 `$limit`。

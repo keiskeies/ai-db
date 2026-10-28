@@ -1,7 +1,8 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { TableInfo } from '@aidb/core';
+import { api } from '../lib/api';
 import { useApp } from '../store';
-import { Modal } from './ui';
+import { Modal, Spinner } from './ui';
 
 interface Props {
   table: TableInfo;
@@ -10,21 +11,92 @@ interface Props {
   /** 非关系型对象用「集合 / 索引 / 标签」等自己的名词，并省略外键、自增等关系型专属信息。 */
   objectLabel?: string;
   relational?: boolean;
+  /** 连接 id + 该引擎支持索引管理时，索引区直接可建删。 */
+  connectionId?: string;
+  manageIndexes?: boolean;
 }
 
-export function TableInfoDialog({ table, database, onClose, objectLabel = '表', relational = true }: Props) {
+export function TableInfoDialog({
+  table,
+  database,
+  onClose,
+  objectLabel = '表',
+  relational = true,
+  connectionId,
+  manageIndexes = false,
+}: Props) {
   const t = useApp((s) => s.t);
+  const notify = useApp((s) => s.notify);
+  const loadSchema = useApp((s) => s.loadSchema);
   const columns = table.columns ?? [];
   const indexes = table.indexes ?? [];
   const foreignKeys = table.foreignKeys ?? [];
   const pk = useMemo(() => columns.filter((column) => column.primaryKey).map((column) => column.name), [columns]);
+  const [creating, setCreating] = useState(false);
+  const [fields, setFields] = useState('');
+  const [indexName, setIndexName] = useState('');
+  const [unique, setUnique] = useState(false);
+  const [sparse, setSparse] = useState(false);
+  const [ttl, setTtl] = useState('');
+  const [pendingDrop, setPendingDrop] = useState<string | null>(null);
+  const [dropTyped, setDropTyped] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const done = (title: string, detail: string) => {
+    notify('success', title, detail);
+    if (connectionId) void loadSchema(connectionId, true, database).catch(() => undefined);
+    onClose();
+  };
+
+  const submitCreate = async () => {
+    if (!connectionId) return;
+    const parsed = fields.split(',').map((column) => column.trim()).filter(Boolean);
+    if (!parsed.length) {
+      setError('至少填写一个字段');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const { result } = await api.createIndex({
+        connectionId,
+        database,
+        collection: table.name,
+        columns: parsed,
+        name: indexName.trim() || undefined,
+        unique,
+        sparse,
+        expireAfterSeconds: Number(ttl) > 0 ? Math.floor(Number(ttl)) : undefined,
+      });
+      done('索引已创建', result.name);
+    } catch (err: any) {
+      setError(err?.message ?? '创建索引失败');
+      setBusy(false);
+    }
+  };
+
+  const submitDrop = async (name: string) => {
+    if (!connectionId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.dropIndex({ connectionId, database, collection: table.name, name });
+      done('索引已删除', name);
+    } catch (err: any) {
+      setError(err?.message ?? '删除索引失败');
+      setBusy(false);
+      setPendingDrop(null);
+      setDropTyped('');
+    }
+  };
 
   return (
     <Modal
       title={`对象信息 · ${table.name}`}
       onClose={onClose}
       wide
-      footer={<button className="btn" onClick={onClose}>关闭</button>}
+      footer={<button className="btn" onClick={onClose} disabled={busy}>关闭</button>}
     >
       <div className="col gap-12">
         <div className="info-grid">
@@ -59,10 +131,49 @@ export function TableInfoDialog({ table, database, onClose, objectLabel = '表',
         </div>
 
         <div>
-          <div className="tool-section-title">索引（{indexes.length}）</div>
+          <div className="tool-section-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span>索引（{indexes.length}）</span>
+            {manageIndexes ? (
+              <button className="btn small" onClick={() => { setCreating((prev) => !prev); setError(null); }} disabled={busy} data-testid="create-index-open">
+                新建索引…
+              </button>
+            ) : null}
+          </div>
+          {manageIndexes && creating ? (
+            <div className="form-grid" style={{ marginBottom: 8 }} data-testid="create-index-form">
+              <label>字段（逗号分隔）</label>
+              <input className="input" value={fields} onChange={(event) => setFields(event.target.value)} placeholder="weight, name" data-testid="index-fields" />
+              <label>索引名</label>
+              <input className="input" value={indexName} onChange={(event) => setIndexName(event.target.value)} placeholder="留空自动生成" data-testid="index-name" />
+              <label>TTL（秒）</label>
+              <input className="input" value={ttl} onChange={(event) => setTtl(event.target.value.replace(/\D/g, ''))} placeholder="留空则不过期" data-testid="index-ttl" />
+              <label>选项</label>
+              <div style={{ display: 'flex', gap: 12, fontSize: 12 }}>
+                <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <input type="checkbox" checked={unique} onChange={(event) => setUnique(event.target.checked)} data-testid="index-unique" /> 唯一
+                </label>
+                <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <input type="checkbox" checked={sparse} onChange={(event) => setSparse(event.target.checked)} data-testid="index-sparse" /> 稀疏
+                </label>
+              </div>
+              <label />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn primary" onClick={() => void submitCreate()} disabled={busy} data-testid="index-submit">
+                  {busy ? <Spinner /> : null} 创建
+                </button>
+                <button className="btn" onClick={() => setCreating(false)} disabled={busy}>取消</button>
+              </div>
+            </div>
+          ) : null}
           <div className="mini-table-wrap">
             <table className="tool-table">
-              <thead><tr><th>名称</th><th>列</th><th>唯一</th>{relational ? <th>主键</th> : <><th>主键</th><th>方法</th><th>说明</th></>}</tr></thead>
+              <thead>
+                <tr>
+                  <th>名称</th><th>列</th><th>唯一</th>
+                  {relational ? <th>主键</th> : <><th>主键</th><th>方法</th><th>说明</th></>}
+                  {manageIndexes ? <th /> : null}
+                </tr>
+              </thead>
               <tbody>
                 {indexes.map((index) => (
                   <tr key={index.name}>
@@ -72,9 +183,49 @@ export function TableInfoDialog({ table, database, onClose, objectLabel = '表',
                     <td>{index.primary ? 'PK' : ''}</td>
                     {relational ? null : <td className="mono">{index.method ?? '—'}</td>}
                     {relational ? null : <td className="mono">{index.comment ?? '—'}</td>}
+                    {manageIndexes ? (
+                      <td>
+                        {index.primary ? (
+                          <span className="muted" style={{ fontSize: 11 }}>主键不可删</span>
+                        ) : pendingDrop === index.name ? (
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                            <input
+                              className="input"
+                              style={{ width: 140 }}
+                              value={dropTyped}
+                              placeholder={`输入 ${index.name}`}
+                              onChange={(event) => setDropTyped(event.target.value)}
+                              data-testid="index-drop-confirm"
+                            />
+                            <button
+                              className="btn small danger"
+                              onClick={() => void submitDrop(index.name)}
+                              disabled={busy || dropTyped.trim() !== index.name}
+                              data-testid="index-drop-submit"
+                            >
+                              确认删除
+                            </button>
+                            <button className="btn small" onClick={() => { setPendingDrop(null); setDropTyped(''); }} disabled={busy}>
+                              取消
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            className="btn small"
+                            onClick={() => { setPendingDrop(index.name); setDropTyped(''); setError(null); }}
+                            disabled={busy}
+                            data-testid="index-drop-open"
+                          >
+                            删除
+                          </button>
+                        )}
+                      </td>
+                    ) : null}
                   </tr>
                 ))}
-                {!indexes.length ? <tr><td colSpan={relational ? 4 : 6} className="muted">无索引</td></tr> : null}
+                {!indexes.length ? (
+                  <tr><td colSpan={(relational ? 4 : 6) + (manageIndexes ? 1 : 0)} className="muted">无索引</td></tr>
+                ) : null}
               </tbody>
             </table>
           </div>
@@ -101,7 +252,12 @@ export function TableInfoDialog({ table, database, onClose, objectLabel = '表',
           </div>
         </div>
         ) : null}
-        <p className="hint" style={{ margin: 0 }}>{t('readonly')}：对象信息为只读；{relational ? '修改请使用设计表或 SQL 编辑器。' : '修改请使用写入面板或对应的查询语言。'}</p>
+        {error ? <div style={{ color: 'var(--danger)', fontSize: 12 }} data-testid="index-error">{error}</div> : null}
+        <p className="hint" style={{ margin: 0 }}>
+          {manageIndexes
+            ? '索引在此直接创建与删除；建索引需要扫描整个集合，大集合上先在测试库验证。'
+            : `${t('readonly')}：对象信息为只读；${relational ? '修改请使用设计表或 SQL 编辑器。' : '修改请使用写入面板或对应的查询语言。'}`}
+        </p>
       </div>
     </Modal>
   );

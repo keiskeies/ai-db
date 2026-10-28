@@ -17,6 +17,8 @@ export interface EngineCapabilities {
   objectLifecycle?: boolean;
   /** 可批量写入与删除文档/向量点（驱动实现了 DocumentWriteDriver）。 */
   documentWrite?: boolean;
+  /** 可在对象信息面板里创建/删除索引（驱动实现了 CollectionIndexDriver）。 */
+  indexManage?: boolean;
 }
 
 export interface EngineMeta {
@@ -231,6 +233,7 @@ export const ENGINES: EngineMeta[] = [
       gridEdit: false,
       users: false,
       documentWrite: true,
+      indexManage: true,
       objectLifecycle: true,
     },
     defaultPort: 27017,
@@ -945,6 +948,11 @@ export function managesObjects(engine: Engine): boolean {
 /** 该引擎能否批量写入/删除文档或向量点。 */
 export function writesDocuments(engine: Engine): boolean {
   return engineMeta(engine).capabilities.documentWrite === true;
+}
+
+/** 该引擎能否在对象信息面板里创建/删除索引。 */
+export function managesIndexes(engine: Engine): boolean {
+  return engineMeta(engine).capabilities.indexManage === true;
 }
 
 export function isEngine(value: unknown): value is Engine {

@@ -398,6 +398,39 @@ if (MONGO_PORT) {
   await page.locator('.modal-head .icon-btn').last().click();
   await page.waitForTimeout(200);
 
+  const openIndexPanel = async () => {
+    await page.locator('[title="集合 widgets"]').click({ button: 'right' });
+    await page.click('text=对象信息');
+    await page.waitForSelector('[data-testid="create-index-open"]', { timeout: 10000 });
+  };
+  await openIndexPanel();
+  await page.click('[data-testid="create-index-open"]');
+  await page.fill('[data-testid="index-fields"]', 'weight');
+  await page.fill('[data-testid="index-name"]', 'e2e_weight_idx');
+  await page.click('[data-testid="index-submit"]');
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
+  await openIndexPanel();
+  await page.waitForFunction(
+    () => [...document.querySelectorAll('[data-testid="object-info-index-name"]')].some((cell) => cell.textContent === 'e2e_weight_idx'),
+    null,
+    { timeout: 20000 },
+  );
+  check('Mongo index created from the object info panel', true);
+
+  await page.locator('.tool-table tr', { hasText: 'e2e_weight_idx' }).locator('[data-testid="index-drop-open"]').click();
+  await page.fill('[data-testid="index-drop-confirm"]', 'e2e_weight_idx');
+  await page.click('[data-testid="index-drop-submit"]');
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
+  await openIndexPanel();
+  await page.waitForFunction(
+    () => ![...document.querySelectorAll('[data-testid="object-info-index-name"]')].some((cell) => cell.textContent === 'e2e_weight_idx'),
+    null,
+    { timeout: 20000 },
+  );
+  check('Mongo index dropped from the object info panel', true);
+  await page.locator('.modal-head .icon-btn').last().click();
+  await page.waitForTimeout(200);
+
   await page.screenshot({ path: join(shots, 'desktop-mongodb.png') });
 }
 

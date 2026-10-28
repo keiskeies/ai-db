@@ -2,6 +2,8 @@ import { MongoClient, ObjectId } from 'mongodb';
 import type { Collection, Document, Filter, Sort } from 'mongodb';
 import type { ColumnInfo, Engine, IndexInfo, MqlQuery, QueryResult, StructuredQuery, TableInfo } from '@aidb/core';
 import type {
+  CollectionIndexDriver,
+  CollectionIndexInput,
   CreateObjectInput,
   DeleteDocumentsInput,
   DocumentWriteDriver,
@@ -193,7 +195,7 @@ export function normalizeMql(value: unknown): MqlQuery {
   return query;
 }
 
-export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver, ObjectCreateDriver {
+export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver, ObjectCreateDriver, CollectionIndexDriver {
   engine: Engine = 'mongodb';
   private client?: MongoClient;
   private connected?: Promise<MongoClient>;
@@ -408,6 +410,39 @@ export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver, 
     } catch (err: any) {
       throw new DbError(err?.message ?? 'MongoDB 删集合失败', { code: err?.codeName ?? 'MONGO_DROP' });
     }
+  }
+
+  async createIndex(input: CollectionIndexInput, opts: RunOptions = {}): Promise<{ name: string; created: boolean }> {
+    if (!input.collection) throw new DbError('集合名不能为空', { code: 'MQL_COLLECTION' });
+    const columns = input.columns.map((column) => column.trim()).filter(Boolean);
+    if (!columns.length) throw new DbError('索引至少需要一个字段', { code: 'MQL_INDEX' });
+    const keys: Record<string, 1> = {};
+    for (const column of columns) keys[column] = 1;
+    const options: { name?: string; unique?: boolean; sparse?: boolean; expireAfterSeconds?: number } = {};
+    if (input.name?.trim()) options.name = input.name.trim();
+    if (input.unique) options.unique = true;
+    if (input.sparse) options.sparse = true;
+    if (input.expireAfterSeconds && input.expireAfterSeconds > 0) options.expireAfterSeconds = Math.floor(input.expireAfterSeconds);
+    const coll = await this.collection(input.collection, opts.database);
+    try {
+      const name = await coll.createIndex(keys, options);
+      return { name, created: true };
+    } catch (err: any) {
+      throw new DbError(err?.message ?? 'MongoDB 建索引失败', { code: err?.codeName ?? 'MONGO_CREATE_INDEX' });
+    }
+  }
+
+  async dropIndex(input: { collection: string; name: string }, opts: RunOptions = {}): Promise<{ name: string; dropped: boolean }> {
+    const name = input.name.trim();
+    if (!name) throw new DbError('索引名不能为空', { code: 'MQL_INDEX' });
+    if (name === '_id_') throw new DbError('_id_ 主键索引不能删除', { code: 'MQL_INDEX' });
+    const coll = await this.collection(input.collection, opts.database);
+    try {
+      await coll.dropIndex(name);
+    } catch (err: any) {
+      throw new DbError(err?.message ?? 'MongoDB 删索引失败', { code: err?.codeName ?? 'MONGO_DROP_INDEX' });
+    }
+    return { name, dropped: true };
   }
 
   async upsertDocuments(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {

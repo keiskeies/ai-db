@@ -234,6 +234,18 @@ export const api = {
     fields?: Array<{ name: string; type: string }>;
     edge?: boolean;
   }) => request<{ result: { name: string; kind: string } }>('/objects/create', { method: 'POST', body: JSON.stringify(body) }),
+  createIndex: (body: {
+    connectionId: string;
+    database?: string;
+    collection: string;
+    columns: string[];
+    name?: string;
+    unique?: boolean;
+    sparse?: boolean;
+    expireAfterSeconds?: number;
+  }) => request<{ result: { name: string; created: boolean } }>('/indexes/create', { method: 'POST', body: JSON.stringify(body) }),
+  dropIndex: (body: { connectionId: string; database?: string; collection: string; name: string }) =>
+    request<{ result: { name: string; dropped: boolean } }>('/indexes/drop', { method: 'POST', body: JSON.stringify(body) }),
   dropObject: (body: { connectionId: string; database?: string; name: string }) =>
     request<{ result: { name: string; dropped: boolean } }>('/objects/drop', { method: 'POST', body: JSON.stringify(body) }),
   upsertDocuments: (body: { connectionId: string; database?: string; collection: string; documents: Record<string, unknown>[] }) =>

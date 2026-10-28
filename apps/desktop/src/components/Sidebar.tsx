@@ -30,7 +30,7 @@ import {
   PanelLeftClose,
 } from 'lucide-react';
 import type { ConnectionConfig, DatabaseSchema, TableInfo } from '@aidb/core';
-import { engineMeta, managesObjects } from '@aidb/core';
+import { engineMeta, managesIndexes, managesObjects } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp, type ContextMenuItem } from '../store';
 import { TableOpsDialog, type TableDialogKind } from './TableOpsDialog';
@@ -97,6 +97,8 @@ export function Sidebar() {
     database?: string;
     objectLabel?: string;
     relational?: boolean;
+    connectionId?: string;
+    manageIndexes?: boolean;
   } | null>(null);
 
   const filtered = useMemo(() => {
@@ -240,7 +242,19 @@ export function Sidebar() {
       },
       { label: '', icon: null, sep: true, onClick: () => undefined },
       ...(table.indexes?.length
-        ? [{ label: '对象信息', icon: <Info size={13} />, onClick: () => setInfoTable({ table, database: schema.name, objectLabel, relational: false }) }]
+        ? [{
+            label: '对象信息',
+            icon: <Info size={13} />,
+            onClick: () =>
+              setInfoTable({
+                table,
+                database: schema.name,
+                objectLabel,
+                relational: false,
+                connectionId: conn.id,
+                manageIndexes: managesIndexes(conn.engine) && !conn.readonly,
+              }),
+          }]
         : []),
       { label: t('refresh'), icon: <RefreshCw size={13} />, onClick: () => void loadSchema(conn.id, true) },
       {
@@ -752,6 +766,8 @@ export function Sidebar() {
           database={infoTable.database}
           objectLabel={infoTable.objectLabel}
           relational={infoTable.relational ?? true}
+          connectionId={infoTable.connectionId}
+          manageIndexes={infoTable.manageIndexes}
           onClose={() => setInfoTable(null)}
         />
       ) : null}
