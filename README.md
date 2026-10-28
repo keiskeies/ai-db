@@ -16,7 +16,7 @@ AI 原生、全平台数据库工作台。Navicat 式的完整数据库操作 + 
 - **表右键菜单**：打开、设计、新建、重命名、复制（结构 / 结构+数据）、查看 DDL、维护、对象信息、设置权限、导入 / 导出向导、清空、截断、删除、逆向到模型。
 
 ### 数据库工作台
-- **连接管理**：**26 种引擎** — 关系型 SQLite / MySQL / MariaDB / PostgreSQL / CockroachDB / SQL Server / Oracle / ClickHouse，文档型 MongoDB，键值型 Redis，图数据库 Neo4j，以及金仓 / openGauss / GaussDB / OceanBase / TiDB / PolarDB / TDSQL / GBase 8a / Doris / StarRocks / 瀚高 / Vastbase / IvorySQL / GreatSQL / GoldenDB 等国产库（协议别名复用 PG/MySQL 驱动）；SSH 隧道、环境标签（DEV / STG / PROD）、只读模式、AES-256-GCM 加密凭据、测试连接。详见 [多引擎架构](docs/09-multi-engine.md)。
+- **连接管理**：**27 种引擎** — 关系型 SQLite / MySQL / MariaDB / PostgreSQL / CockroachDB / SQL Server / Oracle / ClickHouse / 达梦 DM8，文档型 MongoDB，键值型 Redis，图数据库 Neo4j，以及金仓 / openGauss / GaussDB / OceanBase / TiDB / PolarDB / TDSQL / GBase 8a / Doris / StarRocks / 瀚高 / Vastbase / IvorySQL / GreatSQL / GoldenDB 等国产库（协议别名复用 PG/MySQL 驱动；达梦走官方 dmdb）；SSH 隧道、环境标签（DEV / STG / PROD）、只读模式、AES-256-GCM 加密凭据、测试连接。详见 [多引擎架构](docs/09-multi-engine.md)。
 - **非关系型工作台**：MongoDB 集合浏览 + 采样字段推断 + JSON MQL（find / aggregate / count / distinct）+ 文档结果；Redis DB 索引、SCAN 键浏览、命令控制台与类型化结果；Neo4j 节点标签 / 关系类型浏览 + Cypher 控制台；非 SQL 引擎的 DDL、结构同步、备份等 SQL 专属功能会明确禁用。
 - **对象浏览器**：连接 → 库 / Schema → 表 / 视图 → 列 / 索引 / 外键，搜索、右键菜单、懒加载；表和视图分组展示。
 - **数据网格**：行号、分页、排序、WHERE 过滤、**可视化筛选构建器**、**排序对话框**、**文本视图**、双击编辑、新增/删除行、**行多选**、**复制 / 粘贴 / 复制行 / 批量删除**、**查找替换**、主键安全定位、记录区间与页码；**CSV 导入向导**（分隔符 / 表头 / 预览 / 列映射），导出 CSV / JSON / SQL / XML。

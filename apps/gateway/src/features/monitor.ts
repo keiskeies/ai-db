@@ -177,7 +177,7 @@ export async function monitorConnection(store: Store, manager: ConnectionManager
         const get = (name: string) => row[names.indexOf(name)];
         sessions.push({ id: String(get('session_id')), user: String(get('login_name') ?? ''), database: String(get('db') ?? ''), state: String(get('status') ?? ''), query: String(get('program_name') ?? '') });
       }
-    } else if (family === 'oracle') {
+    } else if (family === 'oracle' || family === 'dm') {
       const inst = await run('SELECT instance_name, status, version, startup_time FROM v$instance');
       version = String(rowValue(inst, 'version') ?? '');
       sections.push({
@@ -229,7 +229,7 @@ export async function killSession(store: Store, manager: ConnectionManager, conn
     if (!/^\d+$/.test(sessionId)) throw new Error('会话 ID 必须是数字');
     sql = 'SELECT pg_terminate_backend($1)';
     params = [Number(sessionId)];
-  } else if (family === 'oracle') {
+  } else if (family === 'oracle' || family === 'dm') {
     if (!/^\d+,\d+$/.test(sessionId)) throw new Error('Oracle 会话 ID 格式应为 sid,serial#');
     sql = `ALTER SYSTEM KILL SESSION ${quoteLiteral(sessionId)} IMMEDIATE`;
   } else if (family === 'clickhouse') {

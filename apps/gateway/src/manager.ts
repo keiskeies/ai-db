@@ -112,7 +112,7 @@ export class ConnectionManager {
     if (engineUsesSchema(conn.engine)) {
       const groups = new Map<string, TableInfo[]>();
       for (const table of tables) {
-        const fallback = conn.engine === 'sqlserver' ? 'dbo' : conn.engine === 'oracle' ? (conn.username ?? '').toUpperCase() : dbKey || 'public';
+        const fallback = conn.engine === 'sqlserver' ? 'dbo' : conn.engine === 'oracle' ? (conn.username ?? '').toUpperCase() : conn.engine === 'dm' ? (conn.username ?? 'SYSDBA').toUpperCase() : dbKey || 'public';
         const key = table.schema ?? fallback;
         groups.set(key, [...(groups.get(key) ?? []), table]);
       }

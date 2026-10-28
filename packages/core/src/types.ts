@@ -10,6 +10,7 @@ export type Engine =
   | 'mongodb'
   | 'redis'
   | 'neo4j'
+  | 'dm'
   | 'kingbase'
   | 'opengauss'
   | 'gaussdb'
@@ -40,12 +41,13 @@ export type Transport =
   | 'mongodb'
   | 'redis'
   | 'bolt'
+  | 'dm'
   | 'qdrant-http'
   | 'milvus-grpc'
   | 'weaviate-http';
 
 /** SQL 方言；协议别名（金仓、TiDB 等）复用已有方言。 */
-export type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickhouse';
+export type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickhouse' | 'dm';
 
 export type QueryLanguage = 'sql' | 'mql' | 'redis' | 'cypher' | 'vector';
 

@@ -273,6 +273,25 @@ export const ENGINES: EngineMeta[] = [
     color: '#22C55E',
   },
   {
+    id: 'dm',
+    label: '达梦 DM8',
+    family: 'dm',
+    model: 'relational',
+    transport: 'dm',
+    dialect: 'dm',
+    languages: ['sql'],
+    capabilities: relational(),
+    defaultPort: 5236,
+    defaultUsername: 'SYSDBA',
+    defaultDatabase: 'SYSDBA',
+    fileBased: false,
+    supportsSsh: true,
+    supportsSsl: false,
+    description: '国产关系型数据库，Oracle 兼容语法',
+    notes: '默认端口 5236；系统表与大小写规则需按实例验证',
+    color: '#B91C1C',
+  },
+  {
     id: 'kingbase',
     label: '人大金仓 KingbaseES',
     family: 'postgres',
@@ -556,5 +575,5 @@ export function dialectOf(engine: Engine): DialectId {
 
 export function engineUsesSchema(engine: Engine): boolean {
   const dialect = engineMeta(engine).dialect;
-  return dialect === 'postgres' || dialect === 'mssql' || dialect === 'oracle' || dialect === 'clickhouse';
+  return dialect === 'postgres' || dialect === 'mssql' || dialect === 'oracle' || dialect === 'clickhouse' || dialect === 'dm';
 }

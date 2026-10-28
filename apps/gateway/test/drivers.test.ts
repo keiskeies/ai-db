@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { ConnectionConfig } from '@aidb/core';
 import { createDriver } from '../src/drivers';
+import { DmDriver } from '../src/drivers/dm';
 import { MongoDriver } from '../src/drivers/mongodb';
 import { Neo4jDriver } from '../src/drivers/neo4j';
 import { RedisDriver } from '../src/drivers/redis';
@@ -34,6 +35,11 @@ test('driver factory routes protocol aliases to the shared SQL drivers', async (
   assert.equal(tidb.driver.engine, 'tidb');
   assert.ok(tidb.driver instanceof MysqlDriver);
   await tidb.close();
+
+  const dm = await createDriver(config('dm', 5236));
+  assert.equal(dm.driver.engine, 'dm');
+  assert.ok(dm.driver instanceof DmDriver);
+  await dm.close();
 });
 
 test('driver factory creates MongoDB and Redis drivers without connecting', async () => {

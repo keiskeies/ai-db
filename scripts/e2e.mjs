@@ -58,7 +58,7 @@ async function waitHealth(url, timeout = 25000) {
 }
 
 const port = await freePort();
-const gatewayEnv = { ...process.env, AIDB_HOME: home, AIDB_HOST: '127.0.0.1', AIDB_PORT: String(port), AIDB_TOKEN: TOKEN, AIDB_SECRET: 'e2e-secret', AIDB_STATIC_DIR: desktopDist, NODE_ENV: 'production' };
+const gatewayEnv = { ...process.env, NODE_OPTIONS: [process.env.NODE_OPTIONS, '--openssl-legacy-provider'].filter(Boolean).join(' '), AIDB_HOME: home, AIDB_HOST: '127.0.0.1', AIDB_PORT: String(port), AIDB_TOKEN: TOKEN, AIDB_SECRET: 'e2e-secret', AIDB_STATIC_DIR: desktopDist, NODE_ENV: 'production' };
 delete gatewayEnv.ELECTRON_RUN_AS_NODE;
 const gateway = spawn(process.execPath, [gatewayEntry], { env: gatewayEnv, stdio: ['ignore', 'pipe', 'pipe'] });
 gateway.stdout.on('data', (d) => gatewayLogs.push(String(d)));
@@ -88,6 +88,8 @@ const MONGO_PORT = process.env.AIDB_TEST_MONGO_PORT ? Number(process.env.AIDB_TE
 const REDIS_PORT = process.env.AIDB_TEST_REDIS_PORT ? Number(process.env.AIDB_TEST_REDIS_PORT) : undefined;
 const NEO4J_PORT = process.env.AIDB_TEST_NEO4J_PORT ? Number(process.env.AIDB_TEST_NEO4J_PORT) : undefined;
 const NEO4J_PASSWORD = process.env.AIDB_TEST_NEO4J_PASSWORD ?? 'testpass';
+const DM_PORT = process.env.AIDB_TEST_DM_PORT ? Number(process.env.AIDB_TEST_DM_PORT) : undefined;
+const DM_PASSWORD = process.env.AIDB_TEST_DM_PASSWORD ?? 'SYSDBA';
 if (MONGO_PORT) {
   const { MongoClient } = await import('mongodb');
   const client = new MongoClient(`mongodb://127.0.0.1:${MONGO_PORT}`, { serverSelectionTimeoutMS: 5000 });
@@ -115,6 +117,44 @@ if (NEO4J_PORT) {
   await session.run('CREATE (a:Person {name: $a})-[:KNOWS {since: 2020}]->(b:Person {name: $b})', { a: 'Ada', b: 'Linus' });
   await session.close();
   await driver.close();
+}
+if (DM_PORT) {
+  const created = await api('/connections', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: 'dm-seed',
+      engine: 'dm',
+      host: '127.0.0.1',
+      port: DM_PORT,
+      database: 'SYSDBA',
+      username: 'SYSDBA',
+      password: DM_PASSWORD,
+      groupName: 'seed',
+      color: 'red',
+      environment: 'dev',
+      readonly: false,
+    }),
+  });
+  if (created.status !== 201) throw new Error(`DM seed connection failed: ${JSON.stringify(created.body)}`);
+  const id = created.body.connection.id;
+  await api('/query', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: id, database: 'SYSDBA', sql: 'DROP TABLE AIDB_E2E' }),
+  });
+  const ddl = await api('/query', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: id, database: 'SYSDBA', sql: 'CREATE TABLE AIDB_E2E (ID INT PRIMARY KEY, NAME VARCHAR(50))' }),
+  });
+  if (ddl.status !== 200) throw new Error(`DM seed DDL failed: ${JSON.stringify(ddl.body)}`);
+  await api('/query', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: id, database: 'SYSDBA', sql: "INSERT INTO AIDB_E2E VALUES (1, 'Ada')" }),
+  });
+  await api('/query', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: id, database: 'SYSDBA', sql: "INSERT INTO AIDB_E2E VALUES (2, 'Linus')" }),
+  });
+  await api(`/connections/${id}`, { method: 'DELETE' });
 }
 
 // Mobile static server
@@ -178,7 +218,7 @@ await page.waitForTimeout(150);
 await page.click('[data-testid="sidebar-new-connection"]');
 await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
 const engineOptions = await page.locator('[data-testid="connection-engine"] option').count();
-check('connection form lists 26 engines', engineOptions === 26, String(engineOptions));
+check('connection form lists 27 engines', engineOptions === 27, String(engineOptions));
 await page.screenshot({ path: join(shots, 'desktop-connection-engines.png') });
 await page.locator('.modal-head .icon-btn').click();
 await page.waitForTimeout(200);
@@ -262,7 +302,26 @@ if (NEO4J_PORT) {
   check('Neo4j query hides SQL-only actions', (await page.locator('.query-actions').getByText('美化 SQL').count()) === 0);
 }
 
-if (MONGO_PORT || REDIS_PORT || NEO4J_PORT) {
+if (DM_PORT) {
+  await page.click('[data-testid="sidebar-new-connection"]');
+  await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
+  await page.fill('[data-testid="connection-name"]', 'DM E2E');
+  await page.selectOption('[data-testid="connection-engine"]', 'dm');
+  await page.fill('[data-testid="connection-host"]', '127.0.0.1');
+  await page.fill('[data-testid="connection-port"]', String(DM_PORT));
+  await page.fill('[data-testid="connection-password"]', DM_PASSWORD);
+  await page.click('[data-testid="connection-save"]');
+  const dmRow = page.locator('.conn-row', { hasText: 'DM E2E' });
+  await dmRow.waitFor({ timeout: 15000 });
+  await page.waitForSelector('[title="TABLE AIDB_E2E"]', { timeout: 30000 });
+  check('DM connection expands to tables', true);
+  await page.click('[title="TABLE AIDB_E2E"]');
+  await page.waitForSelector('[data-testid="data-grid"] tbody tr', { timeout: 20000 });
+  const dmRows = await page.locator('[data-testid="data-grid"] tbody tr').count();
+  check('DM data grid returns rows', dmRows === 2, `${dmRows} rows`);
+}
+
+if (MONGO_PORT || REDIS_PORT || NEO4J_PORT || DM_PORT) {
   // 恢复初始工作区：bootstrap 会把 active connection 指回 demo，并重新出现欢迎页
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });

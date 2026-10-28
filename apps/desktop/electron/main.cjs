@@ -1,9 +1,10 @@
 const { app, BrowserWindow, shell, session } = require('electron');
 const path = require('node:path');
+const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
 const crypto = require('node:crypto');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 
 let gatewayProcess = null;
 let mainWindow = null;
@@ -65,6 +66,29 @@ function waitForHealth(url, timeoutMs = 25000) {
   });
 }
 
+function findSystemNode() {
+  const configured = process.env.AIDB_NODE_BIN;
+  const candidates = [];
+  if (configured) candidates.push(configured);
+  try {
+    const where = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['node'], { encoding: 'utf8', windowsHide: true });
+    for (const line of String(where.stdout ?? '').split(/\r?\n/)) if (line.trim()) candidates.push(line.trim());
+  } catch {
+    /* no PATH lookup */
+  }
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const version = spawnSync(candidate, ['-v'], { encoding: 'utf8', windowsHide: true }).stdout?.trim() ?? '';
+      const [major, minor] = version.replace(/^v/, '').split('.').map(Number);
+      if (major > 22 || (major === 22 && minor >= 5)) return candidate;
+    } catch {
+      /* try next candidate */
+    }
+  }
+  return undefined;
+}
+
 async function startEmbeddedGateway() {
   const port = await getFreePort();
   const token = crypto.randomBytes(24).toString('hex');
@@ -72,17 +96,25 @@ async function startEmbeddedGateway() {
     ? path.join(process.resourcesPath, 'gateway', 'index.js')
     : path.join(__dirname, '..', '..', 'gateway', 'dist', 'index.js');
   const staticDir = app.isPackaged ? path.join(process.resourcesPath, 'desktop') : path.join(__dirname, '..', 'dist');
-  gatewayProcess = spawn(process.execPath, [gatewayEntry], {
-    env: {
-      ...process.env,
-      ELECTRON_RUN_AS_NODE: '1',
-      NODE_ENV: 'production',
-      AIDB_HOME: app.getPath('userData'),
-      AIDB_HOST: '127.0.0.1',
-      AIDB_PORT: String(port),
-      AIDB_TOKEN: token,
-      AIDB_STATIC_DIR: staticDir,
-    },
+  // dmdb 需要 --openssl-legacy-provider，而 Electron 内置 Node 不接受该参数；
+  // 有系统 Node（>=22.5）时优先用它启动 Bridge，否则回退到 Electron Node（达梦连接会给出明确提示）。
+  const nodeBin = findSystemNode();
+  const env = {
+    ...process.env,
+    NODE_ENV: 'production',
+    AIDB_HOME: app.getPath('userData'),
+    AIDB_HOST: '127.0.0.1',
+    AIDB_PORT: String(port),
+    AIDB_TOKEN: token,
+    AIDB_STATIC_DIR: staticDir,
+  };
+  if (nodeBin) {
+    delete env.ELECTRON_RUN_AS_NODE;
+  } else {
+    env.ELECTRON_RUN_AS_NODE = '1';
+  }
+  gatewayProcess = spawn(nodeBin ?? process.execPath, nodeBin ? ['--openssl-legacy-provider', gatewayEntry] : [gatewayEntry], {
+    env,
     stdio: 'ignore',
     windowsHide: true,
   });

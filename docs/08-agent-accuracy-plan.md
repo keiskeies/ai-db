@@ -582,7 +582,7 @@ demo 库上的一次实测（6 题、每题独立会话）：A 组 2 题「一�
 | 5 | `compressSchema` / `buildSystemPrompt` 各只有一个调用者 | ✅ 已核验（全仓 grep） |
 | 6 | `<followups>` 标签能被 Anthropic / OpenAI / 本地三种 provider 稳定产出 | ✅ **问题已消除**（§12.6-1）：P2 改为 Bridge 侧确定性生成（`agentHost.ts:349`），不再依赖模型守格式，容错解析分支一并删除 |
 | 7 | PNG 导出栅格化路径 | ✅ **两种形态均已实测**（浏览器：§12.4 探针 3；Electron：§12.6-2，1572×728 / 76,419 字节 / `state=completed`）。Electron 侧测出真实缺陷——主进程没挂 `will-download`，5 条导出路径全都弹无类型过滤器的原生另存为，已修复并纳入 `npm run e2e`。两个必踩陷阱（`btoa` 需 utf8 安全包装、需先铺底色）已写入 §5.2 |
-| 8 | 各方言下 `buildMonthlySeriesExpr` 全覆盖 | ✅ **已实测**（§12.6-3）：v0.4 扩到 26 个引擎（含 MongoDB/Redis/Neo4j 与 15 个协议别名），`ddl.test` 改为按 6 个 SQL 方言断言；别名自动复用方言，非 SQL 引擎不参与月度聚合 |
+| 8 | 各方言下 `buildMonthlySeriesExpr` 全覆盖 | ✅ **已实测**（§12.6-3）：v0.4 扩到 27 个引擎（含 MongoDB/Redis/Neo4j、达梦 DM8 与 15 个协议别名），`ddl.test` 改为按 7 个 SQL 方言断言；别名自动复用方言，非 SQL 引擎不参与月度聚合 |
 | 9 | 准确率对照实验的 10 个问题集 | ❌ 未准备。P1 开工前需与用户确认题目（应来自其真实业务问法）；跑法与只读基线见 §9.1 / §9.2 |
 | 10 | 表管理面板在 30+ 库 / 单库 100+ 表时的渲染性能 | ✅ **已在用户真实 MySQL 上实测**（§12.6-4，只读）：最大库 235 表 / 705 控件，库加载+渲染 33ms、6 次筛选按键 88ms、整表滚动往返 33ms → 虚拟滚动与分页都不做 |
 | 11 | 预测算法数值正确性 | ✅ **已实测通过**（§12.4 探针 2：17/17 断言）。过程中发现并修掉一个真实缺陷——`Number(null) === 0` 会把 SQL NULL 变成 0 数据点污染拟合，已固化为 §5.4 规则 1 与单测项 |
@@ -733,7 +733,7 @@ P2 落地时把「让模型输出 `<followups>` 标签、Bridge 再容错解析�
 
 #### 3. `buildMonthlySeriesExpr` 的方言覆盖 → 按方言断言，别名自动复用
 
-计划写「12 类方言」，而当时 `ENGINE_IDS` 只有 8 个引擎。v0.4 扩到 26 个引擎后，`packages/core/test/ddl.test.ts` 改为按 `DialectId` 集合（sqlite / mysql / postgres / mssql / oracle / clickhouse）断言：每个 SQL 引擎解析到方言，每个方言都必须有月度表达式；新增协议别名只要映射到已有方言即可，不再需要逐个补 `MONTHLY_FN`。MongoDB/Redis/Neo4j 没有 SQL 方言，不参与该测试。计划里「不支持的 engine 降级为不生成 trend 建议」的兜底在当前 6 个 SQL 方言上仍无触发对象。
+计划写「12 类方言」，而当时 `ENGINE_IDS` 只有 8 个引擎。v0.4 扩到 27 个引擎后，`packages/core/test/ddl.test.ts` 改为按 `DialectId` 集合（sqlite / mysql / postgres / mssql / oracle / clickhouse / dm）断言：每个 SQL 引擎解析到方言，每个方言都必须有月度表达式；新增协议别名只要映射到已有方言即可，不再需要逐个补 `MONTHLY_FN`。MongoDB/Redis/Neo4j 没有 SQL 方言，不参与该测试。计划里「不支持的 engine 降级为不生成 trend 建议」的兜底在当前 7 个 SQL 方言上仍无触发对象。
 
 #### 4. 表管理面板在真实规模下的渲染性能 → 不需要虚拟滚动
 

@@ -1,5 +1,6 @@
 import { engineDefaultPort, engineMeta, type ConnectionConfig, type ConnectionSecret } from '@aidb/core';
 import { ClickHouseDriver } from './clickhouse';
+import { DmDriver } from './dm';
 import { MongoDriver } from './mongodb';
 import { MysqlDriver } from './mysql';
 import { Neo4jDriver } from './neo4j';
@@ -102,6 +103,16 @@ export async function createDriver(config: ConnectionConfig, secret: ConnectionS
         password: secret.password,
         database: config.database || 'default',
         ssl: config.ssl,
+      });
+      return { driver, close: () => closeWithTunnel(driver) };
+    }
+    case 'dm': {
+      const driver = new DmDriver({
+        host: connectHost,
+        port: connectPort,
+        user: config.username ?? 'SYSDBA',
+        password: secret.password,
+        database: config.database,
       });
       return { driver, close: () => closeWithTunnel(driver) };
     }

@@ -73,7 +73,7 @@ export function ConnectionModal() {
     setEngine(next);
     setPort(meta.defaultPort ? String(meta.defaultPort) : '');
     setUsername(meta.defaultUsername ?? '');
-    if (meta.fileBased || meta.model !== 'relational') setDatabase(meta.defaultDatabase ?? '');
+    if (meta.fileBased || meta.model !== 'relational' || meta.defaultDatabase) setDatabase(meta.defaultDatabase ?? '');
     setTestResult(null);
   };
 

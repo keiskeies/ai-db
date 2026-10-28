@@ -179,6 +179,7 @@ export class ToolExecutor {
     if (table?.schema) return table.schema;
     if (conn.engine === 'sqlserver') return 'dbo';
     if (conn.engine === 'oracle') return (conn.username ?? '').toUpperCase();
+    if (conn.engine === 'dm') return (conn.username ?? 'SYSDBA').toUpperCase();
     if (conn.engine === 'clickhouse') return conn.database ?? 'default';
     return 'public';
   }

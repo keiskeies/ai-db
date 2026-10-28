@@ -1,6 +1,6 @@
 # AiDB Studio — 产品设计总览
 
-> 版本：v0.4-dev · 日期：2026-10-28 · 状态：多引擎扩展进行中（关系型 8 种 + MongoDB/Redis/Neo4j + 15 种国产协议别名）
+> 版本：v0.4-dev · 日期：2026-10-28 · 状态：多引擎扩展进行中（关系型 9 种，含达梦 DM8；MongoDB/Redis/Neo4j；15 种国产协议别名）
 
 ## 1. 产品定位
 
@@ -47,7 +47,7 @@ AiDB Studio 是一款 **AI 原生、全平台** 的数据库连接与管理工�
 
 ### 5.1 当前交付（v0.4-dev）
 - 主界面：Navicat 式顶部 12 模块功能区、连接 / 对象树（表 / 视图 / 函数 / 查询 / 备份分组）、工作区 Tabs、AI 面板。
-- 连接管理：关系型 SQLite / MySQL / MariaDB / PostgreSQL / CockroachDB / SQL Server / Oracle / ClickHouse；文档型 MongoDB；键值型 Redis；图数据库 Neo4j；国产协议别名 金仓 / openGauss / GaussDB / OceanBase / TiDB / PolarDB / TDSQL / GBase 8a / Doris / StarRocks / 瀚高 / Vastbase / IvorySQL / GreatSQL / GoldenDB。支持 SSH 隧道、测试连接、颜色标签、只读开关。
+- 连接管理：关系型 SQLite / MySQL / MariaDB / PostgreSQL / CockroachDB / SQL Server / Oracle / ClickHouse / 达梦 DM8；文档型 MongoDB；键值型 Redis；图数据库 Neo4j；国产协议别名 金仓 / openGauss / GaussDB / OceanBase / TiDB / PolarDB / TDSQL / GBase 8a / Doris / StarRocks / 瀚高 / Vastbase / IvorySQL / GreatSQL / GoldenDB。支持 SSH 隧道、测试连接、颜色标签、只读开关。
 - 非关系型基础能力：MongoDB 集合浏览、采样字段推断、JSON MQL 查询与聚合；Redis DB 索引、SCAN 键浏览、命令控制台与类型化结果；Neo4j 节点标签 / 关系类型浏览与 Cypher 控制台；SQL 专属功能（DDL 设计器、结构同步、数据对比、SQL dump、审计体检、图表）在非 SQL 连接上明确禁用。详见 [多引擎架构](./09-multi-engine.md)。
 - 对象浏览器：库/Schema → 表/视图 → 列/索引/外键，搜索过滤，刷新，完整右键菜单。
 - 数据库操作：新建 / 重命名 / 删除（按引擎能力）、转储 SQL、数据库内查找、命令列、运行 SQL 文件。

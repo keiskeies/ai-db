@@ -95,7 +95,7 @@ export async function listUsers(store: Store, manager: ConnectionManager, connec
       })),
     };
   }
-  if (family === 'oracle') {
+  if (family === 'oracle' || family === 'dm') {
     const result = await query('SELECT username, account_status, default_tablespace FROM all_users ORDER BY username');
     const names = result.names.map((name) => name.toLowerCase());
     return {
@@ -170,7 +170,7 @@ export async function manageUser(
       const role = requireRole(payload.role ?? payload.privileges);
       statements.push(`ALTER SERVER ROLE ${quoteIdent(role, conn.engine)} ADD MEMBER ${user}`);
     }
-  } else if (family === 'oracle') {
+  } else if (family === 'oracle' || family === 'dm') {
     const upper = name.toUpperCase();
     const user = quoteIdent(upper, conn.engine);
     if (action === 'create') statements.push(`CREATE USER ${user} IDENTIFIED BY ${quoteLiteral(requirePassword(payload.password))}`);
