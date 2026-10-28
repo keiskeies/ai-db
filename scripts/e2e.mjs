@@ -188,6 +188,7 @@ if (DM_PORT) {
 if (QDRANT_PORT) {
   const base = `http://127.0.0.1:${QDRANT_PORT}`;
   await fetch(`${base}/collections/aidb_e2e`, { method: 'DELETE' }).catch(() => undefined);
+  await fetch(`${base}/collections/aidb_uicreated`, { method: 'DELETE' }).catch(() => undefined);
   await fetch(`${base}/collections/aidb_e2e`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
@@ -564,6 +565,16 @@ if (QDRANT_PORT) {
   await page.click('[data-testid="document-write-submit"]');
   await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 2, null, { timeout: 20000 });
   check('Qdrant delete by ids removes points', true);
+
+  await page.locator('.tree-node.folder-node', { hasText: '向量集合' }).last().click({ button: 'right' });
+  await page.click('text=新建集合…');
+  await page.waitForSelector('[data-testid="create-object-name"]', { timeout: 10000 });
+  await page.fill('[data-testid="create-object-name"]', 'aidb_uicreated');
+  await page.fill('[data-testid="create-object-dimension"]', '2');
+  await page.click('[data-testid="create-object-submit"]');
+  await page.waitForSelector('[title="向量集合 aidb_uicreated"]', { timeout: 20000 });
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 10000 });
+  check('Collection created from the tree menu closes the dialog', true);
 }
 
 if (TDENGINE_PORT) {

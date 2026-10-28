@@ -108,7 +108,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - 结果：id、score 与 payload/entity/properties 字段，`resultKind = 'vectors'`。
 - 文本检索：`text` 由网关调用 Embedding Provider 转成向量；未配置时可直接传 `vector`。
 - 写入：`upsert_document` 单条/批量、`import_documents` CSV 批量导入（id/vector 列可指定）、`delete_documents` 按 id 列表删除。
-- 建对象：`create_collection` 工具与 `POST /objects/create` 支持 Qdrant 集合、Elasticsearch/OpenSearch 索引、Weaviate class（对象树菜单待接）；Milvus 需要完整字段与索引定义，明确拒绝。不支持 SQL DDL 设计器与备份。
+- 建对象：对象树右键菜单「新建集合…／新建索引…」与 `create_collection` / `POST /objects/create` 支持 Qdrant 集合（维度+距离）、Elasticsearch/OpenSearch 索引（mapping 字段）、Weaviate class（属性）；Milvus 需要完整字段与索引定义，明确拒绝。不支持 SQL DDL 设计器与备份。
 - 导出：查询结果可导出 CSV/JSON/XML（INSERT 脚本仅 SQL 引擎）。
 
 ### Cassandra / ScyllaDB

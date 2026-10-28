@@ -221,6 +221,14 @@ export const api = {
     for (const [key, value] of Object.entries(params)) if (value) q.set(key, String(value));
     return request<{ detail: RedisKeyDetail }>(`/redis/key?${q.toString()}`);
   },
+  createObject: (body: {
+    connectionId: string;
+    database?: string;
+    name: string;
+    dimension?: number;
+    distance?: string;
+    fields?: Array<{ name: string; type: string }>;
+  }) => request<{ result: { name: string; kind: string } }>('/objects/create', { method: 'POST', body: JSON.stringify(body) }),
   upsertDocuments: (body: { connectionId: string; database?: string; collection: string; documents: Record<string, unknown>[] }) =>
     request<{ result: { ids: string[]; upserted: number } }>('/documents/upsert', { method: 'POST', body: JSON.stringify(body) }),
   deleteDocuments: (body: { connectionId: string; database?: string; collection: string; ids: string[] }) =>

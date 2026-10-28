@@ -225,7 +225,7 @@
 | MongoDB | document | database → collection/view；采样 30 条推断字段（含一层嵌套字段） | JSON MQL：find / aggregate / count / distinct；支持 filter / pipeline / projection / sort / limit / skip；文档写入 / CSV 导入 / 按 _id 删除 | 文档行，嵌套值为 JSON 单元格 | 禁用 DDL 设计器、结构同步、数据对比、dump、审计体检、图表 |
 | Redis | keyvalue | DB 索引 → keys 伪对象 + RediSearch 索引；SCAN 浏览，不执行 `KEYS *`；双击键行打开类型感知详情 | 单条命令控制台；SCAN / HGETALL / ZRANGE / FT.SEARCH 等类型化结果 | key/value、field/value、member/score、索引文档行；详情含 TTL / 规模 / 编码 | 禁用 DDL、结构同步、备份、SQL 工具；Redis Stack 模块自动识别 |
 | Neo4j | graph | database → 节点标签 / 关系类型；采样 30 个节点/关系推断属性 | Cypher 控制台；支持 `$params`；`EXPLAIN` / `PROFILE` 计划以 JSON 返回 | 节点/关系/路径为 JSON 单元格，`resultKind=graph`；支持表格/图视图（力导向布局、缩放平移、拖动节点、属性面板、搜索高亮） | 禁用 SQL 工具、DDL、结构同步、备份；超大图（>140 节点）自动退回环形布局 |
-| Qdrant | vector | collection → 维度 / 距离 / payload 字段；`create_collection` / `POST /objects/create` 可建集合 | JSON：`scroll` 浏览或 `vector` / `text` 检索；批量写入、CSV 导入与按 id 删除 | id/score/payload 行，`resultKind=vectors` | 禁用 SQL 工具与 SQL DDL 设计器；文本检索需 Embedding |
+| Qdrant | vector | collection → 维度 / 距离 / payload 字段；对象树菜单可新建集合 | JSON：`scroll` 浏览或 `vector` / `text` 检索；批量写入、CSV 导入与按 id 删除 | id/score/payload 行，`resultKind=vectors` | 禁用 SQL 工具与 SQL DDL 设计器；文本检索需 Embedding |
 | Milvus | vector | collection → field schema / 维度 | JSON：`scroll` 查询或 `vector` / `text` 检索；批量写入与按 id 删除 | id/score/entity 行，`resultKind=vectors` | 禁用 SQL/DDL 与建集合（需要完整字段定义）；文本检索需 Embedding |
 | Weaviate | vector | class → properties / vectorizer | JSON：scroll 或 nearVector 检索（GraphQL） | id/score/properties 行，`resultKind=vectors` | 禁用 SQL/DDL；文本检索需 Embedding |
 | Memgraph | graph | 节点标签 / 关系类型（复用 Bolt） | Cypher 控制台 | 节点/关系 JSON 行 | 禁用 SQL/DDL；多库能力有限 |
@@ -234,7 +234,7 @@
 | TDengine | timeseries | database → 超级表/子表；列、TAG | SQL 控制台，REST 6041；单语句 | 行结果 | 网格编辑关闭（时序数据不支持 UPDATE 语义） |
 | InfluxDB | timeseries | database → measurement；列类型来自 information_schema | SQL 控制台（InfluxDB 3 /api/v3/query_sql，DataFusion）；EXPLAIN 可用 | 行结果 | DDL 与网格编辑关闭；写入走行协议 API |
 | ArangoDB | graph | database → 文档集合 / 边集合；采样 30 个文档推断属性 | AQL 控制台（HTTP `/_api/cursor`）；支持 `@bindVar` 与 `@@collection` | 文档 JSON 行；带边/路径的结果渲染图视图 | 禁用 SQL/DDL；REMOVE 无 FILTER 视为破坏性 |
-| Elasticsearch / OpenSearch | search | 索引 → mapping 字段；`create_collection` / `POST /objects/create` 可建索引（带 mapping） | JSON `_search` DSL；批量写入、CSV 导入与按 id 删除文档 | `_id`/`_score`/`_source` 行，`resultKind=documents` | 禁用 SQL 工具与 SQL DDL 设计器；写入需非只读连接 |
+| Elasticsearch / OpenSearch | search | 索引 → mapping 字段；对象树菜单可新建索引（带 mapping） | JSON `_search` DSL；批量写入、CSV 导入与按 id 删除文档 | `_id`/`_score`/`_source` 行，`resultKind=documents` | 禁用 SQL 工具与 SQL DDL 设计器；写入需非只读连接 |
 
 协议别名：金仓 / openGauss / GaussDB / 瀚高 / Vastbase / IvorySQL 复用 PostgreSQL 驱动与方言；OceanBase / TiDB / PolarDB / TDSQL / GBase 8a / Doris / StarRocks / GreatSQL / GoldenDB 复用 MySQL 驱动与方言。openGauss/GaussDB 默认 sha256 认证需实例改为 md5 或使用兼容认证；Doris/StarRocks/GBase 8a 的 DDL 能力按 `EngineMeta.capabilities` 关闭设计器。
 
