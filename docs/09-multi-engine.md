@@ -225,7 +225,7 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 
 - MongoDB 结构是采样推断，不能替代模型校验；authSource / replicaSet 可通过在 Host 字段填完整 `mongodb://` URI 传入。
 - Redis 键浏览基于 SCAN 采样，超大键空间只展示当前批次；`SELECT` 被拒绝，请用数据库下拉切换 DB。
-- Neo4j 结果为 JSON 单元格，尚未做图布局/可视化；属性推断基于 30 个样本，复杂图模型请用 `CALL db.labels()` / `db.schema.visualization()` 核对。
+- Neo4j 结果为 JSON 单元格，带节点/关系/路径的结果会切到交互式图视图（力导向布局、缩放平移、拖动节点、属性面板、搜索高亮，超大图退回环形布局）；属性推断基于 30 个样本，复杂图模型请用 `CALL db.labels()` / `db.schema.visualization()` 核对。
 - openGauss/GaussDB 的 sha256 认证与标准 `pg` 驱动不兼容；当前要求实例改用 md5 或使用兼容认证，后续可补 SASL/侧车。
 - 国产分析型（Doris/StarRocks/GBase 8a）只保证查询与浏览，DDL 设计器按能力位关闭。
 - 达梦 dmdb 使用 DES-CFB 登录加密，Node 18+ 需要 `--openssl-legacy-provider`；桌面端 Bridge 与 `npm start` 已内置该参数，独立部署请自行添加。DM 方言沿用 Oracle 兼容类型与 `LIMIT` 分页，复杂 PL/SQL、系统表差异仍需按实例验证。
