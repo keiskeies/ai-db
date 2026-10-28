@@ -38,7 +38,8 @@ export type Engine =
   | 'tdengine'
   | 'falkordb'
   | 'influxdb'
-  | 'arangodb';
+  | 'arangodb'
+  | 'timescale';
 
 /** 数据模型，决定对象树、编辑器语言和结果渲染方式。 */
 export type DataModel = 'relational' | 'document' | 'keyvalue' | 'vector' | 'graph' | 'widecolumn' | 'search' | 'timeseries';

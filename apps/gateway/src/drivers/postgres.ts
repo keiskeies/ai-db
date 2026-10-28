@@ -116,6 +116,17 @@ export class PostgresDriver implements Driver {
         SELECT n.nspname AS schema, c.relname AS table, c.reltuples AS estimate
         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE c.relkind IN ('r','p') AND n.nspname NOT IN ${SYSTEM_SCHEMAS}`);
+      let hypertables: Array<Record<string, any>> = [];
+      if (this.engine === 'timescale') {
+        try {
+          const res = await pool.query(
+            'SELECT hypertable_schema, hypertable_name, num_chunks FROM timescaledb_information.hypertables',
+          );
+          hypertables = res.rows as Array<Record<string, any>>;
+        } catch {
+          /* 实例未安装 timescaledb 扩展：按普通 PG 展示 */
+        }
+      }
 
       const tables = new Map<string, TableInfo>();
       for (const r of tablesRes.rows as Array<Record<string, any>>) {
@@ -132,6 +143,10 @@ export class PostgresDriver implements Driver {
       for (const r of estRes.rows as Array<Record<string, any>>) {
         const t = tables.get(`${r.schema}.${r.table}`);
         if (t) t.rowEstimate = Math.max(0, Math.round(Number(r.estimate)));
+      }
+      for (const r of hypertables) {
+        const t = tables.get(`${r.hypertable_schema}.${r.hypertable_name}`);
+        if (t) t.comment = `超表 · ${Number(r.num_chunks ?? 0)} chunks`;
       }
       const primaryCols = new Map<string, Set<string>>();
       for (const r of indexesRes.rows as Array<Record<string, any>>) {

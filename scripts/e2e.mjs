@@ -102,6 +102,7 @@ const ARANGO_PORT = process.env.AIDB_TEST_ARANGO_PORT ? Number(process.env.AIDB_
 const ARANGO_DB = 'aidb_e2e';
 const ARANGO_PASSWORD = process.env.AIDB_TEST_ARANGO_PASSWORD ?? 'testpass';
 const REDIS_STACK = process.env.AIDB_TEST_REDIS_STACK === '1';
+const TIMESCALE_PORT = process.env.AIDB_TEST_TIMESCALE_PORT ? Number(process.env.AIDB_TEST_TIMESCALE_PORT) : undefined;
 if (MONGO_PORT) {
   const { MongoClient } = await import('mongodb');
   const client = new MongoClient(`mongodb://127.0.0.1:${MONGO_PORT}`, { serverSelectionTimeoutMS: 5000 });
@@ -113,6 +114,16 @@ if (MONGO_PORT) {
     { name: 'gamma', weight: 3 },
   ]);
   await client.close();
+}
+if (TIMESCALE_PORT) {
+  const pg = (await import('pg')).default;
+  const pool = new pg.Pool({ host: '127.0.0.1', port: TIMESCALE_PORT, user: 'postgres', password: 'test', database: 'postgres' });
+  await pool.query('CREATE EXTENSION IF NOT EXISTS timescaledb');
+  await pool.query('DROP TABLE IF EXISTS aidb_e2e_metrics');
+  await pool.query('CREATE TABLE aidb_e2e_metrics (ts timestamptz NOT NULL, host text, value double precision)');
+  await pool.query("SELECT create_hypertable('aidb_e2e_metrics', 'ts')");
+  await pool.query("INSERT INTO aidb_e2e_metrics VALUES ('2024-01-05T00:00:00Z', 'a', 1), ('2024-02-05T00:00:00Z', 'b', 2)");
+  await pool.end();
 }
 if (REDIS_PORT) {
   const { Redis } = await import('ioredis');
@@ -326,7 +337,7 @@ await page.waitForTimeout(150);
 await page.click('[data-testid="sidebar-new-connection"]');
 await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
 const engineOptions = await page.locator('[data-testid="connection-engine"] option').count();
-check('connection form lists 40 engines', engineOptions === 40, String(engineOptions));
+check('connection form lists 41 engines', engineOptions === 41, String(engineOptions));
 await page.screenshot({ path: join(shots, 'desktop-connection-engines.png') });
 await page.locator('.modal-head .icon-btn').click();
 await page.waitForTimeout(200);
@@ -359,6 +370,26 @@ if (MONGO_PORT) {
   check('Mongo MQL query returns documents', mongoRows === 3, `${mongoRows} rows`);
   check('Mongo query hides SQL-only actions', (await page.locator('.query-actions').getByText('美化 SQL').count()) === 0);
   await page.screenshot({ path: join(shots, 'desktop-mongodb.png') });
+}
+
+if (TIMESCALE_PORT) {
+  await page.click('[data-testid="sidebar-new-connection"]');
+  await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
+  await page.fill('[data-testid="connection-name"]', 'Timescale E2E');
+  await page.selectOption('[data-testid="connection-engine"]', 'timescale');
+  await page.fill('[data-testid="connection-host"]', '127.0.0.1');
+  await page.fill('[data-testid="connection-port"]', String(TIMESCALE_PORT));
+  await page.fill('[data-testid="connection-username"]', 'postgres');
+  await page.fill('[data-testid="connection-password"]', 'test');
+  await page.click('[data-testid="connection-save"]');
+  const tsRow = page.locator('.conn-row', { hasText: 'Timescale E2E' });
+  await tsRow.waitFor({ timeout: 15000 });
+  await page.waitForSelector('[title="TABLE aidb_e2e_metrics"]', { timeout: 25000 });
+  check('Timescale connection expands to hypertables', true);
+  await page.click('[title="TABLE aidb_e2e_metrics"]');
+  await page.waitForSelector('[data-testid="data-grid"] tbody tr', { timeout: 20000 });
+  const tsRows = await page.locator('[data-testid="data-grid"] tbody tr').count();
+  check('Timescale data grid returns rows', tsRows === 2, `${tsRows} rows`);
 }
 
 if (REDIS_PORT) {
@@ -599,7 +630,7 @@ if (DUCKDB_E2E) {
   check('DuckDB data grid returns rows', duckRows === 2, `${duckRows} rows`);
 }
 
-if (MONGO_PORT || REDIS_PORT || NEO4J_PORT || DM_PORT || QDRANT_PORT || DUCKDB_E2E || TDENGINE_PORT || FALKORDB_PORT || INFLUXDB_PORT || ARANGO_PORT) {
+if (MONGO_PORT || REDIS_PORT || NEO4J_PORT || DM_PORT || QDRANT_PORT || DUCKDB_E2E || TDENGINE_PORT || FALKORDB_PORT || INFLUXDB_PORT || ARANGO_PORT || TIMESCALE_PORT) {
   // 恢复初始工作区：bootstrap 会把 active connection 指回 demo，并重新出现欢迎页
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
