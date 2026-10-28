@@ -569,6 +569,17 @@ export function createApiRouter(deps: ApiDeps): Router {
     }),
   );
 
+  router.get(
+    '/redis/key',
+    ah(async (req, res) => {
+      const connectionId = str(req.query.connectionId);
+      const key = str(req.query.key);
+      if (!connectionId || !key) throw Object.assign(new Error('connectionId 与 key 必填'), { code: 'INVALID_INPUT', status: 400 });
+      const detail = await manager.keyDetail(connectionId, key, { database: str(req.query.database) });
+      res.json({ detail });
+    }),
+  );
+
   router.post(
     '/objects/create',
     ah(async (req, res) => {
@@ -606,8 +617,7 @@ export function createApiRouter(deps: ApiDeps): Router {
           approval: 'manual',
           status: 'ok',
         });
-        const schemas = await manager.schema(connectionId, database);
-        res.json({ result, schemas });
+        res.json({ result });
       } catch (err: any) {
         store.addAudit({
           actor: 'user',

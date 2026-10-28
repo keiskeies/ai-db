@@ -27,6 +27,7 @@ import {
   type MqlQuery,
   type QueryBatchResult,
   type QueryResult,
+  type RedisKeyDetail,
   type RedisQuery,
   type SearchQuery,
   type StructuredQuery,
@@ -36,7 +37,7 @@ import {
 import type { GatewayConfig } from './config';
 import { createDriver, DbError, type Driver } from './drivers';
 import { normalizeMql } from './drivers/mongodb';
-import { supportsDocumentWrite, supportsObjectCreate, supportsStructuredQuery, supportsVectorSearch } from './drivers/types';
+import { supportsDocumentWrite, supportsKeyDetail, supportsObjectCreate, supportsStructuredQuery, supportsVectorSearch } from './drivers/types';
 import { embedText } from './embeddings';
 import type { Store } from './store';
 
@@ -338,6 +339,21 @@ export class ConnectionManager {
   /** 批量写入历史只留摘要，避免把整批文档塞进历史表。 */
   private describeBatch(collection: string, count: number, ids: string[]): string {
     return JSON.stringify({ collection, count, ids: ids.slice(0, 5) });
+  }
+
+  /** 键值引擎的键详情（Redis / Redis Stack）。 */
+  async keyDetail(connectionId: string, key: string, opts: { database?: string } = {}): Promise<RedisKeyDetail> {
+    const conn = this.store.getConnection(connectionId);
+    if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+    const meta = engineMeta(conn.engine);
+    if (meta.model !== 'keyvalue') {
+      throw new DbError(`${meta.label} 没有键详情视图`, { code: 'UNSUPPORTED_ENGINE' });
+    }
+    const driver = await this.driverFor(connectionId);
+    if (!supportsKeyDetail(driver)) {
+      throw new DbError(`${meta.label} 驱动不支持键详情`, { code: 'UNSUPPORTED_ENGINE' });
+    }
+    return driver.describeKey(key, opts.database ?? conn.database);
   }
 
   /** 向量/搜索引擎的对象创建（非 SQL DDL）：Qdrant 集合、ES/OpenSearch 索引、Weaviate class。 */

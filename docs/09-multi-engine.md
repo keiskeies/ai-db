@@ -87,7 +87,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 
 - 对象树：DB 索引 → `keys` 伪对象（`rowEstimate = DBSIZE`）；安装 RediSearch 时追加每个 `FT._LIST` 索引为“搜索索引”节点，点击即执行 `FT.SEARCH <index> * LIMIT 0 20`。
 - 模块：连接测试读取 `MODULE LIST`，版本串显示为 `Redis 7.4 · JSON/RediSearch/TimeSeries/Bloom`。
-- 浏览：`SCAN` 采样，不执行 `KEYS *`。
+- 浏览：`SCAN` 采样，不执行 `KEYS *`；双击键行打开键详情（TYPE / TTL / 规模 / 编码 + 按类型展开的取值，覆盖 string/hash/list/set/zset/stream/JSON/TimeSeries）。
 - 查询：单条命令；支持 String / Hash / List / Set / ZSet / Stream 的常用读取命令。
 - 结果：`SCAN` 返回 key 列表；`HGETALL` 返回 field/value；`ZRANGE WITHSCORES` 返回 member/score；`INFO` 解析为 field/value；`FT.SEARCH` 兼容 RESP2 与 RESP3 map 两种回复，统一输出 key/score/字段列。
 - 安全：只读连接拦截写命令；`FLUSHALL` / `FLUSHDB` / `CONFIG SET` / `EVAL` / `FCALL` / `SHUTDOWN` / `DEBUG` / `MODULE` 等判为 destructive；未知命令按 write 处理。
@@ -108,7 +108,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - 结果：id、score 与 payload/entity/properties 字段，`resultKind = 'vectors'`。
 - 文本检索：`text` 由网关调用 Embedding Provider 转成向量；未配置时可直接传 `vector`。
 - 写入：`upsert_document` 单条/批量、`import_documents` CSV 批量导入（id/vector 列可指定）、`delete_documents` 按 id 列表删除。
-- 建对象：Qdrant / Elasticsearch / OpenSearch / Weaviate 支持通过对象树菜单或 `create_collection` 创建集合/索引/class；Milvus 需要完整字段与索引定义，界面明确拒绝。不支持 SQL DDL 设计器与备份。
+- 建对象：`create_collection` 工具与 `POST /objects/create` 支持 Qdrant 集合、Elasticsearch/OpenSearch 索引、Weaviate class（对象树菜单待接）；Milvus 需要完整字段与索引定义，明确拒绝。不支持 SQL DDL 设计器与备份。
 - 导出：查询结果可导出 CSV/JSON/XML（INSERT 脚本仅 SQL 引擎）。
 
 ### Cassandra / ScyllaDB

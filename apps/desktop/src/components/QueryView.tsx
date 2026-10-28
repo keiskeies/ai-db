@@ -17,6 +17,7 @@ import { DataGrid } from './DataGrid';
 import { GraphView } from './GraphView';
 import { VectorSearchPanel } from './VectorSearchPanel';
 import { DocumentWritePanel } from './DocumentWritePanel';
+import { RedisKeyDialog } from './RedisKeyDialog';
 import { Spinner } from './ui';
 
 type QueryTab = Extract<Tab, { kind: 'query' }>;
@@ -60,6 +61,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const canWriteDocuments = conn ? ['vector', 'search', 'document'].includes(engineMeta(conn.engine).model) : false;
   const [vectorOpen, setVectorOpen] = useState(false);
   const [writeOpen, setWriteOpen] = useState(false);
+  const [keyDialog, setKeyDialog] = useState<string | null>(null);
 
   const [sql, setSql] = useState(tab.sql);
   const [batch, setBatch] = useState<QueryBatchResult | null>(null);
@@ -592,7 +594,19 @@ ${text}
                   <GraphView graph={set.graph} />
                 </div>
               ) : (
-                <DataGrid columns={set.columns} rows={set.rows} testId="query-result-grid" />
+                <DataGrid
+                  columns={set.columns}
+                  rows={set.rows}
+                  testId="query-result-grid"
+                  onRowActivate={
+                    conn && conn.engine === 'redis' && set.resultKind === 'keys'
+                      ? (rowIndex) => {
+                          const value = set.rows[rowIndex]?.[0];
+                          if (typeof value === 'string' && value) setKeyDialog(value);
+                        }
+                      : undefined
+                  }
+                />
               )
             ) : set ? (
               <div className="messages-panel">
@@ -692,6 +706,9 @@ ${text}
         </div>
       </div>
       {vectorOpen && conn ? <VectorSearchPanel connection={conn} database={tab.database} onClose={() => setVectorOpen(false)} /> : null}
+      {keyDialog && conn ? (
+        <RedisKeyDialog connectionId={conn.id} database={tab.database} keyName={keyDialog} onClose={() => setKeyDialog(null)} />
+      ) : null}
       {writeOpen && conn ? (
         <DocumentWritePanel
           connection={conn}

@@ -123,13 +123,14 @@ test('Qdrant collection is created over HTTP and appears in the schema', { skip:
     readonly: false,
   });
 
-  const created = await env.api<{ result: { name: string; kind: string }; schemas: Array<{ tables: Array<{ name: string; kind?: string }> }> }>(
-    '/objects/create',
-    { method: 'POST', body: JSON.stringify({ connectionId, name: 'aidb_created', dimension: 3, distance: 'Cosine' }) },
-  );
+  const created = await env.api<{ result: { name: string; kind: string } }>('/objects/create', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId, name: 'aidb_created', dimension: 3, distance: 'Cosine' }),
+  });
   assert.equal(created.status, 200, JSON.stringify(created.body));
   assert.equal(created.body.result.name, 'aidb_created');
-  assert.ok(created.body.schemas[0].tables.some((table) => table.name === 'aidb_created'), '刷新后的对象树包含新集合');
+  const schemas = await env.api<{ schemas: Array<{ tables: Array<{ name: string }> }> }>(`/connections/${connectionId}/schema?refresh=1`);
+  assert.ok(schemas.body.schemas[0].tables.some((table) => table.name === 'aidb_created'), '刷新后的对象树包含新集合');
 
   const readonlyId = await env.createConnection({
     name: 'qdrant-create-readonly',

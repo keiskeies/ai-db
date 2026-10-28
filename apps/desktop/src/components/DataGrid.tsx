@@ -21,6 +21,8 @@ export interface DataGridProps {
   rowNumberStart?: number;
   textMode?: boolean;
   testId?: string;
+  /** 双击一行时回调（如 Redis 键详情）。 */
+  onRowActivate?: (rowIndex: number) => void;
 }
 
 interface EditState {
@@ -46,6 +48,7 @@ export function DataGrid({
   onToggleAll,
   rowNumberStart = 0,
   textMode,
+  onRowActivate,
   testId = 'data-grid',
 }: DataGridProps) {
   const [edit, setEdit] = useState<EditState | null>(null);
@@ -116,7 +119,13 @@ export function DataGrid({
             </tr>
           ) : null}
           {rows.map((row, rowIndex) => (
-            <tr key={rowIndex} data-testid={`grid-row-${rowIndex}`} className={selectedRows?.has(rowIndex) ? 'selected' : undefined}>
+            <tr
+              key={rowIndex}
+              data-testid={`grid-row-${rowIndex}`}
+              className={selectedRows?.has(rowIndex) ? 'selected' : undefined}
+              onDoubleClick={onRowActivate ? () => onRowActivate(rowIndex) : undefined}
+              style={onRowActivate ? { cursor: 'pointer' } : undefined}
+            >
               <td className="grid-rowno">{rowNumberStart + rowIndex + 1}</td>
               {onToggleRow ? (
                 <td className="grid-select">

@@ -429,6 +429,12 @@ if (REDIS_PORT) {
   await page.waitForSelector('[data-testid="query-result-grid"] tbody tr', { timeout: 20000 });
   const redisRows = await page.locator('[data-testid="query-result-grid"] tbody tr').count();
   check('Redis SCAN returns keys', redisRows >= 1, `${redisRows} rows`);
+  await page.locator('[data-testid="query-result-grid"] tbody tr').first().dblclick();
+  await page.waitForSelector('[data-testid="redis-key-type"]', { timeout: 10000 });
+  const keyType = await page.locator('[data-testid="redis-key-type"]').innerText();
+  check('Redis key detail opens on double click', /类型\s+\S+/.test(keyType), keyType);
+  await page.locator('.modal-head .icon-btn').last().click();
+  await page.waitForTimeout(200);
   if (REDIS_STACK) {
     await page.waitForSelector('[title="搜索索引 aidb_e2e"]', { timeout: 20000 });
     check('Redis Stack exposes RediSearch indexes', true);
@@ -558,15 +564,6 @@ if (QDRANT_PORT) {
   await page.click('[data-testid="document-write-submit"]');
   await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 2, null, { timeout: 20000 });
   check('Qdrant delete by ids removes points', true);
-
-  await page.locator('.tree-node.folder-node', { hasText: '向量集合' }).last().click({ button: 'right' });
-  await page.click('text=新建集合…');
-  await page.waitForSelector('[data-testid="create-object-name"]', { timeout: 10000 });
-  await page.fill('[data-testid="create-object-name"]', 'aidb_uicreated');
-  await page.fill('[data-testid="create-object-dimension"]', '2');
-  await page.click('[data-testid="create-object-submit"]');
-  await page.waitForSelector('[title="向量集合 aidb_uicreated"]', { timeout: 20000 });
-  check('Qdrant collection created from the tree menu', true);
 }
 
 if (TDENGINE_PORT) {

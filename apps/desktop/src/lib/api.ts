@@ -15,6 +15,7 @@ import type {
   QueryBatchResult,
   QuestionSuggestion,
   QueryResult,
+  RedisKeyDetail,
   TableInfo,
 } from '@aidb/core';
 
@@ -215,15 +216,11 @@ export const api = {
     text?: string;
     topK?: number;
   }) => request<{ result: QueryResult }>('/vector/search', { method: 'POST', body: JSON.stringify(body) }),
-  createObject: (body: {
-    connectionId: string;
-    database?: string;
-    name: string;
-    dimension?: number;
-    distance?: string;
-    fields?: Array<{ name: string; type: string }>;
-  }) =>
-    request<{ result: { name: string; kind: string }; schemas: unknown[] }>('/objects/create', { method: 'POST', body: JSON.stringify(body) }),
+  redisKey: (params: { connectionId: string; database?: string; key: string }) => {
+    const q = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) if (value) q.set(key, String(value));
+    return request<{ detail: RedisKeyDetail }>(`/redis/key?${q.toString()}`);
+  },
   upsertDocuments: (body: { connectionId: string; database?: string; collection: string; documents: Record<string, unknown>[] }) =>
     request<{ result: { ids: string[]; upserted: number } }>('/documents/upsert', { method: 'POST', body: JSON.stringify(body) }),
   deleteDocuments: (body: { connectionId: string; database?: string; collection: string; ids: string[] }) =>

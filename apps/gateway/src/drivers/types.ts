@@ -1,4 +1,4 @@
-import type { Engine, QueryResult, StructuredQuery, TableInfo, VectorQuery } from '@aidb/core';
+import type { Engine, QueryResult, RedisKeyDetail, StructuredQuery, TableInfo, VectorQuery } from '@aidb/core';
 
 export interface RunOptions {
   maxRows?: number;
@@ -88,6 +88,15 @@ export interface ObjectCreateDriver extends Driver {
 
 export function supportsObjectCreate(driver: Driver): driver is ObjectCreateDriver {
   return typeof (driver as ObjectCreateDriver).createObject === 'function';
+}
+
+/** 键值引擎的键详情（类型感知查看器）。 */
+export interface RedisKeyDriver extends Driver {
+  describeKey(key: string, database?: string, limit?: number): Promise<RedisKeyDetail>;
+}
+
+export function supportsKeyDetail(driver: Driver): driver is RedisKeyDriver {
+  return typeof (driver as RedisKeyDriver).describeKey === 'function';
 }
 
 export interface ConnectionRecord {

@@ -1,7 +1,7 @@
 import { Redis } from 'ioredis';
 import { parseRedisCommandLine } from '@aidb/core';
-import type { Engine, QueryResult, RedisQuery, StructuredQuery, TableInfo } from '@aidb/core';
-import type { Driver, DriverTestResult, RunOptions, StructuredQueryDriver } from './types';
+import type { Engine, QueryResult, RedisKeyDetail, RedisQuery, StructuredQuery, TableInfo } from '@aidb/core';
+import type { Driver, DriverTestResult, RedisKeyDriver, RunOptions, StructuredQueryDriver } from './types';
 import { DbError } from './types';
 
 const MODULE_LABEL: Record<string, string> = {
@@ -48,6 +48,12 @@ function scalarResult(value: unknown, started: number, statement: string): Query
     durationMs: Date.now() - started,
     statement,
   };
+}
+
+/** RESP3 把 member/score 成对返回为嵌套数组，这里展平成 pairs 需要的形式。 */
+function flattenPairs(raw: unknown): unknown[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((entry) => (Array.isArray(entry) ? entry : [entry]));
 }
 
 function pairs(flat: unknown[], left: string, right: string): { columns: { name: string; type: string }[]; rows: unknown[][] } {
@@ -185,7 +191,7 @@ function resultFromRedis(
     }
     const withScores = args.some((arg) => arg.toUpperCase() === 'WITHSCORES');
     if (withScores && upper.startsWith('Z')) {
-      const data = pairs(raw, 'member', 'score');
+      const data = pairs(flattenPairs(raw), 'member', 'score');
       return { ...data, rowCount: data.rows.length, durationMs: Date.now() - started, statement };
     }
     if (upper === 'XRANGE' || upper === 'XREVRANGE') {
@@ -250,7 +256,7 @@ function resultFromRedis(
   return scalarResult(raw, started, statement);
 }
 
-export class RedisDriver implements StructuredQueryDriver {
+export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
   engine: Engine = 'redis';
   private clients = new Map<number, Redis>();
 
@@ -396,6 +402,140 @@ export class RedisDriver implements StructuredQueryDriver {
     } catch (err: any) {
       throw new DbError(err?.message ?? '无法读取 Redis 键空间', { code: 'REDIS_ERROR' });
     }
+  }
+
+  /** 类型感知的键详情：先读 TYPE/TTL/ENCODING，再按类型取值，单次最多 limit 个成员。 */
+  async describeKey(key: string, database?: string, limit = 200): Promise<RedisKeyDetail> {
+    const name = key.trim();
+    if (!name) throw new DbError('键名不能为空', { code: 'REDIS_KEY' });
+    const client = await this.ready(database);
+    const type = String(await client.type(name));
+    if (type === 'none') throw new DbError(`键不存在：${name}`, { code: 'REDIS_KEY_NOT_FOUND', status: 404 });
+    const ttl = Number(await client.ttl(name));
+    let encoding: string | undefined;
+    try {
+      encoding = String(await client.call('OBJECT', 'ENCODING', name));
+    } catch {
+      /* 少数类型不支持 OBJECT ENCODING */
+    }
+    const sizeCommand: Record<string, string> = { string: 'STRLEN', hash: 'HLEN', list: 'LLEN', set: 'SCARD', zset: 'ZCARD', stream: 'XLEN' };
+    let size: number | null = null;
+    try {
+      const command = sizeCommand[type];
+      if (command) size = Number(await client.call(command, name));
+      else if (type === 'ReJSON-RL') size = Number(await client.call('JSON.OBJLEN', name, '$')) || null;
+      else if (type === 'TSDB-TYPE') {
+        const info = (await client.call('TS.INFO', name)) as unknown;
+        const flat = Array.isArray(info) ? info : [];
+        const index = flat.findIndex((value) => String(value) === 'total_samples');
+        size = index >= 0 ? Number(flat[index + 1]) : null;
+      }
+    } catch {
+      size = null;
+    }
+
+    if (type === 'string') {
+      const value = await client.get(name);
+      return { key: name, type, ttl, size, encoding, columns: [{ name: 'value', type: 'string' }], rows: value === null ? [] : [[value]] };
+    }
+    if (type === 'hash') {
+      const flat = (await client.hgetall(name)) as Record<string, string>;
+      const rows = Object.entries(flat).slice(0, limit).map(([field, value]) => [field, value]);
+      return {
+        key: name,
+        type,
+        ttl,
+        size,
+        encoding,
+        columns: [
+          { name: 'field', type: 'string' },
+          { name: 'value', type: 'string' },
+        ],
+        rows,
+        note: Object.keys(flat).length > limit ? `仅显示前 ${limit} 个字段` : undefined,
+      };
+    }
+    if (type === 'list') {
+      const values = await client.lrange(name, 0, limit - 1);
+      return { key: name, type, ttl, size, encoding, columns: [{ name: 'index', type: 'integer' }, { name: 'value', type: 'string' }], rows: values.map((value, index) => [index, value]) };
+    }
+    if (type === 'set') {
+      const members = await client.smembers(name);
+      return {
+        key: name,
+        type,
+        ttl,
+        size,
+        encoding,
+        columns: [{ name: 'member', type: 'string' }],
+        rows: members.slice(0, limit).map((member) => [member]),
+        note: members.length > limit ? `仅显示前 ${limit} 个成员` : undefined,
+      };
+    }
+    if (type === 'zset') {
+      const data = pairs(flattenPairs(await client.call('ZRANGE', name, '0', String(limit - 1), 'WITHSCORES')), 'member', 'score');
+      return { key: name, type, ttl, size, encoding, columns: data.columns, rows: data.rows };
+    }
+    if (type === 'stream') {
+      const raw = (await client.call('XRANGE', name, '-', '+', 'COUNT', String(limit))) as unknown[];
+      const rows = (Array.isArray(raw) ? raw : []).map((entry) => {
+        const pair = Array.isArray(entry) ? entry : [entry];
+        const fields = Array.isArray(pair[1]) ? (pair[1] as unknown[]) : [];
+        const object: Record<string, unknown> = {};
+        for (let index = 0; index + 1 < fields.length; index += 2) object[String(fields[index])] = fields[index + 1];
+        return [serialize(pair[0]), JSON.stringify(object)];
+      });
+      return {
+        key: name,
+        type,
+        ttl,
+        size,
+        encoding,
+        columns: [
+          { name: 'id', type: 'string' },
+          { name: 'fields', type: 'json' },
+        ],
+        rows,
+      };
+    }
+    if (type === 'ReJSON-RL') {
+      const raw = await client.call('JSON.GET', name);
+      let pretty = String(raw ?? '');
+      try {
+        pretty = JSON.stringify(JSON.parse(String(raw)), null, 2);
+      } catch {
+        /* 非标准 JSON 时原样展示 */
+      }
+      return { key: name, type: 'json', ttl, size, encoding, columns: [{ name: 'json', type: 'json' }], rows: pretty ? [[pretty]] : [] };
+    }
+    if (type === 'TSDB-TYPE') {
+      const samples = (await client.call('TS.RANGE', name, '-', '+', 'COUNT', String(limit))) as unknown[];
+      return {
+        key: name,
+        type: 'timeseries',
+        ttl,
+        size,
+        encoding,
+        columns: [
+          { name: 'timestamp', type: 'integer' },
+          { name: 'value', type: 'string' },
+        ],
+        rows: (Array.isArray(samples) ? samples : []).map((sample) => {
+          const pair = Array.isArray(sample) ? sample : [];
+          return [serialize(pair[0]), serialize(pair[1])];
+        }),
+      };
+    }
+    return {
+      key: name,
+      type,
+      ttl,
+      size,
+      encoding,
+      columns: [{ name: 'value', type: 'string' }],
+      rows: [],
+      note: `暂不支持预览 ${type} 类型，可在命令窗口用对应命令读取`,
+    };
   }
 
   async executeQuery(query: StructuredQuery, opts: RunOptions = {}): Promise<QueryResult> {

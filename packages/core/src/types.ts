@@ -234,6 +234,18 @@ export interface QueryResult {
   graph?: GraphData;
 }
 
+/** 键值引擎的键详情：类型、TTL、规模与按类型展开的取值行。 */
+export interface RedisKeyDetail {
+  key: string;
+  type: string;
+  ttl: number;
+  size: number | null;
+  encoding?: string;
+  columns: Array<{ name: string; type: string }>;
+  rows: unknown[][];
+  note?: string;
+}
+
 export interface QueryBatchResult {
   sets: QueryResult[];
   messages: string[];
