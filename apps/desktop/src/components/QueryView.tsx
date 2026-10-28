@@ -641,11 +641,19 @@ ${text}
                           const value = set.rows[rowIndex]?.[0];
                           if (typeof value === 'string' && value) setKeyDialog(value);
                         }
-                      : conn && canWriteDocuments && !conn.readonly && canEditRecords && (set.resultKind === 'documents' || set.resultKind === 'vectors')
+                      : conn &&
+                          canWriteDocuments &&
+                          !conn.readonly &&
+                          canEditRecords &&
+                          (set.resultKind === 'documents' || set.resultKind === 'vectors' || conn.engine === 'arangodb')
                         ? (rowIndex) => {
                             const idIndex = set.columns.findIndex((column) => column.name === '_id' || column.name === 'id');
-                            const id = idIndex >= 0 ? idOf(set.rows[rowIndex]?.[idIndex]) : '';
-                            const collection = collectionOf(set.statement) ?? collectionOf(sql);
+                            const rawId = idIndex >= 0 ? idOf(set.rows[rowIndex]?.[idIndex]) : '';
+                            // ArangoDB 的 _id 是「集合/键」句柄，集合直接从它拆出来，不必解析 AQL。
+                            const fromHandle = conn.engine === 'arangodb' ? rawId.split('/') : [];
+                            const collection =
+                              fromHandle.length === 2 ? fromHandle[0] : collectionOf(set.statement) ?? collectionOf(sql);
+                            const id = fromHandle.length === 2 ? fromHandle[1] : rawId;
                             if (id && collection) setDocEdit({ collection, id });
                           }
                         : undefined

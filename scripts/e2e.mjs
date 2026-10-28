@@ -939,6 +939,21 @@ if (ARANGO_PORT) {
   await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 2, null, { timeout: 20000 });
   check('ArangoDB delete by _key removes the document', true);
 
+  await page.locator('[data-testid="query-result-grid"] tbody tr', { hasText: 'Linus' }).first().dblclick();
+  await page.waitForSelector('[data-testid="doc-edit-json"]', { timeout: 10000 });
+  const editedArango = JSON.parse(await page.locator('[data-testid="doc-edit-json"]').inputValue());
+  editedArango.name = 'Linus Torvalds';
+  await page.fill('[data-testid="doc-edit-json"]', JSON.stringify(editedArango, null, 2));
+  await page.click('[data-testid="doc-edit-save"]');
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
+  await page.waitForFunction(
+    () => document.querySelector('[data-testid="query-result-grid"]')?.innerText.includes('Linus Torvalds'),
+    null,
+    { timeout: 25000 },
+  );
+  check('ArangoDB document edited from the result grid', true);
+  await page.waitForTimeout(200);
+
   const openArangoInfo = async () => {
     await page.locator('[title="文档集合 person"]').click({ button: 'right' });
     await page.click('text=对象信息');

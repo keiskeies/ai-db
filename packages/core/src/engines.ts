@@ -379,6 +379,7 @@ export const ENGINES: EngineMeta[] = [
       gridEdit: false,
       users: false,
       documentWrite: true,
+      recordEdit: true,
     },
     defaultPort: 8529,
     defaultUsername: 'root',

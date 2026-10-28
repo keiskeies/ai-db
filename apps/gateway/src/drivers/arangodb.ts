@@ -298,6 +298,31 @@ export class ArangoDriver implements Driver, StructuredQueryDriver, ObjectCreate
     return { name: target, dropped: true };
   }
 
+  /** 读取单文档：文档句柄（collection/key）分成两段走文档接口，未命中回 404 而不是通用错误。 */
+  async getDocument(collection: string, id: string, database?: string): Promise<{ id: string; document: string }> {
+    const collectionName = collection.trim();
+    const key = id.trim();
+    if (!collectionName || !key) throw new DbError('集合名与文档键必填', { code: 'AQL_COLLECTION' });
+    const handle = `${encodeURIComponent(collectionName)}/${encodeURIComponent(key)}`;
+    let response: Response;
+    try {
+      response = await fetch(
+        `${this.base()}${this.dbPath(database)}/_api/document/${handle}`,
+        { headers: this.headers(), signal: AbortSignal.timeout(30000) },
+      );
+    } catch (err: any) {
+      throw new DbError(`ArangoDB 请求失败：${err?.message ?? '网络错误'}`, { code: 'ARANGO_NETWORK' });
+    }
+    if (response.status === 404) throw new DbError(`文档不存在：${collectionName}/${key}`, { code: 'ARANGO_DOC_NOT_FOUND', status: 404 });
+    const body = (await response.json().catch(() => null)) as any;
+    if (!response.ok || body?.error) {
+      throw new DbError(`ArangoDB 执行失败：${body?.errorMessage ?? `HTTP ${response.status}`}`, {
+        code: `ARANGO_${body?.errorNum ?? response.status}`,
+      });
+    }
+    return { id: String(body?._key ?? id), document: JSON.stringify(body ?? {}) };
+  }
+
   /** 批量写入走文档接口：overwriteMode=replace 让带 _key 的文档替换、其余插入。 */
   async upsertDocuments(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {
     if (!input.collection) throw new DbError('collection 不能为空', { code: 'AQL_COLLECTION' });

@@ -6,11 +6,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { editsRecords, engineMeta } from '@aidb/core';
+import { ArangoDriver } from '../src/drivers/arangodb';
 import { ElasticsearchDriver } from '../src/drivers/elasticsearch';
 import { QdrantDriver } from '../src/drivers/qdrant';
 import { WeaviateDriver } from '../src/drivers/weaviate';
 import { supportsDocumentRead } from '../src/drivers/types';
 import { createGateway } from '../src/server';
+
+const ARANGO_PORT = process.env.AIDB_TEST_ARANGO_PORT ? Number(process.env.AIDB_TEST_ARANGO_PORT) : undefined;
+const ARANGO_PASSWORD = process.env.AIDB_TEST_ARANGO_PASSWORD ?? 'testpass';
 
 const ES_PORT = process.env.AIDB_TEST_ELASTICSEARCH_PORT ? Number(process.env.AIDB_TEST_ELASTICSEARCH_PORT) : undefined;
 const QDRANT_PORT = process.env.AIDB_TEST_QDRANT_PORT ? Number(process.env.AIDB_TEST_QDRANT_PORT) : undefined;
@@ -23,10 +27,10 @@ function json(payload: unknown, status = 200): Response {
 }
 
 test('recordEdit 只开给实现了单记录读取的引擎', () => {
-  for (const engine of ['mongodb', 'qdrant', 'weaviate', 'elasticsearch', 'opensearch'] as const) {
+  for (const engine of ['mongodb', 'qdrant', 'weaviate', 'elasticsearch', 'opensearch', 'arangodb'] as const) {
     assert.equal(editsRecords(engine), true, engine);
   }
-  for (const engine of ['redis', 'milvus', 'arangodb', 'mysql', 'cassandra'] as const) {
+  for (const engine of ['redis', 'milvus', 'mysql', 'cassandra'] as const) {
     assert.equal(editsRecords(engine), false, engine);
   }
   assert.equal(engineMeta('milvus').capabilities.documentWrite, true, 'Milvus 仍可批量写入，只是没有单点读回入口');
@@ -116,6 +120,32 @@ async function harness() {
     },
   };
 }
+
+test('ArangoDB 文档读回：按 collection/key 句柄取回原文，未命中回 404', { skip: !ARANGO_PORT }, async () => {
+  const driver = new ArangoDriver({ host: '127.0.0.1', port: ARANGO_PORT!, database: '_system', user: 'root', password: ARANGO_PASSWORD });
+  const collection = 'aidb_record_arango';
+  await driver.dropObject(collection).catch(() => undefined);
+  await driver.createObject({ name: collection });
+  try {
+    assert.equal(supportsDocumentRead(driver), true);
+    await driver.upsertDocuments({
+      collection,
+      documents: [{ _key: 'p1', name: 'Ada', age: 36 }],
+    });
+
+    const found = await driver.getDocument(collection, 'p1');
+    assert.equal(found.id, 'p1');
+    const doc = JSON.parse(found.document);
+    assert.equal(doc.name, 'Ada');
+    assert.equal(doc.age, 36);
+    assert.equal(doc._id, `${collection}/p1`);
+
+    await assert.rejects(() => driver.getDocument(collection, 'nope'), /文档不存在/);
+  } finally {
+    await driver.dropObject(collection).catch(() => undefined);
+    await driver.close();
+  }
+});
 
 test('HTTP 读回单条记录：ES 索引文档、Qdrant 点、Weaviate 对象', { skip: !ES_PORT || !QDRANT_PORT || !WEAVIATE_PORT }, async () => {
   const env = await harness();
