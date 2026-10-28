@@ -162,16 +162,20 @@ export function Sidebar() {
     const isWide = meta.model === 'widecolumn';
     const isAql = meta.languages.includes('aql');
     const isEdge = table.kind === 'edge_label';
-    const objectLabel = isAql ? (isEdge ? '边集合' : '文档集合') : isMongo ? '集合' : isGraph ? (isEdge ? '关系类型' : '节点标签') : isVector ? '向量集合' : isSearch ? '索引' : isWide ? '表' : '键空间';
-    const openLabel = isAql ? (isEdge ? '打开边集合' : '打开集合') : isMongo ? '打开集合' : isGraph ? (isEdge ? '打开关系类型' : '打开节点标签') : isVector ? '浏览集合' : isSearch ? '打开索引' : isWide ? '打开表' : '浏览键';
-    const newQueryLabel = isAql ? '新建 AQL 查询' : isMongo ? '新建 MQL 查询' : isGraph ? '新建 Cypher 查询' : isVector ? '新建向量查询' : isSearch ? '新建搜索查询' : isWide ? '新建 CQL 查询' : '命令列';
+    const isRedisIndex = meta.model === 'keyvalue' && table.kind === 'index';
+    const objectLabel = isRedisIndex ? '搜索索引' : isAql ? (isEdge ? '边集合' : '文档集合') : isMongo ? '集合' : isGraph ? (isEdge ? '关系类型' : '节点标签') : isVector ? '向量集合' : isSearch ? '索引' : isWide ? '表' : '键空间';
+    const openLabel = isRedisIndex ? '打开索引' : isAql ? (isEdge ? '打开边集合' : '打开集合') : isMongo ? '打开集合' : isGraph ? (isEdge ? '打开关系类型' : '打开节点标签') : isVector ? '浏览集合' : isSearch ? '打开索引' : isWide ? '打开表' : '浏览键';
+    const newQueryLabel = isRedisIndex ? '新建 RediSearch 查询' : isAql ? '新建 AQL 查询' : isMongo ? '新建 MQL 查询' : isGraph ? '新建 Cypher 查询' : isVector ? '新建向量查询' : isSearch ? '新建搜索查询' : isWide ? '新建 CQL 查询' : '命令列';
     const vectorQuery = JSON.stringify({ collection: table.name, op: 'scroll', topK: 20 }, null, 2);
     const searchQuery = JSON.stringify({ index: table.name, query: { match_all: {} }, size: 100 }, null, 2);
     const cqlQuery = `SELECT * FROM "${schema.name}"."${table.name}" LIMIT 100;`;
     const aqlQuery = `FOR d IN \`${table.name.replace(/`/g, '')}\` LIMIT 100 RETURN d`;
-    const newQueryText = isAql ? aqlQuery : isMongo ? '' : isGraph ? 'MATCH (n) RETURN n LIMIT 100' : isVector ? vectorQuery : isSearch ? searchQuery : isWide ? cqlQuery : 'SCAN 0 COUNT 100';
+    const redisSearch = `FT.SEARCH ${table.name} * LIMIT 0 20`;
+    const newQueryText = isRedisIndex ? redisSearch : isAql ? aqlQuery : isMongo ? '' : isGraph ? 'MATCH (n) RETURN n LIMIT 100' : isVector ? vectorQuery : isSearch ? searchQuery : isWide ? cqlQuery : 'SCAN 0 COUNT 100';
     const open = () => {
-      if (isAql) {
+      if (isRedisIndex) {
+        openQuery(conn.id, redisSearch, table.name, schema.name);
+      } else if (isAql) {
         openQuery(conn.id, aqlQuery, table.name, schema.name);
       } else if (isMongo) {
         openQuery(
@@ -208,7 +212,9 @@ export function Sidebar() {
         icon: <Sparkles size={13} />,
         onClick: () =>
           prefillAgent(
-            isMongo
+            isRedisIndex
+              ? `解释 RediSearch 索引 ${table.name} 的字段定义与查询语法，并给出 3 个 FT.SEARCH 示例。`
+              : isMongo
               ? `解释集合 ${table.name} 的字段、索引与典型用途，并给出 3 个 MQL 查询示例。`
               : isAql
                 ? `解释${objectLabel} ${table.name} 的属性和关系，并给出 3 个 AQL 查询示例。`

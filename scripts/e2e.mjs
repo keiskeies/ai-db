@@ -101,6 +101,7 @@ const INFLUXDB_DB = 'aidb_e2e';
 const ARANGO_PORT = process.env.AIDB_TEST_ARANGO_PORT ? Number(process.env.AIDB_TEST_ARANGO_PORT) : undefined;
 const ARANGO_DB = 'aidb_e2e';
 const ARANGO_PASSWORD = process.env.AIDB_TEST_ARANGO_PASSWORD ?? 'testpass';
+const REDIS_STACK = process.env.AIDB_TEST_REDIS_STACK === '1';
 if (MONGO_PORT) {
   const { MongoClient } = await import('mongodb');
   const client = new MongoClient(`mongodb://127.0.0.1:${MONGO_PORT}`, { serverSelectionTimeoutMS: 5000 });
@@ -118,6 +119,12 @@ if (REDIS_PORT) {
   const client = new Redis({ host: '127.0.0.1', port: REDIS_PORT, lazyConnect: true });
   await client.connect();
   await client.set('aidb:e2e:key', 'hello');
+  if (REDIS_STACK) {
+    await client.call('FT.DROPINDEX', 'aidb_e2e').catch(() => undefined);
+    await client.call('JSON.SET', 'doc:1', '$', '{"name":"Ada"}');
+    await client.call('JSON.SET', 'doc:2', '$', '{"name":"Linus"}');
+    await client.call('FT.CREATE', 'aidb_e2e', 'ON', 'JSON', 'PREFIX', '1', 'doc:', 'SCHEMA', '$.name', 'AS', 'name', 'TEXT');
+  }
   await client.quit();
 }
 if (NEO4J_PORT) {
@@ -373,6 +380,15 @@ if (REDIS_PORT) {
   await page.waitForSelector('[data-testid="query-result-grid"] tbody tr', { timeout: 20000 });
   const redisRows = await page.locator('[data-testid="query-result-grid"] tbody tr').count();
   check('Redis SCAN returns keys', redisRows >= 1, `${redisRows} rows`);
+  if (REDIS_STACK) {
+    await page.waitForSelector('[title="搜索索引 aidb_e2e"]', { timeout: 20000 });
+    check('Redis Stack exposes RediSearch indexes', true);
+    await page.click('[title="搜索索引 aidb_e2e"]');
+    await page.locator('[data-testid="query-run"]').last().click();
+    await page.waitForSelector('[data-testid="query-result-grid"] tbody tr', { timeout: 20000 });
+    const searchRows = await page.locator('[data-testid="query-result-grid"] tbody tr').count();
+    check('FT.SEARCH returns indexed documents', searchRows === 2, `${searchRows} rows`);
+  }
   await page.screenshot({ path: join(shots, 'desktop-redis.png') });
 }
 

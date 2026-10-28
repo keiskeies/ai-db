@@ -44,7 +44,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 | 时序 | TDengine | tdengine-http | tdengine | taosAdapter REST（6041）；超级表/子表浏览 + SQL；无网格编辑 |
 | 时序 | InfluxDB | influxdb-http | influxdb | InfluxDB 3 `/api/v3/query_sql`（DataFusion SQL）；measurement 浏览 + SQL + EXPLAIN；DDL 关闭 |
 | 文档 | MongoDB | mongodb | —（MQL） | 浏览 + 查询 + 结果；无 DDL/备份 |
-| 键值 | Redis | redis | —（命令） | 浏览 + 命令 + 结果；无 DDL/备份 |
+| 键值 | Redis | redis | —（命令） | 浏览 + 命令 + 结果；识别 Redis Stack 模块与 RediSearch 索引；无 DDL/备份 |
 | 宽列 | Cassandra | cassandra | —（CQL） | keyspace/table 浏览 + CQL；无 JOIN/DDL 设计器 |
 | 宽列 | ScyllaDB | cassandra | —（CQL） | 复用 Cassandra 驱动与 CQL |
 | 图 | Neo4j | bolt | —（Cypher） | 标签/关系浏览 + Cypher + 计划 + 交互式图视图 |
@@ -77,10 +77,11 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 
 ### Redis
 
-- 对象树：DB 索引 → `keys` 伪对象；`rowEstimate = DBSIZE`。
+- 对象树：DB 索引 → `keys` 伪对象（`rowEstimate = DBSIZE`）；安装 RediSearch 时追加每个 `FT._LIST` 索引为“搜索索引”节点，点击即执行 `FT.SEARCH <index> * LIMIT 0 20`。
+- 模块：连接测试读取 `MODULE LIST`，版本串显示为 `Redis 7.4 · JSON/RediSearch/TimeSeries/Bloom`。
 - 浏览：`SCAN` 采样，不执行 `KEYS *`。
 - 查询：单条命令；支持 String / Hash / List / Set / ZSet / Stream 的常用读取命令。
-- 结果：`SCAN` 返回 key 列表；`HGETALL` 返回 field/value；`ZRANGE WITHSCORES` 返回 member/score；`INFO` 解析为 field/value。
+- 结果：`SCAN` 返回 key 列表；`HGETALL` 返回 field/value；`ZRANGE WITHSCORES` 返回 member/score；`INFO` 解析为 field/value；`FT.SEARCH` 兼容 RESP2 与 RESP3 map 两种回复，统一输出 key/score/字段列。
 - 安全：只读连接拦截写命令；`FLUSHALL` / `FLUSHDB` / `CONFIG SET` / `EVAL` / `FCALL` / `SHUTDOWN` / `DEBUG` / `MODULE` 等判为 destructive；未知命令按 write 处理。
 - 不支持：DDL、备份、SQL 工具、事务型多命令。
 
@@ -175,6 +176,7 @@ npm run build
 # 临时容器（示例）
 docker run -d --rm --name aidb-test-mongo -p 27018:27017 mongo:7
 docker run -d --rm --name aidb-test-redis -p 6380:6379 redis:7-alpine
+# Redis Stack（含 JSON/RediSearch/TimeSeries）：docker run -d --rm --name aidb-test-redis-stack -p 6380:6379 redis/redis-stack-server:latest
 docker run -d --rm --name aidb-test-neo4j -p 7688:7687 -e NEO4J_AUTH=neo4j/testpass neo4j:5
 docker run -d --rm --name aidb-test-memgraph -p 7689:7687 memgraph/memgraph:latest
 docker run -d --rm --name aidb-test-cassandra -p 9043:9042 -e CASSANDRA_CLUSTER_NAME=aidb -e MAX_HEAP_SIZE=512M -e HEAP_NEWSIZE=128M cassandra:4.1
@@ -191,7 +193,7 @@ docker run -d --rm --name aidb-test-arango -p 8530:8529 -e ARANGO_ROOT_PASSWORD=
 # 达梦 DM8：官方未提供轻量镜像，可用社区镜像初始化后运行（示例）
 # docker run ... sizx/dm8，dminit + dmserver，映射 5237:5236
 
-AIDB_TEST_MONGO_PORT=27018 AIDB_TEST_REDIS_PORT=6380 AIDB_TEST_NEO4J_PORT=7688 AIDB_TEST_NEO4J_PASSWORD=testpass AIDB_TEST_MEMGRAPH_PORT=7689 AIDB_TEST_CASSANDRA_PORT=9043 AIDB_TEST_PGVECTOR_PORT=5434 AIDB_TEST_QDRANT_PORT=6335 AIDB_TEST_WEAVIATE_PORT=8081 AIDB_TEST_ELASTICSEARCH_PORT=9203 AIDB_TEST_MILVUS_PORT=19531 AIDB_TEST_TDENGINE_PORT=6042 AIDB_TEST_FALKORDB_PORT=6382 AIDB_TEST_INFLUXDB_PORT=8184 AIDB_TEST_ARANGO_PORT=8530 npm --workspace @aidb/gateway run test
+AIDB_TEST_MONGO_PORT=27018 AIDB_TEST_REDIS_PORT=6380 AIDB_TEST_NEO4J_PORT=7688 AIDB_TEST_NEO4J_PASSWORD=testpass AIDB_TEST_MEMGRAPH_PORT=7689 AIDB_TEST_CASSANDRA_PORT=9043 AIDB_TEST_PGVECTOR_PORT=5434 AIDB_TEST_QDRANT_PORT=6335 AIDB_TEST_WEAVIATE_PORT=8081 AIDB_TEST_ELASTICSEARCH_PORT=9203 AIDB_TEST_MILVUS_PORT=19531 AIDB_TEST_TDENGINE_PORT=6042 AIDB_TEST_FALKORDB_PORT=6382 AIDB_TEST_INFLUXDB_PORT=8184 AIDB_TEST_ARANGO_PORT=8530 AIDB_TEST_REDIS_STACK_PORT=6380 npm --workspace @aidb/gateway run test
 NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSWORD=SYSDBA npm --workspace @aidb/gateway run test
 ```
 
@@ -223,7 +225,7 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 | 阶段 | 内容 |
 |---|---|
 | P1 | 已完成：Neo4j、达梦 DM8、DuckDB、Qdrant、Milvus、pgvector + Embedding |
-| P2 | 已完成：Memgraph、Cassandra/ScyllaDB、Weaviate、Elasticsearch/OpenSearch、TDengine、FalkorDB、InfluxDB、ArangoDB、交互式图视图、向量/搜索单条写入；待补：批量写入/删除、Redis Stack |
+| P2 | 已完成：Memgraph、Cassandra/ScyllaDB、Weaviate、Elasticsearch/OpenSearch、TDengine、FalkorDB、InfluxDB、ArangoDB、交互式图视图、向量/搜索单条写入、Redis Stack 模块与 RediSearch 浏览；待补：批量写入/删除 |
 | P3 | 云数仓（Snowflake / BigQuery / Redshift / Databricks）、Db2 / SAP HANA、无 Node 驱动的国产库（神通 / GBase 8s / 崖山 / 虚谷） |
 
 ## 11. 关键文件

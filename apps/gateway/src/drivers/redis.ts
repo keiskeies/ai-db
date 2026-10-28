@@ -4,6 +4,16 @@ import type { Engine, QueryResult, RedisQuery, StructuredQuery, TableInfo } from
 import type { Driver, DriverTestResult, RunOptions, StructuredQueryDriver } from './types';
 import { DbError } from './types';
 
+const MODULE_LABEL: Record<string, string> = {
+  ReJSON: 'JSON',
+  search: 'RediSearch',
+  timeseries: 'TimeSeries',
+  bf: 'Bloom',
+  redisgears_2: 'Gears',
+  RedisCompat: 'compat',
+  vectorset: 'VectorSet',
+};
+
 export interface RedisOptions {
   host: string;
   port: number;
@@ -84,6 +94,48 @@ function infoResult(text: string, started: number, statement: string): QueryResu
   };
 }
 
+/** Redis 把 map 回复摊平成 [k, v, k, v]，这里还原成对象。 */
+function kvPairs(flat: unknown[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (let index = 0; index + 1 < flat.length; index += 2) out[String(flat[index])] = flat[index + 1];
+  return out;
+}
+
+/**
+ * FT.SEARCH 有两种回复：RESP2 的 [total, key, [field, value], ...]
+ * 与 RESP3/新版 Stack 的 map（results / total_results），两者都转成同一种行。
+ */
+function parseSearchReply(raw: unknown[]): { total: number; names: string[]; docs: Array<Record<string, unknown>> } | null {
+  const names: string[] = [];
+  const docs: Array<Record<string, unknown>> = [];
+  const push = (record: Record<string, unknown>) => {
+    for (const key of Object.keys(record)) {
+      if (key !== '__key' && !names.includes(key)) names.push(key);
+    }
+    docs.push(record);
+  };
+
+  if (typeof raw[0] === 'number') {
+    for (let index = 1; index + 1 < raw.length; index += 2) {
+      const flat = Array.isArray(raw[index + 1]) ? (raw[index + 1] as unknown[]) : [];
+      push({ __key: String(raw[index]), ...kvPairs(flat) });
+    }
+    return { total: Number(raw[0]), names, docs };
+  }
+
+  const map = kvPairs(raw);
+  const results = Array.isArray(map.results) ? (map.results as unknown[]) : undefined;
+  if (!results) return null;
+  for (const entry of results) {
+    const item = Array.isArray(entry) ? kvPairs(entry) : ((entry as Record<string, unknown> | null) ?? {});
+    const attributes = Array.isArray(item.extra_attributes)
+      ? kvPairs(item.extra_attributes as unknown[])
+      : ((item.extra_attributes as Record<string, unknown> | null) ?? {});
+    push({ __key: String(item.id ?? ''), ...attributes });
+  }
+  return { total: Number(map.total_results ?? docs.length), names, docs };
+}
+
 function resultFromRedis(
   command: string,
   args: string[],
@@ -156,6 +208,31 @@ function resultFromRedis(
         statement,
       };
     }
+    if (upper === 'FT.SEARCH') {
+      const parsed = parseSearchReply(raw);
+      if (parsed) {
+        const { total, names, docs } = parsed;
+        const rows = docs.slice(0, maxRows).map((record) => [
+          record.__key ?? null,
+          null,
+          ...names.map((name) => serialize(record[name])),
+        ]);
+        return {
+          columns: [
+            { name: 'key', type: 'string' },
+            { name: 'score', type: 'float' },
+            ...names.map((name) => ({ name, type: 'json', kind: 'json' as const })),
+          ],
+          rows,
+          rowCount: rows.length,
+          durationMs: Date.now() - started,
+          truncated: docs.length > rows.length,
+          messages: [`total=${total}`],
+          statement,
+          resultKind: 'documents',
+        };
+      }
+    }
     const allScalar = raw.every((value) => value === null || typeof value !== 'object');
     if (allScalar) {
       return listResult(raw, upper === 'KEYS' || upper.endsWith('SCAN') ? 'key' : 'value', started, statement, raw.length > maxRows);
@@ -213,6 +290,22 @@ export class RedisDriver implements StructuredQueryDriver {
     return client;
   }
 
+  private async modules(client: Redis): Promise<string[]> {
+    try {
+      const raw = (await client.call('MODULE', 'LIST')) as unknown;
+      if (!Array.isArray(raw)) return [];
+      return raw
+        .map((entry) => {
+          const fields = Array.isArray(entry) ? entry : [];
+          const index = fields.findIndex((value) => String(value).toLowerCase() === 'name');
+          return index >= 0 ? String(fields[index + 1] ?? '') : '';
+        })
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
   async test(): Promise<DriverTestResult> {
     const started = Date.now();
     try {
@@ -220,7 +313,13 @@ export class RedisDriver implements StructuredQueryDriver {
       await client.ping();
       const info = await client.info('server');
       const version = /redis_version:([^\r\n]+)/.exec(String(info))?.[1];
-      return { ok: true, version: `Redis ${version ?? ''}`.trim(), latencyMs: Date.now() - started };
+      const modules = await this.modules(client);
+      const tags = modules.map((name) => MODULE_LABEL[name] ?? name).filter((name) => name !== 'compat');
+      return {
+        ok: true,
+        version: `Redis ${version ?? ''}${tags.length ? ` · ${tags.join('/')}` : ''}`.trim(),
+        latencyMs: Date.now() - started,
+      };
     } catch (err: any) {
       return { ok: false, latencyMs: Date.now() - started, message: err?.message ?? '连接失败' };
     }
@@ -248,7 +347,7 @@ export class RedisDriver implements StructuredQueryDriver {
     try {
       const client = await this.ready(database);
       const size = Number(await client.dbsize()) || 0;
-      return [
+      const tables: TableInfo[] = [
         {
           name: 'keys',
           type: 'table',
@@ -263,6 +362,37 @@ export class RedisDriver implements StructuredQueryDriver {
           ],
         },
       ];
+      try {
+        const raw = (await client.call('FT._LIST')) as unknown;
+        const names = Array.isArray(raw) ? raw.map((name) => String(name)).filter(Boolean) : [];
+        for (const name of names) {
+          let docs: number | undefined;
+          try {
+            const info = (await client.call('FT.INFO', name)) as unknown;
+            if (Array.isArray(info)) {
+              const index = info.findIndex((value) => String(value).toLowerCase() === 'num_docs');
+              if (index >= 0) docs = Number(info[index + 1]);
+            }
+          } catch {
+            /* FT.INFO 在旧版本可能不可用 */
+          }
+          tables.push({
+            name,
+            type: 'table',
+            kind: 'index',
+            rowEstimate: Number.isFinite(docs) ? docs : undefined,
+            comment: 'RediSearch 索引；打开时执行 FT.SEARCH',
+            columns: [
+              { name: 'key', type: 'string', nullable: false, primaryKey: true },
+              { name: 'score', type: 'float', nullable: true, primaryKey: false },
+              { name: 'fields', type: 'json', nullable: true, primaryKey: false },
+            ],
+          });
+        }
+      } catch {
+        /* 未安装 RediSearch：只展示键空间 */
+      }
+      return tables;
     } catch (err: any) {
       throw new DbError(err?.message ?? '无法读取 Redis 键空间', { code: 'REDIS_ERROR' });
     }
