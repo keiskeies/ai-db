@@ -76,49 +76,56 @@ test('MongoDB driver contract', { skip: !MONGO_PORT }, async () => {
 });
 
 test('Redis driver contract', { skip: !REDIS_PORT }, async () => {
-  const driver = new RedisDriver({ host: '127.0.0.1', port: REDIS_PORT!, database: '0' });
-  const ping = await driver.test();
-  assert.equal(ping.ok, true, ping.message);
-  assert.match(String(ping.version), /Redis/);
+  // 用独立的 DB 索引，避免 E2E 在 DB 0 留下的 RediSearch 索引干扰对象计数。
+  const driver = new RedisDriver({ host: '127.0.0.1', port: REDIS_PORT!, database: '9' });
+  try {
+    const ping = await driver.test();
+    assert.equal(ping.ok, true, ping.message);
+    assert.match(String(ping.version), /Redis/);
 
-  const databases = await driver.listDatabases();
-  assert.ok(databases.includes('0'));
+    const databases = await driver.listDatabases();
+    assert.ok(databases.includes('0'));
 
-  const tables = await driver.describe('0');
-  assert.equal(tables.length, 1);
-  assert.equal(tables[0].kind, 'key');
-  assert.ok((tables[0].rowEstimate ?? 0) >= 0);
+    const tables = await driver.describe('9');
+    // RediSearch 的 FT._LIST 在所有 DB 间全局可见，索引数量取决于环境，
+    // 因此只断言 keys 伪对象本身，索引的展示由专门的 Redis 索引测试覆盖。
+    const keysObjects = tables.filter((table) => table.kind === 'key');
+    assert.equal(keysObjects.length, 1);
+    assert.equal(keysObjects[0].name, 'keys');
+    assert.ok((keysObjects[0].rowEstimate ?? 0) >= 0);
 
-  await driver.executeQuery({ language: 'redis', command: 'SET', args: ['aidb:test:name', 'Ada'] });
-  await driver.executeQuery({ language: 'redis', command: 'HSET', args: ['aidb:test:user', 'name', 'Ada', 'age', '36'] });
+    await driver.executeQuery({ language: 'redis', command: 'SET', args: ['aidb:test:name', 'Ada'] });
+    await driver.executeQuery({ language: 'redis', command: 'HSET', args: ['aidb:test:user', 'name', 'Ada', 'age', '36'] });
 
-  const get = await driver.executeQuery({ language: 'redis', command: 'GET', args: ['aidb:test:name'] });
-  assert.deepEqual(get.rows, [['Ada']]);
+    const get = await driver.executeQuery({ language: 'redis', command: 'GET', args: ['aidb:test:name'] });
+    assert.deepEqual(get.rows, [['Ada']]);
 
-  const hash = await driver.executeQuery({ language: 'redis', command: 'HGETALL', args: ['aidb:test:user'] });
-  assert.deepEqual(hash.columns.map((column) => column.name), ['field', 'value']);
-  assert.equal(hash.rowCount, 2);
+    const hash = await driver.executeQuery({ language: 'redis', command: 'HGETALL', args: ['aidb:test:user'] });
+    assert.deepEqual(hash.columns.map((column) => column.name), ['field', 'value']);
+    assert.equal(hash.rowCount, 2);
 
-  const scan = await driver.executeQuery({
-    language: 'redis',
-    command: 'SCAN',
-    args: ['0', 'MATCH', 'aidb:test:*', 'COUNT', '100'],
-  });
-  assert.equal(scan.resultKind, 'keys');
-  assert.ok(scan.rowCount >= 2, 'SCAN returns both keys');
-  assert.ok(scan.messages?.some((message) => message.startsWith('cursor=')));
+    const scan = await driver.executeQuery({
+      language: 'redis',
+      command: 'SCAN',
+      args: ['0', 'MATCH', 'aidb:test:*', 'COUNT', '100'],
+    });
+    assert.equal(scan.resultKind, 'keys');
+    assert.ok(scan.rowCount >= 2, 'SCAN returns both keys');
+    assert.ok(scan.messages?.some((message) => message.startsWith('cursor=')));
 
-  const keys = await driver.executeQuery({ language: 'redis', command: 'KEYS', args: ['aidb:test:*'] });
-  assert.equal(keys.rowCount, 2);
+    const keys = await driver.executeQuery({ language: 'redis', command: 'KEYS', args: ['aidb:test:*'] });
+    assert.equal(keys.rowCount, 2);
 
-  const info = await driver.executeQuery({ language: 'redis', command: 'INFO', args: ['server'] });
-  assert.deepEqual(info.columns.map((column) => column.name), ['field', 'value']);
-  assert.ok(info.rows.some((row) => String(row[0]) === 'redis_version'));
+    const info = await driver.executeQuery({ language: 'redis', command: 'INFO', args: ['server'] });
+    assert.deepEqual(info.columns.map((column) => column.name), ['field', 'value']);
+    assert.ok(info.rows.some((row) => String(row[0]) === 'redis_version'));
 
-  await driver.executeQuery({ language: 'redis', command: 'DEL', args: ['aidb:test:name', 'aidb:test:user'] });
-  await assert.rejects(
-    () => driver.executeQuery({ language: 'redis', command: 'SELECT', args: ['1'] }),
-    /切换 Redis DB/,
-  );
-  await driver.close();
+    await driver.executeQuery({ language: 'redis', command: 'DEL', args: ['aidb:test:name', 'aidb:test:user'] });
+    await assert.rejects(
+      () => driver.executeQuery({ language: 'redis', command: 'SELECT', args: ['1'] }),
+      /切换 Redis DB/,
+    );
+  } finally {
+    await driver.close();
+  }
 });
