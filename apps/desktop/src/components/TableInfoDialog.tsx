@@ -35,6 +35,7 @@ export function TableInfoDialog({
   const foreignKeys = table.foreignKeys ?? [];
   const pk = useMemo(() => columns.filter((column) => column.primaryKey).map((column) => column.name), [columns]);
   const singleField = engine === 'qdrant';
+  const mongoOptions = engine === 'mongodb';
   const [creating, setCreating] = useState(false);
   const [fields, setFields] = useState('');
   const [indexName, setIndexName] = useState('');
@@ -55,7 +56,6 @@ export function TableInfoDialog({
 
   const submitCreate = async () => {
     if (!connectionId) return;
-    const singleField = engine === 'qdrant';
     const parsed = singleField ? [fields.trim()] : fields.split(',').map((column) => column.trim()).filter(Boolean);
     if (!parsed.length || parsed.some((column) => !column)) {
       setError(singleField ? '请填写一个字段名' : '至少填写一个字段');
@@ -69,10 +69,10 @@ export function TableInfoDialog({
         database,
         collection: table.name,
         columns: parsed,
-        name: singleField ? undefined : indexName.trim() || undefined,
-        unique: singleField ? undefined : unique,
-        sparse: singleField ? undefined : sparse,
-        expireAfterSeconds: singleField || !(Number(ttl) > 0) ? undefined : Math.floor(Number(ttl)),
+        name: mongoOptions ? indexName.trim() || undefined : undefined,
+        unique: mongoOptions ? unique : undefined,
+        sparse: mongoOptions ? sparse : undefined,
+        expireAfterSeconds: mongoOptions && Number(ttl) > 0 ? Math.floor(Number(ttl)) : undefined,
         type: singleField ? payloadType : undefined,
       });
       done('索引已创建', result.name);
@@ -160,7 +160,7 @@ export function TableInfoDialog({
                     ))}
                   </select>
                 </>
-              ) : (
+              ) : mongoOptions ? (
                 <>
                   <label>索引名</label>
                   <input className="input" value={indexName} onChange={(event) => setIndexName(event.target.value)} placeholder="留空自动生成" data-testid="index-name" />
@@ -176,7 +176,7 @@ export function TableInfoDialog({
                     </label>
                   </div>
                 </>
-              )}
+              ) : null}
               <label />
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn primary" onClick={() => void submitCreate()} disabled={busy} data-testid="index-submit">

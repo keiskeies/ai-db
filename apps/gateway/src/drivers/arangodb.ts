@@ -1,5 +1,7 @@
-import type { ColumnInfo, Engine, GraphData, QueryResult, StructuredQuery, TableInfo } from '@aidb/core';
+import type { ColumnInfo, Engine, GraphData, IndexInfo, QueryResult, StructuredQuery, TableInfo } from '@aidb/core';
 import type {
+  CollectionIndexDriver,
+  CollectionIndexInput,
   CreateObjectInput,
   DeleteDocumentsInput,
   DocumentWriteDriver,
@@ -37,6 +39,23 @@ interface CollectionMeta {
   name: string;
   type: 2 | 3;
   isSystem?: boolean;
+}
+
+/** ArangoDB 的索引条目转成对象树用的 IndexInfo。 */
+function toIndexInfo(raw: any): IndexInfo {
+  const fields = Array.isArray(raw?.fields)
+    ? raw.fields.map((field: any) => (typeof field === 'string' ? field : String(field?.name ?? ''))).filter(Boolean)
+    : [];
+  const id = String(raw?.id ?? '');
+  const suffix = id.includes('/') ? id.slice(id.indexOf('/') + 1) : '';
+  return {
+    name: String(raw?.name ?? suffix ?? ''),
+    columns: fields,
+    unique: Boolean(raw?.unique),
+    primary: String(raw?.type ?? '') === 'primary' || suffix === '0',
+    method: String(raw?.type ?? 'index'),
+    comment: raw?.sparse ? 'sparse' : raw?.expireAfter !== undefined ? `TTL ${raw.expireAfter}` : undefined,
+  };
 }
 
 function baseType(value: unknown): string {
@@ -131,7 +150,7 @@ function screenColumns(docs: unknown[]): { columns: ColumnInfo[]; keys: string[]
   return { columns, keys };
 }
 
-export class ArangoDriver implements Driver, StructuredQueryDriver, ObjectCreateDriver, DocumentWriteDriver {
+export class ArangoDriver implements Driver, StructuredQueryDriver, ObjectCreateDriver, DocumentWriteDriver, CollectionIndexDriver {
   engine: Engine = 'arangodb';
 
   constructor(private opts: ArangoOptions) {}
@@ -245,6 +264,11 @@ export class ArangoDriver implements Driver, StructuredQueryDriver, ObjectCreate
       } catch {
         table.columns = [];
       }
+      try {
+        table.indexes = (await this.indexList(db, collection.name)).map(toIndexInfo);
+      } catch {
+        /* 索引读取失败不影响对象树 */
+      }
       result.push(table);
     }
     return result;
@@ -306,6 +330,46 @@ export class ArangoDriver implements Driver, StructuredQueryDriver, ObjectCreate
       input.ids.length,
     );
     return { deleted: docs.length };
+  }
+
+  /** 3.12 起索引接口靠查询参数定位集合，路径里带集合名反而被拒绝。 */
+  private async indexList(database: string | undefined, collection: string): Promise<any[]> {
+    const { body } = await this.send(`${this.dbPath(database)}/_api/index?collection=${encodeURIComponent(collection)}`);
+    return Array.isArray(body?.indexes) ? body.indexes : [];
+  }
+
+  async createIndex(input: CollectionIndexInput, opts: RunOptions = {}): Promise<{ name: string; created: boolean }> {
+    const target = input.collection.trim();
+    if (!target) throw new DbError('集合名不能为空', { code: 'AQL_COLLECTION' });
+    const fields = input.columns.map((column) => column.trim()).filter(Boolean);
+    if (!fields.length) throw new DbError('索引至少需要一个字段', { code: 'AQL_INDEX' });
+    // 不给名字的话 ArangoDB 会生成 idx_<数字>，在面板里既难认也难手输确认
+    const name = input.name?.trim() || fields.join('_');
+    const { body } = await this.send(`${this.dbPath(opts.database)}/_api/index?collection=${encodeURIComponent(target)}`, {
+      method: 'POST',
+      // 这一版只接受 inverted 索引；unique / ttl 等类型名会被判定为非法类型
+      body: { type: 'inverted', fields, name },
+      timeoutMs: opts.timeoutMs ?? 30000,
+    });
+    return { name: String(body?.name ?? name), created: true };
+  }
+
+  async dropIndex(input: { collection: string; name: string }, opts: RunOptions = {}): Promise<{ name: string; dropped: boolean }> {
+    const target = input.collection.trim();
+    const name = input.name.trim();
+    if (!target) throw new DbError('集合名不能为空', { code: 'AQL_COLLECTION' });
+    if (!name) throw new DbError('索引名不能为空', { code: 'AQL_INDEX' });
+    const indexes = await this.indexList(opts.database, target);
+    const match = indexes.find((index) => toIndexInfo(index).name === name);
+    if (!match) throw new DbError(`索引不存在：${name}`, { code: 'AQL_INDEX_NOT_FOUND', status: 404 });
+    if (toIndexInfo(match).primary) throw new DbError('主键索引不能删除', { code: 'AQL_INDEX' });
+    const id = String(match.id ?? '');
+    const [owner, number] = id.includes('/') ? [id.slice(0, id.indexOf('/')), id.slice(id.indexOf('/') + 1)] : [target, id];
+    await this.send(
+      `${this.dbPath(opts.database)}/_api/index/${encodeURIComponent(owner || target)}/${encodeURIComponent(number)}`,
+      { method: 'DELETE', timeoutMs: opts.timeoutMs ?? 30000 },
+    );
+    return { name, dropped: true };
   }
 
   async executeQuery(query: StructuredQuery, opts: RunOptions = {}): Promise<QueryResult> {

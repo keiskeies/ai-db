@@ -258,6 +258,10 @@ if (ARANGO_PORT) {
     method: 'POST',
     body: JSON.stringify([{ _key: 'k1', _from: 'person/ada', _to: 'person/linus', since: 2020 }]),
   });
+  await arango(`/_db/${ARANGO_DB}/_api/index?collection=person`, {
+    method: 'POST',
+    body: JSON.stringify({ type: 'inverted', fields: ['age'], name: 'age' }),
+  });
 }
 if (FALKORDB_PORT) {
   const { Redis } = await import('ioredis');
@@ -821,6 +825,40 @@ if (ARANGO_PORT) {
   await page.click('[data-testid="document-write-submit"]');
   await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 2, null, { timeout: 20000 });
   check('ArangoDB delete by _key removes the document', true);
+
+  const openArangoInfo = async () => {
+    await page.locator('[title="文档集合 person"]').click({ button: 'right' });
+    await page.click('text=对象信息');
+    await page.waitForSelector('[data-testid="create-index-open"]', { timeout: 10000 });
+  };
+  await openArangoInfo();
+  await page.locator('[data-testid="object-info-index-name"]', { hasText: 'primary' }).first().waitFor({ timeout: 10000 });
+  check('ArangoDB indexes show in object info', true);
+  await page.click('[data-testid="create-index-open"]');
+  await page.fill('[data-testid="index-fields"]', 'name');
+  await page.click('[data-testid="index-submit"]');
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
+  await openArangoInfo();
+  await page.waitForFunction(
+    () => [...document.querySelectorAll('[data-testid="object-info-index-name"]')].some((cell) => cell.textContent === 'name'),
+    null,
+    { timeout: 20000 },
+  );
+  check('ArangoDB inverted index created from the panel', true);
+
+  await page.locator('.tool-table tr', { hasText: 'name' }).locator('[data-testid="index-drop-open"]').first().click();
+  await page.fill('[data-testid="index-drop-confirm"]', 'name');
+  await page.click('[data-testid="index-drop-submit"]');
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
+  await openArangoInfo();
+  await page.waitForFunction(
+    () => ![...document.querySelectorAll('[data-testid="object-info-index-name"]')].some((cell) => cell.textContent === 'name'),
+    null,
+    { timeout: 20000 },
+  );
+  check('ArangoDB index dropped from the panel', true);
+  await page.locator('.modal-head .icon-btn').last().click();
+  await page.waitForTimeout(200);
 }
 
 if (INFLUXDB_PORT) {

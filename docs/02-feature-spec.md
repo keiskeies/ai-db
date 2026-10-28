@@ -233,7 +233,7 @@
 | Cassandra / ScyllaDB | widecolumn | keyspace → table；列、主键/分区键 | CQL 控制台，支持 `?` 参数；无 JOIN | 行结果 | 禁用 SQL/DDL 设计器；不支持 JOIN |
 | TDengine | timeseries | database → 超级表/子表；列、TAG | SQL 控制台，REST 6041；单语句 | 行结果 | 网格编辑关闭（时序数据不支持 UPDATE 语义） |
 | InfluxDB | timeseries | database → measurement；列类型来自 information_schema | SQL 控制台（InfluxDB 3 /api/v3/query_sql，DataFusion）；EXPLAIN 可用 | 行结果 | DDL 与网格编辑关闭；写入走行协议 API |
-| ArangoDB | graph | database → 文档集合 / 边集合（对象树可新建与删除，`_` 系统集合除外）；采样 30 个文档推断属性 | AQL 控制台（HTTP `/_api/cursor`）；支持 `@bindVar` 与 `@@collection`；文档写入/覆盖与按 `_key` 删除走 `/_api/document` | 文档 JSON 行；带边/路径的结果渲染图视图 | 禁用 SQL/DDL；REMOVE 无 FILTER 视为破坏性 |
+| ArangoDB | graph | database → 文档集合 / 边集合（对象树可新建与删除，`_` 系统集合除外）；采样 30 个文档推断属性 | AQL 控制台（HTTP `/_api/cursor`）；支持 `@bindVar` 与 `@@collection`；文档写入/覆盖与按 `_key` 删除走 `/_api/document`；「对象信息」列出 `/_api/index` 的索引并可建 inverted / 删除 | 文档 JSON 行；带边/路径的结果渲染图视图 | 禁用 SQL/DDL；REMOVE 无 FILTER 视为破坏性 |
 | Elasticsearch / OpenSearch | search | 索引 → mapping 字段；对象树菜单可新建索引（带 mapping） | JSON `_search` DSL；批量写入、CSV 导入与按 id 删除文档 | `_id`/`_score`/`_source` 行，`resultKind=documents` | 禁用 SQL 工具与 SQL DDL 设计器；写入需非只读连接 |
 
 协议别名：金仓 / openGauss / GaussDB / 瀚高 / Vastbase / IvorySQL 复用 PostgreSQL 驱动与方言；OceanBase / TiDB / PolarDB / TDSQL / GBase 8a / Doris / StarRocks / GreatSQL / GoldenDB 复用 MySQL 驱动与方言。openGauss/GaussDB 默认 sha256 认证需实例改为 md5 或使用兼容认证；Doris/StarRocks/GBase 8a 的 DDL 能力按 `EngineMeta.capabilities` 关闭设计器。

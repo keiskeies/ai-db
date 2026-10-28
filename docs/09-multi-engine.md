@@ -144,7 +144,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - Cypher：`classifyCypher` 先屏蔽字符串/注释/反引号，再识别写子句与写型过程；`EXPLAIN` 为只读，`PROFILE` 按内部语句定级。
 - 向量：`classifyVector` 校验 collection/topK/向量数值，只读检索走 `<=>` 相似度查询或各自 REST；写入通过 `upsert_document`（需 `write` 权限，只读连接拒绝）。
 - Agent：`resolveRisk` 对 `run_mql` / `run_redis` 动态取风险；审批弹窗展示结构化查询。
-- SQL 专属工具在非 SQL 连接上返回 `UNSUPPORTED_ENGINE`；HTTP 的 DDL / 数据编辑 / 结构同步 / 监控 / 用户 / 备份等路由同样拒绝。例外：`manage_index` 在 MongoDB / Qdrant 上走 `POST /indexes/*` 的结构化通道（与对象信息面板同一实现），`create_collection` / `delete_collection` / `upsert_document` / `delete_documents` / `import_documents` 也按能力位开放。
+- SQL 专属工具在非 SQL 连接上返回 `UNSUPPORTED_ENGINE`；HTTP 的 DDL / 数据编辑 / 结构同步 / 监控 / 用户 / 备份等路由同样拒绝。例外：`manage_index` 在 MongoDB / Qdrant / ArangoDB 上走 `POST /indexes/*` 的结构化通道（与对象信息面板同一实现），`create_collection` / `delete_collection` / `upsert_document` / `delete_documents` / `import_documents` 也按能力位开放。
 
 ## 6. Agent 工具
 
@@ -170,7 +170,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 ## 7. UI 行为
 
 - 连接表单由 `EngineMeta` 驱动默认端口、默认用户名、默认数据库与限制；MongoDB/Redis/Neo4j 显示“数据库 / DB 索引”字段。
-- 对象树按查询语言渲染：SQL 连接（含 TDengine）显示表/视图与完整右键菜单；MongoDB 显示“集合”；Redis 显示“键空间”（安装 RediSearch 时追加“搜索索引”）；Cassandra/ScyllaDB 显示“表”；Neo4j/Memgraph/FalkorDB 显示“标签”、ArangoDB 显示“集合”；Qdrant/Milvus/Weaviate 显示“向量集合”；Elasticsearch/OpenSearch 显示“索引”。非关系型保留打开、查询、导出结果、AI 解释、刷新、复制；支持对象生命周期的引擎（Qdrant、Elasticsearch/OpenSearch、Weaviate、MongoDB、ArangoDB）在集合文件夹上多一项「新建集合…／新建索引…」，在集合节点上多一项「删除集合…／删除索引…」；Redis 的「搜索索引」节点同样提供「删除索引…」；已读到索引的集合（MongoDB、Qdrant）多一项「对象信息」，可在面板里建删索引。
+- 对象树按查询语言渲染：SQL 连接（含 TDengine）显示表/视图与完整右键菜单；MongoDB 显示“集合”；Redis 显示“键空间”（安装 RediSearch 时追加“搜索索引”）；Cassandra/ScyllaDB 显示“表”；Neo4j/Memgraph/FalkorDB 显示“标签”、ArangoDB 显示“集合”；Qdrant/Milvus/Weaviate 显示“向量集合”；Elasticsearch/OpenSearch 显示“索引”。非关系型保留打开、查询、导出结果、AI 解释、刷新、复制；支持对象生命周期的引擎（Qdrant、Elasticsearch/OpenSearch、Weaviate、MongoDB、ArangoDB）在集合文件夹上多一项「新建集合…／新建索引…」，在集合节点上多一项「删除集合…／删除索引…」；Redis 的「搜索索引」节点同样提供「删除索引…」；已读到索引的集合（MongoDB、Qdrant、ArangoDB）多一项「对象信息」，可在面板里建删索引。
 - 查询窗口按语言切换：SQL 连接保留美化、EXPLAIN、查询构建器、图表、SQL 文件；MongoDB/Redis/Neo4j/向量库/搜索索引显示 JSON/命令/Cypher 提示并隐藏 SQL 专属按钮。
 - 图查询结果为 `resultKind=graph` 时，结果区提供“表格 / 图”切换；图视图为基础环形布局，悬停节点可查看属性。
 - PostgreSQL / Qdrant / Milvus 的查询工具栏提供“向量检索”面板：选择表/集合与向量字段，输入文本（走 Embedding）或向量 JSON、TopK，结果直接进入 DataGrid。
@@ -233,7 +233,7 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 - TDengine 走 taosAdapter REST：无参数化查询、无网格编辑；对象树最多列出 500 个表，超大库请用 SQL 过滤。
 - FalkorDB 通过 Redis 协议执行 `GRAPH.QUERY`：参数以 `CYPHER k=v` 前缀内联（驱动已做字面量转义），属性/统计信息来自 `GRAPH.QUERY` 的第二、三段返回；无多图事务与索引管理 UI。
 - InfluxDB 3 的 SQL 接口只读，且只有 `iox`/`system`/`information_schema` 三个 schema；建库写数据需用 `influxdb3` CLI 或行协议 API。InfluxDB 1.x/2.x 的 Flux/InfluxQL 端点不同，当前只保证 3.x。
-- ArangoDB 走 HTTP `/_api/cursor`：AQL 无 DDL 设计器，文档集合与边集合通过 `/_api/collection` 在对象树里新建/删除（边集合靠请求体 `type: 3`，查询参数会被忽略）；`_` 前缀的系统集合既不能创建也不能删除。写入走 `/_api/document/{collection}?overwriteMode=replace`（带 `_key` 覆盖、不带则插入，`_id`/`_rev` 会被剔除），删除用 `REMOVE … FILTER d._key IN @ids`；批量接口按条目返回错误，遇到非法 `_key` 会抛错而不是静默跳过。文档集合与边集合都按对象树展示，带 `_from`/`_to` 或 path 的结果自动切换图视图；单批上限 1000 行，超出自动 follow-up 并截断。
+- ArangoDB 走 HTTP `/_api/cursor`：AQL 无 DDL 设计器，文档集合与边集合通过 `/_api/collection` 在对象树里新建/删除（边集合靠请求体 `type: 3`，查询参数会被忽略）；`_` 前缀的系统集合既不能创建也不能删除。索引通过 `GET /_api/index?collection=` 显示在「对象信息」里，建索引必须用 `POST /_api/index?collection=<集合>` + body `{type:'inverted', fields:[...]}`（这一版拒绝路径写法与 `unique` / 数字类型，TTL 要求 `expireAfter` 属性），删除按 `collection/编号` 两段路径走；主键索引拒删。写入走 `/_api/document/{collection}?overwriteMode=replace`（带 `_key` 覆盖、不带则插入，`_id`/`_rev` 会被剔除），删除用 `REMOVE … FILTER d._key IN @ids`；批量接口按条目返回错误，遇到非法 `_key` 会抛错而不是静默跳过。文档集合与边集合都按对象树展示，带 `_from`/`_to` 或 path 的结果自动切换图视图；单批上限 1000 行，超出自动 follow-up 并截断。
 - 向量/搜索写入已支持单条文档写入；批量导入与删除仍待补。
 
 ## 10. 后续路线

@@ -445,7 +445,7 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: 'manage_index',
     description:
-      'Create or drop an index. On SQL connections `table` is a table/view; on MongoDB connections it is a collection and sparse / expireAfterSeconds (TTL) are supported; on Qdrant it creates a payload index on a single field, where `type` selects keyword / integer / float / text / bool / geo. The _id_ index cannot be dropped.',
+      'Create or drop an index. On SQL connections `table` is a table/view; on MongoDB connections it is a collection and sparse / expireAfterSeconds (TTL) are supported; on Qdrant it creates a payload index on a single field, where `type` selects keyword / integer / float / text / bool / geo; on ArangoDB it builds an inverted index over the given fields. The _id_ / primary index cannot be dropped.',
     risk: 'ddl',
     inputSchema: {
       type: 'object',

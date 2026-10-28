@@ -364,6 +364,7 @@ export const ENGINES: EngineMeta[] = [
     capabilities: {
       objects: ['collection', 'edge_label'],
       objectLifecycle: true,
+      indexManage: true,
       ddl: false,
       explain: false,
       multiStatement: false,
