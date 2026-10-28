@@ -4,7 +4,7 @@ import type { Engine } from '../types';
 export function quoteIdent(name: string, engine: Engine): string {
   if (name.includes('\u0000')) throw new Error('非法标识符');
   const dialect = dialectOf(engine);
-  if (dialect === 'mysql' || dialect === 'clickhouse') return '`' + name.replace(/`/g, '``') + '`';
+  if (dialect === 'mysql' || dialect === 'clickhouse' || dialect === 'tdengine') return '`' + name.replace(/`/g, '``') + '`';
   if (dialect === 'mssql') return '[' + name.replace(/]/g, ']]') + ']';
   return '"' + name.replace(/"/g, '""') + '"';
 }

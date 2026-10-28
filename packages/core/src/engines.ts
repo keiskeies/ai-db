@@ -1,6 +1,6 @@
 import type { DataModel, DbObjectKind, DialectId, Engine, QueryLanguage, Transport } from './types';
 
-export type EngineFamily = DialectId | 'mongodb' | 'redis' | 'graph' | 'vector' | 'search' | 'cassandra';
+export type EngineFamily = DialectId | 'mongodb' | 'redis' | 'graph' | 'vector' | 'search' | 'cassandra' | 'timeseries';
 
 export interface EngineCapabilities {
   /** 对象树中该引擎支持的对象类型。 */
@@ -414,6 +414,35 @@ export const ENGINES: EngineMeta[] = [
     description: '嵌入式分析型数据库（文件 / 内存）',
     notes: '使用 SQL 工作台；可视化建表暂不开放，可手动执行 DDL',
     color: '#FBBF24',
+  },
+  {
+    id: 'tdengine',
+    label: 'TDengine',
+    family: 'timeseries',
+    model: 'timeseries',
+    transport: 'tdengine-http',
+    dialect: 'tdengine',
+    languages: ['sql'],
+    capabilities: {
+      objects: ['table'],
+      ddl: true,
+      explain: true,
+      multiStatement: false,
+      structureSync: false,
+      dataCompare: false,
+      backup: 'none',
+      gridEdit: false,
+      users: false,
+    },
+    defaultPort: 6041,
+    defaultUsername: 'root',
+    defaultDatabase: 'power',
+    fileBased: false,
+    supportsSsh: true,
+    supportsSsl: true,
+    description: '国产时序数据库（SQL 接口）',
+    notes: '走 taosAdapter REST（6041）；对象树区分超级表与子表，写入/查询用 SQL',
+    color: '#0EA5E9',
   },
   {
     id: 'cassandra',

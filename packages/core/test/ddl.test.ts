@@ -13,6 +13,7 @@ const MONTHLY_FN: Record<DialectId, string> = {
   oracle: 'to_char',
   clickhouse: 'formatDateTime',
   dm: 'to_char',
+  tdengine: 'TO_CHAR',
 };
 
 test('buildMonthlySeriesExpr has dialect-correct SQL for every SQL engine', () => {

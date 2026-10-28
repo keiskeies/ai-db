@@ -6,7 +6,7 @@
 
 | 能力域 | Navicat 对应 | AiDB v0.3 | 说明 / 差异 |
 |---|---|---|---|
-| 连接管理 | Connection | ✅ | 10 种关系型（含达梦 DM8、DuckDB）+ MongoDB + Redis + Cassandra/ScyllaDB + Neo4j/Memgraph + Qdrant/Milvus/Weaviate + Elasticsearch/OpenSearch + 15 种国产协议别名；颜色、只读、SSH 隧道、测试连接 |
+| 连接管理 | Connection | ✅ | 10 种关系型（含达梦 DM8、DuckDB）+ TDengine + MongoDB + Redis + Cassandra/ScyllaDB + Neo4j/Memgraph + Qdrant/Milvus/Weaviate + Elasticsearch/OpenSearch + 15 种国产协议别名；颜色、只读、SSH 隧道、测试连接 |
 | 对象浏览器 | 导航窗格 | ✅ | 库→表/视图→列/索引/外键；搜索、右键、刷新、懒加载 |
 | 数据网格 | 表数据查看器 | ✅ | 分页/排序/过滤/编辑/增删行/复制/导出；虚拟滚动 |
 | SQL 编辑器 | 查询编辑器 | ✅ | 多标签、高亮、执行选区、多结果集、历史、EXPLAIN、格式化 |
@@ -229,6 +229,7 @@
 | Weaviate | vector | class → properties / vectorizer | JSON：scroll 或 nearVector 检索（GraphQL） | id/score/properties 行，`resultKind=vectors` | 禁用 SQL/DDL；文本检索需 Embedding |
 | Memgraph | graph | 节点标签 / 关系类型（复用 Bolt） | Cypher 控制台 | 节点/关系 JSON 行 | 禁用 SQL/DDL；多库能力有限 |
 | Cassandra / ScyllaDB | widecolumn | keyspace → table；列、主键/分区键 | CQL 控制台，支持 `?` 参数；无 JOIN | 行结果 | 禁用 SQL/DDL 设计器；不支持 JOIN |
+| TDengine | timeseries | database → 超级表/子表；列、TAG | SQL 控制台，REST 6041；单语句 | 行结果 | 网格编辑关闭（时序数据不支持 UPDATE 语义） |
 | Elasticsearch / OpenSearch | search | 索引 → mapping 字段 | JSON `_search` DSL | `_id`/`_score`/`_source` 行，`resultKind=documents` | 禁用 SQL/DDL；只读检索 |
 
 协议别名：金仓 / openGauss / GaussDB / 瀚高 / Vastbase / IvorySQL 复用 PostgreSQL 驱动与方言；OceanBase / TiDB / PolarDB / TDSQL / GBase 8a / Doris / StarRocks / GreatSQL / GoldenDB 复用 MySQL 驱动与方言。openGauss/GaussDB 默认 sha256 认证需实例改为 md5 或使用兼容认证；Doris/StarRocks/GBase 8a 的 DDL 能力按 `EngineMeta.capabilities` 关闭设计器。

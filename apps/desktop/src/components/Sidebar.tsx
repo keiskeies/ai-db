@@ -255,7 +255,7 @@ export function Sidebar() {
   const renderTable = (conn: ConnectionConfig, schema: DatabaseSchema, table: TableInfo, padding: number) => {
     const q = query.trim().toLowerCase();
     if (q && !table.name.toLowerCase().includes(q)) return null;
-    if (engineMeta(conn.engine).model !== 'relational') return renderNonRelationalObject(conn, schema, table, padding);
+    if (!engineMeta(conn.engine).languages.includes('sql')) return renderNonRelationalObject(conn, schema, table, padding);
     return (
       <div
         key={`${schema.name}.${table.name}`}
@@ -492,7 +492,7 @@ export function Sidebar() {
                                 if (willOpen && !loaded && !loading) void loadSchema(conn.id, false, schema.name);
                               }}
                               onContextMenu={(e) =>
-                                engineMeta(conn.engine).model !== 'relational'
+                                !engineMeta(conn.engine).languages.includes('sql')
                                   ? openMenu(e, [
                                       { label: '关闭数据库', icon: <FolderOpen size={13} />, onClick: () => toggleSchema(schemaKey) },
                                       {
@@ -580,7 +580,7 @@ export function Sidebar() {
                                       const tablesOpen = groupOpen[tableKey] ?? true;
                                       const viewsOpen = groupOpen[viewKey] ?? false;
                                       const model = engineMeta(conn.engine).model;
-                                      if (model !== 'relational') {
+                                      if (!engineMeta(conn.engine).languages.includes('sql')) {
                                         return (
                                           <>
                                             <div

@@ -14,6 +14,7 @@ import { QdrantDriver } from './qdrant';
 import { RedisDriver } from './redis';
 import { SqliteDriver } from './sqlite';
 import { SqlServerDriver } from './sqlserver';
+import { TdengineDriver } from './tdengine';
 import { WeaviateDriver } from './weaviate';
 import { openTunnel, type Tunnel } from './ssh';
 import { DbError, type Driver } from './types';
@@ -201,6 +202,17 @@ export async function createDriver(config: ConnectionConfig, secret: ConnectionS
         host: connectHost,
         port: connectPort,
         apiKey: secret.password,
+        ssl: config.ssl,
+      });
+      return { driver, close: () => closeWithTunnel(driver) };
+    }
+    case 'tdengine-http': {
+      const driver = new TdengineDriver({
+        host: connectHost,
+        port: connectPort,
+        user: config.username ?? 'root',
+        password: secret.password,
+        database: config.database || meta.defaultDatabase,
         ssl: config.ssl,
       });
       return { driver, close: () => closeWithTunnel(driver) };

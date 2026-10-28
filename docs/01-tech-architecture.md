@@ -11,7 +11,7 @@
 | D3 | 代码组织 | **npm workspaces 单仓多包** | 多仓 | 核心协议、Agent、SQL 工具在桌面/移动/Bridge 间共享，单仓保证版本一致。 |
 | D4 | Agent 运行位置 | **Bridge 服务端（Node）** | 渲染进程 / 移动端本地 | 工具执行需要数据库驱动与文件系统；服务端单点执行便于审计、移动端复用、防止渲染层被注入后直接操作 DB。 |
 | D5 | 元数据存储 | **SQLite（Node 内置 `node:sqlite`）** | better-sqlite3 / 文件 JSON | Node ≥22.5 内置、零原生编译；要求 Electron ≥45（内置 Node 24），否则打包运行时缺少该模块。WAL 并发足够。 |
-| D6 | 驱动 | `node:sqlite` + `mysql2` + `pg` + `mssql` + `oracledb` (thin) + ClickHouse HTTP + `mongodb` + `ioredis` + `neo4j-driver` + `cassandra-driver` + `dmdb` + `@duckdb/node-api` + Qdrant/Milvus/Weaviate/ES/OpenSearch REST | ORM / Prisma | 数据库工具需要原始 SQL/命令、多库方言、任意 DDL；ORM 反而阻碍。MariaDB/CockroachDB 与国产协议别名复用 MySQL/PG 驱动；MongoDB/Redis/Neo4j/Memgraph/Cassandra/向量库/搜索走结构化查询与命令分类；达梦 DM8 使用官方 dmdb。 |
+| D6 | 驱动 | `node:sqlite` + `mysql2` + `pg` + `mssql` + `oracledb` (thin) + ClickHouse HTTP + `mongodb` + `ioredis` + `neo4j-driver` + `cassandra-driver` + `dmdb` + `@duckdb/node-api` + Qdrant/Milvus/Weaviate/ES/OpenSearch REST + TDengine taosAdapter REST | ORM / Prisma | 数据库工具需要原始 SQL/命令、多库方言、任意 DDL；ORM 反而阻碍。MariaDB/CockroachDB 与国产协议别名复用 MySQL/PG 驱动；MongoDB/Redis/Neo4j/Memgraph/Cassandra/向量库/搜索走结构化查询与命令分类；达梦 DM8 使用官方 dmdb。 |
 | D7 | 桌面 ↔ Bridge | **REST + SSE + WebSocket**，统一为 `BridgeClient` | Electron IPC | 同一协议同时服务桌面 Web 形态、移动端与远程 Bridge；Electron 只做窗口壳，验证时可直接用浏览器跑，E2E 成本低。 |
 | D8 | 编辑器 | **CodeMirror 6** | Monaco | 体积小、启动快、移动 Web 兼容、方言扩展易定制。 |
 | D9 | 状态管理 | **Zustand + 自研 SSE 事件总线** | Redux | 轻量，store 切片清晰，配合流式事件简单。 |

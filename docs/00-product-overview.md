@@ -1,6 +1,6 @@
 # AiDB Studio — 产品设计总览
 
-> 版本：v0.4-dev · 日期：2026-10-28 · 状态：多引擎扩展进行中（36 种引擎：10 种关系型，含达梦 DM8/DuckDB；MongoDB/Redis；Cassandra/ScyllaDB；Neo4j/Memgraph；Qdrant/Milvus/Weaviate；Elasticsearch/OpenSearch；15 种国产协议别名）
+> 版本：v0.4-dev · 日期：2026-10-28 · 状态：多引擎扩展进行中（37 种引擎：10 种关系型，含达梦 DM8/DuckDB；时序 TDengine；MongoDB/Redis；Cassandra/ScyllaDB；Neo4j/Memgraph；Qdrant/Milvus/Weaviate；Elasticsearch/OpenSearch；15 种国产协议别名）
 
 ## 1. 产品定位
 
@@ -47,8 +47,8 @@ AiDB Studio 是一款 **AI 原生、全平台** 的数据库连接与管理工�
 
 ### 5.1 当前交付（v0.4-dev）
 - 主界面：Navicat 式顶部 12 模块功能区、连接 / 对象树（表 / 视图 / 函数 / 查询 / 备份分组）、工作区 Tabs、AI 面板。
-- 连接管理：关系型 SQLite / MySQL / MariaDB / PostgreSQL / CockroachDB / SQL Server / Oracle / ClickHouse / 达梦 DM8 / DuckDB；文档型 MongoDB；键值型 Redis；宽列 Cassandra / ScyllaDB；图数据库 Neo4j / Memgraph；向量数据库 Qdrant / Milvus / Weaviate；搜索 Elasticsearch / OpenSearch；国产协议别名 金仓 / openGauss / GaussDB / OceanBase / TiDB / PolarDB / TDSQL / GBase 8a / Doris / StarRocks / 瀚高 / Vastbase / IvorySQL / GreatSQL / GoldenDB。支持 SSH 隧道、测试连接、颜色标签、只读开关。
-- 非关系型与向量基础能力：MongoDB 集合浏览与 JSON MQL；Redis DB 索引、SCAN 与命令控制台；Cassandra/ScyllaDB keyspace/table 浏览与 CQL；Neo4j / Memgraph 标签/关系浏览、Cypher 与基础图视图；Qdrant / Milvus / Weaviate 集合浏览与向量检索；Elasticsearch / OpenSearch 索引/mapping 与 `_search` DSL；pgvector 关系表向量检索与 Embedding。SQL 专属功能在非 SQL 连接上明确禁用。详见 [多引擎架构](./09-multi-engine.md)。
+- 连接管理：关系型 SQLite / MySQL / MariaDB / PostgreSQL / CockroachDB / SQL Server / Oracle / ClickHouse / 达梦 DM8 / DuckDB；时序 TDengine；文档型 MongoDB；键值型 Redis；宽列 Cassandra / ScyllaDB；图数据库 Neo4j / Memgraph；向量数据库 Qdrant / Milvus / Weaviate；搜索 Elasticsearch / OpenSearch；国产协议别名 金仓 / openGauss / GaussDB / OceanBase / TiDB / PolarDB / TDSQL / GBase 8a / Doris / StarRocks / 瀚高 / Vastbase / IvorySQL / GreatSQL / GoldenDB。支持 SSH 隧道、测试连接、颜色标签、只读开关。
+- 非关系型与向量基础能力：MongoDB 集合浏览与 JSON MQL；Redis DB 索引、SCAN 与命令控制台；Cassandra/ScyllaDB keyspace/table 浏览与 CQL；Neo4j / Memgraph 标签/关系浏览、Cypher 与基础图视图；Qdrant / Milvus / Weaviate 集合浏览与向量检索；Elasticsearch / OpenSearch 索引/mapping 与 `_search` DSL；TDengine 超级表/子表浏览与 SQL 控制台；pgvector 关系表向量检索与 Embedding。SQL 专属功能在非 SQL 连接上明确禁用。详见 [多引擎架构](./09-multi-engine.md)。
 - 对象浏览器：库/Schema → 表/视图 → 列/索引/外键，搜索过滤，刷新，完整右键菜单。
 - 数据库操作：新建 / 重命名 / 删除（按引擎能力）、转储 SQL、数据库内查找、命令列、运行 SQL 文件。
 - 表操作：新建、设计、重命名、复制（结构 / 结构+数据）、查看 DDL、对象信息、清空、截断、删除、维护。

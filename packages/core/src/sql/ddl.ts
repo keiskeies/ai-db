@@ -457,6 +457,7 @@ export function buildMonthlySeriesExpr(engine: Engine, column: string): string {
   if (isMysqlLike(d)) return `DATE_FORMAT(${col}, '%Y-%m')`;
   if (isPgLike(d)) return `to_char(${col}, 'YYYY-MM')`;
   if (d === 'oracle' || d === 'dm') return `to_char(${col}, 'YYYY-MM')`;
+  if (d === 'tdengine') return `TO_CHAR(${col}, 'YYYY-MM')`;
   if (d === 'clickhouse') return `formatDateTime(${col}, '%Y-%m')`;
   return `FORMAT(${col}, 'yyyy-MM')`;
 }

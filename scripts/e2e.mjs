@@ -93,6 +93,7 @@ const DM_PASSWORD = process.env.AIDB_TEST_DM_PASSWORD ?? 'SYSDBA';
 const QDRANT_PORT = process.env.AIDB_TEST_QDRANT_PORT ? Number(process.env.AIDB_TEST_QDRANT_PORT) : undefined;
 const MILVUS_PORT = process.env.AIDB_TEST_MILVUS_PORT ? Number(process.env.AIDB_TEST_MILVUS_PORT) : undefined;
 const DUCKDB_E2E = process.env.AIDB_TEST_DUCKDB === '1';
+const TDENGINE_PORT = process.env.AIDB_TEST_TDENGINE_PORT ? Number(process.env.AIDB_TEST_TDENGINE_PORT) : undefined;
 if (MONGO_PORT) {
   const { MongoClient } = await import('mongodb');
   const client = new MongoClient(`mongodb://127.0.0.1:${MONGO_PORT}`, { serverSelectionTimeoutMS: 5000 });
@@ -178,6 +179,20 @@ if (QDRANT_PORT) {
     }),
   });
 }
+if (TDENGINE_PORT) {
+  const base = `http://127.0.0.1:${TDENGINE_PORT}`;
+  const sql = (query, db) =>
+    fetch(`${base}/rest/sql${db ? `/${db}` : ''}`, {
+      method: 'POST',
+      headers: { authorization: `Basic ${Buffer.from('root:taosdata').toString('base64')}` },
+      body: query,
+    });
+  await sql('DROP DATABASE IF EXISTS aidb_e2e');
+  await sql('CREATE DATABASE aidb_e2e');
+  await sql('CREATE STABLE meters (ts TIMESTAMP, current FLOAT) TAGS (location NCHAR(32))', 'aidb_e2e');
+  await sql("INSERT INTO d1 USING meters TAGS ('beijing') VALUES (NOW, 10.3)", 'aidb_e2e');
+  await sql("INSERT INTO d2 USING meters TAGS ('shanghai') VALUES (NOW, 12.1)", 'aidb_e2e');
+}
 const duckdbPath = join(home, 'duckdb-e2e.duckdb');
 if (DUCKDB_E2E) {
   const created = await api('/connections', {
@@ -252,7 +267,7 @@ await page.waitForTimeout(150);
 await page.click('[data-testid="sidebar-new-connection"]');
 await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
 const engineOptions = await page.locator('[data-testid="connection-engine"] option').count();
-check('connection form lists 36 engines', engineOptions === 36, String(engineOptions));
+check('connection form lists 37 engines', engineOptions === 37, String(engineOptions));
 await page.screenshot({ path: join(shots, 'desktop-connection-engines.png') });
 await page.locator('.modal-head .icon-btn').click();
 await page.waitForTimeout(200);
@@ -391,6 +406,26 @@ if (QDRANT_PORT) {
   await page.waitForTimeout(200);
 }
 
+if (TDENGINE_PORT) {
+  await page.click('[data-testid="sidebar-new-connection"]');
+  await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
+  await page.fill('[data-testid="connection-name"]', 'TDengine E2E');
+  await page.selectOption('[data-testid="connection-engine"]', 'tdengine');
+  await page.fill('[data-testid="connection-host"]', '127.0.0.1');
+  await page.fill('[data-testid="connection-port"]', String(TDENGINE_PORT));
+  await page.fill('[data-testid="connection-password"]', 'taosdata');
+  await page.fill('[data-testid="connection-database"]', 'aidb_e2e');
+  await page.click('[data-testid="connection-save"]');
+  const tdRow = page.locator('.conn-row', { hasText: 'TDengine E2E' });
+  await tdRow.waitFor({ timeout: 15000 });
+  await page.waitForSelector('[title="TABLE meters"]', { timeout: 30000 });
+  check('TDengine connection expands to stables', true);
+  await page.click('[title="TABLE meters"]');
+  await page.waitForSelector('[data-testid="data-grid"] tbody tr', { timeout: 20000 });
+  const tdRows = await page.locator('[data-testid="data-grid"] tbody tr').count();
+  check('TDengine data grid returns rows', tdRows === 2, `${tdRows} rows`);
+}
+
 if (DUCKDB_E2E) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
@@ -408,7 +443,7 @@ if (DUCKDB_E2E) {
   check('DuckDB data grid returns rows', duckRows === 2, `${duckRows} rows`);
 }
 
-if (MONGO_PORT || REDIS_PORT || NEO4J_PORT || DM_PORT || QDRANT_PORT || DUCKDB_E2E) {
+if (MONGO_PORT || REDIS_PORT || NEO4J_PORT || DM_PORT || QDRANT_PORT || DUCKDB_E2E || TDENGINE_PORT) {
   // 恢复初始工作区：bootstrap 会把 active connection 指回 demo，并重新出现欢迎页
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });

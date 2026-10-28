@@ -34,7 +34,8 @@ export type Engine =
   | 'vastbase'
   | 'ivorysql'
   | 'greatsql'
-  | 'goldendb';
+  | 'goldendb'
+  | 'tdengine';
 
 /** 数据模型，决定对象树、编辑器语言和结果渲染方式。 */
 export type DataModel = 'relational' | 'document' | 'keyvalue' | 'vector' | 'graph' | 'widecolumn' | 'search' | 'timeseries';
@@ -56,10 +57,11 @@ export type Transport =
   | 'duckdb-file'
   | 'cassandra'
   | 'elasticsearch-http'
-  | 'weaviate-http';
+  | 'weaviate-http'
+  | 'tdengine-http';
 
 /** SQL 方言；协议别名（金仓、TiDB 等）复用已有方言。 */
-export type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickhouse' | 'dm';
+export type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickhouse' | 'dm' | 'tdengine';
 
 export type QueryLanguage = 'sql' | 'mql' | 'redis' | 'cypher' | 'vector' | 'search' | 'cql';
 

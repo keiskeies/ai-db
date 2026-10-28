@@ -132,7 +132,7 @@ CREATE INDEX idx_agent_ctx ON agent_context(connection_id, database_name, kind);
 ```ts
 export type Engine =
   | 'sqlite' | 'mysql' | 'mariadb' | 'postgresql' | 'cockroachdb' | 'sqlserver' | 'oracle' | 'clickhouse'
-  | 'mongodb' | 'redis' | 'neo4j' | 'memgraph' | 'cassandra' | 'scylla' | 'dm' | 'qdrant' | 'milvus' | 'weaviate' | 'duckdb' | 'elasticsearch' | 'opensearch'
+  | 'mongodb' | 'redis' | 'neo4j' | 'memgraph' | 'cassandra' | 'scylla' | 'dm' | 'qdrant' | 'milvus' | 'weaviate' | 'duckdb' | 'elasticsearch' | 'opensearch' | 'tdengine'
   | 'kingbase' | 'opengauss' | 'gaussdb' | 'oceanbase' | 'tidb' | 'polardb' | 'tdsql' | 'gbase8a'
   | 'doris' | 'starrocks' | 'highgo' | 'vastbase' | 'ivorysql' | 'greatsql' | 'goldendb';
 export type Environment = 'dev' | 'staging' | 'prod';
