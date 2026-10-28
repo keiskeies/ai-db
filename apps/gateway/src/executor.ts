@@ -8,6 +8,7 @@ import {
   buildExplain,
   buildSelectTable,
   classifySql,
+  cqlQueryFromArgs,
   cypherQueryFromArgs,
   deltas,
   engineMeta,
@@ -68,6 +69,7 @@ const DB_TOOLS = new Set([
   'run_cypher',
   'vector_search',
   'search_index',
+  'run_cql',
   'explain_sql',
   'sample_rows',
   'profile_column',
@@ -184,6 +186,7 @@ export class ToolExecutor {
     if (conn.engine === 'sqlserver') return 'dbo';
     if (conn.engine === 'oracle') return (conn.username ?? '').toUpperCase();
     if (conn.engine === 'dm') return (conn.username ?? 'SYSDBA').toUpperCase();
+    if (conn.engine === 'cassandra' || conn.engine === 'scylla') return conn.database || 'system';
     if (conn.engine === 'clickhouse') return conn.database ?? 'default';
     return 'public';
   }
@@ -196,13 +199,19 @@ export class ToolExecutor {
         throw new DbError(`${engineMeta(conn.engine).label} 不支持 ${call.name}`, {
           code: 'UNSUPPORTED_ENGINE',
           hint:
-            conn.engine === 'mongodb'
+            engineMeta(conn.engine).model === 'document'
               ? '请使用 run_mql 执行 MongoDB 查询'
-              : conn.engine === 'redis'
+              : engineMeta(conn.engine).model === 'keyvalue'
                 ? '请使用 run_redis 执行 Redis 命令'
-                : conn.engine === 'neo4j'
+                : engineMeta(conn.engine).model === 'graph'
                   ? '请使用 run_cypher 执行 Cypher'
-                  : '该功能仅支持 SQL 引擎',
+                  : engineMeta(conn.engine).model === 'vector'
+                    ? '请使用 vector_search 执行向量检索'
+                    : engineMeta(conn.engine).model === 'search'
+                      ? '请使用 search_index 执行搜索 DSL'
+                      : engineMeta(conn.engine).model === 'widecolumn'
+                        ? '请使用 run_cql 执行 CQL'
+                        : '该功能仅支持 SQL 引擎',
         });
       }
     }
@@ -394,6 +403,28 @@ export class ToolExecutor {
         });
         const last = batch.sets[0];
         return ok(started, `返回 ${last?.rowCount ?? 0} 条命中`, {
+          ...last,
+          messages: batch.messages,
+          durationMs: batch.durationMs,
+        });
+      }
+
+      case 'run_cql': {
+        const conn = this.requireConnection(call, ctx);
+        if (conn.engine !== 'cassandra' && conn.engine !== 'scylla') {
+          throw new DbError('run_cql 仅用于 Cassandra/ScyllaDB 连接', { code: 'UNSUPPORTED_ENGINE', hint: 'SQL 连接请使用 run_sql' });
+        }
+        const query = cqlQueryFromArgs(a);
+        if (!query.text.trim()) throw new DbError('CQL 不能为空', { code: 'CQL_EMPTY' });
+        const settings = this.getSettings();
+        const batch = await this.manager.queryStructured(conn.id, query, {
+          database: this.databaseOf(call, conn),
+          maxRows: Math.min(5000, Math.max(1, Number(a.maxRows) || settings.defaultLimit)),
+          timeoutMs: settings.queryTimeoutMs,
+          actor: 'agent',
+        });
+        const last = batch.sets[0];
+        return ok(started, `返回 ${last?.rowCount ?? 0} 行`, {
           ...last,
           messages: batch.messages,
           durationMs: batch.durationMs,

@@ -1,6 +1,6 @@
 import type { Environment, PermissionMode, Risk } from '../types';
 import { classifySql, extractTableRef } from '../sql/classify';
-import { classifyCypher, classifyMql, classifyRedis, cypherQueryFromArgs, formatStructuredQuery, mqlQueryFromArgs, redisQueryFromArgs } from '../query';
+import { classifyCql, classifyCypher, classifyMql, classifyRedis, cqlQueryFromArgs, cypherQueryFromArgs, formatStructuredQuery, mqlQueryFromArgs, redisQueryFromArgs } from '../query';
 import type { ToolCall, ToolDefinition } from './types';
 
 export type PermissionVerdict = 'allow' | 'ask' | 'deny';
@@ -23,6 +23,7 @@ export function resolveRisk(call: ToolCall, tool: ToolDefinition): Risk {
     if (call.name === 'run_mql') return classifyMql(mqlQueryFromArgs(call.args)).risk;
     if (call.name === 'run_redis') return classifyRedis(redisQueryFromArgs(call.args)).risk;
     if (call.name === 'run_cypher') return classifyCypher(cypherQueryFromArgs(call.args)).risk;
+    if (call.name === 'run_cql') return classifyCql(cqlQueryFromArgs(call.args)).risk;
     if (call.name === 'alter_table') {
       const ops = Array.isArray(call.args.operations) ? (call.args.operations as Array<{ op?: string }>) : [];
       return ops.some((o) => o?.op === 'drop_column') ? 'destructive' : 'ddl';
@@ -43,6 +44,7 @@ export function toolSignature(call: ToolCall): string {
   else if (call.name === 'run_cypher' && typeof call.args.query === 'string') target = call.args.query.slice(0, 40);
   else if (call.name === 'vector_search' && typeof call.args.collection === 'string') target = call.args.collection;
   else if (call.name === 'search_index' && typeof call.args.index === 'string') target = call.args.index;
+  else if (call.name === 'run_cql' && typeof call.args.query === 'string') target = call.args.query.slice(0, 40);
   else if (call.args.index && typeof call.args.index === 'object') {
     const idx = call.args.index as Record<string, unknown>;
     if (typeof idx.name === 'string') target = idx.name;

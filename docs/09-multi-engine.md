@@ -16,7 +16,7 @@ v0.3 的 8 个关系型引擎已经覆盖 DB-Engines 前四（Oracle / MySQL / S
 type Engine = 'mongodb' | 'redis' | 'kingbase' | /* ... */;
 type DataModel = 'relational' | 'document' | 'keyvalue' | 'vector' | 'graph' | 'widecolumn' | 'search' | 'timeseries';
 type Transport = 'sqlite-file' | 'mysql' | 'postgres' | 'tds' | 'oracle' | 'clickhouse-http'
-               | 'mongodb' | 'redis' | 'bolt' | 'dm' | 'qdrant-http' | 'milvus-http' | 'weaviate-http' | 'duckdb-file' | 'elasticsearch-http';
+               | 'mongodb' | 'redis' | 'bolt' | 'cassandra' | 'dm' | 'qdrant-http' | 'milvus-http' | 'weaviate-http' | 'duckdb-file' | 'elasticsearch-http';
 type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickhouse' | 'dm';
 ```
 
@@ -29,7 +29,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 
 核心定义在 [`packages/core/src/engines.ts`](../packages/core/src/engines.ts)、[`packages/core/src/types.ts`](../packages/core/src/types.ts)。SQL 方言函数统一通过 `dialectOf(engine)` 归一化，因此金仓、TiDB 等别名不需要复制 `ddl.ts` / `ident.ts`。
 
-## 3. 接入矩阵（34 种）
+## 3. 接入矩阵（36 种）
 
 | 分组 | 引擎 | Transport | Dialect | 能力 |
 |---|---|---|---|---|
@@ -43,6 +43,8 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 | 分析型 | ClickHouse | clickhouse-http | clickhouse | 无结构同步/数据对比 |
 | 文档 | MongoDB | mongodb | —（MQL） | 浏览 + 查询 + 结果；无 DDL/备份 |
 | 键值 | Redis | redis | —（命令） | 浏览 + 命令 + 结果；无 DDL/备份 |
+| 宽列 | Cassandra | cassandra | —（CQL） | keyspace/table 浏览 + CQL；无 JOIN/DDL 设计器 |
+| 宽列 | ScyllaDB | cassandra | —（CQL） | 复用 Cassandra 驱动与 CQL |
 | 图 | Neo4j | bolt | —（Cypher） | 标签/关系浏览 + Cypher + 计划 + 基础图视图 |
 | 图 | Memgraph | bolt | —（Cypher） | 复用 Neo4j Bolt 驱动；标签/关系浏览 + Cypher + 基础图视图 |
 | 向量 | Qdrant | qdrant-http | —（JSON） | 集合/维度/payload 浏览 + scroll/向量检索 |
@@ -94,6 +96,13 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - 文本检索：`text` 由网关调用 Embedding Provider 转成向量；未配置时可直接传 `vector`。
 - 不支持：SQL、DDL、备份、写入/删除（后续）。
 
+### Cassandra / ScyllaDB
+
+- 对象树：keyspace → table；列、主键/分区键/clustering key。
+- 查询：CQL 控制台，支持 `?` 参数；无 JOIN。
+- 结果：普通行结果；`resultKind` 缺省为表格。
+- 不支持：SQL 工具、DDL 设计器、备份、JOIN、写入网格（后续）。
+
 ### Elasticsearch / OpenSearch
 
 - 对象树：索引 → mapping 字段，展示文档数/health。
@@ -115,13 +124,14 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 
 ## 6. Agent 工具
 
-新增五个工具，工具总数 29：
+新增六个工具，工具总数 30：
 
 | 工具 | 作用 |
 |---|---|
 | `run_mql` | MongoDB 结构化查询（find/aggregate/count/distinct） |
 | `run_redis` | 单条 Redis 命令 |
 | `run_cypher` | Neo4j / Memgraph Cypher 查询（支持 `$params`） |
+| `run_cql` | Cassandra / ScyllaDB CQL（支持 `?` 参数） |
 | `vector_search` | pgvector / Qdrant / Milvus / Weaviate 向量检索（text 走 Embedding） |
 | `search_index` | Elasticsearch / OpenSearch `_search` JSON DSL |
 
@@ -130,11 +140,11 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 ## 7. UI 行为
 
 - 连接表单由 `EngineMeta` 驱动默认端口、默认用户名、默认数据库与限制；MongoDB/Redis/Neo4j 显示“数据库 / DB 索引”字段。
-- 对象树按数据模型渲染：关系型显示表/视图与完整右键菜单；MongoDB 显示“集合”；Redis 显示“键空间”；Neo4j/Memgraph 显示“标签”；Qdrant/Milvus/Weaviate 显示“向量集合”；Elasticsearch/OpenSearch 显示“索引”。非关系型只保留打开、查询、AI 解释、刷新、复制。
+- 对象树按数据模型渲染：关系型显示表/视图与完整右键菜单；MongoDB 显示“集合”；Redis 显示“键空间”；Cassandra/ScyllaDB 显示“表”；Neo4j/Memgraph 显示“标签”；Qdrant/Milvus/Weaviate 显示“向量集合”；Elasticsearch/OpenSearch 显示“索引”。非关系型只保留打开、查询、AI 解释、刷新、复制。
 - 查询窗口按语言切换：SQL 连接保留美化、EXPLAIN、查询构建器、图表、SQL 文件；MongoDB/Redis/Neo4j/向量库/搜索索引显示 JSON/命令/Cypher 提示并隐藏 SQL 专属按钮。
 - 图查询结果为 `resultKind=graph` 时，结果区提供“表格 / 图”切换；图视图为基础环形布局，悬停节点可查看属性。
 - PostgreSQL / Qdrant / Milvus 的查询工具栏提供“向量检索”面板：选择表/集合与向量字段，输入文本（走 Embedding）或向量 JSON、TopK，结果直接进入 DataGrid。
-- `openData` 对非关系型自动改为打开查询标签：MongoDB 预填 `{collection, op:'find', filter:{}, limit:100}`，Redis 预填 `SCAN 0 COUNT 100`，Neo4j 预填 `MATCH (n) RETURN n LIMIT 100`，Qdrant/Milvus/Weaviate 预填 `{collection, op:'scroll', topK:20}`，搜索索引预填 `{index, query:{match_all:{}}, size:100}`。
+- `openData` 对非关系型自动改为打开查询标签：MongoDB 预填 `{collection, op:'find', filter:{}, limit:100}`，Redis 预填 `SCAN 0 COUNT 100`，Cassandra/ScyllaDB 预填 `SELECT * FROM "ks"."table" LIMIT 100;`，Neo4j 预填 `MATCH (n) RETURN n LIMIT 100`，Qdrant/Milvus/Weaviate 预填 `{collection, op:'scroll', topK:20}`，搜索索引预填 `{index, query:{match_all:{}}, size:100}`。
 
 ## 8. 测试
 
@@ -153,6 +163,7 @@ docker run -d --rm --name aidb-test-mongo -p 27018:27017 mongo:7
 docker run -d --rm --name aidb-test-redis -p 6380:6379 redis:7-alpine
 docker run -d --rm --name aidb-test-neo4j -p 7688:7687 -e NEO4J_AUTH=neo4j/testpass neo4j:5
 docker run -d --rm --name aidb-test-memgraph -p 7689:7687 memgraph/memgraph:latest
+docker run -d --rm --name aidb-test-cassandra -p 9043:9042 -e CASSANDRA_CLUSTER_NAME=aidb -e MAX_HEAP_SIZE=512M -e HEAP_NEWSIZE=128M cassandra:4.1
 docker run -d --rm --name aidb-test-pgvector -p 5434:5432 -e POSTGRES_PASSWORD=test -e POSTGRES_DB=aidb pgvector/pgvector:pg16
 docker run -d --rm --name aidb-test-qdrant -p 6335:6333 qdrant/qdrant
 docker run -d --rm --name aidb-test-weaviate -p 8081:8080 -e AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true -e PERSISTENCE_DATA_PATH=/var/lib/weaviate -e DEFAULT_VECTORIZER_MODULE=none -e CLUSTER_HOSTNAME=node1 semitechnologies/weaviate:1.26.4
@@ -162,11 +173,11 @@ docker run -d --rm --name aidb-test-es -p 9203:9200 -e discovery.type=single-nod
 # 达梦 DM8：官方未提供轻量镜像，可用社区镜像初始化后运行（示例）
 # docker run ... sizx/dm8，dminit + dmserver，映射 5237:5236
 
-AIDB_TEST_MONGO_PORT=27018 AIDB_TEST_REDIS_PORT=6380 AIDB_TEST_NEO4J_PORT=7688 AIDB_TEST_NEO4J_PASSWORD=testpass AIDB_TEST_MEMGRAPH_PORT=7689 AIDB_TEST_PGVECTOR_PORT=5434 AIDB_TEST_QDRANT_PORT=6335 AIDB_TEST_WEAVIATE_PORT=8081 AIDB_TEST_ELASTICSEARCH_PORT=9203 AIDB_TEST_MILVUS_PORT=19531 npm --workspace @aidb/gateway run test
+AIDB_TEST_MONGO_PORT=27018 AIDB_TEST_REDIS_PORT=6380 AIDB_TEST_NEO4J_PORT=7688 AIDB_TEST_NEO4J_PASSWORD=testpass AIDB_TEST_MEMGRAPH_PORT=7689 AIDB_TEST_CASSANDRA_PORT=9043 AIDB_TEST_PGVECTOR_PORT=5434 AIDB_TEST_QDRANT_PORT=6335 AIDB_TEST_WEAVIATE_PORT=8081 AIDB_TEST_ELASTICSEARCH_PORT=9203 AIDB_TEST_MILVUS_PORT=19531 npm --workspace @aidb/gateway run test
 NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSWORD=SYSDBA npm --workspace @aidb/gateway run test
 ```
 
-覆盖：驱动工厂协议别名路由、MongoDB、Redis、Neo4j/Memgraph、达梦、DuckDB、Qdrant/Milvus/Weaviate、pgvector + Embedding、Elasticsearch/OpenSearch，HTTP `/schema`、`/query`、`/vector/search` 管线、非 SQL 连接的功能禁用。
+覆盖：驱动工厂协议别名路由、MongoDB、Redis、Neo4j/Memgraph、Cassandra/ScyllaDB、达梦、DuckDB、Qdrant/Milvus/Weaviate、pgvector + Embedding、Elasticsearch/OpenSearch，HTTP `/schema`、`/query`、`/vector/search` 管线、非 SQL 连接的功能禁用。
 
 ## 9. 已知限制
 
@@ -181,6 +192,7 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 - pgvector 只支持 PostgreSQL 方言；相似度分数按 `1 - cosine_distance` 返回，metric 以索引定义为准。
 - Elasticsearch/OpenSearch 只读，支持 `_search` DSL；OpenSearch 复用 Elasticsearch 驱动，个别 API/字段差异需按实例验证。
 - Memgraph 复用 Bolt 驱动；不支持 `CALL db.labels()`，标签/关系通过 Cypher 扫描推断；多数据库与系统表能力有限。
+- Cassandra/ScyllaDB 只支持 CQL 控制台与 keyspace/table 浏览；无 JOIN、无 DDL 设计器、无写入网格；默认本地数据中心按 `datacenter1` 配置，非默认拓扑需调整。
 - Weaviate 检索使用 GraphQL `nearVector`；文本检索需先经 Embedding，未配置时请传向量。
 - 复杂图布局/交互、向量/搜索写入仍待补；当前图视图为基础环形布局。
 
@@ -189,7 +201,7 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 | 阶段 | 内容 |
 |---|---|
 | P1 | 已完成：Neo4j、达梦 DM8、DuckDB、Qdrant、Milvus、pgvector + Embedding |
-| P2 | 已完成：Memgraph、Weaviate、Elasticsearch/OpenSearch、基础图视图、向量/搜索只读；待补：复杂图布局、向量/搜索写入、Cassandra/ScyllaDB、TDengine/InfluxDB、FalkorDB/ArangoDB、Redis Stack |
+| P2 | 已完成：Memgraph、Cassandra/ScyllaDB、Weaviate、Elasticsearch/OpenSearch、基础图视图、向量/搜索只读；待补：复杂图布局、向量/搜索写入、TDengine/InfluxDB、FalkorDB/ArangoDB、Redis Stack |
 | P3 | 云数仓（Snowflake / BigQuery / Redshift / Databricks）、Db2 / SAP HANA、无 Node 驱动的国产库（神通 / GBase 8s / 崖山 / 虚谷） |
 
 ## 11. 关键文件
@@ -197,7 +209,7 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 - 类型与注册：[`packages/core/src/types.ts`](../packages/core/src/types.ts)、[`packages/core/src/engines.ts`](../packages/core/src/engines.ts)
 - 结构化查询与安全：[`packages/core/src/query.ts`](../packages/core/src/query.ts)
 - 驱动接口：[`apps/gateway/src/drivers/types.ts`](../apps/gateway/src/drivers/types.ts)、[`apps/gateway/src/drivers/index.ts`](../apps/gateway/src/drivers/index.ts)
-- 向量/图/嵌入式/搜索：[`apps/gateway/src/drivers/qdrant.ts`](../apps/gateway/src/drivers/qdrant.ts)、[`milvus.ts`](../apps/gateway/src/drivers/milvus.ts)、[`weaviate.ts`](../apps/gateway/src/drivers/weaviate.ts)、[`duckdb.ts`](../apps/gateway/src/drivers/duckdb.ts)、[`elasticsearch.ts`](../apps/gateway/src/drivers/elasticsearch.ts)、[`embeddings.ts`](../apps/gateway/src/embeddings.ts)
+- 宽列/向量/图/嵌入式/搜索：[`apps/gateway/src/drivers/cassandra.ts`](../apps/gateway/src/drivers/cassandra.ts)、[`qdrant.ts`](../apps/gateway/src/drivers/qdrant.ts)、[`milvus.ts`](../apps/gateway/src/drivers/milvus.ts)、[`weaviate.ts`](../apps/gateway/src/drivers/weaviate.ts)、[`duckdb.ts`](../apps/gateway/src/drivers/duckdb.ts)、[`elasticsearch.ts`](../apps/gateway/src/drivers/elasticsearch.ts)、[`embeddings.ts`](../apps/gateway/src/embeddings.ts)
 - 向量 UI：[`apps/desktop/src/components/VectorSearchPanel.tsx`](../apps/desktop/src/components/VectorSearchPanel.tsx)
 - MongoDB / Redis / Neo4j / 达梦：[`mongodb.ts`](../apps/gateway/src/drivers/mongodb.ts)、[`redis.ts`](../apps/gateway/src/drivers/redis.ts)、[`neo4j.ts`](../apps/gateway/src/drivers/neo4j.ts)、[`dm.ts`](../apps/gateway/src/drivers/dm.ts)
 - 网关执行管线：[`apps/gateway/src/manager.ts`](../apps/gateway/src/manager.ts)

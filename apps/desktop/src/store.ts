@@ -379,7 +379,7 @@ export const useApp = create<AppStore>((set, get) => ({
   openData: (connectionId, table, database) => {
     const conn = get().connections.find((c) => c.id === connectionId);
     const model = conn ? engineMeta(conn.engine).model : 'relational';
-    if (model === 'document' || model === 'keyvalue' || model === 'graph' || model === 'vector' || model === 'search') {
+    if (model === 'document' || model === 'keyvalue' || model === 'graph' || model === 'vector' || model === 'search' || model === 'widecolumn') {
       const sql =
         model === 'document'
           ? JSON.stringify({ collection: table, op: 'find', filter: {}, limit: 100 }, null, 2)
@@ -389,7 +389,9 @@ export const useApp = create<AppStore>((set, get) => ({
               ? JSON.stringify({ collection: table, op: 'scroll', topK: 20 }, null, 2)
               : model === 'search'
                 ? JSON.stringify({ index: table, query: { match_all: {} }, size: 100 }, null, 2)
-                : 'SCAN 0 COUNT 100';
+                : model === 'widecolumn'
+                  ? `SELECT * FROM ${database ? `"${database}".` : ''}"${table}" LIMIT 100;`
+                  : 'SCAN 0 COUNT 100';
       get().openQuery(connectionId, sql, table, database);
       return;
     }

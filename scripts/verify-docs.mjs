@@ -49,12 +49,12 @@ for (const [f, sections] of Object.entries(requiredSections)) {
   for (const s of sections) text.includes(s) ? ok(`${f} § ${s}`) : fail(`${f} § ${s}`, 'section missing');
 }
 
-// 4. Agent tool inventory (29) defined in 04
+// 4. Agent tool inventory (30) defined in 04
 const agentDoc = read('docs/04-ai-agent-design.md');
 const toolRows = [...agentDoc.matchAll(/^\|\s*\d+\s*\|\s*`([a-z_]+)`\s*\|\s*(read|write|ddl|destructive|动态\*|ddl\/destructive)\s*\|/gm)].map((m) => ({ name: m[1], risk: m[2] }));
-const expectedTools = ['list_connections','inspect_schema','search_objects','run_sql','run_mql','run_redis','run_cypher','vector_search','search_index','explain_sql','sample_rows','profile_column','create_table','alter_table','drop_object','manage_index','export_result','import_csv','backup_database','get_query_history','update_plan','memory_write','memory_search','audit_database','check_data_quality','render_chart','analyze_chart','forecast_chart','generate_data'];
+const expectedTools = ['list_connections','inspect_schema','search_objects','run_sql','run_mql','run_redis','run_cypher','run_cql','vector_search','search_index','explain_sql','sample_rows','profile_column','create_table','alter_table','drop_object','manage_index','export_result','import_csv','backup_database','get_query_history','update_plan','memory_write','memory_search','audit_database','check_data_quality','render_chart','analyze_chart','forecast_chart','generate_data'];
 const names = toolRows.map((t) => t.name);
-if (names.length === 29) ok('29 agent tools documented'); else fail('29 agent tools documented', `found ${names.length}`);
+if (names.length === 30) ok('30 agent tools documented'); else fail('30 agent tools documented', `found ${names.length}`);
 for (const t of expectedTools) names.includes(t) ? ok(`tool ${t}`) : fail(`tool ${t}`, 'not in tool table');
 for (const t of new Set(names)) if (!expectedTools.includes(t)) fail('tool inventory', `unexpected tool ${t}`);
 

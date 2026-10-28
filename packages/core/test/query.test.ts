@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  classifyCql,
   classifyCypher,
   classifyMql,
   classifyRedis,
   classifyVector,
+  cqlQueryFromArgs,
   cypherQueryFromArgs,
   formatStructuredQuery,
   mqlQueryFromArgs,
@@ -87,6 +89,37 @@ test('Cypher classification distinguishes reads, writes, DDL and destructive cla
   assert.equal(readonlyViolationForQuery({ language: 'cypher', text: 'MATCH (n) RETURN n' }), null);
   assert.match(String(readonlyViolationForQuery({ language: 'cypher', text: 'MATCH (n) DELETE n' })), /只读/);
   assert.deepEqual(cypherQueryFromArgs({ query: 'RETURN 1', params: { x: 1 } }), { language: 'cypher', text: 'RETURN 1', params: { x: 1 } });
+});
+
+test('CQL classification distinguishes reads, writes, DDL and destructive statements', () => {
+  assert.equal(classifyCql({ language: 'cql', text: 'SELECT * FROM users LIMIT 10' }).kind, 'read');
+  assert.equal(classifyCql({ language: 'cql', text: 'select name from users where id = ?', params: ['a'] }).kind, 'read');
+  assert.equal(classifyCql({ language: 'cql', text: 'USE my_keyspace' }).kind, 'read');
+  assert.equal(classifyCql({ language: 'cql', text: 'DESCRIBE TABLE users' }).kind, 'read');
+  assert.equal(classifyCql({ language: 'cql', text: 'INSERT INTO users (id, name) VALUES (?, ?)', params: [1, 'Ada'] }).kind, 'write');
+  assert.equal(classifyCql({ language: 'cql', text: 'UPDATE users SET name = ? WHERE id = ?', params: ['Ada', 1] }).kind, 'write');
+  assert.equal(classifyCql({ language: 'cql', text: 'DELETE FROM users WHERE id = 1' }).kind, 'write');
+  assert.equal(classifyCql({ language: 'cql', text: 'DELETE FROM users' }).kind, 'destructive');
+  assert.equal(classifyCql({ language: 'cql', text: 'DROP TABLE users' }).kind, 'destructive');
+  assert.equal(classifyCql({ language: 'cql', text: 'TRUNCATE users' }).kind, 'destructive');
+  assert.equal(classifyCql({ language: 'cql', text: 'CREATE TABLE users (id int PRIMARY KEY, name text)' }).kind, 'ddl');
+  assert.equal(
+    classifyCql({ language: 'cql', text: "BEGIN BATCH INSERT INTO users (id) VALUES (1); APPLY BATCH" }).kind,
+    'write',
+  );
+  assert.equal(
+    classifyCql({ language: 'cql', text: "BEGIN BATCH DELETE FROM users WHERE id = 1; TRUNCATE users; APPLY BATCH" }).kind,
+    'destructive',
+  );
+  assert.equal(classifyCql({ language: 'cql', text: '' }).kind, 'destructive');
+  assert.equal(classifyCql({ language: 'cql', text: '-- just a comment\nSELECT * FROM users' }).kind, 'read');
+  assert.equal(readonlyViolationForQuery({ language: 'cql', text: 'SELECT * FROM users' }), null);
+  assert.match(String(readonlyViolationForQuery({ language: 'cql', text: 'DROP TABLE users' })), /只读/);
+  assert.deepEqual(cqlQueryFromArgs({ cql: 'SELECT * FROM users', params: [1] }), {
+    language: 'cql',
+    text: 'SELECT * FROM users',
+    params: [1],
+  });
 });
 
 test('vector queries are validated and read-only', () => {

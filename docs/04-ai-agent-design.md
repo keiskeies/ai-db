@@ -63,7 +63,7 @@ for (step = 0; step < maxSteps; step++) {
 
 **约束**：`maxSteps` 默认 12；同一工具相同参数连续失败 2 次 → 中止并解释；单工具超时 60s（查询 30s）；取消信号贯穿 Provider 与 Driver。
 
-## 4. 工具目录（29 个）
+## 4. 工具目录（30 个）
 
 风险等级：`read < write < ddl < destructive`。所有工具入参使用 JSON Schema（`additionalProperties: false`）。
 
@@ -98,6 +98,7 @@ for (step = 0; step < maxSteps; step++) {
 | 27 | `run_cypher` | 动态* | 执行 Neo4j Cypher；支持 `$params`，只读连接拒绝写子句 | `{ connectionId, database?, query, params?, maxRows? }` |
 | 28 | `vector_search` | read | 向量检索：pgvector 指定 field，Qdrant/Milvus/Weaviate 可选命名向量；文本走 Embedding | `{ connectionId, database?, collection, field?, vector?, text?, topK?, filter? }` |
 | 29 | `search_index` | read | Elasticsearch/OpenSearch `_search` JSON DSL | `{ connectionId, database?, index, query?, body?, size? }` |
+| 30 | `run_cql` | 动态* | Cassandra/ScyllaDB CQL，支持 `?` 参数 | `{ connectionId, database?, query, params?, maxRows? }` |
 
 \* `run_sql`、`run_mql`、`run_redis`、`run_cypher` 风险按各自语言的安全分类动态提升；`dryRun=true` 时 DDL 只返回将执行的 SQL（用于预览）。`run_mql` / `run_redis` / `run_cypher` / `vector_search` 仅用于对应模型的连接，SQL 专属工具（DDL、审计、图表等）在非 SQL 连接上明确返回不支持。
 \** 导出写文件为 `write`，不触碰数据库。

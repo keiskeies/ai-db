@@ -1,5 +1,6 @@
 import {
   applyLimit,
+  classifyCql,
   classifyCypher,
   classifyMql,
   classifyRedis,
@@ -18,6 +19,7 @@ import {
   type AppSettings,
   type ConnectionConfig,
   type ConnectionSecret,
+  type CqlQuery,
   type CypherQuery,
   type DatabaseSchema,
   type MqlQuery,
@@ -107,7 +109,7 @@ export class ConnectionManager {
   async schema(connectionId: string, database?: string, refresh = false, ttlMs = 30000): Promise<DatabaseSchema[]> {
     const conn = this.store.getConnection(connectionId);
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
-    const dbKey = database ?? conn.database ?? (conn.engine === 'sqlite' ? 'main' : conn.engine === 'redis' ? '0' : conn.engine === 'neo4j' ? 'neo4j' : conn.engine === 'memgraph' ? 'memgraph' : conn.engine === 'elasticsearch' || conn.engine === 'opensearch' ? 'default' : '');
+    const dbKey = database ?? conn.database ?? (conn.engine === 'sqlite' ? 'main' : conn.engine === 'redis' ? '0' : conn.engine === 'neo4j' ? 'neo4j' : conn.engine === 'memgraph' ? 'memgraph' : conn.engine === 'elasticsearch' || conn.engine === 'opensearch' ? 'default' : conn.engine === 'cassandra' || conn.engine === 'scylla' ? 'system' : '');
     const cached = this.store.getSchemaCache(connectionId, dbKey);
     if (!refresh && cached && Date.now() - new Date(cached.fetchedAt).getTime() < ttlMs) {
       try {
@@ -121,7 +123,7 @@ export class ConnectionManager {
     if (engineUsesSchema(conn.engine)) {
       const groups = new Map<string, TableInfo[]>();
       for (const table of tables) {
-        const fallback = conn.engine === 'sqlserver' ? 'dbo' : conn.engine === 'oracle' ? (conn.username ?? '').toUpperCase() : conn.engine === 'dm' ? (conn.username ?? 'SYSDBA').toUpperCase() : dbKey || 'public';
+        const fallback = conn.engine === 'sqlserver' ? 'dbo' : conn.engine === 'oracle' ? (conn.username ?? '').toUpperCase() : conn.engine === 'dm' ? (conn.username ?? 'SYSDBA').toUpperCase() : conn.engine === 'cassandra' || conn.engine === 'scylla' ? dbKey || 'system' : dbKey || 'public';
         const key = table.schema ?? fallback;
         groups.set(key, [...(groups.get(key) ?? []), table]);
       }
@@ -199,6 +201,11 @@ export class ConnectionManager {
         throw new DbError('搜索查询需要 JSON，例如 {"index":"logs","query":{"match_all":{}},"size":20}', { code: 'SEARCH_PARSE' });
       }
       return searchQueryFromArgs(parsed);
+    }
+    if (conn.engine === 'cassandra' || conn.engine === 'scylla') {
+      const trimmed = text.trim();
+      if (!trimmed) throw new DbError('CQL 不能为空', { code: 'CQL_EMPTY' });
+      return { language: 'cql', text: trimmed };
     }
     throw new DbError(`${engineMeta(conn.engine).label} 暂不支持查询`, { code: 'UNSUPPORTED_ENGINE' });
   }

@@ -82,7 +82,7 @@ const api = async (path, init = {}) => {
 const boot = (await api('/bootstrap')).body;
 const demo = boot.connections.find((c) => c.engine === 'sqlite');
 check('bridge bootstrap', Boolean(demo), demo?.name);
-check('29 agent tools', boot.tools.length === 29, String(boot.tools.length));
+check('30 agent tools', boot.tools.length === 30, String(boot.tools.length));
 
 const MONGO_PORT = process.env.AIDB_TEST_MONGO_PORT ? Number(process.env.AIDB_TEST_MONGO_PORT) : undefined;
 const REDIS_PORT = process.env.AIDB_TEST_REDIS_PORT ? Number(process.env.AIDB_TEST_REDIS_PORT) : undefined;
@@ -252,7 +252,7 @@ await page.waitForTimeout(150);
 await page.click('[data-testid="sidebar-new-connection"]');
 await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
 const engineOptions = await page.locator('[data-testid="connection-engine"] option').count();
-check('connection form lists 34 engines', engineOptions === 34, String(engineOptions));
+check('connection form lists 36 engines', engineOptions === 36, String(engineOptions));
 await page.screenshot({ path: join(shots, 'desktop-connection-engines.png') });
 await page.locator('.modal-head .icon-btn').click();
 await page.waitForTimeout(200);

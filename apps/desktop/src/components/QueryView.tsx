@@ -472,7 +472,9 @@ ${text}
                   ? '向量库：输入 JSON，例如 {"collection":"docs","vector":[...],"topK":5}；scroll 可浏览全部点'
                   : conn && engineMeta(conn.engine).model === 'search'
                     ? '搜索：输入 JSON，例如 {"index":"logs","query":{"match_all":{}},"size":20}'
-                    : 'Redis：输入单条命令，例如 SCAN 0 COUNT 100 或 HGETALL user:1'}
+                    : conn && engineMeta(conn.engine).model === 'widecolumn'
+                      ? 'Cassandra：输入 CQL，例如 SELECT * FROM ks.tbl LIMIT 100（不支持 JOIN）'
+                      : 'Redis：输入单条命令，例如 SCAN 0 COUNT 100 或 HGETALL user:1'}
           </span>
         )}
         <div className="spacer" />

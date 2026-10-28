@@ -195,6 +195,25 @@ export const TOOLS: ToolDefinition[] = [
     summarize: (a) => `搜索 ${a.index ?? ''}`.trim(),
   },
   {
+    name: 'run_cql',
+    description:
+      'Run a CQL statement on a Cassandra/ScyllaDB connection. Use ? placeholders and params for values. CQL has no JOINs; prefer bounded SELECTs with partition keys.',
+    risk: 'dynamic',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connectionId', 'query'],
+      properties: {
+        ...connectionProp,
+        ...databaseProp,
+        query: { type: 'string', description: 'CQL statement, e.g. SELECT * FROM ks.tbl LIMIT 10' },
+        params: { type: 'array', items: {}, description: 'Positional bind values for ? placeholders' },
+        maxRows: { type: 'integer', minimum: 1, maximum: 5000 },
+      },
+    },
+    summarize: (a) => `CQL ${String(a.query ?? '').replace(/\s+/g, ' ').slice(0, 60)}`,
+  },
+  {
     name: 'explain_sql',
     description: 'Get the query execution plan (EXPLAIN) for a SQL statement.',
     risk: 'read',

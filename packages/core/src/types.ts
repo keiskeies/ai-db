@@ -16,6 +16,8 @@ export type Engine =
   | 'milvus'
   | 'weaviate'
   | 'duckdb'
+  | 'cassandra'
+  | 'scylla'
   | 'elasticsearch'
   | 'opensearch'
   | 'kingbase'
@@ -52,13 +54,14 @@ export type Transport =
   | 'qdrant-http'
   | 'milvus-http'
   | 'duckdb-file'
+  | 'cassandra'
   | 'elasticsearch-http'
   | 'weaviate-http';
 
 /** SQL 方言；协议别名（金仓、TiDB 等）复用已有方言。 */
 export type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickhouse' | 'dm';
 
-export type QueryLanguage = 'sql' | 'mql' | 'redis' | 'cypher' | 'vector' | 'search';
+export type QueryLanguage = 'sql' | 'mql' | 'redis' | 'cypher' | 'vector' | 'search' | 'cql';
 
 export type DbObjectKind = 'table' | 'view' | 'collection' | 'key' | 'node_label' | 'edge_label' | 'vector_collection' | 'index';
 

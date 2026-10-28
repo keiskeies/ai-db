@@ -1,5 +1,6 @@
 import { engineDefaultPort, engineMeta, type ConnectionConfig, type ConnectionSecret } from '@aidb/core';
 import { ClickHouseDriver } from './clickhouse';
+import { CassandraDriver } from './cassandra';
 import { DmDriver } from './dm';
 import { DuckdbDriver } from './duckdb';
 import { ElasticsearchDriver } from './elasticsearch';
@@ -114,6 +115,20 @@ export async function createDriver(config: ConnectionConfig, secret: ConnectionS
         database: config.database || 'default',
         ssl: config.ssl,
       });
+      return { driver, close: () => closeWithTunnel(driver) };
+    }
+    case 'cassandra': {
+      const driver = new CassandraDriver(
+        {
+          host: connectHost,
+          port: connectPort,
+          user: config.username,
+          password: secret.password,
+          database: config.database,
+          ssl: config.ssl,
+        },
+        config.engine,
+      );
       return { driver, close: () => closeWithTunnel(driver) };
     }
     case 'dm': {

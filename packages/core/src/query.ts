@@ -54,7 +54,13 @@ export interface SearchQuery {
   size?: number;
 }
 
-export type StructuredQuery = MqlQuery | RedisQuery | CypherQuery | VectorQuery | SearchQuery;
+export interface CqlQuery {
+  language: 'cql';
+  text: string;
+  params?: unknown[];
+}
+
+export type StructuredQuery = MqlQuery | RedisQuery | CypherQuery | VectorQuery | SearchQuery | CqlQuery;
 
 export function queryLanguageOf(query: StructuredQuery): QueryLanguage {
   return query.language;
@@ -65,6 +71,7 @@ export function formatStructuredQuery(query: StructuredQuery): string {
   if (query.language === 'cypher') return query.text;
   if (query.language === 'vector') return JSON.stringify(query);
   if (query.language === 'search') return JSON.stringify(query);
+  if (query.language === 'cql') return query.text;
   return [query.command, ...(query.args ?? [])].join(' ');
 }
 
@@ -133,6 +140,14 @@ export function searchQueryFromArgs(args: Record<string, unknown>): SearchQuery 
   else if (args.query && typeof args.query === 'object' && !Array.isArray(args.query)) query.body = { query: args.query };
   if (typeof args.size === 'number') query.size = args.size;
   return query;
+}
+
+export function cqlQueryFromArgs(args: Record<string, unknown>): CqlQuery {
+  return {
+    language: 'cql',
+    text: typeof args.query === 'string' ? args.query : typeof args.cql === 'string' ? args.cql : '',
+    params: Array.isArray(args.params) ? args.params : undefined,
+  };
 }
 
 const MQL_RISK: Record<string, QueryKind> = {
@@ -291,7 +306,9 @@ export function readonlyViolationForQuery(query: StructuredQuery): string | null
           ? classifyCypher(query)
           : query.language === 'vector'
             ? classifyVector(query)
-            : classifySearch(query);
+            : query.language === 'search'
+              ? classifySearch(query)
+              : classifyCql(query);
   if (safety.kind === 'read') return null;
   const label =
     query.language === 'mql'
@@ -302,7 +319,9 @@ export function readonlyViolationForQuery(query: StructuredQuery): string | null
           ? 'Cypher 写操作'
           : query.language === 'vector'
             ? '向量写操作'
-            : '搜索写操作';
+            : query.language === 'search'
+              ? '搜索写操作'
+              : 'CQL 写操作';
   return `只读连接不允许执行 ${label}${safety.reason ? `（${safety.reason}）` : ''}`;
 }
 
@@ -404,6 +423,31 @@ export function classifySearch(query: SearchQuery): QuerySafety {
     return { risk: 'destructive', kind: 'destructive', reason: 'size 必须在 1-10000 之间' };
   }
   return { risk: 'read', kind: 'read' };
+}
+
+export function classifyCql(query: CqlQuery): QuerySafety {
+  const text = query.text.trim();
+  if (!text) return { risk: 'destructive', kind: 'destructive', reason: '空 CQL' };
+  const code = maskCypher(text)
+    .split('\n')
+    .map((line) => line.replace(/--.*$/, ' '))
+    .join('\n')
+    .toUpperCase();
+  const head = code.split('\n').map((line) => line.trim()).find((line) => line.length > 0) ?? '';
+  if (/^(SELECT|DESCRIBE|USE|LIST|TRACING)\b/.test(head)) return { risk: 'read', kind: 'read' };
+  if (/^(CREATE|ALTER|GRANT|REVOKE)\b/.test(head)) return { risk: 'ddl', kind: 'ddl' };
+  if (/^(TRUNCATE|DROP)\b/.test(head)) return { risk: 'destructive', kind: 'destructive', reason: 'CQL 删除/清空操作' };
+  if (/^(DELETE)\b/.test(head)) {
+    return /\bWHERE\b/.test(code)
+      ? { risk: 'write', kind: 'write' }
+      : { risk: 'destructive', kind: 'destructive', reason: 'DELETE 缺少 WHERE' };
+  }
+  if (/^(INSERT|UPDATE|COPY)\b/.test(head)) return { risk: 'write', kind: 'write' };
+  if (/^BEGIN\s+(UNLOGGED\s+)?BATCH\b/.test(head)) {
+    if (/\b(TRUNCATE|DROP)\b/.test(code)) return { risk: 'destructive', kind: 'destructive', reason: 'BATCH 含删除/清空' };
+    return { risk: 'write', kind: 'write' };
+  }
+  return { risk: 'ddl', kind: 'ddl' };
 }
 
 /** 把一行 Redis 命令拆成命令名与参数，支持单双引号。 */

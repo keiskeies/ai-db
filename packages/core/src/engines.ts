@@ -1,6 +1,6 @@
 import type { DataModel, DbObjectKind, DialectId, Engine, QueryLanguage, Transport } from './types';
 
-export type EngineFamily = DialectId | 'mongodb' | 'redis' | 'graph' | 'vector' | 'search';
+export type EngineFamily = DialectId | 'mongodb' | 'redis' | 'graph' | 'vector' | 'search' | 'cassandra';
 
 export interface EngineCapabilities {
   /** 对象树中该引擎支持的对象类型。 */
@@ -416,6 +416,58 @@ export const ENGINES: EngineMeta[] = [
     color: '#FBBF24',
   },
   {
+    id: 'cassandra',
+    label: 'Cassandra',
+    family: 'cassandra',
+    model: 'widecolumn',
+    transport: 'cassandra',
+    languages: ['cql'],
+    capabilities: {
+      objects: ['table', 'view'],
+      ddl: false,
+      explain: false,
+      multiStatement: false,
+      structureSync: false,
+      dataCompare: false,
+      backup: 'none',
+      gridEdit: false,
+      users: false,
+    },
+    defaultPort: 9042,
+    fileBased: false,
+    supportsSsh: true,
+    supportsSsl: true,
+    description: '分布式宽列数据库（CQL）',
+    notes: 'CQL 控制台与 keyspace/table 浏览；不支持 JOIN，DDL 设计器关闭',
+    color: '#38BDF8',
+  },
+  {
+    id: 'scylla',
+    label: 'ScyllaDB',
+    family: 'cassandra',
+    model: 'widecolumn',
+    transport: 'cassandra',
+    languages: ['cql'],
+    capabilities: {
+      objects: ['table', 'view'],
+      ddl: false,
+      explain: false,
+      multiStatement: false,
+      structureSync: false,
+      dataCompare: false,
+      backup: 'none',
+      gridEdit: false,
+      users: false,
+    },
+    defaultPort: 9042,
+    fileBased: false,
+    supportsSsh: true,
+    supportsSsl: true,
+    description: 'CQL 兼容的高性能宽列数据库',
+    notes: '复用 Cassandra 驱动；CQL 控制台与 keyspace/table 浏览',
+    color: '#F97316',
+  },
+  {
     id: 'elasticsearch',
     label: 'Elasticsearch',
     family: 'search',
@@ -755,5 +807,13 @@ export function dialectOf(engine: Engine): DialectId {
 
 export function engineUsesSchema(engine: Engine): boolean {
   const dialect = engineMeta(engine).dialect;
-  return dialect === 'postgres' || dialect === 'mssql' || dialect === 'oracle' || dialect === 'clickhouse' || dialect === 'dm';
+  return (
+    dialect === 'postgres' ||
+    dialect === 'mssql' ||
+    dialect === 'oracle' ||
+    dialect === 'clickhouse' ||
+    dialect === 'dm' ||
+    engine === 'cassandra' ||
+    engine === 'scylla'
+  );
 }

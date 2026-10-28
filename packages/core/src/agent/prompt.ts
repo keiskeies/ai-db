@@ -179,7 +179,9 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
           ? '- Use vector_search with a vector or text (text requires an embedding provider). For Qdrant/Milvus use collection and optional named field; for pgvector also pass field (the vector column). topK is capped at 1000.'
           : language === 'search'
             ? '- Use search_index with an Elasticsearch/OpenSearch _search JSON DSL body. Pass query (the DSL query object) or body; size is capped at 10000. Do not use SQL for this connection.'
-            : '- Use run_redis for one Redis command at a time. Prefer SCAN over KEYS; do not use EVAL, CONFIG, FLUSHALL or SHUTDOWN. Values are returned as rows; explain the key type when relevant.';
+            : language === 'cql'
+              ? '- Use run_cql for Cassandra/ScyllaDB. Use ? placeholders with params; CQL has no JOINs, so query tables separately. Bound SELECTs and include partition keys when possible.'
+              : '- Use run_redis for one Redis command at a time. Prefer SCAN over KEYS; do not use EVAL, CONFIG, FLUSHALL or SHUTDOWN. Values are returned as rows; explain the key type when relevant.';
   const sqlOnlyRules = isSql
     ? `- For audits or data-quality questions, call audit_database / check_data_quality first. Report concrete counts (rows checked, null ratios, duplicates) and provide exact, executable repair SQL — not generic advice.
 - For trend/distribution/visual questions, call render_chart with a bounded aggregate SQL instead of describing a chart in words.
