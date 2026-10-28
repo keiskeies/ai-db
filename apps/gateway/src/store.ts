@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS query_history (
 );
 CREATE INDEX IF NOT EXISTS idx_history_conn ON query_history(connection_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS agent_sessions (
-  id TEXT PRIMARY KEY, connection_id TEXT, title TEXT NOT NULL DEFAULT '新会话', summary TEXT,
+  id TEXT PRIMARY KEY, connection_id TEXT, database TEXT, title TEXT NOT NULL DEFAULT '新会话', summary TEXT,
   model TEXT, permission_mode TEXT NOT NULL DEFAULT 'ask', status TEXT NOT NULL DEFAULT 'idle',
   tokens_in INTEGER DEFAULT 0, tokens_out INTEGER DEFAULT 0,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, archived INTEGER DEFAULT 0
@@ -146,6 +146,7 @@ interface ConnectionRow {
 interface SessionRow {
   id: string;
   connection_id: string | null;
+  database: string | null;
   title: string;
   summary: string | null;
   model: string | null;
@@ -292,7 +293,14 @@ export class Store {
     } else {
       this.db.exec(SCHEMA_SQL);
     }
-    this.db.exec('PRAGMA user_version = 3');
+    // 连接不再要求填库名之后，会话必须自己记住选中的库，否则重开会话会悄悄跑回默认库
+    this.ensureColumn('agent_sessions', 'database', 'TEXT');
+    this.db.exec('PRAGMA user_version = 4');
+  }
+
+  private ensureColumn(table: string, column: string, type: string): void {
+    const exists = this.all<{ name: string }>(`PRAGMA table_info(${table})`).some((item) => item.name === column);
+    if (!exists) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
   }
 
   close(): void {
@@ -568,6 +576,7 @@ export class Store {
     return {
       id: row.id,
       connectionId: row.connection_id ?? undefined,
+      database: row.database ?? undefined,
       title: row.title,
       summary: row.summary ?? undefined,
       model: row.model ?? undefined,
@@ -580,12 +589,12 @@ export class Store {
     };
   }
 
-  createSession(input: { connectionId?: string; title?: string; model?: string; permissionMode?: PermissionMode } = {}): AgentSessionMeta {
+  createSession(input: { connectionId?: string; database?: string; title?: string; model?: string; permissionMode?: PermissionMode } = {}): AgentSessionMeta {
     const id = randomUUID();
     const now = iso();
     this.exec(
-      'INSERT INTO agent_sessions (id,connection_id,title,model,permission_mode,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)',
-      [id, input.connectionId ?? null, input.title ?? '新会话', input.model ?? null, input.permissionMode ?? 'ask', 'idle', now, now],
+      'INSERT INTO agent_sessions (id,connection_id,database,title,model,permission_mode,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
+      [id, input.connectionId ?? null, input.database ?? null, input.title ?? '新会话', input.model ?? null, input.permissionMode ?? 'ask', 'idle', now, now],
     );
     return this.getSession(id)!;
   }
@@ -601,10 +610,11 @@ export class Store {
 
   updateSession(
     id: string,
-    patch: Partial<Pick<AgentSessionMeta, 'connectionId' | 'title' | 'summary' | 'model' | 'permissionMode' | 'status' | 'tokensIn' | 'tokensOut'>> & { archived?: boolean },
+    patch: Partial<Pick<AgentSessionMeta, 'connectionId' | 'database' | 'title' | 'summary' | 'model' | 'permissionMode' | 'status' | 'tokensIn' | 'tokensOut'>> & { archived?: boolean },
   ): AgentSessionMeta {
     const map: Record<string, string> = {
       connectionId: 'connection_id',
+      database: 'database',
       title: 'title',
       summary: 'summary',
       model: 'model',

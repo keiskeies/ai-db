@@ -92,8 +92,9 @@ export async function compareData(
     }
   }
   return {
-    source: source.name,
-    target: target.name,
+    // 同一连接下比两个库时，只写连接名会显示成「local3306 → local3306」
+    source: opts.sourceDatabase ? `${source.name}/${opts.sourceDatabase}` : source.name,
+    target: opts.targetDatabase ? `${target.name}/${opts.targetDatabase}` : target.name,
     rows,
     same: rows.filter((row) => row.status === 'same').length,
     different: rows.filter((row) => row.status === 'different').length,

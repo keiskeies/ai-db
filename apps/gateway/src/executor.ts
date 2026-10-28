@@ -46,6 +46,8 @@ import type { Store } from './store';
 export interface ToolContext {
   sessionId: string;
   connectionId?: string;
+  /** 会话选中的库：工具自己没传 database 时以它为准（优先于连接上的默认库）。 */
+  database?: string;
   signal?: AbortSignal;
 }
 
@@ -107,7 +109,7 @@ export class ToolExecutor {
       this.store.addAudit({
         actor: 'agent',
         connectionId: this.connectionIdOf(call, ctx),
-        database: typeof call.args.database === 'string' ? call.args.database : undefined,
+        database: typeof call.args.database === 'string' ? call.args.database : ctx.database,
         tool: call.name,
         sql,
         risk,
@@ -129,7 +131,8 @@ export class ToolExecutor {
     if (!id) throw new DbError('缺少 connectionId：请先选择连接或调用 list_connections', { code: 'NO_CONNECTION' });
     const conn = this.store.getConnection(id);
     if (!conn) throw new DbError(`连接不存在：${id}`, { code: 'CONNECTION_NOT_FOUND' });
-    return conn;
+    // 把会话库盖到连接上，下面所有 databaseOf() 的兜底就自然指向它
+    return ctx.database ? { ...conn, database: ctx.database } : conn;
   }
 
   private databaseOf(call: ToolCall, conn: { database?: string }): string | undefined {

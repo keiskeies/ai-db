@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { Download, Network, RefreshCw, Table2, TerminalSquare } from 'lucide-react';
 import type { TableInfo } from '@aidb/core';
 import { useApp, type Tab } from '../store';
+import { DatabaseSelect } from './DatabaseSelect';
 import { EmptyState } from './ui';
 
 type RelationsTab = Extract<Tab, { kind: 'relations' }>;
@@ -27,6 +28,7 @@ export function RelationsView({ tab }: { tab: RelationsTab }) {
   const loadSchema = useApp((s) => s.loadSchema);
   const openData = useApp((s) => s.openData);
   const openQuery = useApp((s) => s.openQuery);
+  const updateTab = useApp((s) => s.updateTab);
 
   const conn = connections.find((c) => c.id === tab.connectionId);
 
@@ -107,10 +109,16 @@ export function RelationsView({ tab }: { tab: RelationsTab }) {
             {conn?.name} · {nodes.length} 张表 · {edges.length} 条关系
           </span>
         </span>
-        <button className="icon-btn" title="刷新" onClick={() => void loadSchema(tab.connectionId, true)}>
+        <DatabaseSelect
+          connectionId={tab.connectionId}
+          value={tab.database ?? ''}
+          onChange={(database) => updateTab(tab.id, { database })}
+          testId="erd-db"
+        />
+        <button className="icon-btn" title="刷新" onClick={() => void loadSchema(tab.connectionId, true, tab.database)}>
           <RefreshCw size={14} />
         </button>
-        <button className="btn small" onClick={() => openQuery(tab.connectionId)}>
+        <button className="btn small" onClick={() => openQuery(tab.connectionId, undefined, undefined, tab.database)}>
           <TerminalSquare size={12} /> 新建查询
         </button>
         <button className="btn small" onClick={() => exportSvg({ nodes, edges, width, height })}>

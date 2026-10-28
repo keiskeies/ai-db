@@ -214,6 +214,9 @@ await page.waitForTimeout(300);
 const prefilled = await page.locator('[data-testid="agent-input"]').inputValue();
 check('SQL Copilot prefills the agent', prefilled.includes('优化') && prefilled.includes('SELECT'), prefilled.slice(0, 60));
 
+// 连接只有单库（SQLite）时库选择器应当隐藏；多库时有独立探针覆盖（.tools/probes/db-pickers.mjs）
+check('single-database connection hides the agent database picker', (await page.locator('[data-testid="agent-db"]').count()) === 0);
+
 await page.fill('[data-testid="agent-input"]', '看看有哪些表');
 await page.click('[data-testid="agent-send"]');
 await page.waitForFunction(() => document.querySelector('.agent-transcript')?.textContent?.includes('张表'), { timeout: 25000 });

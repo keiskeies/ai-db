@@ -114,6 +114,7 @@ export interface TurnPayload {
   /** 已上传的图片附件 id。 */
   images?: string[];
   connectionId?: string;
+  database?: string;
 }
 
 export async function streamTurn(sessionId: string, payload: TurnPayload, onEvent: (event: AgentEvent) => void, signal?: AbortSignal): Promise<void> {
@@ -243,7 +244,7 @@ export const api = {
   },
 
   sessions: () => request<{ sessions: AgentSessionMeta[] }>('/agent/sessions'),
-  createSession: (body: { connectionId?: string; title?: string; permissionMode?: string }) =>
+  createSession: (body: { connectionId?: string; database?: string; title?: string; permissionMode?: string }) =>
     request<{ session: AgentSessionMeta }>('/agent/sessions', { method: 'POST', body: JSON.stringify(body) }),
   getSession: (id: string) => request<SessionDetail>(`/agent/sessions/${id}`),
   updateSession: (id: string, body: Record<string, unknown>) => request<{ session: AgentSessionMeta }>(`/agent/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),

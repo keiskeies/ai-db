@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { AlertTriangle, ArrowLeftRight, Loader2, Play } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
+import { DatabaseSelect } from '../DatabaseSelect';
 
 interface DiffChange {
   kind: string;
@@ -84,8 +85,8 @@ export function SchemaCompareTool() {
           </select>
         </div>
         <div className="field" style={{ flex: 1, minWidth: 150 }}>
-          <label>源数据库（可选）</label>
-          <input className="input mono" value={sourceDatabase} onChange={(e) => setSourceDatabase(e.target.value)} placeholder="默认连接数据库" />
+          <label>源数据库</label>
+          <DatabaseSelect connectionId={sourceId} value={sourceDatabase} onChange={setSourceDatabase} testId="schema-compare-source-db" />
         </div>
         <div className="field" style={{ flex: 1, minWidth: 150 }}>
           <label>目标连接</label>
@@ -94,8 +95,8 @@ export function SchemaCompareTool() {
           </select>
         </div>
         <div className="field" style={{ flex: 1, minWidth: 150 }}>
-          <label>目标数据库（可选）</label>
-          <input className="input mono" value={targetDatabase} onChange={(e) => setTargetDatabase(e.target.value)} placeholder="默认连接数据库" />
+          <label>目标数据库</label>
+          <DatabaseSelect connectionId={targetId} value={targetDatabase} onChange={setTargetDatabase} testId="schema-compare-target-db" />
         </div>
         <button className="btn primary" style={{ alignSelf: 'flex-end' }} onClick={() => void compare()} disabled={loading || !sourceId || !targetId}>
           {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <ArrowLeftRight size={12} />} 对比

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { FileSearch, Loader2, Search } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
+import { DatabaseSelect } from '../DatabaseSelect';
 
 interface ObjectMatch {
   kind: string;
@@ -22,6 +23,7 @@ export function SearchTool() {
   const closeTools = useApp((s) => s.closeTools);
   const notify = useApp((s) => s.notify);
   const [query, setQuery] = useState('');
+  const [database, setDatabase] = useState('');
   const [scope, setScope] = useState<'all' | 'objects' | 'data'>('all');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ objects: ObjectMatch[]; data: DataMatch[]; scannedTables: number } | null>(null);
@@ -35,7 +37,7 @@ export function SearchTool() {
     if (!query.trim()) return;
     setLoading(true);
     try {
-      const res = await api.searchDatabase({ connectionId: activeConnectionId, database: conn?.database, query, scope });
+      const res = await api.searchDatabase({ connectionId: activeConnectionId, database: database || undefined, query, scope });
       setResult(res);
     } catch (err: any) {
       notify('error', '搜索失败', err?.message);
@@ -55,6 +57,7 @@ export function SearchTool() {
           <Search size={13} />
           <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void run()} placeholder="表名、列名或任意文本…" autoFocus />
         </div>
+        <DatabaseSelect allowAll connectionId={activeConnectionId} value={database} onChange={setDatabase} testId="search-db" />
         <select className="select" value={scope} onChange={(e) => setScope(e.target.value as typeof scope)} style={{ width: 130 }}>
           <option value="all">对象 + 数据</option>
           <option value="objects">仅对象</option>
@@ -78,7 +81,7 @@ export function SearchTool() {
                     key={`${item.table}_${item.column ?? ''}_${index}`}
                     className="result-row"
                     onClick={() => {
-                      openData(activeConnectionId!, item.table, conn?.database);
+                      openData(activeConnectionId!, item.table, database || conn?.database);
                       closeTools();
                     }}
                   >
@@ -101,7 +104,7 @@ export function SearchTool() {
                       <strong className="mono">{match.table}</strong>
                       <span className="muted" style={{ fontSize: 10 }}>{match.rows.length} 行</span>
                       <span className="spacer" />
-                      <button className="btn ghost small" onClick={() => { openData(activeConnectionId!, match.table, conn?.database); closeTools(); }}>
+                      <button className="btn ghost small" onClick={() => { openData(activeConnectionId!, match.table, database || conn?.database); closeTools(); }}>
                         打开表
                       </button>
                     </div>

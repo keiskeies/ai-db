@@ -97,6 +97,11 @@ interface AppStore {
    */
   agentFollowUps: QuestionSuggestion[];
   agentMode: PermissionMode;
+  /**
+   * Agent 当前瞄准的库。连接不再填库名之后，这个值决定 schema、业务上下文
+   * 和工具默认库；空串表示交给后端按会话/连接默认库兜底。
+   */
+  agentDatabase: string;
   live?: LiveTurn;
   approval?: ApprovalState;
   agentPrefill?: string;
@@ -127,7 +132,7 @@ interface AppStore {
   toggleSchema: (key: string) => void;
 
   openData: (connectionId: string, table: string, database?: string) => void;
-  openQuery: (connectionId?: string, sql?: string, title?: string) => void;
+  openQuery: (connectionId?: string, sql?: string, title?: string, database?: string) => void;
   openDesign: (connectionId?: string, table?: string, database?: string) => void;
   openRelations: (connectionId?: string, database?: string) => void;
   closeTab: (id: string) => void;
@@ -142,6 +147,7 @@ interface AppStore {
   setAgentOpen: (open: boolean) => void;
   setAgentExpanded: (expanded: boolean) => void;
   setAgentMode: (mode: PermissionMode) => void;
+  setAgentDatabase: (database: string) => void;
   setSessionsOpen: (open: boolean) => void;
   newAgentSession: () => Promise<void>;
   loadAgentSession: (id: string) => Promise<void>;
@@ -207,6 +213,7 @@ export const useApp = create<AppStore>((set, get) => ({
   agentMessages: [],
   agentFollowUps: [],
   agentMode: 'ask',
+  agentDatabase: '',
   sessionsOpen: false,
   memoryOpen: false,
   memoryQuery: '',
@@ -312,11 +319,11 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 
   selectConnection: (id) => {
-    set({ activeConnectionId: id });
+    set((s) => ({ activeConnectionId: id, ...(s.activeConnectionId === id ? {} : { agentDatabase: '' }) }));
     if (!get().schemas[id]) void get().loadSchema(id);
   },
 
-  setActiveConnection: (id) => set({ activeConnectionId: id }),
+  setActiveConnection: (id) => set((s) => ({ activeConnectionId: id, ...(s.activeConnectionId === id ? {} : { agentDatabase: '' }) })),
 
   toggleConnection: (id) => {
     const open = !get().expandedConnections[id];
@@ -339,7 +346,7 @@ export const useApp = create<AppStore>((set, get) => ({
     else if (database && !(get().loadedDatabases[connectionId] ?? []).includes(database)) void get().loadSchema(connectionId, false, database);
   },
 
-  openQuery: (connectionId, sql, title) => {
+  openQuery: (connectionId, sql, title, database) => {
     const connId = connectionId ?? get().activeConnectionId ?? get().connections[0]?.id;
     if (!connId) {
       get().openConnectionEditor('new');
@@ -352,7 +359,7 @@ export const useApp = create<AppStore>((set, get) => ({
       kind: 'query',
       title: title ?? `查询 ${count}`,
       connectionId: connId,
-      database: get().connections.find((c) => c.id === connId)?.database,
+      database: database ?? get().connections.find((c) => c.id === connId)?.database,
       sql: sql ?? '',
     };
     set((s) => ({ tabs: [...s.tabs.filter((t) => t.id !== 'welcome'), tab], activeTabId: id, activeConnectionId: connId }));
@@ -468,6 +475,13 @@ export const useApp = create<AppStore>((set, get) => ({
   setAgentOpen: (open) => set({ agentOpen: open }),
   setAgentExpanded: (expanded) => set({ agentExpanded: expanded }),
   setAgentMode: (mode) => set({ agentMode: mode }),
+
+  setAgentDatabase: (database) => {
+    set({ agentDatabase: database });
+    // 选完就落库：否则重开会话会退回连接默认库，历史对话和实际执行对不上
+    const id = get().agentSessionId;
+    if (id) void api.updateSession(id, { database }).catch(() => undefined);
+  },
   setSessionsOpen: (open) => set({ sessionsOpen: open }),
 
   refreshSessions: async () => {
@@ -499,11 +513,13 @@ export const useApp = create<AppStore>((set, get) => ({
       if (get().live && (get().live!.status === 'streaming' || get().live!.status === 'awaiting')) await get().abortAgent();
       const { session } = await api.createSession({
         connectionId: get().activeConnectionId,
+        database: get().agentDatabase || undefined,
         permissionMode: get().agentMode,
       });
       set({
         agentSessionId: session.id,
         agentSessionMeta: session,
+        agentDatabase: session.database ?? get().agentDatabase,
         agentMessages: [],
         agentFollowUps: [],
         live: undefined,
@@ -531,6 +547,7 @@ export const useApp = create<AppStore>((set, get) => ({
         agentOpen: true,
         sessionsOpen: false,
         agentMode: detail.session.permissionMode,
+        agentDatabase: detail.session.database ?? '',
         activeConnectionId: detail.session.connectionId ?? get().activeConnectionId,
       });
       if (detail.session.connectionId && !get().schemas[detail.session.connectionId]) void get().loadSchema(detail.session.connectionId);
@@ -641,7 +658,11 @@ export const useApp = create<AppStore>((set, get) => ({
     let sessionId = get().agentSessionId;
     try {
       if (!sessionId) {
-        const { session } = await api.createSession({ connectionId: get().activeConnectionId, permissionMode: mode ?? get().agentMode });
+        const { session } = await api.createSession({
+          connectionId: get().activeConnectionId,
+          database: get().agentDatabase || undefined,
+          permissionMode: mode ?? get().agentMode,
+        });
         sessionId = session.id;
         set({ agentSessionId: session.id, agentSessionMeta: session, agentMessages: [] });
         await get().refreshSessions();
@@ -669,7 +690,7 @@ export const useApp = create<AppStore>((set, get) => ({
       currentAbort = new AbortController();
       await streamTurn(
         sessionId,
-        { text: trimmed, mode: permission, attachments, ...(images?.length ? { images } : {}), connectionId: get().activeConnectionId },
+        { text: trimmed, mode: permission, attachments, ...(images?.length ? { images } : {}), connectionId: get().activeConnectionId, database: get().agentDatabase || undefined },
         (event) => get().handleAgentEvent(event),
         currentAbort.signal,
       );

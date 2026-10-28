@@ -36,6 +36,7 @@ import { api, attachmentObjectUrl, type StoredAttachment } from '../lib/api';
 import { formatBytes, formatCell, formatDuration, formatRelative } from '../lib/format';
 import { useApp, type LiveTool } from '../store';
 import { ChartView, type ChartSpec } from './ChartView';
+import { DatabaseSelect } from './DatabaseSelect';
 import { CopyButton, Markdown, RiskBadge } from './ui';
 
 const MODE_OPTIONS: Array<{ value: PermissionMode; zh: string; en: string }> = [
@@ -502,11 +503,13 @@ export function AgentPanel() {
   const activeConnectionId = useApp((s) => s.activeConnectionId);
   const schemas = useApp((s) => activeConnectionId ? s.schemas[activeConnectionId] : undefined);
   const agentMode = useApp((s) => s.agentMode);
+  const agentDatabase = useApp((s) => s.agentDatabase);
   const prefill = useApp((s) => s.agentPrefill);
 
   const setAgentOpen = useApp((s) => s.setAgentOpen);
   const setAgentExpanded = useApp((s) => s.setAgentExpanded);
   const setAgentMode = useApp((s) => s.setAgentMode);
+  const setAgentDatabase = useApp((s) => s.setAgentDatabase);
   const setSessionsOpen = useApp((s) => s.setSessionsOpen);
   const newAgentSession = useApp((s) => s.newAgentSession);
   const loadAgentSession = useApp((s) => s.loadAgentSession);
@@ -587,7 +590,7 @@ export function AgentPanel() {
     }
     let cancelled = false;
     api
-      .suggest({ connectionId: activeConnectionId, database: activeConnection?.database, limit: 6 })
+      .suggest({ connectionId: activeConnectionId, database: agentDatabase || activeConnection?.database, limit: 6 })
       .then((res) => {
         if (!cancelled) setSuggestions(res.suggestions);
       })
@@ -597,7 +600,7 @@ export function AgentPanel() {
     return () => {
       cancelled = true;
     };
-  }, [activeConnectionId, activeConnection?.database, tables.length]);
+  }, [activeConnectionId, activeConnection?.database, agentDatabase, tables.length]);
 
   useEffect(() => {
     if (prefill) {
@@ -758,6 +761,14 @@ export function AgentPanel() {
             <option key={c.id} value={c.id}>{c.name}</option>
           ))}
         </select>
+        <DatabaseSelect
+          connectionId={activeConnectionId}
+          value={agentDatabase}
+          onChange={setAgentDatabase}
+          testId="agent-db"
+          className="mode-select"
+          style={{ border: 'none', background: 'transparent', maxWidth: 130 }}
+        />
         <span>·</span>
         <span>{sessionMeta?.title ?? t('emptyAgentTitle')}</span>
         <div className="spacer" />

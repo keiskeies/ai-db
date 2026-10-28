@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS query_history (
 CREATE INDEX idx_history_conn ON query_history(connection_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS agent_sessions (
-  id TEXT PRIMARY KEY, connection_id TEXT, title TEXT NOT NULL DEFAULT '新会话',
+  id TEXT PRIMARY KEY, connection_id TEXT, database TEXT,  -- database: 会话选中的库（连接不再填库名）
+  title TEXT NOT NULL DEFAULT '新会话',
   summary TEXT, model TEXT, permission_mode TEXT NOT NULL DEFAULT 'ask',
   status TEXT NOT NULL DEFAULT 'idle',        -- idle|running|done|error|aborted
   tokens_in INTEGER DEFAULT 0, tokens_out INTEGER DEFAULT 0,
@@ -202,10 +203,10 @@ export interface QueryResult {
 | GET | `/audit` | 审计日志；`?format=csv` 导出 |
 | GET | `/snippets` · POST/PUT/DELETE | SQL 片段 |
 | GET | `/agent/tools` | 工具清单 + JSON Schema（UI 展示） |
-| GET/POST | `/agent/sessions` | 会话列表 / 新建 |
+| GET/POST | `/agent/sessions` | 会话列表 / 新建（`{connectionId?, database?, title?, permissionMode?}`） |
 | GET/DELETE | `/agent/sessions/:id` | 会话详情（messages + tool_runs）/ 删除 |
-| PATCH | `/agent/sessions/:id` | 更新会话（title / connectionId / permissionMode / archived） |
-| POST | `/agent/sessions/:id/turns` | **SSE** 发起回合（`{text, mode, attachments, images, connectionId}`） |
+| PATCH | `/agent/sessions/:id` | 更新会话（title / connectionId / database / permissionMode / archived） |
+| POST | `/agent/sessions/:id/turns` | **SSE** 发起回合（`{text, mode, attachments, images, connectionId, database}`；database 依次回退到会话记录的库、连接默认库） |
 | POST | `/agent/sessions/:id/abort` | 中止 |
 | POST | `/agent/approvals/:id` | `{decision, scope}` 审批结果 |
 | GET | `/agent/memories` | 记忆列表/搜索（scope/kind/q/limit） |

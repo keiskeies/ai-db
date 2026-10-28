@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ArrowRight, Loader2, Table2 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
+import { DatabaseSelect } from '../DatabaseSelect';
 
 interface TransferResult {
   table: string;
@@ -19,6 +20,8 @@ export function TransferTool() {
   const notify = useApp((s) => s.notify);
   const [sourceId, setSourceId] = useState(activeConnectionId ?? connections[0]?.id ?? '');
   const [targetId, setTargetId] = useState(connections.find((c) => c.id !== activeConnectionId)?.id ?? connections[0]?.id ?? '');
+  const [sourceDb, setSourceDb] = useState('');
+  const [targetDb, setTargetDb] = useState('');
   const [tables, setTables] = useState<Array<{ name: string; columns?: number }>>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [mode, setMode] = useState<'append' | 'replace'>('append');
@@ -29,26 +32,28 @@ export function TransferTool() {
   useEffect(() => {
     if (!sourceId) return;
     api
-      .getTables(sourceId)
+      .getTables(sourceId, sourceDb || undefined)
       .then((result) => {
         const list = result.tables.filter((table) => table.type === 'table').map((table) => ({ name: table.name, columns: table.columns?.length ?? 0 }));
         setTables(list);
         setSelected(new Set(list.slice(0, 3).map((table) => table.name)));
       })
       .catch(() => setTables([]));
-  }, [sourceId]);
+  }, [sourceId, sourceDb]);
 
   const run = async () => {
     if (!sourceId || !targetId || !selected.size) return;
-    if (sourceId === targetId && mode === 'replace') {
-      if (!window.confirm('源与目标是同一连接，替换模式会清空目标表后再从自身复制。继续？')) return;
+    if (sourceId === targetId && sourceDb === targetDb && mode === 'replace') {
+      if (!window.confirm('源与目标是同一库，替换模式会清空目标表后再从自身复制。继续？')) return;
     }
     setRunning(true);
     setResults(null);
     try {
       const { result } = await api.transfer({
         sourceId,
+        sourceDatabase: sourceDb || undefined,
         targetId,
+        targetDatabase: targetDb || undefined,
         tables: [...selected],
         mode,
         createMissing: true,
@@ -56,7 +61,7 @@ export function TransferTool() {
       setResults(result.results);
       setSummary(`传输 ${result.results.length} 张表 · ${result.totalRows} 行 · 新建 ${result.createdTables} 张表`);
       notify('success', '数据传输完成', `${result.totalRows} 行`);
-      await loadSchema(targetId, true);
+      await loadSchema(targetId, true, targetDb || undefined);
     } catch (err: any) {
       notify('error', '数据传输失败', err?.message);
     } finally {
@@ -71,18 +76,24 @@ export function TransferTool() {
         <span className="muted">跨连接复制表结构与数据，目标缺失表自动创建</span>
       </div>
       <div className="tool-row" style={{ flexWrap: 'wrap' }}>
-        <div className="field" style={{ flex: 1, minWidth: 180 }}>
-          <label>源连接</label>
-          <select className="select" value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
-            {connections.map((conn) => <option key={conn.id} value={conn.id}>{conn.name} · {conn.engine}</option>)}
-          </select>
+        <div className="field" style={{ flex: 1, minWidth: 240 }}>
+          <label>源连接 / 数据库</label>
+          <div className="row gap-6">
+            <select className="select" style={{ flex: 1 }} value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
+              {connections.map((conn) => <option key={conn.id} value={conn.id}>{conn.name} · {conn.engine}</option>)}
+            </select>
+            <DatabaseSelect connectionId={sourceId} value={sourceDb} onChange={setSourceDb} testId="transfer-source-db" />
+          </div>
         </div>
         <ArrowRight size={15} className="muted" style={{ alignSelf: 'flex-end', marginBottom: 6 }} />
-        <div className="field" style={{ flex: 1, minWidth: 180 }}>
-          <label>目标连接</label>
-          <select className="select" value={targetId} onChange={(e) => setTargetId(e.target.value)}>
-            {connections.map((conn) => <option key={conn.id} value={conn.id}>{conn.name} · {conn.engine}{conn.readonly ? '（只读）' : ''}</option>)}
-          </select>
+        <div className="field" style={{ flex: 1, minWidth: 240 }}>
+          <label>目标连接 / 数据库</label>
+          <div className="row gap-6">
+            <select className="select" style={{ flex: 1 }} value={targetId} onChange={(e) => setTargetId(e.target.value)}>
+              {connections.map((conn) => <option key={conn.id} value={conn.id}>{conn.name} · {conn.engine}{conn.readonly ? '（只读）' : ''}</option>)}
+            </select>
+            <DatabaseSelect connectionId={targetId} value={targetDb} onChange={setTargetDb} testId="transfer-target-db" />
+          </div>
         </div>
         <div className="field" style={{ width: 140 }}>
           <label>写入模式</label>

@@ -1,30 +1,39 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Loader2, Sparkles, Wand2 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
+import { DatabaseSelect, useDatabaseTables } from '../DatabaseSelect';
 
 export function GeneratorTool() {
   const activeConnectionId = useApp((s) => s.activeConnectionId);
   const connections = useApp((s) => s.connections);
-  const schemasByConn = useApp((s) => s.schemas);
   const loadSchema = useApp((s) => s.loadSchema);
   const notify = useApp((s) => s.notify);
   const conn = connections.find((c) => c.id === activeConnectionId);
-  const tables = (activeConnectionId ? schemasByConn[activeConnectionId] ?? [] : []).flatMap((schema) => schema.tables).filter((table) => table.type === 'table');
-  const [table, setTable] = useState(tables[0]?.name ?? '');
+  const [database, setDatabase] = useState('');
+  const tables = useDatabaseTables(activeConnectionId, database);
+  const [table, setTable] = useState('');
   const [rows, setRows] = useState(20);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
+
+  useEffect(() => {
+    if (!tables.length) {
+      setTable('');
+      return;
+    }
+    if (!tables.some((item) => item.name === table)) setTable(tables[0].name);
+  }, [tables, table]);
 
   const generate = async (dryRun: boolean) => {
     if (!activeConnectionId || !table) return;
     setLoading(true);
     try {
-      const { result: generated } = await api.generateData({ connectionId: activeConnectionId, database: conn?.database, table, rows, dryRun });
+      const { result: generated } = await api.generateData({ connectionId: activeConnectionId, database: database || undefined, table, rows, dryRun });
       setResult(generated);
       if (!dryRun) {
         notify('success', '示例数据已生成', `${generated.inserted} 行 → ${table}`);
-        await loadSchema(activeConnectionId, true);
+        await loadSchema(activeConnectionId, true, database || undefined);
       }
     } catch (err: any) {
       notify('error', '生成失败', err?.message);
@@ -43,10 +52,13 @@ export function GeneratorTool() {
       </div>
       <div className="tool-row" style={{ flexWrap: 'wrap' }}>
         <div className="field" style={{ flex: 1, minWidth: 200 }}>
-          <label>目标表</label>
-          <select className="select" value={table} onChange={(e) => { setTable(e.target.value); setResult(null); }}>
-            {tables.map((item) => <option key={item.name} value={item.name}>{item.name} · {item.columns?.length ?? 0} 列</option>)}
-          </select>
+          <label>数据库 / 目标表</label>
+          <div className="row gap-6">
+            <DatabaseSelect connectionId={activeConnectionId} value={database} onChange={setDatabase} testId="generate-db" />
+            <select className="select" style={{ flex: 1 }} value={table} onChange={(e) => { setTable(e.target.value); setResult(null); }}>
+              {tables.map((item) => <option key={item.name} value={item.name}>{item.name} · {item.columns?.length ?? 0} 列</option>)}
+            </select>
+          </div>
         </div>
         <div className="field" style={{ width: 120 }}>
           <label>行数</label>

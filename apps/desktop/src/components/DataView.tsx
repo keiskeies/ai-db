@@ -499,10 +499,10 @@ export function DataView({ tab }: { tab: DataTab }) {
       <div className="toolbar data-toolbar">
         <span className="title">
           <Table2 size={14} style={{ color: 'var(--accent)' }} />
-          {conn?.database && conn.engine !== 'sqlite' ? `${conn.database}.` : ''}
+          {tab.database && conn?.engine !== 'sqlite' ? `${tab.database}.` : ''}
           {tab.table}
         </span>
-        <button className="icon-btn" title={t('refresh')} onClick={() => { setRefreshKey((k) => k + 1); void loadSchema(tab.connectionId, true); }} data-testid="data-refresh">
+        <button className="icon-btn" title={t('refresh')} onClick={() => { setRefreshKey((k) => k + 1); void loadSchema(tab.connectionId, true, tab.database); }} data-testid="data-refresh">
           <RefreshCw size={14} />
         </button>
         <div className="sep" />

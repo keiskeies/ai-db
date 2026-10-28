@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react';
 import { Code2, Loader2, RefreshCw } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
+import { DatabaseSelect } from '../DatabaseSelect';
 
 export function AdvancedObjectsTool() {
   const connections = useApp((s) => s.connections);
   const activeConnectionId = useApp((s) => s.activeConnectionId);
   const notify = useApp((s) => s.notify);
   const [connectionId, setConnectionId] = useState(activeConnectionId ?? connections[0]?.id ?? '');
+  const [database, setDatabase] = useState('');
   const [data, setData] = useState<any>(null);
   const [tab, setTab] = useState<'triggers' | 'routines' | 'sequences' | 'events'>('triggers');
   const [selected, setSelected] = useState<any>(null);
@@ -16,7 +18,7 @@ export function AdvancedObjectsTool() {
   const load = async () => {
     setLoading(true);
     try {
-      const { objects } = await api.objects(connectionId);
+      const { objects } = await api.objects(connectionId, database || undefined);
       setData(objects);
       const first = objects.triggers?.[0] ?? objects.routines?.[0] ?? objects.sequences?.[0] ?? objects.events?.[0] ?? null;
       setSelected(first);
@@ -30,7 +32,7 @@ export function AdvancedObjectsTool() {
 
   useEffect(() => {
     if (connectionId) void load();
-  }, [connectionId]);
+  }, [connectionId, database]);
 
   const list = data?.[tab] ?? [];
 
@@ -44,6 +46,7 @@ export function AdvancedObjectsTool() {
         <select className="select" value={connectionId} onChange={(e) => setConnectionId(e.target.value)} style={{ width: 260 }}>
           {connections.map((conn) => <option key={conn.id} value={conn.id}>{conn.name} · {conn.engine}</option>)}
         </select>
+        <DatabaseSelect connectionId={connectionId} value={database} onChange={setDatabase} testId="objects-db" />
         <button className="btn" onClick={() => void load()} disabled={loading}>
           {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <RefreshCw size={12} />} 刷新
         </button>

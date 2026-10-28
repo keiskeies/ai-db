@@ -327,6 +327,7 @@ export interface AgentPlanItem {
 export interface AgentSessionMeta {
   id: string;
   connectionId?: string;
+  database?: string;
   title: string;
   summary?: string;
   model?: string;

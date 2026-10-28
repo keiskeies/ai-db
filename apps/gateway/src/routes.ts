@@ -694,6 +694,7 @@ export function createApiRouter(deps: ApiDeps): Router {
       const body = obj(req.body, 'body');
       const session = store.createSession({
         connectionId: str(body.connectionId),
+        database: str(body.database),
         title: str(body.title),
         model: str(body.model),
         permissionMode: str(body.permissionMode) as PermissionMode | undefined,
@@ -718,6 +719,7 @@ export function createApiRouter(deps: ApiDeps): Router {
       const session = store.updateSession(req.params.id, {
         title: str(body.title),
         connectionId: body.connectionId === null ? undefined : str(body.connectionId),
+        database: str(body.database),
         permissionMode: str(body.permissionMode) as PermissionMode | undefined,
         archived: body.archived === undefined ? undefined : Boolean(body.archived),
       });
@@ -760,6 +762,7 @@ export function createApiRouter(deps: ApiDeps): Router {
             attachments: Array.isArray(body.attachments) ? (body.attachments as string[]) : undefined,
             images: Array.isArray(body.images) ? (body.images as string[]).map(String).slice(0, 4) : undefined,
             connectionId: str(body.connectionId),
+            database: str(body.database),
           },
           (event) => {
             if (!finished && !res.writableEnded) res.write(encodeSse(event));

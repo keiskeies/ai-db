@@ -43,6 +43,8 @@ export interface TurnInput {
   /** 已上传到 Bridge 的图片附件 id。 */
   images?: string[];
   connectionId?: string;
+  /** 本回合的目标库；缺省用会话记录的库，再缺省用连接默认库。 */
+  database?: string;
 }
 
 export interface AgentHostOptions {
@@ -155,7 +157,13 @@ export class AgentHost {
     if (!session) throw new DbError('会话不存在', { code: 'SESSION_NOT_FOUND', status: 404 });
     const mode = MODES.includes(input.mode as PermissionMode) ? (input.mode as PermissionMode) : session.permissionMode;
     const connectionId = input.connectionId ?? session.connectionId;
-    const conn = connectionId ? this.opts.store.getConnection(connectionId) : undefined;
+    const stored = connectionId ? this.opts.store.getConnection(connectionId) : undefined;
+    // 目标库按「本回合 > 会话记录 > 连接默认」取，并替换进 conn，
+    // 让 schema、召回、业务上下文、提示词和工具默认库都指向同一个库。
+    // 会话库只在连接没换时才有意义，换了连接就退回新连接的默认库
+    const sameConnection = !session.connectionId || !connectionId || session.connectionId === connectionId;
+    const database = input.database || (sameConnection ? session.database : undefined) || stored?.database;
+    const conn = stored ? { ...stored, database } : undefined;
     const settings = this.opts.store.getSettings();
     const profile = getModelProfile(settings.agent);
     if (input.images?.length && !supportsInput(profile, 'image')) {
@@ -203,6 +211,7 @@ export class AgentHost {
     const title = session.title === '新会话' || !session.title ? text.slice(0, 28) : session.title;
     store.updateSession(sessionId, {
       connectionId,
+      database,
       title,
       permissionMode: mode,
       status: 'running',
@@ -284,7 +293,7 @@ export class AgentHost {
         }
         return `${base}\n${extra.join('\n\n')}`;
       },
-      executeTool: (call, signal) => this.opts.executor.execute(call, { sessionId, connectionId: conn?.id, signal }),
+      executeTool: (call, signal) => this.opts.executor.execute(call, { sessionId, connectionId: conn?.id, database: conn?.database, signal }),
       requestApproval: (payload) => this.waitApproval(payload, sessionId),
       emit: wrappedEmit,
     });

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Braces, Play } from 'lucide-react';
-import type { DatabaseSchema, TableInfo } from '@aidb/core';
+import type { TableInfo } from '@aidb/core';
 import { useApp } from '../../store';
+import { DatabaseSelect, useDatabaseTables } from '../DatabaseSelect';
 
 function quote(name: string, engine: string): string {
   if (engine === 'mysql' || engine === 'mariadb' || engine === 'clickhouse') return '`' + name.replace(/`/g, '``') + '`';
@@ -12,13 +13,12 @@ function quote(name: string, engine: string): string {
 export function QueryBuilderTool() {
   const activeConnectionId = useApp((s) => s.activeConnectionId);
   const connections = useApp((s) => s.connections);
-  const schemasByConn = useApp((s) => s.schemas);
   const openQuery = useApp((s) => s.openQuery);
   const closeTools = useApp((s) => s.closeTools);
   const notify = useApp((s) => s.notify);
   const conn = connections.find((c) => c.id === activeConnectionId);
-  const schemas: DatabaseSchema[] = activeConnectionId ? schemasByConn[activeConnectionId] ?? [] : [];
-  const tables = schemas.flatMap((schema) => schema.tables).filter((table) => table.type === 'table');
+  const [database, setDatabase] = useState('');
+  const tables = useDatabaseTables(activeConnectionId, database);
   const [t1, setT1] = useState('');
   const [t2, setT2] = useState('');
   const [joinType, setJoinType] = useState<'INNER' | 'LEFT'>('LEFT');
@@ -93,6 +93,14 @@ export function QueryBuilderTool() {
       <div className="tool-pane-head">
         <Braces size={15} /> 查询构建器
         <span className="muted">{conn.name} · {tables.length} 张表</span>
+      </div>
+      <div className="tool-row">
+        <DatabaseSelect
+          connectionId={activeConnectionId}
+          value={database}
+          onChange={(value) => { setDatabase(value); setT1(''); setT2(''); setSelected(new Set()); }}
+          testId="builder-db"
+        />
       </div>
       <div className="builder-grid">
         <div className="builder-form">
@@ -190,7 +198,7 @@ export function QueryBuilderTool() {
                   notify('warning', '请先选择表');
                   return;
                 }
-                openQuery(activeConnectionId ?? undefined, sql);
+                openQuery(activeConnectionId ?? undefined, sql, undefined, database || undefined);
                 closeTools();
               }}
             >

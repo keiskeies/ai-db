@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Clock, ListTodo, Loader2, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
+import { DatabaseSelect } from '../DatabaseSelect';
 
 interface Job {
   id: string;
@@ -26,6 +27,7 @@ export function JobsTool() {
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('每小时统计订单');
   const [connectionId, setConnectionId] = useState(activeConnectionId ?? connections[0]?.id ?? '');
+  const [database, setDatabase] = useState('');
   const [type, setType] = useState<'query' | 'backup'>('query');
   const [sql, setSql] = useState('SELECT status, COUNT(*) AS n FROM orders GROUP BY status');
   const [minutes, setMinutes] = useState(60);
@@ -49,7 +51,7 @@ export function JobsTool() {
 
   const create = async () => {
     try {
-      await api.createJob({ name, connectionId, type, sql: type === 'query' ? sql : undefined, intervalSeconds: Math.max(30, minutes * 60), enabled: true });
+      await api.createJob({ name, connectionId, database: database || undefined, type, sql: type === 'query' ? sql : undefined, intervalSeconds: Math.max(30, minutes * 60), enabled: true });
       setShowForm(false);
       await load();
       notify('success', '任务已创建');
@@ -101,6 +103,10 @@ export function JobsTool() {
               </select>
             </div>
             <div className="field">
+              <label>数据库</label>
+              <DatabaseSelect connectionId={connectionId} value={database} onChange={setDatabase} testId="job-db" />
+            </div>
+            <div className="field">
               <label>类型</label>
               <select className="select" value={type} onChange={(e) => setType(e.target.value as 'query' | 'backup')}>
                 <option value="query">SQL 查询</option>
@@ -137,7 +143,7 @@ export function JobsTool() {
                   {!job.enabled ? <span className="badge write">已暂停</span> : null}
                 </div>
                 <div className="listMeta">
-                  {conn?.name} · 每 {Math.round(job.intervalSeconds / 60)} 分钟
+                  {conn?.name}{job.database ? ` / ${job.database}` : ''} · 每 {Math.round(job.intervalSeconds / 60)} 分钟
                   {job.lastRunAt ? ` · 上次 ${new Date(job.lastRunAt).toLocaleString()}` : ' · 尚未运行'}
                 </div>
                 {job.lastError ? <div className="hint" style={{ color: 'var(--danger)' }}>{job.lastError}</div> : null}

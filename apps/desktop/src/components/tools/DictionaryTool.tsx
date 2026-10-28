@@ -2,13 +2,13 @@ import { useState } from 'react';
 import { BookOpen, Download, Loader2 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
+import { DatabaseSelect } from '../DatabaseSelect';
 
 export function DictionaryTool() {
   const activeConnectionId = useApp((s) => s.activeConnectionId);
-  const connections = useApp((s) => s.connections);
   const notify = useApp((s) => s.notify);
-  const conn = connections.find((item) => item.id === activeConnectionId);
   const [data, setData] = useState<any>(null);
+  const [database, setDatabase] = useState('');
   const [tab, setTab] = useState<'markdown' | 'sql'>('markdown');
   const [loading, setLoading] = useState(false);
 
@@ -16,7 +16,7 @@ export function DictionaryTool() {
     if (!activeConnectionId) return;
     setLoading(true);
     try {
-      const { dictionary } = await api.dictionary(activeConnectionId, conn?.database);
+      const { dictionary } = await api.dictionary(activeConnectionId, database || undefined);
       setData(dictionary);
     } catch (err: any) {
       notify('error', '生成失败', err?.message);
@@ -42,6 +42,7 @@ export function DictionaryTool() {
         <span className="muted">Markdown / DDL / JSON</span>
       </div>
       <div className="tool-row">
+        <DatabaseSelect connectionId={activeConnectionId} value={database} onChange={(value) => { setDatabase(value); setData(null); }} testId="dictionary-db" />
         <button className="btn primary" onClick={() => void load()} disabled={loading || !activeConnectionId}>
           {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <BookOpen size={12} />} 生成字典
         </button>

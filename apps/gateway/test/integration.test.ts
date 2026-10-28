@@ -287,11 +287,11 @@ test('table operations and batch data operations', async () => {
   assert.equal(unsupported.body.supported, false);
 });
 
-async function runTurn(sessionId: string, text: string, mode = 'ask', approve = false): Promise<{ events: AgentEvent[]; text: string }> {
+async function runTurn(sessionId: string, text: string, mode = 'ask', approve = false, database?: string): Promise<{ events: AgentEvent[]; text: string }> {
   const res = await fetch(`${base}/api/agent/sessions/${sessionId}/turns`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ text, mode }),
+    body: JSON.stringify({ text, mode, ...(database ? { database } : {}) }),
   });
   assert.equal(res.status, 200);
   const reader = res.body!.getReader();
@@ -598,4 +598,40 @@ test('websocket protocol streams a full agent turn', async () => {
   assert.ok(events.some((event) => event.type === 'tool_call' && event.tool === 'inspect_schema'));
   assert.ok(events.some((event) => event.type === 'done'));
   assert.ok(events.some((event) => event.type === 'turn_end'));
+});
+
+test('agent session remembers the selected database', async () => {
+  const created = await api<{ session: { id: string; database?: string } }>('/agent/sessions', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: demo.id, database: 'demo_db_one' }),
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.body.session.database, 'demo_db_one');
+
+  const patched = await api<{ session: { database?: string } }>(`/agent/sessions/${created.body.session.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ database: 'demo_db_two' }),
+  });
+  assert.equal(patched.body.session.database, 'demo_db_two');
+
+  const detail = await api<{ session: { database?: string } }>(`/agent/sessions/${created.body.session.id}`);
+  assert.equal(detail.body.session.database, 'demo_db_two');
+});
+
+test('agent turn runs against the database chosen in the session', async () => {
+  const created = await api<{ session: { id: string } }>('/agent/sessions', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: demo.id }),
+  });
+  const sessionId = created.body.session.id;
+
+  await runTurn(sessionId, '看看有哪些表', 'ask', false, 'demo_db_one');
+
+  // 工具没传 database 时，执行器应以会话选中的库为准
+  const audit = await api<{ entries: Array<{ tool: string; database?: string }> }>(`/audit?connectionId=${demo.id}&limit=20`);
+  const inspect = audit.body.entries.find((entry) => entry.tool === 'inspect_schema');
+  assert.equal(inspect?.database, 'demo_db_one');
+
+  const detail = await api<{ session: { database?: string } }>(`/agent/sessions/${sessionId}`);
+  assert.equal(detail.body.session.database, 'demo_db_one');
 });

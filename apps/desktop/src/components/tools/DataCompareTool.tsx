@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ArrowLeftRight, Loader2, RefreshCw } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
+import { DatabaseSelect } from '../DatabaseSelect';
 
 export function DataCompareTool() {
   const connections = useApp((s) => s.connections);
@@ -9,6 +10,8 @@ export function DataCompareTool() {
   const notify = useApp((s) => s.notify);
   const [sourceId, setSourceId] = useState(activeConnectionId ?? connections[0]?.id ?? '');
   const [targetId, setTargetId] = useState(connections.find((c) => c.id !== activeConnectionId)?.id ?? connections[0]?.id ?? '');
+  const [sourceDb, setSourceDb] = useState('');
+  const [targetDb, setTargetDb] = useState('');
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -18,7 +21,7 @@ export function DataCompareTool() {
     setResult(null);
     setSelected(new Set());
     try {
-      const { result: compared } = await api.compareData({ sourceId, targetId });
+      const { result: compared } = await api.compareData({ sourceId, sourceDatabase: sourceDb || undefined, targetId, targetDatabase: targetDb || undefined });
       setResult(compared);
       setSelected(new Set(compared.rows.filter((row: any) => row.status === 'different').map((row: any) => row.table)));
     } catch (err: any) {
@@ -33,7 +36,7 @@ export function DataCompareTool() {
     if (!window.confirm(`将用源数据替换目标中 ${selected.size} 张表（清空后写入），确认继续？`)) return;
     setLoading(true);
     try {
-      const { result: transferred } = await api.transfer({ sourceId, targetId, tables: [...selected], mode: 'replace', createMissing: true });
+      const { result: transferred } = await api.transfer({ sourceId, sourceDatabase: sourceDb || undefined, targetId, targetDatabase: targetDb || undefined, tables: [...selected], mode: 'replace', createMissing: true });
       notify('success', '数据同步完成', `${transferred.totalRows} 行`);
       await compare();
     } catch (err: any) {
@@ -50,17 +53,23 @@ export function DataCompareTool() {
         <span className="muted">行数与表存在性对比；可直接替换同步</span>
       </div>
       <div className="tool-row">
-        <div className="field" style={{ flex: 1, minWidth: 160 }}>
-          <label>源连接</label>
-          <select className="select" value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
-            {connections.map((conn) => <option key={conn.id} value={conn.id}>{conn.name}</option>)}
-          </select>
+        <div className="field" style={{ flex: 1, minWidth: 220 }}>
+          <label>源连接 / 数据库</label>
+          <div className="row gap-6">
+            <select className="select" style={{ flex: 1 }} value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
+              {connections.map((conn) => <option key={conn.id} value={conn.id}>{conn.name}</option>)}
+            </select>
+            <DatabaseSelect connectionId={sourceId} value={sourceDb} onChange={setSourceDb} testId="compare-source-db" />
+          </div>
         </div>
-        <div className="field" style={{ flex: 1, minWidth: 160 }}>
-          <label>目标连接</label>
-          <select className="select" value={targetId} onChange={(e) => setTargetId(e.target.value)}>
-            {connections.map((conn) => <option key={conn.id} value={conn.id}>{conn.name}</option>)}
-          </select>
+        <div className="field" style={{ flex: 1, minWidth: 220 }}>
+          <label>目标连接 / 数据库</label>
+          <div className="row gap-6">
+            <select className="select" style={{ flex: 1 }} value={targetId} onChange={(e) => setTargetId(e.target.value)}>
+              {connections.map((conn) => <option key={conn.id} value={conn.id}>{conn.name}</option>)}
+            </select>
+            <DatabaseSelect connectionId={targetId} value={targetDb} onChange={setTargetDb} testId="compare-target-db" />
+          </div>
         </div>
         <button className="btn primary" style={{ alignSelf: 'flex-end' }} onClick={() => void compare()} disabled={loading}>
           {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <RefreshCw size={12} />} 对比
