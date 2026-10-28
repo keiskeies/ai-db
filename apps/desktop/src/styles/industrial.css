@@ -31,7 +31,7 @@ body {
   width: 20px;
   height: 20px;
   border-radius: 6px;
-  background: linear-gradient(140deg, var(--accent), var(--accent-2));
+  background: linear-gradient(140deg, var(--brand-a), var(--brand-b));
   box-shadow: 0 0 10px var(--glow-accent);
   font-size: 9.5px;
 }
@@ -259,7 +259,7 @@ body {
 .welcome-hero { gap: 12px; margin-bottom: 16px; align-items: flex-start; }
 .welcome-mark {
   width: 40px; height: 40px; border-radius: 11px;
-  background: linear-gradient(140deg, var(--accent), var(--accent-2));
+  background: linear-gradient(140deg, var(--brand-a), var(--brand-b));
   box-shadow: 0 0 16px var(--glow-accent);
 }
 .welcome h1 { font-size: 21px; margin-bottom: 4px; letter-spacing: -0.4px; }

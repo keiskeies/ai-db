@@ -14,6 +14,10 @@
   --accent: #45c8c3;
   --accent-hover: #5fd8d3;
   --accent-2: #e0af63;
+  /* 品牌渐变与实心品牌块：两套主题保持一致，避免浅色下被压暗成泥色 */
+  --brand-a: #45c8c3;
+  --brand-b: #e0af63;
+  --on-brand: #0b0d0d;
   --accent-soft: rgba(69, 200, 195, 0.12);
   --violet: #45c8c3;
   --agent: #45c8c3;
@@ -56,6 +60,9 @@
   --accent: #0a7370;
   --accent-hover: #08605d;
   --accent-2: #96681b;
+  --brand-a: #45c8c3;
+  --brand-b: #e0af63;
+  --on-brand: #0b0d0d;
   --accent-soft: rgba(10, 115, 112, 0.1);
   --violet: #0a7370;
   --agent: #0a7370;

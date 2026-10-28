@@ -44,8 +44,8 @@ a { color: var(--accent); text-decoration: none; }
 .brand { display: flex; align-items: center; gap: 8px; padding-left: 4px; }
 .brand-mark {
   width: 22px; height: 22px; border-radius: 6px;
-  background: linear-gradient(140deg, var(--accent), var(--accent-2));
-  display: grid; place-items: center; color: var(--on-solid); font-size: 11px; font-weight: 800;
+  background: linear-gradient(140deg, var(--brand-a), var(--brand-b));
+  display: grid; place-items: center; color: var(--on-brand); font-size: 11px; font-weight: 800;
   box-shadow: 0 0 0 1px rgba(255,255,255,.08) inset;
 }
 .brand-name { font-weight: 650; letter-spacing: .2px; font-size: 12.5px; }
@@ -212,7 +212,7 @@ a { color: var(--accent); text-decoration: none; }
 .welcome { flex: 1; overflow: auto; display: flex; justify-content: center; padding: 48px 32px; }
 .welcome-inner { width: 100%; max-width: 860px; }
 .welcome-hero { display: flex; align-items: center; gap: 18px; margin-bottom: 26px; }
-.welcome-mark { width: 54px; height: 54px; border-radius: 15px; background: linear-gradient(140deg, var(--accent), var(--accent-2)); display: grid; place-items: center; color: var(--on-solid); box-shadow: 0 12px 30px rgba(0,0,0,.25); }
+.welcome-mark { width: 54px; height: 54px; border-radius: 15px; background: linear-gradient(140deg, var(--brand-a), var(--brand-b)); display: grid; place-items: center; color: var(--on-brand); box-shadow: 0 12px 30px rgba(0,0,0,.25); }
 .welcome h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -.5px; }
 .welcome .lead { color: var(--text-secondary); font-size: 13.5px; line-height: 1.6; margin: 0; }
 .welcome-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 26px 0; }
