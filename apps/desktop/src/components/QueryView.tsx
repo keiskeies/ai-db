@@ -19,6 +19,7 @@ import { VectorSearchPanel } from './VectorSearchPanel';
 import { DocumentWritePanel } from './DocumentWritePanel';
 import { DocumentEditDialog } from './DocumentEditDialog';
 import { RedisKeyDialog } from './RedisKeyDialog';
+import { RedisKeyCreateDialog } from './RedisKeyCreateDialog';
 import { Spinner } from './ui';
 
 type QueryTab = Extract<Tab, { kind: 'query' }>;
@@ -91,6 +92,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const [vectorOpen, setVectorOpen] = useState(false);
   const [writeOpen, setWriteOpen] = useState(false);
   const [keyDialog, setKeyDialog] = useState<string | null>(null);
+  const [keyCreateOpen, setKeyCreateOpen] = useState(false);
   const [docEdit, setDocEdit] = useState<{ collection: string; id: string } | null>(null);
 
   const [sql, setSql] = useState(tab.sql);
@@ -525,6 +527,11 @@ ${text}
             <Sparkles size={12} /> 向量检索
           </button>
         ) : null}
+        {conn && conn.engine === 'redis' && !conn.readonly ? (
+          <button className="btn small ai" onClick={() => setKeyCreateOpen(true)} data-testid="open-key-create">
+            <Plus size={12} /> 新建键
+          </button>
+        ) : null}
         <button className="icon-btn" title="导出当前语句结果（CSV）" onClick={() => void exportResult()} data-testid="query-export">
           <Download size={13} />
         </button>
@@ -745,6 +752,14 @@ ${text}
       {vectorOpen && conn ? <VectorSearchPanel connection={conn} database={tab.database} onClose={() => setVectorOpen(false)} /> : null}
       {keyDialog && conn ? (
         <RedisKeyDialog connectionId={conn.id} database={tab.database} keyName={keyDialog} onClose={() => setKeyDialog(null)} />
+      ) : null}
+      {keyCreateOpen && conn ? (
+        <RedisKeyCreateDialog
+          connectionId={conn.id}
+          database={tab.database}
+          onCreated={() => void run()}
+          onClose={() => setKeyCreateOpen(false)}
+        />
       ) : null}
       {docEdit && conn ? (
         <DocumentEditDialog

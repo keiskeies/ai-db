@@ -94,8 +94,17 @@ export function supportsObjectCreate(driver: Driver): driver is ObjectCreateDriv
 }
 
 /** 键值引擎的键详情（类型感知查看器）。 */
+export interface CreateRedisKeyInput {
+  key: string;
+  type: 'string' | 'hash' | 'list' | 'set' | 'zset';
+  /** string 为标量；hash/zset 为对象；list/set 为数组。 */
+  value: unknown;
+  ttl?: number | null;
+}
+
 export interface RedisKeyDriver extends Driver {
   describeKey(key: string, database?: string, limit?: number): Promise<RedisKeyDetail>;
+  createKey(input: CreateRedisKeyInput, database?: string): Promise<{ key: string; type: string; ttl: number }>;
   deleteKeys(keys: string[], database?: string): Promise<{ deleted: number }>;
   dropIndex(name: string, database?: string): Promise<{ name: string; dropped: boolean }>;
   setTtl(key: string, seconds: number | null, database?: string): Promise<{ key: string; ttl: number }>;

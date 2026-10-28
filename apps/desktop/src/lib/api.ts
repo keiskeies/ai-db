@@ -228,6 +228,8 @@ export const api = {
   },
   setKeyTtl: (body: { connectionId: string; database?: string; key: string; seconds: number | null }) =>
     request<{ result: { key: string; ttl: number } }>('/redis/key/ttl', { method: 'POST', body: JSON.stringify(body) }),
+  createRedisKey: (body: { connectionId: string; database?: string; key: string; type: string; value: unknown; ttl?: number | null }) =>
+    request<{ result: { key: string; type: string; ttl: number } }>('/redis/key/create', { method: 'POST', body: JSON.stringify(body) }),
   renameKey: (body: { connectionId: string; database?: string; key: string; to: string }) =>
     request<{ result: { from: string; to: string } }>('/redis/key/rename', { method: 'POST', body: JSON.stringify(body) }),
   deleteRedisKeys: (body: { connectionId: string; database?: string; keys: string[] }) =>

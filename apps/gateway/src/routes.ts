@@ -769,6 +769,57 @@ export function createApiRouter(deps: ApiDeps): Router {
   );
 
   router.post(
+    '/redis/key/create',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const connectionId = str(body.connectionId);
+      const key = str(body.key);
+      const type = str(body.type);
+      if (!connectionId || !key || !type) {
+        throw Object.assign(new Error('connectionId、key 与 type 必填'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      if (!['string', 'hash', 'list', 'set', 'zset'].includes(type)) {
+        throw Object.assign(new Error('type 需要是 string/hash/list/set/zset'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      if (body.value === undefined) throw Object.assign(new Error('value 必填'), { code: 'INVALID_INPUT', status: 400 });
+      const database = str(body.database);
+      const ttl = body.ttl === null || body.ttl === undefined || body.ttl === '' ? null : Number(body.ttl);
+      if (ttl !== null && (!Number.isFinite(ttl) || ttl < 1)) {
+        throw Object.assign(new Error('ttl 需要是正整数秒，或 null 表示永不过期'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      const input = { key, type: type as 'string' | 'hash' | 'list' | 'set' | 'zset', value: body.value, ttl };
+      try {
+        const result = await manager.createKey(connectionId, input, { database, actor: 'user' });
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'redis.key.create',
+          sql: JSON.stringify({ key, type }),
+          risk: 'write',
+          approval: 'manual',
+          status: 'ok',
+          meta: { ttl: result.ttl },
+        });
+        res.json({ result });
+      } catch (err: any) {
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'redis.key.create',
+          sql: JSON.stringify({ key, type }),
+          risk: 'write',
+          approval: 'manual',
+          status: 'error',
+          meta: { error: err.message },
+        });
+        throw err;
+      }
+    }),
+  );
+
+  router.post(
     '/redis/key/ttl',
     ah(async (req, res) => {
       const body = obj(req.body, 'body');

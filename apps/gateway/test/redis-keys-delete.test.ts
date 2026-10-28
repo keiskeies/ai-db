@@ -205,3 +205,68 @@ test('HTTP 设置/移除 TTL 与重命名键', { skip: !PORT }, async () => {
     await cleanup.quit();
   }
 });
+
+test('HTTP 新建键覆盖五种类型，拒绝重复键与只读连接', { skip: !PORT }, async () => {
+  const env = await gateway();
+  after(env.close);
+  const writable = await env.connect('redis-create', false);
+  const readonly = await env.connect('redis-create-ro', true);
+  const db = '9';
+  const names = ['aidb_ck_str', 'aidb_ck_hash', 'aidb_ck_list', 'aidb_ck_set', 'aidb_ck_zset'];
+
+  const client = new Redis({ host: '127.0.0.1', port: PORT!, db: Number(db), lazyConnect: true });
+  await client.connect();
+  try {
+    await client.del(...names);
+    const create = (key: string, type: string, value: unknown, ttl?: number | null) =>
+      env.api<{ result: { key: string; type: string; ttl: number } }>('/redis/key/create', {
+        method: 'POST',
+        body: JSON.stringify({ connectionId: writable, database: db, key, type, value, ttl }),
+      });
+
+    const str = await create('aidb_ck_str', 'string', 'hello', 600);
+    assert.equal(str.status, 200, JSON.stringify(str.body));
+    assert.equal(str.body.result.type, 'string');
+    assert.ok(str.body.result.ttl > 0 && str.body.result.ttl <= 600, 'TTL 生效');
+    assert.equal(await client.get('aidb_ck_str'), 'hello');
+
+    assert.equal((await create('aidb_ck_hash', 'hash', { name: 'Ada', age: '36' })).status, 200);
+    assert.deepEqual(await client.hgetall('aidb_ck_hash'), { name: 'Ada', age: '36' });
+
+    assert.equal((await create('aidb_ck_list', 'list', ['a', 'b'])).status, 200);
+    assert.deepEqual(await client.lrange('aidb_ck_list', 0, -1), ['a', 'b']);
+
+    assert.equal((await create('aidb_ck_set', 'set', ['x', 'y', 'x'])).status, 200);
+    assert.deepEqual((await client.smembers('aidb_ck_set')).sort(), ['x', 'y']);
+
+    assert.equal((await create('aidb_ck_zset', 'zset', { alice: 1, bob: 2 })).status, 200);
+    assert.deepEqual(await client.zrange('aidb_ck_zset', 0, -1, 'WITHSCORES'), ['alice', '1', 'bob', '2']);
+
+    const dup = await create('aidb_ck_str', 'string', 'again');
+    assert.equal(dup.status, 409);
+    assert.equal((dup.body as any).error.code, 'REDIS_KEY_EXISTS');
+    assert.equal(await client.get('aidb_ck_str'), 'hello', '重复创建不覆盖原值');
+
+    const ro = await env.api('/redis/key/create', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: readonly, database: db, key: 'aidb_ck_ro', type: 'string', value: 'x' }),
+    });
+    assert.equal(ro.status, 403);
+    assert.equal((ro.body as any).error.code, 'READONLY');
+
+    const badType = await env.api('/redis/key/create', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: writable, database: db, key: 'aidb_ck_bad', type: 'stream', value: 'x' }),
+    });
+    assert.equal(badType.status, 400);
+
+    const badScore = await create('aidb_ck_zset2', 'zset', { alice: 'not-a-number' });
+    assert.equal(badScore.status, 400);
+
+    const audits = await env.api<{ entries: Array<{ tool: string; risk: string }> }>(`/audit?connectionId=${writable}&limit=30`);
+    assert.ok((audits.body.entries ?? []).some((entry) => entry.tool === 'redis.key.create' && entry.risk === 'write'));
+  } finally {
+    await client.del(...names, 'aidb_ck_zset2');
+    await client.quit();
+  }
+});

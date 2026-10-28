@@ -1,7 +1,7 @@
 import { Redis } from 'ioredis';
 import { parseRedisCommandLine } from '@aidb/core';
 import type { Engine, QueryResult, RedisKeyDetail, RedisQuery, StructuredQuery, TableInfo } from '@aidb/core';
-import type { Driver, DriverTestResult, RedisKeyDriver, RunOptions, StructuredQueryDriver } from './types';
+import type { CreateRedisKeyInput, Driver, DriverTestResult, RedisKeyDriver, RunOptions, StructuredQueryDriver } from './types';
 import { DbError } from './types';
 
 const MODULE_LABEL: Record<string, string> = {
@@ -539,6 +539,55 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
   }
 
   /** 删除键走 UNLINK：值很大时由后台线程回收，不阻塞主线程。 */
+  async createKey(input: CreateRedisKeyInput, database?: string): Promise<{ key: string; type: string; ttl: number }> {
+    const name = input.key.trim();
+    if (!name) throw new DbError('键名不能为空', { code: 'REDIS_KEY' });
+    const client = await this.ready(database);
+    if (await client.exists(name)) throw new DbError(`键已存在：${name}`, { code: 'REDIS_KEY_EXISTS', status: 409 });
+    const text = (value: unknown): string => (value !== null && typeof value === 'object' ? JSON.stringify(value) : String(value));
+    const value = input.value;
+    try {
+      if (input.type === 'string') {
+        if (value === null || value === undefined || typeof value === 'object') {
+          throw new DbError('string 键需要一个标量值', { code: 'REDIS_VALUE' });
+        }
+        await client.set(name, text(value));
+      } else if (input.type === 'hash' || input.type === 'zset') {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+          throw new DbError(`${input.type} 键需要一个对象`, { code: 'REDIS_VALUE' });
+        }
+        const entries = Object.entries(value as Record<string, unknown>);
+        if (!entries.length) throw new DbError(`${input.type} 键至少需要一个成员`, { code: 'REDIS_VALUE' });
+        if (input.type === 'hash') {
+          await client.hset(name, ...entries.flatMap(([field, item]) => [field, text(item)]));
+        } else {
+          const args: Array<string | number> = [];
+          for (const [member, score] of entries) {
+            const numeric = Number(score);
+            if (!Number.isFinite(numeric)) throw new DbError(`zset 成员 ${member} 的分数必须是数字`, { code: 'REDIS_VALUE' });
+            args.push(numeric, member);
+          }
+          await client.zadd(name, ...args);
+        }
+      } else if (input.type === 'list' || input.type === 'set') {
+        if (!Array.isArray(value) || !value.length) throw new DbError(`${input.type} 键需要一个非空数组`, { code: 'REDIS_VALUE' });
+        const members = value.map(text);
+        if (input.type === 'list') await client.rpush(name, ...members);
+        else await client.sadd(name, ...members);
+      } else {
+        throw new DbError(`不支持的键类型：${input.type}`, { code: 'REDIS_TYPE' });
+      }
+    } catch (err) {
+      if (err instanceof DbError) throw err;
+      throw new DbError((err as any)?.message ?? `创建键失败：${name}`, { code: 'REDIS_CREATE' });
+    }
+    if (input.ttl !== undefined && input.ttl !== null) {
+      if (!Number.isFinite(input.ttl) || input.ttl < 1) throw new DbError('TTL 需要是正整数秒', { code: 'REDIS_TTL' });
+      await client.expire(name, Math.floor(input.ttl));
+    }
+    return { key: name, type: input.type, ttl: Number(await client.ttl(name)) };
+  }
+
   async deleteKeys(keys: string[], database?: string): Promise<{ deleted: number }> {
     const names = keys.map((key) => key.trim()).filter(Boolean);
     if (!names.length) throw new DbError('至少要指定一个键', { code: 'REDIS_KEY' });

@@ -41,7 +41,7 @@ import {
 import type { GatewayConfig } from './config';
 import { createDriver, DbError, type Driver } from './drivers';
 import { normalizeMql } from './drivers/mongodb';
-import type { RedisKeyDriver } from './drivers/types';
+import type { CreateRedisKeyInput, RedisKeyDriver } from './drivers/types';
 import { supportsCollectionIndexes, supportsDocumentRead, supportsDocumentWrite, supportsFieldAdd, supportsKeyDetail, supportsObjectCreate, supportsStructuredQuery, supportsVectorSearch } from './drivers/types';
 import { embedText } from './embeddings';
 import type { Store } from './store';
@@ -595,6 +595,23 @@ export class ConnectionManager {
       connectionId,
       database: opts.database ?? conn.database,
       sql: JSON.stringify({ renameKey: result }),
+      status: 'ok',
+      durationMs: Date.now() - started,
+    });
+    return result;
+  }
+
+  /** 新建键（string/hash/list/set/zset）；键已存在时由驱动拒绝。 */
+  async createKey(connectionId: string, input: CreateRedisKeyInput, opts: QueryOptions): Promise<{ key: string; type: string; ttl: number }> {
+    const { conn, driver } = await this.keyDriver(connectionId);
+    if (!input.key?.trim()) throw new DbError('键名不能为空', { code: 'REDIS_KEY' });
+    const started = Date.now();
+    const result = await driver.createKey(input, opts.database ?? conn.database);
+    this.invalidate(connectionId);
+    this.store.addHistory({
+      connectionId,
+      database: opts.database ?? conn.database,
+      sql: JSON.stringify({ createKey: { key: result.key, type: result.type } }),
       status: 'ok',
       durationMs: Date.now() - started,
     });

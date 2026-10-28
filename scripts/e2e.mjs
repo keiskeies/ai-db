@@ -133,7 +133,7 @@ if (REDIS_PORT) {
   const client = new Redis({ host: '127.0.0.1', port: REDIS_PORT, lazyConnect: true });
   await client.connect();
   await client.set('aidb:e2e:key', 'hello');
-  await client.del('aidb:e2e:key_renamed');
+  await client.del('aidb:e2e:key_renamed', 'aidb:e2e:created');
   await client.set('aidb:e2e:del', 'throwaway');
   if (REDIS_STACK) {
     await client.call('FT.DROPINDEX', 'aidb_e2e').catch(() => undefined);
@@ -570,6 +570,20 @@ if (REDIS_PORT) {
     { timeout: 20000 },
   );
   check('Redis key renamed from the detail dialog', true);
+
+  await page.click('[data-testid="open-key-create"]');
+  await page.waitForSelector('[data-testid="key-create-name"]', { timeout: 10000 });
+  await page.fill('[data-testid="key-create-name"]', 'aidb:e2e:created');
+  await page.selectOption('[data-testid="key-create-type"]', 'hash');
+  await page.fill('[data-testid="key-create-value"]', '{"name":"Ada"}');
+  await page.click('[data-testid="key-create-submit"]');
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
+  await page.waitForFunction(
+    () => document.querySelector('[data-testid="query-result-grid"]')?.innerText.includes('aidb:e2e:created'),
+    null,
+    { timeout: 20000 },
+  );
+  check('Redis key created from the new-key dialog', true);
 
   if (REDIS_STACK) {
     await page.waitForSelector('[title="搜索索引 aidb_e2e"]', { timeout: 20000 });
