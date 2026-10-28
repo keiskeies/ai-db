@@ -243,6 +243,7 @@ export const api = {
     unique?: boolean;
     sparse?: boolean;
     expireAfterSeconds?: number;
+    type?: string;
   }) => request<{ result: { name: string; created: boolean } }>('/indexes/create', { method: 'POST', body: JSON.stringify(body) }),
   dropIndex: (body: { connectionId: string; database?: string; collection: string; name: string }) =>
     request<{ result: { name: string; dropped: boolean } }>('/indexes/drop', { method: 'POST', body: JSON.stringify(body) }),

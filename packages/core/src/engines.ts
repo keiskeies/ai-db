@@ -421,6 +421,7 @@ export const ENGINES: EngineMeta[] = [
       gridEdit: false,
       users: false,
       documentWrite: true,
+      indexManage: true,
       objectLifecycle: true,
     },
     defaultPort: 6333,

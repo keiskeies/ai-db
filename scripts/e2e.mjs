@@ -206,6 +206,11 @@ if (QDRANT_PORT) {
       ],
     }),
   });
+  await fetch(`${base}/collections/aidb_e2e/index?wait=true`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ field_name: 'name', field_schema: { type: 'keyword' } }),
+  });
 }
 if (TDENGINE_PORT) {
   const base = `http://127.0.0.1:${TDENGINE_PORT}`;
@@ -649,6 +654,41 @@ if (QDRANT_PORT) {
   await page.click('[data-testid="drop-object-submit"]');
   await page.waitForSelector('[title="向量集合 aidb_uicreated"]', { state: 'detached', timeout: 20000 });
   check('Collection dropped from the tree menu disappears', true);
+
+  const openVectorInfo = async () => {
+    await page.locator('[title="向量集合 aidb_e2e"]').click({ button: 'right' });
+    await page.click('text=对象信息');
+    await page.waitForSelector('[data-testid="create-index-open"]', { timeout: 10000 });
+  };
+  await openVectorInfo();
+  await page.locator('[data-testid="object-info-index-name"]', { hasText: 'name' }).first().waitFor({ timeout: 10000 });
+  check('Qdrant payload index shows in object info', true);
+  await page.click('[data-testid="create-index-open"]');
+  await page.fill('[data-testid="index-fields"]', 'weight');
+  await page.selectOption('[data-testid="index-type"]', 'integer');
+  await page.click('[data-testid="index-submit"]');
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
+  await openVectorInfo();
+  await page.waitForFunction(
+    () => [...document.querySelectorAll('[data-testid="object-info-index-name"]')].some((cell) => cell.textContent === 'weight'),
+    null,
+    { timeout: 20000 },
+  );
+  check('Qdrant payload index created from the panel', true);
+
+  await page.locator('.tool-table tr', { hasText: 'weight' }).locator('[data-testid="index-drop-open"]').click();
+  await page.fill('[data-testid="index-drop-confirm"]', 'weight');
+  await page.click('[data-testid="index-drop-submit"]');
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
+  await openVectorInfo();
+  await page.waitForFunction(
+    () => ![...document.querySelectorAll('[data-testid="object-info-index-name"]')].some((cell) => cell.textContent === 'weight'),
+    null,
+    { timeout: 20000 },
+  );
+  check('Qdrant payload index dropped from the panel', true);
+  await page.locator('.modal-head .icon-btn').last().click();
+  await page.waitForTimeout(200);
 }
 
 if (TDENGINE_PORT) {

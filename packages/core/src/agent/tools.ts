@@ -445,7 +445,7 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: 'manage_index',
     description:
-      'Create or drop an index. On SQL connections `table` is a table/view; on MongoDB connections it is a collection and sparse / expireAfterSeconds (TTL) are supported. The _id_ index cannot be dropped.',
+      'Create or drop an index. On SQL connections `table` is a table/view; on MongoDB connections it is a collection and sparse / expireAfterSeconds (TTL) are supported; on Qdrant it creates a payload index on a single field, where `type` selects keyword / integer / float / text / bool / geo. The _id_ index cannot be dropped.',
     risk: 'ddl',
     inputSchema: {
       type: 'object',
@@ -460,6 +460,7 @@ export const TOOLS: ToolDefinition[] = [
         name: { type: 'string', description: 'Index name for drop' },
         sparse: { type: 'boolean', description: 'MongoDB only: build a sparse index' },
         expireAfterSeconds: { type: 'integer', minimum: 1, description: 'MongoDB only: TTL in seconds' },
+        type: { type: 'string', enum: ['keyword', 'integer', 'float', 'text', 'bool', 'geo'], description: 'Qdrant only: payload index type' },
       },
     },
     summarize: (a) => `${a.action === 'drop' ? '删除' : '创建'}索引 ${a.table}`,

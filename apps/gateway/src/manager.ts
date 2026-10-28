@@ -420,7 +420,7 @@ export class ConnectionManager {
   /** 文档型引擎的索引创建/删除（非 SQL DDL）。 */
   async createCollectionIndex(
     connectionId: string,
-    input: { collection: string; name?: string; columns: string[]; unique?: boolean; sparse?: boolean; expireAfterSeconds?: number },
+    input: { collection: string; name?: string; columns: string[]; unique?: boolean; sparse?: boolean; expireAfterSeconds?: number; type?: string },
     opts: QueryOptions,
   ): Promise<{ name: string; created: boolean }> {
     const conn = this.store.getConnection(connectionId);
@@ -447,7 +447,7 @@ export class ConnectionManager {
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
-      sql: JSON.stringify({ createIndex: { collection: input.collection, name: result.name, columns: input.columns, unique: input.unique, sparse: input.sparse, ttl: input.expireAfterSeconds } }),
+      sql: JSON.stringify({ createIndex: { collection: input.collection, name: result.name, columns: input.columns, unique: input.unique, sparse: input.sparse, ttl: input.expireAfterSeconds, type: input.type } }),
       status: 'ok',
       durationMs: Date.now() - started,
     });

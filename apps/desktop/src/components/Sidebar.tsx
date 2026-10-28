@@ -29,7 +29,7 @@ import {
   Upload,
   PanelLeftClose,
 } from 'lucide-react';
-import type { ConnectionConfig, DatabaseSchema, TableInfo } from '@aidb/core';
+import type { ConnectionConfig, DatabaseSchema, Engine, TableInfo } from '@aidb/core';
 import { engineMeta, managesIndexes, managesObjects } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp, type ContextMenuItem } from '../store';
@@ -99,6 +99,7 @@ export function Sidebar() {
     relational?: boolean;
     connectionId?: string;
     manageIndexes?: boolean;
+    engine?: Engine;
   } | null>(null);
 
   const filtered = useMemo(() => {
@@ -253,6 +254,7 @@ export function Sidebar() {
                 relational: false,
                 connectionId: conn.id,
                 manageIndexes: managesIndexes(conn.engine) && !conn.readonly,
+                engine: conn.engine,
               }),
           }]
         : []),
@@ -768,6 +770,7 @@ export function Sidebar() {
           relational={infoTable.relational ?? true}
           connectionId={infoTable.connectionId}
           manageIndexes={infoTable.manageIndexes}
+          engine={infoTable.engine}
           onClose={() => setInfoTable(null)}
         />
       ) : null}

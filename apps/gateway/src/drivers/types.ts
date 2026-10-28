@@ -112,6 +112,8 @@ export interface CollectionIndexInput {
   unique?: boolean;
   sparse?: boolean;
   expireAfterSeconds?: number;
+  /** Qdrant payload 索引类型：keyword / integer / float / text / bool / geo。 */
+  type?: string;
 }
 
 export interface CollectionIndexDriver extends Driver {

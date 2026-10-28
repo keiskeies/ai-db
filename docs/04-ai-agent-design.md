@@ -79,7 +79,7 @@ for (step = 0; step < maxSteps; step++) {
 | 8 | `create_table` | ddl | 结构化建表（列/索引定义） | `{ connectionId, database?, table, columns[], indexes? }` |
 | 9 | `alter_table` | ddl/destructive | 增删改列、重命名、改类型 | `{ connectionId, table, operations[] }` |
 | 10 | `drop_object` | destructive | 删除表/视图/索引 | `{ connectionId, kind, name, cascade? }` |
-| 11 | `manage_index` | ddl | 创建/删除索引（SQL 表；MongoDB 集合也支持 unique / sparse / TTL，`_id_` 拒删） | `{ connectionId, table, action, index, name?, sparse?, expireAfterSeconds? }` |
+| 11 | `manage_index` | ddl | 创建/删除索引（SQL 表；MongoDB 集合支持 unique / sparse / TTL，`_id_` 拒删；Qdrant 建 payload 索引，单字段 + `type`） | `{ connectionId, table, action, index, name?, sparse?, expireAfterSeconds?, type? }` |
 | 12 | `export_result` | write | 导出查询或整表到文件 | `{ connectionId, sql?, table?, format, path? , limit? }` |
 | 13 | `import_csv` | write | CSV 导入（映射 + 事务） | `{ connectionId, table, path, mapping[], hasHeader, delimiter }` |
 | 14 | `backup_database` | read | 备份（SQL dump / SQLite 快照） | `{ connectionId, database?, label? }` |

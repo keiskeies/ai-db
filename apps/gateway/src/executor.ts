@@ -785,6 +785,7 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
                     unique: Boolean(raw.unique),
                     sparse: a.sparse === true,
                     expireAfterSeconds: Number(a.expireAfterSeconds ?? 0) > 0 ? Math.floor(Number(a.expireAfterSeconds)) : undefined,
+                    type: typeof a.type === 'string' ? a.type : undefined,
                   },
                   { database, timeoutMs: settings.queryTimeoutMs, actor: 'agent' },
                 );

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { TableInfo } from '@aidb/core';
+import type { Engine, TableInfo } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp } from '../store';
 import { Modal, Spinner } from './ui';
@@ -14,6 +14,7 @@ interface Props {
   /** 连接 id + 该引擎支持索引管理时，索引区直接可建删。 */
   connectionId?: string;
   manageIndexes?: boolean;
+  engine?: Engine;
 }
 
 export function TableInfoDialog({
@@ -24,6 +25,7 @@ export function TableInfoDialog({
   relational = true,
   connectionId,
   manageIndexes = false,
+  engine,
 }: Props) {
   const t = useApp((s) => s.t);
   const notify = useApp((s) => s.notify);
@@ -32,12 +34,14 @@ export function TableInfoDialog({
   const indexes = table.indexes ?? [];
   const foreignKeys = table.foreignKeys ?? [];
   const pk = useMemo(() => columns.filter((column) => column.primaryKey).map((column) => column.name), [columns]);
+  const singleField = engine === 'qdrant';
   const [creating, setCreating] = useState(false);
   const [fields, setFields] = useState('');
   const [indexName, setIndexName] = useState('');
   const [unique, setUnique] = useState(false);
   const [sparse, setSparse] = useState(false);
   const [ttl, setTtl] = useState('');
+  const [payloadType, setPayloadType] = useState('keyword');
   const [pendingDrop, setPendingDrop] = useState<string | null>(null);
   const [dropTyped, setDropTyped] = useState('');
   const [busy, setBusy] = useState(false);
@@ -51,9 +55,10 @@ export function TableInfoDialog({
 
   const submitCreate = async () => {
     if (!connectionId) return;
-    const parsed = fields.split(',').map((column) => column.trim()).filter(Boolean);
-    if (!parsed.length) {
-      setError('至少填写一个字段');
+    const singleField = engine === 'qdrant';
+    const parsed = singleField ? [fields.trim()] : fields.split(',').map((column) => column.trim()).filter(Boolean);
+    if (!parsed.length || parsed.some((column) => !column)) {
+      setError(singleField ? '请填写一个字段名' : '至少填写一个字段');
       return;
     }
     setBusy(true);
@@ -64,10 +69,11 @@ export function TableInfoDialog({
         database,
         collection: table.name,
         columns: parsed,
-        name: indexName.trim() || undefined,
-        unique,
-        sparse,
-        expireAfterSeconds: Number(ttl) > 0 ? Math.floor(Number(ttl)) : undefined,
+        name: singleField ? undefined : indexName.trim() || undefined,
+        unique: singleField ? undefined : unique,
+        sparse: singleField ? undefined : sparse,
+        expireAfterSeconds: singleField || !(Number(ttl) > 0) ? undefined : Math.floor(Number(ttl)),
+        type: singleField ? payloadType : undefined,
       });
       done('索引已创建', result.name);
     } catch (err: any) {
@@ -141,21 +147,36 @@ export function TableInfoDialog({
           </div>
           {manageIndexes && creating ? (
             <div className="form-grid" style={{ marginBottom: 8 }} data-testid="create-index-form">
-              <label>字段（逗号分隔）</label>
-              <input className="input" value={fields} onChange={(event) => setFields(event.target.value)} placeholder="weight, name" data-testid="index-fields" />
-              <label>索引名</label>
-              <input className="input" value={indexName} onChange={(event) => setIndexName(event.target.value)} placeholder="留空自动生成" data-testid="index-name" />
-              <label>TTL（秒）</label>
-              <input className="input" value={ttl} onChange={(event) => setTtl(event.target.value.replace(/\D/g, ''))} placeholder="留空则不过期" data-testid="index-ttl" />
-              <label>选项</label>
-              <div style={{ display: 'flex', gap: 12, fontSize: 12 }}>
-                <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                  <input type="checkbox" checked={unique} onChange={(event) => setUnique(event.target.checked)} data-testid="index-unique" /> 唯一
-                </label>
-                <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                  <input type="checkbox" checked={sparse} onChange={(event) => setSparse(event.target.checked)} data-testid="index-sparse" /> 稀疏
-                </label>
-              </div>
+              <label>{singleField ? 'payload 字段' : '字段（逗号分隔）'}</label>
+              <input className="input" value={fields} onChange={(event) => setFields(event.target.value)} placeholder={singleField ? 'weight' : 'weight, name'} data-testid="index-fields" />
+              {singleField ? (
+                <>
+                  <label>索引类型</label>
+                  <select className="select" value={payloadType} onChange={(event) => setPayloadType(event.target.value)} data-testid="index-type">
+                    {['keyword', 'integer', 'float', 'text', 'bool', 'geo'].map((type) => (
+                      <option key={type} value={type}>
+                        {type}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              ) : (
+                <>
+                  <label>索引名</label>
+                  <input className="input" value={indexName} onChange={(event) => setIndexName(event.target.value)} placeholder="留空自动生成" data-testid="index-name" />
+                  <label>TTL（秒）</label>
+                  <input className="input" value={ttl} onChange={(event) => setTtl(event.target.value.replace(/\D/g, ''))} placeholder="留空则不过期" data-testid="index-ttl" />
+                  <label>选项</label>
+                  <div style={{ display: 'flex', gap: 12, fontSize: 12 }}>
+                    <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <input type="checkbox" checked={unique} onChange={(event) => setUnique(event.target.checked)} data-testid="index-unique" /> 唯一
+                    </label>
+                    <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <input type="checkbox" checked={sparse} onChange={(event) => setSparse(event.target.checked)} data-testid="index-sparse" /> 稀疏
+                    </label>
+                  </div>
+                </>
+              )}
               <label />
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn primary" onClick={() => void submitCreate()} disabled={busy} data-testid="index-submit">

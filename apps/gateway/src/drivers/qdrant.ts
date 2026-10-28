@@ -1,7 +1,19 @@
-import type { ColumnInfo, Engine, QueryResult, StructuredQuery, TableInfo, VectorQuery } from '@aidb/core';
+import type { ColumnInfo, Engine, IndexInfo, QueryResult, StructuredQuery, TableInfo, VectorQuery } from '@aidb/core';
 import { randomUUID } from 'node:crypto';
 import { vectorQueryFromArgs } from '@aidb/core';
-import type { CreateObjectInput, DeleteDocumentsInput, DocumentWriteDriver, DriverTestResult, ObjectCreateDriver, RunOptions, VectorQueryDriver, WriteDocumentInput, WriteDocumentResult } from './types';
+import type {
+  CollectionIndexDriver,
+  CollectionIndexInput,
+  CreateObjectInput,
+  DeleteDocumentsInput,
+  DocumentWriteDriver,
+  DriverTestResult,
+  ObjectCreateDriver,
+  RunOptions,
+  VectorQueryDriver,
+  WriteDocumentInput,
+  WriteDocumentResult,
+} from './types';
 import { DbError } from './types';
 
 export interface QdrantOptions {
@@ -59,7 +71,7 @@ function pointsToResult(
   };
 }
 
-export class QdrantDriver implements VectorQueryDriver, DocumentWriteDriver, ObjectCreateDriver {
+export class QdrantDriver implements VectorQueryDriver, DocumentWriteDriver, ObjectCreateDriver, CollectionIndexDriver {
   engine: Engine = 'qdrant';
 
   constructor(private opts: QdrantOptions) {}
@@ -133,9 +145,11 @@ export class QdrantDriver implements VectorQueryDriver, DocumentWriteDriver, Obj
             }
           }
         }
+        const payloadIndexes: IndexInfo[] = [];
         for (const [name, schema] of Object.entries(result.payload_schema ?? {})) {
           const type = String((schema as any)?.data_type ?? 'payload');
           columns.push({ name, type, nullable: true, primaryKey: false });
+          payloadIndexes.push({ name, columns: [name], unique: false, method: type });
         }
         try {
           const sample = await this.request<any>(`/collections/${encodeURIComponent(collection.name)}/points/scroll`, {
@@ -160,6 +174,7 @@ export class QdrantDriver implements VectorQueryDriver, DocumentWriteDriver, Obj
           kind: 'vector_collection',
           rowEstimate: Number(result.points_count ?? 0),
           columns,
+          indexes: payloadIndexes,
           comment: attrs.dimension ? `vector(${attrs.dimension}) · ${attrs.metric}` : 'Qdrant collection',
         });
       } catch {
@@ -233,6 +248,33 @@ export class QdrantDriver implements VectorQueryDriver, DocumentWriteDriver, Obj
     if (!target) throw new DbError('集合名不能为空', { code: 'VECTOR_COLLECTION' });
     await this.request(`/collections/${encodeURIComponent(target)}`, { method: 'DELETE' }, opts.timeoutMs ?? 30000);
     return { name: target, dropped: true };
+  }
+
+  /** payload 索引按字段建，Qdrant 一次只接受一个字段。 */
+  async createIndex(input: CollectionIndexInput, opts: RunOptions = {}): Promise<{ name: string; created: boolean }> {
+    if (!input.collection) throw new DbError('collection 不能为空', { code: 'VECTOR_COLLECTION' });
+    const fields = input.columns.map((column) => column.trim()).filter(Boolean);
+    if (fields.length !== 1) throw new DbError('Qdrant 的 payload 索引一次只能建一个字段', { code: 'VECTOR_INDEX' });
+    const allowed = ['keyword', 'integer', 'float', 'geo', 'text', 'bool', 'datetime', 'uuid'];
+    const type = allowed.includes(String(input.type)) ? String(input.type) : 'keyword';
+    await this.request(
+      `/collections/${encodeURIComponent(input.collection)}/index?wait=true`,
+      { method: 'PUT', body: JSON.stringify({ field_name: fields[0], field_schema: { type } }) },
+      opts.timeoutMs ?? 30000,
+    );
+    return { name: fields[0], created: true };
+  }
+
+  async dropIndex(input: { collection: string; name: string }, opts: RunOptions = {}): Promise<{ name: string; dropped: boolean }> {
+    if (!input.collection) throw new DbError('collection 不能为空', { code: 'VECTOR_COLLECTION' });
+    const field = input.name.trim();
+    if (!field) throw new DbError('索引名不能为空', { code: 'VECTOR_INDEX' });
+    await this.request(
+      `/collections/${encodeURIComponent(input.collection)}/index/${encodeURIComponent(field)}?wait=true`,
+      { method: 'DELETE' },
+      opts.timeoutMs ?? 30000,
+    );
+    return { name: field, dropped: true };
   }
 
   async deleteDocuments(input: DeleteDocumentsInput, opts: RunOptions = {}): Promise<{ deleted: number }> {

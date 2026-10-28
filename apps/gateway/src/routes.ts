@@ -628,6 +628,7 @@ export function createApiRouter(deps: ApiDeps): Router {
         unique: body.unique === true,
         sparse: body.sparse === true,
         expireAfterSeconds: Number.isFinite(ttl) && ttl > 0 ? Math.floor(ttl) : undefined,
+        type: str(body.type) || undefined,
       };
       try {
         const result = await manager.createCollectionIndex(connectionId, spec, { database, actor: 'user' });
