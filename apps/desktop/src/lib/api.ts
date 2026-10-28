@@ -205,8 +205,14 @@ export const api = {
   refreshSchema: (id: string, database?: string) => request<{ schemas: DatabaseSchema[] }>(`/connections/${id}/refresh`, { method: 'POST', body: JSON.stringify({ database }) }),
   databases: (id: string) => request<{ databases: string[] }>(`/connections/${id}/databases`),
 
-  query: (body: { connectionId: string; sql: string; database?: string; limit?: number; allowMulti?: boolean }) =>
+  query: (body: { connectionId: string; sql: string; database?: string; limit?: number; allowMulti?: boolean; sessionId?: string }) =>
     request<{ batch: QueryBatchResult }>('/query', { method: 'POST', body: JSON.stringify(body) }),
+  beginTransaction: (body: { connectionId: string; sessionId: string; database?: string }) =>
+    request<{ result: { sessionId: string; database?: string } }>('/tx/begin', { method: 'POST', body: JSON.stringify(body) }),
+  commitTransaction: (body: { sessionId: string }) =>
+    request<{ result: { sessionId: string; committed: boolean } }>('/tx/commit', { method: 'POST', body: JSON.stringify(body) }),
+  rollbackTransaction: (body: { sessionId: string }) =>
+    request<{ result: { sessionId: string; rolledBack: boolean } }>('/tx/rollback', { method: 'POST', body: JSON.stringify(body) }),
   vectorSearch: (body: {
     connectionId: string;
     database?: string;

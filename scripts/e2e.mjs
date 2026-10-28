@@ -1155,6 +1155,7 @@ if (INFLUXDB_PORT) {
   check('InfluxDB line-protocol write adds a sample', true);
 }
 
+
 if (DUCKDB_E2E) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });

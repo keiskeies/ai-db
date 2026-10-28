@@ -81,6 +81,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const settings = useApp((s) => s.settings);
   const connections = useApp((s) => s.connections);
   const notify = useApp((s) => s.notify);
+  const loadSchema = useApp((s) => s.loadSchema);
   const updateTab = useApp((s) => s.updateTab);
   const prefillAgent = useApp((s) => s.prefillAgent);
   const setActiveConnection = useApp((s) => s.setActiveConnection);
@@ -91,6 +92,8 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const canWriteDocuments = conn ? writesDocuments(conn.engine) : false;
   const canEditRecords = conn ? editsRecords(conn.engine) : false;
   const canLineProtocol = conn ? writesLineProtocol(conn.engine) : false;
+  const canTransaction = conn ? conn.engine === 'mysql' || conn.engine === 'postgresql' : false;
+  const [txSession, setTxSession] = useState<string | null>(null);
   const [vectorOpen, setVectorOpen] = useState(false);
   const [writeOpen, setWriteOpen] = useState(false);
   const [keyDialog, setKeyDialog] = useState<string | null>(null);
@@ -212,6 +215,31 @@ export function QueryView({ tab }: { tab: QueryTab }) {
     return sqlRef.current;
   };
 
+  const startTx = async () => {
+    if (!conn) return;
+    const sessionId = `${conn.id}:${Date.now()}`;
+    try {
+      await api.beginTransaction({ connectionId: conn.id, sessionId, database: tab.database });
+      setTxSession(sessionId);
+      notify('info', '事务已开启', '提交前数据不会落库');
+    } catch (err: any) {
+      notify('error', '开启事务失败', err?.message);
+    }
+  };
+
+  const finishTx = async (mode: 'commit' | 'rollback') => {
+    if (!txSession) return;
+    try {
+      if (mode === 'commit') await api.commitTransaction({ sessionId: txSession });
+      else await api.rollbackTransaction({ sessionId: txSession });
+      setTxSession(null);
+      notify('success', mode === 'commit' ? '事务已提交' : '事务已回滚', '');
+      void loadSchema(tab.connectionId, true, tab.database).catch(() => undefined);
+    } catch (err: any) {
+      notify('error', mode === 'commit' ? '提交失败' : '回滚失败', err?.message);
+    }
+  };
+
   const run = async () => {
     const text = currentSql().trim();
     if (!text) {
@@ -227,6 +255,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
         database: tab.database,
         sql: text,
         limit: settings.defaultLimit,
+        sessionId: txSession ?? undefined,
       });
       setBatch(result);
       setActiveSet(0);
@@ -539,6 +568,17 @@ ${text}
           <button className="btn small ai" onClick={() => setLineOpen(true)} data-testid="open-line-protocol">
             <FilePlus size={12} /> 写入行协议
           </button>
+        ) : null}
+        {canTransaction && conn && !conn.readonly ? (
+          txSession ? (
+            <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }} data-testid="tx-active">
+              <span className="badge">事务中</span>
+              <button className="btn small" onClick={() => void finishTx('commit')} data-testid="tx-commit">提交</button>
+              <button className="btn small danger" onClick={() => void finishTx('rollback')} data-testid="tx-rollback">回滚</button>
+            </span>
+          ) : (
+            <button className="btn small" onClick={() => void startTx()} data-testid="tx-begin">开始事务</button>
+          )
         ) : null}
         <button className="icon-btn" title="导出当前语句结果（CSV）" onClick={() => void exportResult()} data-testid="query-export">
           <Download size={13} />
