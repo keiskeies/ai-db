@@ -72,6 +72,7 @@ const DB_TOOLS = new Set([
   'search_index',
   'run_cql',
   'run_aql',
+  'upsert_document',
   'explain_sql',
   'sample_rows',
   'profile_column',
@@ -455,6 +456,23 @@ export class ToolExecutor {
           messages: batch.messages,
           durationMs: batch.durationMs,
         });
+      }
+
+      case 'upsert_document': {
+        const conn = this.requireConnection(call, ctx);
+        const collection = String(a.collection ?? '').trim();
+        if (!collection) throw new DbError('collection 不能为空', { code: 'WRITE_COLLECTION' });
+        const document = a.document;
+        if (!document || typeof document !== 'object' || Array.isArray(document)) {
+          throw new DbError('document 必须是 JSON 对象', { code: 'WRITE_DOCUMENT' });
+        }
+        const settings = this.getSettings();
+        const result = await this.manager.writeDocument(
+          conn.id,
+          { collection, document: document as Record<string, unknown>, id: typeof a.id === 'string' ? a.id : undefined },
+          { database: this.databaseOf(call, conn), timeoutMs: settings.queryTimeoutMs, actor: 'agent' },
+        );
+        return ok(started, `已写入 ${result.id || collection}`, result);
       }
 
       case 'explain_sql': {

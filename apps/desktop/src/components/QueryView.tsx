@@ -5,7 +5,7 @@ import { EditorState, Prec } from '@codemirror/state';
 import { tags as t } from '@lezer/highlight';
 import { keymap } from '@codemirror/view';
 import { MSSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql as sqlLang } from '@codemirror/lang-sql';
-import { AlignLeft, BarChart3, Bookmark, Database, Download, FileDown, FileUp, History, ListChecks, Network, Play, Plus, Sparkles, Table2, TerminalSquare, Trash2, WandSparkles, Wrench } from 'lucide-react';
+import { AlignLeft, BarChart3, Bookmark, Database, Download, FileDown, FilePlus, FileUp, History, ListChecks, Network, Play, Plus, Sparkles, Table2, TerminalSquare, Trash2, WandSparkles, Wrench } from 'lucide-react';
 import type { ConnectionConfig, QueryBatchResult } from '@aidb/core';
 import { engineMeta } from '@aidb/core';
 import { api } from '../lib/api';
@@ -16,6 +16,7 @@ import { ChartView, type ChartSpec } from './ChartView';
 import { DataGrid } from './DataGrid';
 import { GraphView } from './GraphView';
 import { VectorSearchPanel } from './VectorSearchPanel';
+import { DocumentWritePanel } from './DocumentWritePanel';
 import { Spinner } from './ui';
 
 type QueryTab = Extract<Tab, { kind: 'query' }>;
@@ -56,7 +57,9 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const conn = connections.find((c) => c.id === tab.connectionId);
   const isSql = conn ? engineMeta(conn.engine).languages.includes('sql') : true;
   const canVector = conn ? engineMeta(conn.engine).model === 'vector' || engineMeta(conn.engine).dialect === 'postgres' : false;
+  const canWriteDocuments = conn ? ['vector', 'search'].includes(engineMeta(conn.engine).model) : false;
   const [vectorOpen, setVectorOpen] = useState(false);
+  const [writeOpen, setWriteOpen] = useState(false);
 
   const [sql, setSql] = useState(tab.sql);
   const [batch, setBatch] = useState<QueryBatchResult | null>(null);
@@ -480,6 +483,11 @@ ${text}
           </span>
         )}
         <div className="spacer" />
+        {canWriteDocuments ? (
+          <button className="btn small ai" onClick={() => setWriteOpen(true)} data-testid="open-document-write">
+            <FilePlus size={12} /> 写入 JSON
+          </button>
+        ) : null}
         {canVector ? (
           <button className="btn small ai" onClick={() => setVectorOpen(true)} data-testid="open-vector-search">
             <Sparkles size={12} /> 向量检索
@@ -684,6 +692,14 @@ ${text}
         </div>
       </div>
       {vectorOpen && conn ? <VectorSearchPanel connection={conn} database={tab.database} onClose={() => setVectorOpen(false)} /> : null}
+      {writeOpen && conn ? (
+        <DocumentWritePanel
+          connection={conn}
+          database={tab.database}
+          onClose={() => setWriteOpen(false)}
+          onDone={() => void run()}
+        />
+      ) : null}
     </div>
   );
 }

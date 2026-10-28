@@ -82,7 +82,7 @@ const api = async (path, init = {}) => {
 const boot = (await api('/bootstrap')).body;
 const demo = boot.connections.find((c) => c.engine === 'sqlite');
 check('bridge bootstrap', Boolean(demo), demo?.name);
-check('31 agent tools', boot.tools.length === 31, String(boot.tools.length));
+check('32 agent tools', boot.tools.length === 32, String(boot.tools.length));
 
 const MONGO_PORT = process.env.AIDB_TEST_MONGO_PORT ? Number(process.env.AIDB_TEST_MONGO_PORT) : undefined;
 const REDIS_PORT = process.env.AIDB_TEST_REDIS_PORT ? Number(process.env.AIDB_TEST_REDIS_PORT) : undefined;
@@ -456,6 +456,15 @@ if (QDRANT_PORT) {
   check('Qdrant vector search returns results', vectorRows === 2, `${vectorRows} rows`);
   await page.locator('.modal-head .icon-btn').last().click();
   await page.waitForTimeout(200);
+
+  await page.click('[data-testid="open-document-write"]');
+  await page.waitForSelector('[data-testid="document-write-json"]', { timeout: 10000 });
+  await page.fill('[data-testid="document-write-collection"]', 'aidb_e2e');
+  await page.fill('[data-testid="document-write-id"]', '3');
+  await page.fill('[data-testid="document-write-json"]', JSON.stringify({ vector: [0, 1, 0], payload: { name: 'Grace' } }));
+  await page.click('[data-testid="document-write-submit"]');
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 3, null, { timeout: 20000 });
+  check('Qdrant document write inserts a point', true);
 }
 
 if (TDENGINE_PORT) {

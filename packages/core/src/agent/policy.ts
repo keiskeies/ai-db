@@ -45,6 +45,7 @@ export function toolSignature(call: ToolCall): string {
   else if (call.name === 'run_cypher' && typeof call.args.query === 'string') target = call.args.query.slice(0, 40);
   else if (call.name === 'vector_search' && typeof call.args.collection === 'string') target = call.args.collection;
   else if (call.name === 'search_index' && typeof call.args.index === 'string') target = call.args.index;
+  else if (call.name === 'upsert_document' && typeof call.args.collection === 'string') target = call.args.collection;
   else if (call.name === 'run_cql' && typeof call.args.query === 'string') target = call.args.query.slice(0, 40);
   else if (call.name === 'run_aql' && typeof call.args.query === 'string') target = call.args.query.slice(0, 40);
   else if (call.args.index && typeof call.args.index === 'object') {
@@ -77,6 +78,8 @@ export function describeCall(call: ToolCall): { summary: string; sql?: string } 
       const query = aqlQueryFromArgs(a);
       return { summary: `AQL ${query.text.replace(/\s+/g, ' ').slice(0, 200)}`, sql: query.text };
     }
+    case 'upsert_document':
+      return { summary: `写入 ${String(a.collection ?? '')}${a.id ? ` · ${a.id}` : ''}`, sql: JSON.stringify(a.document ?? {}) };
     case 'create_table':
       return { summary: `创建表 ${String(a.table ?? '')}`, sql };
     case 'alter_table':

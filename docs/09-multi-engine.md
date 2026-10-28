@@ -130,7 +130,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - MQL：`classifyMql` 递归扫描 filter/pipeline/projection/sort，按 `$where` / `$function` / `$out` / `$merge` 等提升风险。
 - Redis：`classifyRedis` 按命令表与子命令（CONFIG / ACL / CLUSTER / MEMORY / FUNCTION）分类。
 - Cypher：`classifyCypher` 先屏蔽字符串/注释/反引号，再识别写子句与写型过程；`EXPLAIN` 为只读，`PROFILE` 按内部语句定级。
-- 向量：`classifyVector` 校验 collection/topK/向量数值，只允许只读检索；pgvector 走 `<=>` 相似度查询，Qdrant/Milvus 走各自 REST 检索。
+- 向量：`classifyVector` 校验 collection/topK/向量数值，只读检索走 `<=>` 相似度查询或各自 REST；写入通过 `upsert_document`（需 `write` 权限，只读连接拒绝）。
 - Agent：`resolveRisk` 对 `run_mql` / `run_redis` 动态取风险；审批弹窗展示结构化查询。
 - SQL 专属工具在非 SQL 连接上返回 `UNSUPPORTED_ENGINE`；HTTP 的 DDL / 数据编辑 / 结构同步 / 监控 / 用户 / 备份等路由同样拒绝。
 
@@ -144,6 +144,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 | `run_redis` | 单条 Redis 命令 |
 | `run_cypher` | Neo4j / Memgraph / FalkorDB Cypher 查询（支持 `$params`） |
 | `run_aql` | ArangoDB AQL 查询（支持 `@bindVar` 与 `@@collection`） |
+| `upsert_document` | 写入向量点/搜索文档（Qdrant / Weaviate / Milvus / ES / OpenSearch） |
 | `run_cql` | Cassandra / ScyllaDB CQL（支持 `?` 参数） |
 | `vector_search` | pgvector / Qdrant / Milvus / Weaviate 向量检索（text 走 Embedding） |
 | `search_index` | Elasticsearch / OpenSearch `_search` JSON DSL |
@@ -207,7 +208,7 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 - DuckDB 使用 sqlite 方言的引号/占位符/LIMIT，DDL 设计器关闭；DuckDB 原生模块已随 gateway 打包，但桌面端优先使用系统 Node，回退到 Electron Node 时需按 ABI 验证二进制。
 - Qdrant/Milvus/Weaviate 文本检索依赖 Embedding Provider；Qdrant 的 API Key、Milvus/Weaviate 的 Token/API Key 填在密码字段。当前只支持浏览/检索，不支持写入与删除。
 - pgvector 只支持 PostgreSQL 方言；相似度分数按 `1 - cosine_distance` 返回，metric 以索引定义为准。
-- Elasticsearch/OpenSearch 只读，支持 `_search` DSL；OpenSearch 复用 Elasticsearch 驱动，个别 API/字段差异需按实例验证。
+- Elasticsearch/OpenSearch 支持 `_search` DSL 与按 ID 写入文档；OpenSearch 复用 Elasticsearch 驱动，个别 API/字段差异需按实例验证。
 - Memgraph 复用 Bolt 驱动；不支持 `CALL db.labels()`，标签/关系通过 Cypher 扫描推断；多数据库与系统表能力有限。
 - Cassandra/ScyllaDB 只支持 CQL 控制台与 keyspace/table 浏览；无 JOIN、无 DDL 设计器、无写入网格；默认本地数据中心按 `datacenter1` 配置，非默认拓扑需调整。
 - Weaviate 检索使用 GraphQL `nearVector`；文本检索需先经 Embedding，未配置时请传向量。
@@ -215,14 +216,14 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 - FalkorDB 通过 Redis 协议执行 `GRAPH.QUERY`：参数以 `CYPHER k=v` 前缀内联（驱动已做字面量转义），属性/统计信息来自 `GRAPH.QUERY` 的第二、三段返回；无多图事务与索引管理 UI。
 - InfluxDB 3 的 SQL 接口只读，且只有 `iox`/`system`/`information_schema` 三个 schema；建库写数据需用 `influxdb3` CLI 或行协议 API。InfluxDB 1.x/2.x 的 Flux/InfluxQL 端点不同，当前只保证 3.x。
 - ArangoDB 走 HTTP `/_api/cursor`：AQL 无 DDL 设计器，集合创建/删除需用 `/_api/collection`；文档集合与边集合都按对象树展示，带 `_from`/`_to` 或 path 的结果自动切换图视图；单批上限 1000 行，超出自动 follow-up 并截断。
-- 向量/搜索写入仍待补；图视图已支持力导向布局与交互。
+- 向量/搜索写入已支持单条文档写入；批量导入与删除仍待补。
 
 ## 10. 后续路线
 
 | 阶段 | 内容 |
 |---|---|
 | P1 | 已完成：Neo4j、达梦 DM8、DuckDB、Qdrant、Milvus、pgvector + Embedding |
-| P2 | 已完成：Memgraph、Cassandra/ScyllaDB、Weaviate、Elasticsearch/OpenSearch、TDengine、FalkorDB、InfluxDB、ArangoDB、交互式图视图、向量/搜索只读；待补：向量/搜索写入、Redis Stack |
+| P2 | 已完成：Memgraph、Cassandra/ScyllaDB、Weaviate、Elasticsearch/OpenSearch、TDengine、FalkorDB、InfluxDB、ArangoDB、交互式图视图、向量/搜索单条写入；待补：批量写入/删除、Redis Stack |
 | P3 | 云数仓（Snowflake / BigQuery / Redshift / Databricks）、Db2 / SAP HANA、无 Node 驱动的国产库（神通 / GBase 8s / 崖山 / 虚谷） |
 
 ## 11. 关键文件

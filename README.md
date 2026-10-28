@@ -2,7 +2,7 @@
 
 AI 原生、全平台数据库工作台。Navicat 式的完整数据库操作 + Claude Code 式的 AI 搭档。
 
-支持 **Windows · macOS · Linux · Android · iOS**。内置一个可全权操作数据库的 AI Agent：31 个工具、四级权限、四层记忆、工具轨迹可视化、审批与审计；外加 11 个模块的 Navicat 级工具箱。
+支持 **Windows · macOS · Linux · Android · iOS**。内置一个可全权操作数据库的 AI Agent：32 个工具、四级权限、四层记忆、工具轨迹可视化、审批与审计；外加 11 个模块的 Navicat 级工具箱。
 
 ![Desktop](docs/screenshots/desktop-welcome.png)
 ![Toolbox](docs/screenshots/desktop-toolbox.png)

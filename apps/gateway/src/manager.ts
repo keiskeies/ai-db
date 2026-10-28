@@ -36,7 +36,7 @@ import {
 import type { GatewayConfig } from './config';
 import { createDriver, DbError, type Driver } from './drivers';
 import { normalizeMql } from './drivers/mongodb';
-import { supportsStructuredQuery, supportsVectorSearch } from './drivers/types';
+import { supportsDocumentWrite, supportsStructuredQuery, supportsVectorSearch } from './drivers/types';
 import { embedText } from './embeddings';
 import type { Store } from './store';
 
@@ -316,6 +316,48 @@ export class ConnectionManager {
     const conn = this.store.getConnection(connectionId);
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
     return this.executeStructured(connectionId, conn, query, opts);
+  }
+
+  async writeDocument(connectionId: string, input: { collection: string; document: Record<string, unknown>; id?: string }, opts: QueryOptions): Promise<{ id: string; upserted: number }> {
+    const conn = this.store.getConnection(connectionId);
+    if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+    const meta = engineMeta(conn.engine);
+    if (conn.readonly) {
+      throw new DbError('只读连接不允许写入', { code: 'READONLY', status: 403, hint: '在连接设置中关闭只读后才可写入' });
+    }
+    if (!input.collection || !input.collection.trim()) {
+      throw new DbError('collection 不能为空', { code: 'WRITE_COLLECTION' });
+    }
+    if (!input.document || typeof input.document !== 'object' || Array.isArray(input.document)) {
+      throw new DbError('document 必须是 JSON 对象', { code: 'WRITE_DOCUMENT' });
+    }
+    const driver = await this.driverFor(connectionId);
+    if (!supportsDocumentWrite(driver)) {
+      throw new DbError(`${meta.label} 暂不支持写入文档/向量`, { code: 'UNSUPPORTED_ENGINE', hint: '当前支持 Qdrant / Weaviate / Milvus / Elasticsearch / OpenSearch' });
+    }
+    const started = Date.now();
+    try {
+      const result = await driver.upsertDocument({ ...input, collection: input.collection.trim() }, { database: opts.database, timeoutMs: opts.timeoutMs });
+      this.store.addHistory({
+        connectionId,
+        database: opts.database ?? conn.database,
+        sql: JSON.stringify({ collection: input.collection, id: result.id, document: input.document }),
+        status: 'ok',
+        durationMs: Date.now() - started,
+        rowCount: result.upserted,
+      });
+      return result;
+    } catch (err: any) {
+      this.store.addHistory({
+        connectionId,
+        database: opts.database ?? conn.database,
+        sql: JSON.stringify({ collection: input.collection, id: input.id, document: input.document }),
+        status: 'error',
+        durationMs: Date.now() - started,
+        error: err?.message ?? '写入失败',
+      });
+      throw err instanceof DbError ? err : new DbError(err?.message ?? '写入失败');
+    }
   }
 
   async vectorSearch(connectionId: string, query: VectorQuery, opts: QueryOptions): Promise<QueryResult> {

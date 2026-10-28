@@ -1,6 +1,6 @@
 import type { ColumnInfo, Engine, QueryResult, SearchQuery, StructuredQuery, TableInfo } from '@aidb/core';
 import { searchQueryFromArgs } from '@aidb/core';
-import type { Driver, DriverTestResult, RunOptions } from './types';
+import type { DocumentWriteDriver, DriverTestResult, RunOptions, WriteDocumentInput, WriteDocumentResult } from './types';
 import { DbError } from './types';
 
 export interface ElasticsearchOptions {
@@ -70,7 +70,7 @@ function hitsToResult(hits: Array<Record<string, any>>, started: number, stateme
   };
 }
 
-export class ElasticsearchDriver implements Driver {
+export class ElasticsearchDriver implements DocumentWriteDriver {
   engine: Engine;
 
   constructor(private opts: ElasticsearchOptions, engine: Engine = 'elasticsearch') {
@@ -182,6 +182,22 @@ export class ElasticsearchDriver implements Driver {
 
   async runParams(): Promise<QueryResult> {
     throw new DbError('搜索驱动不支持参数化 SQL', { code: 'SEARCH_ONLY' });
+  }
+
+  async upsertDocument(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {
+    if (!input.collection) throw new DbError('index 不能为空', { code: 'SEARCH_INDEX' });
+    const document = { ...(input.document ?? {}) };
+    const inlineId = typeof document._id === 'string' ? document._id : undefined;
+    delete document._id;
+    const id = input.id ?? inlineId;
+    const index = encodeURIComponent(input.collection);
+    const path = id ? `/${index}/_doc/${encodeURIComponent(id)}` : `/${index}/_doc`;
+    const response = await this.request<any>(
+      path,
+      { method: id ? 'PUT' : 'POST', body: JSON.stringify(document) },
+      opts.timeoutMs ?? 30000,
+    );
+    return { id: String(response?._id ?? id ?? ''), upserted: 1 };
   }
 
   async close(): Promise<void> {

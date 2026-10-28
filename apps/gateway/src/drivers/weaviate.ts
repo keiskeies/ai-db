@@ -1,6 +1,6 @@
 import type { ColumnInfo, Engine, QueryResult, StructuredQuery, TableInfo, VectorQuery } from '@aidb/core';
 import { vectorQueryFromArgs } from '@aidb/core';
-import type { Driver, DriverTestResult, RunOptions, VectorQueryDriver } from './types';
+import type { DocumentWriteDriver, DriverTestResult, RunOptions, VectorQueryDriver, WriteDocumentInput, WriteDocumentResult } from './types';
 import { DbError } from './types';
 
 export interface WeaviateOptions {
@@ -57,7 +57,7 @@ function objectsToResult(
   };
 }
 
-export class WeaviateDriver implements VectorQueryDriver {
+export class WeaviateDriver implements VectorQueryDriver, DocumentWriteDriver {
   engine: Engine = 'weaviate';
 
   constructor(private opts: WeaviateOptions) {}
@@ -179,6 +179,27 @@ export class WeaviateDriver implements VectorQueryDriver {
 
   async runParams(): Promise<QueryResult> {
     throw new DbError('Weaviate 不支持参数化 SQL，请使用向量查询', { code: 'VECTOR_ONLY' });
+  }
+
+  async upsertDocument(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {
+    if (!input.collection) throw new DbError('class 不能为空', { code: 'VECTOR_COLLECTION' });
+    const document = input.document ?? {};
+    const vector = Array.isArray(document.vector) ? document.vector : undefined;
+    const properties =
+      document.properties && typeof document.properties === 'object' && !Array.isArray(document.properties)
+        ? (document.properties as Record<string, unknown>)
+        : Object.fromEntries(Object.entries(document).filter(([key]) => !['id', 'vector', 'properties'].includes(key)));
+    const id = input.id ?? (typeof document.id === 'string' ? document.id : undefined);
+    const body: Record<string, unknown> = { class: input.collection, properties };
+    if (id) body.id = id;
+    if (vector) body.vector = vector;
+    const path = id ? `/v1/objects/${encodeURIComponent(input.collection)}/${encodeURIComponent(id)}` : '/v1/objects';
+    const response = await this.request<any>(
+      path,
+      { method: id ? 'PUT' : 'POST', body: JSON.stringify(body) },
+      opts.timeoutMs ?? 30000,
+    );
+    return { id: String(response?.id ?? id ?? ''), upserted: 1 };
   }
 
   async close(): Promise<void> {

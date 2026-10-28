@@ -411,6 +411,56 @@ export function createApiRouter(deps: ApiDeps): Router {
     }),
   );
 
+  router.post(
+    '/documents/upsert',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const connectionId = str(body.connectionId);
+      const collection = str(body.collection);
+      if (!connectionId || !collection) {
+        throw Object.assign(new Error('connectionId 与 collection 必填'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      if (!body.document || typeof body.document !== 'object' || Array.isArray(body.document)) {
+        throw Object.assign(new Error('document 必须是 JSON 对象'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      const settings = store.getSettings();
+      const started = Date.now();
+      try {
+        const result = await manager.writeDocument(
+          connectionId,
+          { collection, document: body.document as Record<string, unknown>, id: str(body.id) },
+          { database: str(body.database), timeoutMs: settings.queryTimeoutMs, actor: 'user' },
+        );
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database: str(body.database),
+          tool: 'documents.upsert',
+          sql: JSON.stringify({ collection, id: result.id, document: body.document }),
+          risk: 'write',
+          approval: 'manual',
+          status: 'ok',
+          durationMs: Date.now() - started,
+        });
+        res.json({ result });
+      } catch (err: any) {
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database: str(body.database),
+          tool: 'documents.upsert',
+          sql: JSON.stringify({ collection, id: str(body.id), document: body.document }),
+          risk: 'write',
+          approval: 'manual',
+          status: 'error',
+          durationMs: Date.now() - started,
+          meta: { error: err.message },
+        });
+        throw err;
+      }
+    }),
+  );
+
   router.get(
     '/data',
     ah(async (req, res) => {

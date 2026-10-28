@@ -175,6 +175,25 @@ export const TOOLS: ToolDefinition[] = [
     summarize: (a) => `向量检索 ${a.collection ?? ''}${a.field ? ` · ${a.field}` : ''}`.trim(),
   },
   {
+    name: 'upsert_document',
+    description:
+      'Create or replace one document/point in a Qdrant, Weaviate, Milvus collection or an Elasticsearch/OpenSearch index. document is a JSON object; vector collections need a vector (plus optional id/payload). Read-only connections reject writes.',
+    risk: 'write',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connectionId', 'collection', 'document'],
+      properties: {
+        ...connectionProp,
+        ...databaseProp,
+        collection: { type: 'string', description: 'Collection, class or index name' },
+        id: { type: 'string', description: 'Document/point id; generated when omitted' },
+        document: { type: 'object', description: 'JSON document; vector collections include vector and payload' },
+      },
+    },
+    summarize: (a) => `写入 ${a.collection ?? ''}${a.id ? ` · ${a.id}` : ''}`.trim(),
+  },
+  {
     name: 'search_index',
     description:
       'Run an Elasticsearch/OpenSearch _search JSON DSL against an index. Pass the DSL body as query (e.g. {"match":{"message":"error"}}), or omit it for match_all. size is capped at 10000.',

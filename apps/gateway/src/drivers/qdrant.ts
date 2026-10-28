@@ -1,6 +1,7 @@
 import type { ColumnInfo, Engine, QueryResult, StructuredQuery, TableInfo, VectorQuery } from '@aidb/core';
+import { randomUUID } from 'node:crypto';
 import { vectorQueryFromArgs } from '@aidb/core';
-import type { Driver, DriverTestResult, RunOptions, VectorQueryDriver } from './types';
+import type { Driver, DocumentWriteDriver, DriverTestResult, RunOptions, VectorQueryDriver, WriteDocumentInput, WriteDocumentResult } from './types';
 import { DbError } from './types';
 
 export interface QdrantOptions {
@@ -58,7 +59,7 @@ function pointsToResult(
   };
 }
 
-export class QdrantDriver implements VectorQueryDriver {
+export class QdrantDriver implements VectorQueryDriver, DocumentWriteDriver {
   engine: Engine = 'qdrant';
 
   constructor(private opts: QdrantOptions) {}
@@ -202,6 +203,31 @@ export class QdrantDriver implements VectorQueryDriver {
     const query = vectorQueryFromArgs((parsed ?? {}) as Record<string, unknown>);
     if (!query.op) query.op = query.vector?.length || query.text ? 'search' : 'scroll';
     return this.vectorSearch(query, opts);
+  }
+
+  async upsertDocument(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {
+    if (!input.collection) throw new DbError('collection 不能为空', { code: 'VECTOR_COLLECTION' });
+    const document = input.document ?? {};
+    const vector = document.vector;
+    const namedVector = vector && typeof vector === 'object' && !Array.isArray(vector) ? (vector as Record<string, unknown>) : undefined;
+    if (!Array.isArray(vector) && !namedVector) {
+      throw new DbError('Qdrant 写入需要 document.vector（数组或命名向量对象）', { code: 'VECTOR_REQUIRED' });
+    }
+    const rawId = input.id ?? document.id ?? randomUUID();
+    const payload =
+      document.payload && typeof document.payload === 'object' && !Array.isArray(document.payload)
+        ? (document.payload as Record<string, unknown>)
+        : Object.fromEntries(Object.entries(document).filter(([key]) => !['id', 'vector', 'payload'].includes(key)));
+    const numericId = typeof rawId === 'string' && /^\d+$/.test(rawId) ? Number(rawId) : rawId;
+    const body = {
+      points: [{ id: numericId, vector, payload }],
+    };
+    await this.request(
+      `/collections/${encodeURIComponent(input.collection)}/points?wait=true`,
+      { method: 'PUT', body: JSON.stringify(body) },
+      opts.timeoutMs ?? 30000,
+    );
+    return { id: String(rawId), upserted: 1 };
   }
 
   async runParams(): Promise<QueryResult> {

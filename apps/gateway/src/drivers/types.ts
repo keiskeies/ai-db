@@ -40,6 +40,26 @@ export function supportsVectorSearch(driver: Driver): driver is VectorQueryDrive
   return typeof (driver as VectorQueryDriver).vectorSearch === 'function';
 }
 
+export interface WriteDocumentInput {
+  collection: string;
+  document: Record<string, unknown>;
+  id?: string;
+}
+
+export interface WriteDocumentResult {
+  id: string;
+  upserted: number;
+}
+
+/** 向量/搜索驱动实现的写入入口；SQL 与文档型驱动不实现。 */
+export interface DocumentWriteDriver extends StructuredQueryDriver {
+  upsertDocument(input: WriteDocumentInput, opts?: RunOptions): Promise<WriteDocumentResult>;
+}
+
+export function supportsDocumentWrite(driver: Driver): driver is DocumentWriteDriver {
+  return typeof (driver as DocumentWriteDriver).upsertDocument === 'function';
+}
+
 export interface ConnectionRecord {
   config: import('@aidb/core').ConnectionConfig;
   secret: import('@aidb/core').ConnectionSecret;

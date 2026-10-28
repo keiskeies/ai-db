@@ -1,6 +1,6 @@
 import type { ColumnInfo, Engine, QueryResult, StructuredQuery, TableInfo, VectorQuery } from '@aidb/core';
 import { vectorQueryFromArgs } from '@aidb/core';
-import type { Driver, DriverTestResult, RunOptions, VectorQueryDriver } from './types';
+import type { DocumentWriteDriver, DriverTestResult, RunOptions, VectorQueryDriver, WriteDocumentInput, WriteDocumentResult } from './types';
 import { DbError } from './types';
 
 export interface MilvusOptions {
@@ -80,7 +80,7 @@ function resultFromRows(rows: Array<Record<string, unknown>>, started: number, s
   };
 }
 
-export class MilvusDriver implements VectorQueryDriver {
+export class MilvusDriver implements VectorQueryDriver, DocumentWriteDriver {
   engine: Engine = 'milvus';
 
   constructor(private opts: MilvusOptions) {}
@@ -211,6 +211,20 @@ export class MilvusDriver implements VectorQueryDriver {
 
   async runParams(): Promise<QueryResult> {
     throw new DbError('Milvus 不支持参数化 SQL，请使用向量查询', { code: 'VECTOR_ONLY' });
+  }
+
+  async upsertDocument(input: WriteDocumentInput, opts: RunOptions = {}): Promise<WriteDocumentResult> {
+    if (!input.collection) throw new DbError('collection 不能为空', { code: 'VECTOR_COLLECTION' });
+    const document = { ...(input.document ?? {}) };
+    if (input.id && document.id === undefined) document.id = input.id;
+    const response = await this.request<any>(
+      '/v2/vectordb/entities/upsert',
+      { collectionName: input.collection, data: [document] },
+      opts.timeoutMs ?? 30000,
+    );
+    const data = response?.data ?? {};
+    const id = String(input.id ?? data.upsertIds?.[0] ?? data.insertIds?.[0] ?? document.id ?? '');
+    return { id, upserted: Number(data.upsertCount ?? data.insertCount ?? 1) };
   }
 
   async close(): Promise<void> {
