@@ -144,7 +144,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - Cypher：`classifyCypher` 先屏蔽字符串/注释/反引号，再识别写子句与写型过程；`EXPLAIN` 为只读，`PROFILE` 按内部语句定级。
 - 向量：`classifyVector` 校验 collection/topK/向量数值，只读检索走 `<=>` 相似度查询或各自 REST；写入通过 `upsert_document`（需 `write` 权限，只读连接拒绝）。
 - Agent：`resolveRisk` 对 `run_mql` / `run_redis` 动态取风险；审批弹窗展示结构化查询。
-- SQL 专属工具在非 SQL 连接上返回 `UNSUPPORTED_ENGINE`；HTTP 的 DDL / 数据编辑 / 结构同步 / 监控 / 用户 / 备份等路由同样拒绝。
+- SQL 专属工具在非 SQL 连接上返回 `UNSUPPORTED_ENGINE`；HTTP 的 DDL / 数据编辑 / 结构同步 / 监控 / 用户 / 备份等路由同样拒绝。例外：`manage_index` 在 MongoDB 上走 `POST /indexes/*` 的结构化通道（与对象信息面板同一实现），`create_collection` / `delete_collection` / `upsert_document` / `delete_documents` / `import_documents` 也按能力位开放。
 
 ## 6. Agent 工具
 

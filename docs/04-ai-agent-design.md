@@ -79,7 +79,7 @@ for (step = 0; step < maxSteps; step++) {
 | 8 | `create_table` | ddl | 结构化建表（列/索引定义） | `{ connectionId, database?, table, columns[], indexes? }` |
 | 9 | `alter_table` | ddl/destructive | 增删改列、重命名、改类型 | `{ connectionId, table, operations[] }` |
 | 10 | `drop_object` | destructive | 删除表/视图/索引 | `{ connectionId, kind, name, cascade? }` |
-| 11 | `manage_index` | ddl | 创建/删除索引 | `{ connectionId, table, action, index }` |
+| 11 | `manage_index` | ddl | 创建/删除索引（SQL 表；MongoDB 集合也支持 unique / sparse / TTL，`_id_` 拒删） | `{ connectionId, table, action, index, name?, sparse?, expireAfterSeconds? }` |
 | 12 | `export_result` | write | 导出查询或整表到文件 | `{ connectionId, sql?, table?, format, path? , limit? }` |
 | 13 | `import_csv` | write | CSV 导入（映射 + 事务） | `{ connectionId, table, path, mapping[], hasHeader, delimiter }` |
 | 14 | `backup_database` | read | 备份（SQL dump / SQLite 快照） | `{ connectionId, database?, label? }` |
@@ -106,7 +106,7 @@ for (step = 0; step < maxSteps; step++) {
 | 35 | `create_collection` | ddl | 创建向量集合（Qdrant 需维度/距离）、搜索索引 / Weaviate class（字段列表）、MongoDB 集合或 ArangoDB 文档/边集合（`edge=true`）；Milvus 明确拒绝 | `{ connectionId, database?, name, dimension?, distance?, fields?[], edge? }` |
 | 36 | `delete_collection` | destructive | 删除 Qdrant 集合 / ES·OpenSearch 索引 / Weaviate class / MongoDB 集合 / ArangoDB 集合；`confirm` 必须与 `name` 完全一致 | `{ connectionId, database?, name, confirm }` |
 
-\* `run_sql`、`run_mql`、`run_redis`、`run_cypher`、`run_cql`、`run_aql` 风险按各自语言的安全分类动态提升；`dryRun=true` 时 DDL 只返回将执行的 SQL（用于预览）。`run_mql` / `run_redis` / `run_cypher` / `run_aql` / `vector_search` 仅用于对应模型的连接，SQL 专属工具（DDL、审计、图表等）在非 SQL 连接上明确返回不支持。
+\* `run_sql`、`run_mql`、`run_redis`、`run_cypher`、`run_cql`、`run_aql` 风险按各自语言的安全分类动态提升；`dryRun=true` 时 DDL 只返回将执行的 SQL（用于预览）。`run_mql` / `run_redis` / `run_cypher` / `run_aql` / `vector_search` 仅用于对应模型的连接，SQL 专属工具（DDL、审计、图表等）在非 SQL 连接上明确返回不支持；例外是 `manage_index`，在 MongoDB 连接上改走结构化索引通道（同一实现服务对象信息面板的建删），不拼 SQL DDL。
 \** 导出写文件为 `write`，不触碰数据库。
 
 ### 4.1 工具返回统一结构

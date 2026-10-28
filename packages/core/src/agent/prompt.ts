@@ -172,7 +172,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
   const queryRule = isSql
     ? '- Prefer read-only SQL. Add LIMIT to exploratory SELECTs. Use maxRows to bound results.'
     : language === 'mql'
-      ? '- Use run_mql with structured JSON (find/aggregate/count/distinct). Never emit SQL for this connection; filters and pipelines are JSON objects. Fields in ## Schema are inferred from a sample and may be missing in some documents. Use create_collection to add a collection and delete_collection (confirm must repeat the name) to drop one — dropping destroys every document inside.'
+      ? '- Use run_mql with structured JSON (find/aggregate/count/distinct). Never emit SQL for this connection; filters and pipelines are JSON objects. Fields in ## Schema are inferred from a sample and may be missing in some documents. Use create_collection to add a collection and delete_collection (confirm must repeat the name) to drop one — dropping destroys every document inside. manage_index also works here: table = collection, index.columns = fields, plus unique / sparse / expireAfterSeconds; the _id_ index cannot be dropped.'
       : language === 'cypher'
         ? '- Use run_cypher with Cypher. Pass values as $params instead of string interpolation. Read-only connections reject write clauses and write procedures. Prefer MATCH ... RETURN with a bounded LIMIT; node/relationship results are returned as JSON cells.'
         : language === 'vector'

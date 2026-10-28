@@ -20,6 +20,7 @@ import {
   isSqlEngine,
   isTimeSeries,
   looksLikeSecret,
+  managesIndexes,
   mqlQueryFromArgs,
   quoteIdent,
   redisQueryFromArgs,
@@ -201,7 +202,10 @@ export class ToolExecutor {
     const a = call.args;
     if (SQL_ONLY_TOOLS.has(call.name)) {
       const conn = this.requireConnection(call, ctx);
-      if (!isSqlEngine(conn.engine)) {
+      // manage_index 在支持索引管理的文档引擎上走结构化通道，不是 SQL DDL
+      if (call.name === 'manage_index' && managesIndexes(conn.engine)) {
+        /* 放到下面的 dispatch 分支处理 */
+      } else if (!isSqlEngine(conn.engine)) {
         throw new DbError(`${engineMeta(conn.engine).label} 不支持 ${call.name}`, {
           code: 'UNSUPPORTED_ENGINE',
           hint:
@@ -762,6 +766,30 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
         const conn = this.requireConnection(call, ctx);
         const database = this.databaseOf(call, conn);
         const tableName = String(a.table ?? '');
+        if (managesIndexes(conn.engine)) {
+          const settings = this.getSettings();
+          const raw = (a.index ?? {}) as IndexDef;
+          const result =
+            a.action === 'drop'
+              ? await this.manager.dropCollectionIndex(
+                  conn.id,
+                  { collection: tableName, name: String(a.name ?? raw.name ?? '') },
+                  { database, timeoutMs: settings.queryTimeoutMs, actor: 'agent' },
+                )
+              : await this.manager.createCollectionIndex(
+                  conn.id,
+                  {
+                    collection: tableName,
+                    name: typeof raw.name === 'string' ? raw.name : undefined,
+                    columns: Array.isArray(raw.columns) ? raw.columns.map(String) : [],
+                    unique: Boolean(raw.unique),
+                    sparse: a.sparse === true,
+                    expireAfterSeconds: Number(a.expireAfterSeconds ?? 0) > 0 ? Math.floor(Number(a.expireAfterSeconds)) : undefined,
+                  },
+                  { database, timeoutMs: settings.queryTimeoutMs, actor: 'agent' },
+                );
+          return ok(started, a.action === 'drop' ? '索引已删除' : '索引已创建', { table: tableName, index: result.name });
+        }
         const { table } = await this.manager.findTable(conn.id, database, tableName);
         const action = a.action === 'drop' ? 'drop' : 'create';
         let sql: string;

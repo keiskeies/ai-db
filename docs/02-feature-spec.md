@@ -238,7 +238,7 @@
 
 协议别名：金仓 / openGauss / GaussDB / 瀚高 / Vastbase / IvorySQL 复用 PostgreSQL 驱动与方言；OceanBase / TiDB / PolarDB / TDSQL / GBase 8a / Doris / StarRocks / GreatSQL / GoldenDB 复用 MySQL 驱动与方言。openGauss/GaussDB 默认 sha256 认证需实例改为 md5 或使用兼容认证；Doris/StarRocks/GBase 8a 的 DDL 能力按 `EngineMeta.capabilities` 关闭设计器。
 
-安全：只读连接在网关侧按语言分类拦截；MongoDB、Redis、Neo4j/Memgraph/FalkorDB、ArangoDB、Cassandra/ScyllaDB、向量检索与搜索 DSL 均有独立分类器；非 SQL 连接上的 SQL 专属 Agent 工具返回 `UNSUPPORTED_ENGINE`，并提示改用 `run_mql` / `run_redis` / `run_cypher` / `run_aql` / `run_cql` / `vector_search` / `search_index`。
+安全：只读连接在网关侧按语言分类拦截；MongoDB、Redis、Neo4j/Memgraph/FalkorDB、ArangoDB、Cassandra/ScyllaDB、向量检索与搜索 DSL 均有独立分类器；非 SQL 连接上的 SQL 专属 Agent 工具返回 `UNSUPPORTED_ENGINE`，并提示改用 `run_mql` / `run_redis` / `run_cypher` / `run_aql` / `run_cql` / `vector_search` / `search_index`；`manage_index` 是唯一按能力开放的例外，在 MongoDB 集合上建删索引。
 
 ## 9. AI Agent（摘要，详见 04）
 

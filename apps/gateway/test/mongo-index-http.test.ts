@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { MongoClient } from 'mongodb';
 import { createGateway } from '../src/server';
+import { ToolExecutor } from '../src/executor';
 
 const MONGO_PORT = process.env.AIDB_TEST_MONGO_PORT ? Number(process.env.AIDB_TEST_MONGO_PORT) : undefined;
 const DB = 'aidb_index_http';
@@ -56,6 +57,7 @@ async function harness() {
   return {
     api,
     connect,
+    gateway,
     close: async () => {
       await gateway.close();
       try {
@@ -134,6 +136,47 @@ test('MongoDB 索引通过 /indexes 建删，只读与 _id_ 都被拦住', { ski
   const tools = (audits.body.entries ?? []).map((entry) => `${entry.tool}:${entry.risk}`);
   assert.ok(tools.includes('indexes.create:ddl'), '建索引记 ddl 审计');
   assert.ok(tools.includes('indexes.drop:destructive'), '删索引记 destructive 审计');
+
+  const cleanup = new MongoClient(`mongodb://127.0.0.1:${MONGO_PORT}`, { serverSelectionTimeoutMS: 5000 });
+  await cleanup.connect();
+  await cleanup.db(DB).dropDatabase();
+  await cleanup.close();
+});
+
+test('Agent 的 manage_index 走 MongoDB 索引通道，而不是拼 SQL', { skip: !MONGO_PORT }, async () => {
+  const seed = new MongoClient(`mongodb://127.0.0.1:${MONGO_PORT}`, { serverSelectionTimeoutMS: 5000 });
+  await seed.connect();
+  await seed.db(DB).dropDatabase();
+  await seed.db(DB).collection('widgets').insertMany([{ weight: 1 }, { weight: 2 }]);
+  await seed.close();
+
+  const env = await harness();
+  after(env.close);
+  const executor = new ToolExecutor(env.gateway.store, env.gateway.manager, env.gateway.config, () => env.gateway.store.getSettings());
+  const connectionId = await env.connect('mongo-index-agent', false);
+
+  const run = (args: Record<string, unknown>) =>
+    executor.execute(
+      { id: `idx-${Math.random().toString(36).slice(2)}`, name: 'manage_index', args: { connectionId, database: DB, table: 'widgets', ...args } },
+      { sessionId: 's1', connectionId },
+    );
+
+  const created = await run({ action: 'create', index: { columns: ['weight'], name: 'agent_idx', unique: true }, sparse: true });
+  assert.equal(created.ok, true, created.error?.message);
+  assert.equal((created.data as Record<string, unknown>).index, 'agent_idx');
+  const ddl = (created.data as Record<string, unknown>).sql;
+  assert.equal(ddl, undefined, '非 SQL 引擎不应生成 SQL 语句');
+
+  const dropped = await run({ action: 'drop', name: 'agent_idx' });
+  assert.equal(dropped.ok, true, dropped.error?.message);
+
+  const protectedDrop = await run({ action: 'drop', name: '_id_' });
+  assert.equal(protectedDrop.ok, false, '_id_ 主键索引不能删');
+
+  const audits = await env.api<{ entries: Array<{ tool: string; status: string }> }>(`/audit?connectionId=${connectionId}&limit=30`);
+  const agentAudits = (audits.body.entries ?? []).filter((entry) => entry.tool === 'manage_index');
+  assert.ok(agentAudits.length >= 3, 'Agent 建删索引都要留审计');
+  assert.ok(agentAudits.some((entry) => entry.status === 'error'), '失败的删除同样入审计');
 
   const cleanup = new MongoClient(`mongodb://127.0.0.1:${MONGO_PORT}`, { serverSelectionTimeoutMS: 5000 });
   await cleanup.connect();

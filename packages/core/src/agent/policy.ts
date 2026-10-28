@@ -99,7 +99,7 @@ export function describeCall(call: ToolCall): { summary: string; sql?: string } 
     case 'drop_object':
       return { summary: `删除${a.kind === 'view' ? '视图' : '表'} ${String(a.name ?? '')}` };
     case 'manage_index':
-      return { summary: `${a.action === 'drop' ? '删除' : '创建'}索引 ${String((a.index as Record<string, unknown> | undefined)?.name ?? '')}` };
+      return { summary: `${a.action === 'drop' ? '删除' : '创建'}索引 ${String((a.index as Record<string, unknown> | undefined)?.name ?? a.name ?? '')} · ${String(a.table ?? '')}` };
     case 'import_csv':
       return { summary: `导入 CSV 到 ${String(a.table ?? '')}` };
     case 'export_result':

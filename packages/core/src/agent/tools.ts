@@ -444,7 +444,8 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'manage_index',
-    description: 'Create or drop an index on a table.',
+    description:
+      'Create or drop an index. On SQL connections `table` is a table/view; on MongoDB connections it is a collection and sparse / expireAfterSeconds (TTL) are supported. The _id_ index cannot be dropped.',
     risk: 'ddl',
     inputSchema: {
       type: 'object',
@@ -457,6 +458,8 @@ export const TOOLS: ToolDefinition[] = [
         action: { type: 'string', enum: ['create', 'drop'] },
         index: indexSchema,
         name: { type: 'string', description: 'Index name for drop' },
+        sparse: { type: 'boolean', description: 'MongoDB only: build a sparse index' },
+        expireAfterSeconds: { type: 'integer', minimum: 1, description: 'MongoDB only: TTL in seconds' },
       },
     },
     summarize: (a) => `${a.action === 'drop' ? '删除' : '创建'}索引 ${a.table}`,
