@@ -530,6 +530,12 @@ if (ARANGO_PORT) {
   await page.waitForSelector('[data-testid="graph-view"]', { timeout: 10000 });
   const arangoNodes = await page.locator('[data-testid="graph-node"]').count();
   check('ArangoDB graph view renders edges', arangoNodes === 2, `${arangoNodes} nodes`);
+  await page.locator('[data-testid="graph-node"]').first().click();
+  await page.waitForSelector('[data-testid="graph-detail"]', { timeout: 5000 });
+  check('ArangoDB graph node opens property panel', true);
+  await page.click('[data-testid="graph-zoom-in"]');
+  const graphZoom = await page.locator('[data-testid="graph-view"]').getAttribute('data-zoom');
+  check('ArangoDB graph zoom control changes scale', graphZoom === '120%', String(graphZoom));
 }
 
 if (INFLUXDB_PORT) {

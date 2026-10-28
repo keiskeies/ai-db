@@ -47,10 +47,10 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 | 键值 | Redis | redis | —（命令） | 浏览 + 命令 + 结果；无 DDL/备份 |
 | 宽列 | Cassandra | cassandra | —（CQL） | keyspace/table 浏览 + CQL；无 JOIN/DDL 设计器 |
 | 宽列 | ScyllaDB | cassandra | —（CQL） | 复用 Cassandra 驱动与 CQL |
-| 图 | Neo4j | bolt | —（Cypher） | 标签/关系浏览 + Cypher + 计划 + 基础图视图 |
-| 图 | Memgraph | bolt | —（Cypher） | 复用 Neo4j Bolt 驱动；标签/关系浏览 + Cypher + 基础图视图 |
-| 图 | FalkorDB | falkordb | —（Cypher） | Redis 模块（GRAPH.QUERY）；图/标签浏览 + Cypher + 基础图视图；参数内联为 `CYPHER k=v` 前缀 |
-| 图 | ArangoDB | arangodb-http | —（AQL） | HTTP `/_api/cursor` 执行 AQL；文档集合/边集合浏览 + AQL + 图视图；`@bindVar` / `@@collection` 绑定参数 |
+| 图 | Neo4j | bolt | —（Cypher） | 标签/关系浏览 + Cypher + 计划 + 交互式图视图 |
+| 图 | Memgraph | bolt | —（Cypher） | 复用 Neo4j Bolt 驱动；标签/关系浏览 + Cypher + 交互式图视图 |
+| 图 | FalkorDB | falkordb | —（Cypher） | Redis 模块（GRAPH.QUERY）；图/标签浏览 + Cypher + 交互式图视图；参数内联为 `CYPHER k=v` 前缀 |
+| 图 | ArangoDB | arangodb-http | —（AQL） | HTTP `/_api/cursor` 执行 AQL；文档集合/边集合浏览 + AQL + 交互式图视图；`@bindVar` / `@@collection` 绑定参数 |
 | 向量 | Qdrant | qdrant-http | —（JSON） | 集合/维度/payload 浏览 + scroll/向量检索 |
 | 向量 | Milvus | milvus-http | —（JSON） | collection/schema 浏览 + query/向量检索 |
 | 向量 | Weaviate | weaviate-http | —（JSON） | class/properties 浏览 + scroll/nearVector |
@@ -90,7 +90,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - 查询：Cypher 控制台，支持 `$params`；`EXPLAIN` / `PROFILE` 的计划以 JSON 行返回。
 - 结果：节点/关系/路径序列化为 JSON 单元格，`resultKind = 'graph'`；标量查询仍为普通表格。
 - 安全：只读连接拦截 `CREATE` / `MERGE` / `SET` / `DELETE` / `DETACH DELETE` / `REMOVE` / `LOAD CSV` / `FOREACH` 及写型 `CALL`（APOC/GDS/非只读 DB 过程）。
-- 不支持：DDL、备份、SQL 工具、复杂图布局/交互（当前为基础环形布局）。
+- 不支持：DDL、备份、SQL 工具。图视图支持力导向布局、缩放平移、拖动节点、属性面板与搜索高亮；超过 140 个节点自动退回环形布局以保证渲染性能。
 
 ### Qdrant / Milvus / Weaviate
 
@@ -215,14 +215,14 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 - FalkorDB 通过 Redis 协议执行 `GRAPH.QUERY`：参数以 `CYPHER k=v` 前缀内联（驱动已做字面量转义），属性/统计信息来自 `GRAPH.QUERY` 的第二、三段返回；无多图事务与索引管理 UI。
 - InfluxDB 3 的 SQL 接口只读，且只有 `iox`/`system`/`information_schema` 三个 schema；建库写数据需用 `influxdb3` CLI 或行协议 API。InfluxDB 1.x/2.x 的 Flux/InfluxQL 端点不同，当前只保证 3.x。
 - ArangoDB 走 HTTP `/_api/cursor`：AQL 无 DDL 设计器，集合创建/删除需用 `/_api/collection`；文档集合与边集合都按对象树展示，带 `_from`/`_to` 或 path 的结果自动切换图视图；单批上限 1000 行，超出自动 follow-up 并截断。
-- 复杂图布局/交互、向量/搜索写入仍待补；当前图视图为基础环形布局。
+- 向量/搜索写入仍待补；图视图已支持力导向布局与交互。
 
 ## 10. 后续路线
 
 | 阶段 | 内容 |
 |---|---|
 | P1 | 已完成：Neo4j、达梦 DM8、DuckDB、Qdrant、Milvus、pgvector + Embedding |
-| P2 | 已完成：Memgraph、Cassandra/ScyllaDB、Weaviate、Elasticsearch/OpenSearch、TDengine、FalkorDB、InfluxDB、ArangoDB、基础图视图、向量/搜索只读；待补：复杂图布局、向量/搜索写入、Redis Stack |
+| P2 | 已完成：Memgraph、Cassandra/ScyllaDB、Weaviate、Elasticsearch/OpenSearch、TDengine、FalkorDB、InfluxDB、ArangoDB、交互式图视图、向量/搜索只读；待补：向量/搜索写入、Redis Stack |
 | P3 | 云数仓（Snowflake / BigQuery / Redshift / Databricks）、Db2 / SAP HANA、无 Node 驱动的国产库（神通 / GBase 8s / 崖山 / 虚谷） |
 
 ## 11. 关键文件

@@ -48,7 +48,7 @@ AiDB Studio 是一款 **AI 原生、全平台** 的数据库连接与管理工�
 ### 5.1 当前交付（v0.4-dev）
 - 主界面：Navicat 式顶部 12 模块功能区、连接 / 对象树（表 / 视图 / 函数 / 查询 / 备份分组）、工作区 Tabs、AI 面板。
 - 连接管理：关系型 SQLite / MySQL / MariaDB / PostgreSQL / CockroachDB / SQL Server / Oracle / ClickHouse / 达梦 DM8 / DuckDB；时序 TDengine；文档型 MongoDB；键值型 Redis；宽列 Cassandra / ScyllaDB；图数据库 Neo4j / Memgraph；向量数据库 Qdrant / Milvus / Weaviate；搜索 Elasticsearch / OpenSearch；国产协议别名 金仓 / openGauss / GaussDB / OceanBase / TiDB / PolarDB / TDSQL / GBase 8a / Doris / StarRocks / 瀚高 / Vastbase / IvorySQL / GreatSQL / GoldenDB。支持 SSH 隧道、测试连接、颜色标签、只读开关。
-- 非关系型与向量基础能力：MongoDB 集合浏览与 JSON MQL；Redis DB 索引、SCAN 与命令控制台；Cassandra/ScyllaDB keyspace/table 浏览与 CQL；Neo4j / Memgraph 标签/关系浏览、Cypher 与基础图视图；Qdrant / Milvus / Weaviate 集合浏览与向量检索；Elasticsearch / OpenSearch 索引/mapping 与 `_search` DSL；TDengine 超级表/子表浏览与 SQL 控制台；pgvector 关系表向量检索与 Embedding。SQL 专属功能在非 SQL 连接上明确禁用。详见 [多引擎架构](./09-multi-engine.md)。
+- 非关系型与向量基础能力：MongoDB 集合浏览与 JSON MQL；Redis DB 索引、SCAN 与命令控制台；Cassandra/ScyllaDB keyspace/table 浏览与 CQL；Neo4j / Memgraph / FalkorDB / ArangoDB 标签/集合浏览、Cypher/AQL 与交互式图视图；Qdrant / Milvus / Weaviate 集合浏览与向量检索；Elasticsearch / OpenSearch 索引/mapping 与 `_search` DSL；TDengine 超级表/子表浏览与 SQL 控制台；pgvector 关系表向量检索与 Embedding。SQL 专属功能在非 SQL 连接上明确禁用。详见 [多引擎架构](./09-multi-engine.md)。
 - 对象浏览器：库/Schema → 表/视图 → 列/索引/外键，搜索过滤，刷新，完整右键菜单。
 - 数据库操作：新建 / 重命名 / 删除（按引擎能力）、转储 SQL、数据库内查找、命令列、运行 SQL 文件。
 - 表操作：新建、设计、重命名、复制（结构 / 结构+数据）、查看 DDL、对象信息、清空、截断、删除、维护。
@@ -66,7 +66,7 @@ AiDB Studio 是一款 **AI 原生、全平台** 的数据库连接与管理工�
 - 报表设计器、可视化 ER 建模/反向工程编辑器、云协作/团队空间、HTTP Tunnel/SOCKS 代理、Excel 导入导出、行级数据 merge 同步（当前为行数/主键指纹 + 替换同步）、数据库监控历史采样、可视化编辑触发器/存储过程。
 - Navicat 式跨请求事务（开始事务 / 提交 / 回滚）；当前数据编辑即时提交。
 - 协同编辑、云端账号体系。
-- 向量数据库已接入 Qdrant / Milvus / Weaviate 与 pgvector 能力；图数据库已接入 Neo4j / Memgraph 浏览、Cypher 与基础图视图。搜索型 Elasticsearch / OpenSearch 已接入索引浏览与 `_search` DSL。
+- 向量数据库已接入 Qdrant / Milvus / Weaviate 与 pgvector 能力；图数据库已接入 Neo4j / Memgraph / FalkorDB / ArangoDB 浏览、Cypher/AQL 与力导向图视图。搜索型 Elasticsearch / OpenSearch 已接入索引浏览与 `_search` DSL。
 - 非关系型引擎的 DDL 设计器、结构同步、数据对比、SQL dump 备份、查询构建器与 ER 图不承诺；按 EngineMeta.capabilities 显式降级，不静默失败。
 
 ## 6. 质量目标

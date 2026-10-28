@@ -223,7 +223,7 @@
 |---|---|---|---|---|---|
 | MongoDB | document | database → collection/view；采样 30 条推断字段（含一层嵌套字段） | JSON MQL：find / aggregate / count / distinct；支持 filter / pipeline / projection / sort / limit / skip | 文档行，嵌套值为 JSON 单元格 | 禁用 DDL 设计器、结构同步、数据对比、dump、审计体检、图表 |
 | Redis | keyvalue | DB 索引 → keys 伪对象；SCAN 浏览，不执行 `KEYS *` | 单条命令控制台；SCAN / HGETALL / ZRANGE 等类型化结果 | key/value、field/value、member/score 等 | 禁用 DDL、结构同步、备份、SQL 工具 |
-| Neo4j | graph | database → 节点标签 / 关系类型；采样 30 个节点/关系推断属性 | Cypher 控制台；支持 `$params`；`EXPLAIN` / `PROFILE` 计划以 JSON 返回 | 节点/关系/路径为 JSON 单元格，`resultKind=graph`；支持表格/基础图视图 | 禁用 SQL 工具、DDL、结构同步、备份；复杂图布局后续 |
+| Neo4j | graph | database → 节点标签 / 关系类型；采样 30 个节点/关系推断属性 | Cypher 控制台；支持 `$params`；`EXPLAIN` / `PROFILE` 计划以 JSON 返回 | 节点/关系/路径为 JSON 单元格，`resultKind=graph`；支持表格/图视图（力导向布局、缩放平移、拖动节点、属性面板、搜索高亮） | 禁用 SQL 工具、DDL、结构同步、备份；超大图（>140 节点）自动退回环形布局 |
 | Qdrant | vector | collection → 维度 / 距离 / payload 字段 | JSON：`scroll` 浏览或 `vector` / `text` 检索 | id/score/payload 行，`resultKind=vectors` | 禁用 SQL/DDL；文本检索需 Embedding |
 | Milvus | vector | collection → field schema / 维度 | JSON：`scroll` 查询或 `vector` / `text` 检索 | id/score/entity 行，`resultKind=vectors` | 禁用 SQL/DDL；文本检索需 Embedding |
 | Weaviate | vector | class → properties / vectorizer | JSON：scroll 或 nearVector 检索（GraphQL） | id/score/properties 行，`resultKind=vectors` | 禁用 SQL/DDL；文本检索需 Embedding |
