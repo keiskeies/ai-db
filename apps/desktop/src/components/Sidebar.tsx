@@ -35,7 +35,6 @@ import { api } from '../lib/api';
 import { useApp, type ContextMenuItem } from '../store';
 import { TableOpsDialog, type TableDialogKind } from './TableOpsDialog';
 import { DatabaseOpsDialog, type DatabaseDialogKind } from './DatabaseOpsDialog';
-import { CreateObjectDialog } from './CreateObjectDialog';
 import { TableInfoDialog } from './TableInfoDialog';
 
 const COLORS: Record<string, string> = {
@@ -89,7 +88,6 @@ export function Sidebar() {
   const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>({});
   const [tableDialog, setTableDialog] = useState<{ kind: TableDialogKind; conn: ConnectionConfig; schema: DatabaseSchema; table: TableInfo; withData?: boolean } | null>(null);
   const [dbDialog, setDbDialog] = useState<{ kind: DatabaseDialogKind; conn: ConnectionConfig; database: string } | null>(null);
-  const [objectDialog, setObjectDialog] = useState<{ conn: ConnectionConfig; database?: string } | null>(null);
   const [infoTable, setInfoTable] = useState<{ table: TableInfo; database?: string } | null>(null);
 
   const filtered = useMemo(() => {
@@ -603,17 +601,6 @@ export function Sidebar() {
                                               className="tree-node folder-node"
                                               style={{ paddingLeft: INDENT.folder }}
                                               onClick={() => setGroupOpen((prev) => ({ ...prev, [tableKey]: !tablesOpen }))}
-                                              onContextMenu={(event) => {
-                                                if (model !== 'vector' && model !== 'search') return;
-                                                openMenu(event, [
-                                                  {
-                                                    label: model === 'search' ? '新建索引…' : '新建集合…',
-                                                    icon: <Plus size={13} />,
-                                                    onClick: () => setObjectDialog({ conn, database: schema.name }),
-                                                  },
-                                                  { label: t('refresh'), icon: <RefreshCw size={13} />, onClick: () => void loadSchema(conn.id, true, schema.name) },
-                                                ]);
-                                              }}
                                             >
                                               <ChevronRight size={12} className={`conn-toggle ${tablesOpen ? 'open' : ''}`} />
                                               {model === 'graph' ? (
@@ -728,13 +715,6 @@ export function Sidebar() {
       ) : null}
       {infoTable ? (
         <TableInfoDialog table={infoTable.table} database={infoTable.database} onClose={() => setInfoTable(null)} />
-      ) : null}
-      {objectDialog ? (
-        <CreateObjectDialog
-          connection={objectDialog.conn}
-          database={objectDialog.database}
-          onClose={() => setObjectDialog(null)}
-        />
       ) : null}
       {dbDialog ? (
         <DatabaseOpsDialog
