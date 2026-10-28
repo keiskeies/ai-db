@@ -32,6 +32,7 @@ import {
   toSeries,
   topShare,
   vectorQueryFromArgs,
+  writesLineProtocol,
   type AlterOp,
   type AppSettings,
   type ColumnDef,
@@ -523,6 +524,25 @@ export class ToolExecutor {
           { database: this.databaseOf(call, conn), timeoutMs: settings.queryTimeoutMs, actor: 'agent' },
         );
         return ok(started, `写入 ${result.upserted} 条`, result);
+      }
+
+      case 'write_line_protocol': {
+        const conn = this.requireConnection(call, ctx);
+        if (!writesLineProtocol(conn.engine)) {
+          throw new DbError(`${engineMeta(conn.engine).label} 不支持行协议写入`, {
+            code: 'UNSUPPORTED_ENGINE',
+            hint: '只有 InfluxDB 需要走行协议写入；其它引擎请用 run_sql / upsert_document',
+          });
+        }
+        const raw = typeof a.lines === 'string' ? a.lines.split(/\r?\n/) : Array.isArray(a.lines) ? (a.lines as unknown[]).map(String) : [];
+        const lines = raw.map((line) => line.trim()).filter(Boolean);
+        if (!lines.length) throw new DbError('lines 需要至少一行行协议', { code: 'WRITE_LINES' });
+        const result = await this.manager.writeLineProtocol(conn.id, lines, {
+          database: this.databaseOf(call, conn),
+          timeoutMs: this.getSettings().queryTimeoutMs,
+          actor: 'agent',
+        });
+        return ok(started, `写入 ${result.written} 行`, result);
       }
 
       case 'import_documents': {

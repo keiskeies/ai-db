@@ -149,7 +149,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - Cypher：`classifyCypher` 先屏蔽字符串/注释/反引号，再识别写子句与写型过程；`EXPLAIN` 为只读，`PROFILE` 按内部语句定级。
 - 向量：`classifyVector` 校验 collection/topK/向量数值，只读检索走 `<=>` 相似度查询或各自 REST；写入通过 `upsert_document`（需 `write` 权限，只读连接拒绝）。
 - Agent：`resolveRisk` 对 `run_mql` / `run_redis` 动态取风险；审批弹窗展示结构化查询。
-- SQL 专属工具在非 SQL 连接上返回 `UNSUPPORTED_ENGINE`；HTTP 的 DDL / 数据编辑 / 结构同步 / 监控 / 用户 / 备份等路由同样拒绝。例外：`manage_index` 在 MongoDB / Qdrant / ArangoDB 上走 `POST /indexes/*` 的结构化通道（与对象信息面板同一实现），`alter_table` 在 Elasticsearch/OpenSearch / Weaviate 上走 `POST /fields/create` 追加 mapping 字段 / property，`create_collection` / `delete_collection` / `upsert_document` / `delete_documents` / `import_documents` 也按能力位开放。
+- SQL 专属工具在非 SQL 连接上返回 `UNSUPPORTED_ENGINE`；HTTP 的 DDL / 数据编辑 / 结构同步 / 监控 / 用户 / 备份等路由同样拒绝。例外：`manage_index` 在 MongoDB / Qdrant / ArangoDB 上走 `POST /indexes/*` 的结构化通道（与对象信息面板同一实现），`alter_table` 在 Elasticsearch/OpenSearch / Weaviate 上走 `POST /fields/create` 追加 mapping 字段 / property，`create_collection` / `delete_collection` / `upsert_document` / `delete_documents` / `import_documents` / `write_line_protocol` 也按能力位开放。
 
 ## 6. Agent 工具
 
@@ -162,6 +162,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 | `run_cypher` | Neo4j / Memgraph / FalkorDB Cypher 查询（支持 `$params`） |
 | `run_aql` | ArangoDB AQL 查询（支持 `@bindVar` 与 `@@collection`） |
 | `upsert_document` | 批量写入文档/向量点（MongoDB / ArangoDB / Qdrant / Weaviate / Milvus / ES / OpenSearch） |
+| `write_line_protocol` | InfluxDB 行协议写入（v3 的 SQL 只读，时间戳用纳秒） |
 | `delete_documents` | 按 id 列表删除文档/向量点/搜索文档（ArangoDB 用 `_key`） |
 | `import_documents` | CSV 批量导入文档/向量点（含 ArangoDB，id 列映射为 `_key`） |
 | `create_collection` | 创建向量集合 / 搜索索引 / Weaviate class / MongoDB 集合 |

@@ -242,6 +242,29 @@ export const TOOLS: ToolDefinition[] = [
     summarize: (a) => `写入 ${a.collection ?? ''}${Array.isArray(a.documents) ? ` ×${(a.documents as unknown[]).length}` : ''}`.trim(),
   },
   {
+    name: 'write_line_protocol',
+    description:
+      'Write time-series samples to InfluxDB using line protocol, because the InfluxDB SQL API is read-only. Pass lines as a string (one sample per line) or an array. Format: measurement,tag=v field=value timestamp (timestamp in nanoseconds). Duplicate timestamps and tags overwrite by design.',
+    risk: 'write',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connectionId'],
+      properties: {
+        ...connectionProp,
+        ...databaseProp,
+        lines: {
+          oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' }, maxItems: 5000 }],
+          description: 'Line-protocol samples, as one multi-line string or an array of lines',
+        },
+      },
+    },
+    summarize: (a) => {
+      const lines = typeof a.lines === 'string' ? a.lines.split(/\r?\n/).filter((line) => line.trim()) : Array.isArray(a.lines) ? a.lines : [];
+      return `行协议写入 ${lines.length} 行`;
+    },
+  },
+  {
     name: 'import_documents',
     description:
       'Bulk-import a CSV into a MongoDB collection, an ArangoDB collection, a Qdrant/Weaviate/Milvus collection or an Elasticsearch/OpenSearch index (max 5000 rows). Header names become fields; idColumn maps the id field (_id / _key / id) and vectorColumn parses arrays like "[0.1,0.2]" for vector collections.',

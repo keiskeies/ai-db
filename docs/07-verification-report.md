@@ -25,7 +25,7 @@
 ### 1.3 交叉一致性结论
 
 - 平台矩阵、权限矩阵、工具清单、SSE 事件、元数据表名在文档与实现中一一对应（契约脚本会读取 `tools.ts` 校验）。
-- 文档中的 36 个工具全部在 `packages/core/src/agent/tools.ts` 注册，并由 `apps/gateway/src/executor.ts` 实现。
+- 文档中的 37 个工具全部在 `packages/core/src/agent/tools.ts` 注册，并由 `apps/gateway/src/executor.ts` 实现。
 - 权限矩阵与 `packages/core/src/agent/policy.ts` 一致；SSE / WS 共用 `AgentEvent` 类型。
 
 ## 2. 验证环境

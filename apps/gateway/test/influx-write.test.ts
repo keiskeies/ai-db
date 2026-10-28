@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writesLineProtocol } from '@aidb/core';
+import { ToolExecutor } from '../src/executor';
 import { createGateway } from '../src/server';
 
 const PORT = process.env.AIDB_TEST_INFLUXDB_PORT ? Number(process.env.AIDB_TEST_INFLUXDB_PORT) : undefined;
@@ -56,6 +57,7 @@ async function harness() {
   return {
     api,
     connect,
+    gateway,
     close: async () => {
       await gateway.close();
       try {
@@ -107,4 +109,39 @@ test('InfluxDB 行协议写入：写入后能查回，只读与非 InfluxDB 被�
 
   const audits = await env.api<{ entries: Array<{ tool: string; risk: string }> }>(`/audit?connectionId=${writable}&limit=20`);
   assert.ok((audits.body.entries ?? []).some((entry) => entry.tool === 'influx.write' && entry.risk === 'write'));
+
+  const executor = new ToolExecutor(env.gateway.store, env.gateway.manager, env.gateway.config, () => env.gateway.store.getSettings());
+  const agentWrite = await executor.execute(
+    {
+      id: 'lp-1',
+      name: 'write_line_protocol',
+      args: { connectionId: writable, database: DB, lines: [`aidb_lp,host=agent value=7 ${Date.now()}000000`] },
+    },
+    { sessionId: 's1', connectionId: writable },
+  );
+  assert.equal(agentWrite.ok, true, agentWrite.error?.message);
+  assert.equal((agentWrite.data as Record<string, unknown>).written, 1);
+
+  // 非 InfluxDB 连接必须拒绝，避免把行协议发到不相干的引擎。
+  const mongoCreated = await env.api<{ connection: { id: string } }>('/connections', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: 'mongo-not-lp',
+      engine: 'mongodb',
+      host: '127.0.0.1',
+      port: process.env.AIDB_TEST_MONGO_PORT ? Number(process.env.AIDB_TEST_MONGO_PORT) : 27017,
+      database: 'aidb_influx_write_check',
+      groupName: 'live',
+      color: 'green',
+      environment: 'dev',
+      readonly: false,
+    }),
+  });
+  const mongoId = mongoCreated.body.connection.id;
+  const wrongEngine = await executor.execute(
+    { id: 'lp-2', name: 'write_line_protocol', args: { connectionId: mongoId, lines: ['x'] } },
+    { sessionId: 's1', connectionId: mongoId },
+  );
+  assert.equal(wrongEngine.ok, false);
+  assert.equal(wrongEngine.error?.code, 'UNSUPPORTED_ENGINE');
 });
