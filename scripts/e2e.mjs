@@ -571,6 +571,26 @@ if (REDIS_PORT) {
   );
   check('Redis key renamed from the detail dialog', true);
 
+  await page.locator('[data-testid="query-result-grid"] tbody tr', { hasText: 'aidb:e2e:key_renamed' }).first().dblclick();
+  await page.waitForSelector('[data-testid="key-value-input"]', { timeout: 10000 });
+  await page.fill('[data-testid="key-value-input"]', 'hello-edited');
+  const valueSaved = page.waitForResponse(
+    (response) => response.url().includes('/api/redis/key/value') && response.request().method() === 'POST',
+  );
+  await page.click('[data-testid="key-value-save"]');
+  await valueSaved;
+  await page.locator('.modal-head .icon-btn').last().click();
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 10000 });
+  await page.locator('[data-testid="query-result-grid"] tbody tr', { hasText: 'aidb:e2e:key_renamed' }).first().dblclick();
+  await page.waitForFunction(
+    () => document.querySelector('[data-testid="key-value-input"]')?.value === 'hello-edited',
+    null,
+    { timeout: 10000 },
+  );
+  check('Redis string value edited from the key detail dialog', true);
+  await page.locator('.modal-head .icon-btn').last().click();
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 10000 });
+
   await page.click('[data-testid="open-key-create"]');
   await page.waitForSelector('[data-testid="key-create-name"]', { timeout: 10000 });
   await page.fill('[data-testid="key-create-name"]', 'aidb:e2e:created');

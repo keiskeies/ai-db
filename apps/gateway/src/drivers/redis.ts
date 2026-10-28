@@ -622,6 +622,18 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
     return { key: name, ttl: Number(await client.ttl(name)) };
   }
 
+  /** 编辑 string 键的取值；KEEPTTL 保留原过期时间，非 string 类型拒绝以免 SET 覆盖整个键。 */
+  async setKeyValue(key: string, value: string, database?: string): Promise<{ key: string; type: string; ttl: number }> {
+    const name = key.trim();
+    if (!name) throw new DbError('键名不能为空', { code: 'REDIS_KEY' });
+    const client = await this.ready(database);
+    const type = String(await client.type(name));
+    if (type === 'none') throw new DbError(`键不存在：${name}`, { code: 'REDIS_KEY_NOT_FOUND', status: 404 });
+    if (type !== 'string') throw new DbError(`只能编辑 string 键的取值，当前类型为 ${type}`, { code: 'REDIS_TYPE' });
+    await client.set(name, value, 'KEEPTTL');
+    return { key: name, type: 'string', ttl: Number(await client.ttl(name)) };
+  }
+
   async renameKey(from: string, to: string, database?: string): Promise<{ from: string; to: string }> {
     const source = from.trim();
     const target = to.trim();

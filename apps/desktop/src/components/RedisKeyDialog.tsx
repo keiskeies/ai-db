@@ -30,6 +30,7 @@ export function RedisKeyDialog({
   const [deleting, setDeleting] = useState(false);
   const [ttlInput, setTtlInput] = useState('');
   const [renameTo, setRenameTo] = useState('');
+  const [valueText, setValueText] = useState('');
   const [mutating, setMutating] = useState(false);
   const connections = useApp((s) => s.connections);
   const notify = useApp((s) => s.notify);
@@ -46,6 +47,21 @@ export function RedisKeyDialog({
       notify('success', seconds === null ? '已移除过期时间' : '已设置过期时间', keyName);
     } catch (err: any) {
       setError(err?.message ?? '设置 TTL 失败');
+    } finally {
+      setMutating(false);
+    }
+  };
+
+  const saveValue = async () => {
+    setMutating(true);
+    setError(null);
+    try {
+      await api.setRedisKeyValue({ connectionId, database, key: keyName, value: valueText });
+      const { detail: found } = await api.redisKey({ connectionId, database, key: keyName });
+      setDetail(found);
+      notify('success', '键值已保存', keyName);
+    } catch (err: any) {
+      setError(err?.message ?? '保存键值失败');
     } finally {
       setMutating(false);
     }
@@ -91,6 +107,7 @@ export function RedisKeyDialog({
     try {
       const { detail: found } = await api.redisKey({ connectionId, database, key: keyName });
       setDetail(found);
+      if (found.type === 'string') setValueText(String(found.rows[0]?.[0] ?? ''));
     } catch (err: any) {
       setError(err?.message ?? '读取键失败');
     } finally {
@@ -196,7 +213,29 @@ export function RedisKeyDialog({
             </div>
           ) : null}
           {detail.note ? <div className="muted" style={{ fontSize: 11, marginBottom: 8 }}>{detail.note}</div> : null}
-          {detail.rows.length ? (
+          {detail.type === 'string' && conn && !conn.readonly ? (
+            <div>
+              <textarea
+                className="textarea"
+                value={valueText}
+                onChange={(event) => setValueText(event.target.value)}
+                spellCheck={false}
+                style={{ width: '100%', minHeight: 120, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                data-testid="key-value-input"
+              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                <button
+                  className="btn small primary"
+                  onClick={() => void saveValue()}
+                  disabled={mutating || deleting}
+                  data-testid="key-value-save"
+                >
+                  {mutating ? <Spinner /> : null} 保存值
+                </button>
+                <span className="muted" style={{ fontSize: 11 }}>SET KEEPTTL，保留原过期时间</span>
+              </div>
+            </div>
+          ) : detail.rows.length ? (
             <DataGrid columns={detail.columns} rows={detail.rows} testId="redis-key-grid" />
           ) : (
             <div className="muted" style={{ fontSize: 11 }}>没有可展示的取值</div>

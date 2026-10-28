@@ -1,3 +1,4 @@
+import { listenRandom } from './helpers';
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
@@ -26,7 +27,7 @@ async function gateway() {
     host: '127.0.0.1',
     production: false,
   });
-  await new Promise<void>((resolve) => server.server.listen(0, '127.0.0.1', () => resolve()));
+  await listenRandom(server.server);
   const httpPort = (server.server.address() as AddressInfo).port;
   const headers = { 'content-type': 'application/json', authorization: 'Bearer it-token' };
   const api = async <T = any>(path: string, init: RequestInit = {}): Promise<{ status: number; body: T }> => {
@@ -206,6 +207,57 @@ test('HTTP 设置/移除 TTL 与重命名键', { skip: !PORT }, async () => {
   }
 });
 
+test('HTTP 编辑 string 键取值：保留 TTL、拒绝非 string 与只读', { skip: !PORT }, async () => {
+  const env = await gateway();
+  after(env.close);
+  const writable = await env.connect('redis-value', false);
+  const readonly = await env.connect('redis-value-ro', true);
+  const db = '9';
+
+  const client = new Redis({ host: '127.0.0.1', port: PORT!, db: Number(db), lazyConnect: true });
+  await client.connect();
+  try {
+    await client.del('aidb_val_str', 'aidb_val_hash');
+    await client.set('aidb_val_str', 'before', 'EX', '900');
+    await client.hset('aidb_val_hash', 'field', 'value');
+
+    const saved = await env.api<{ result: { key: string; type: string; ttl: number } }>('/redis/key/value', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: writable, database: db, key: 'aidb_val_str', value: 'after' }),
+    });
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    assert.equal(await client.get('aidb_val_str'), 'after');
+    assert.ok((await client.ttl('aidb_val_str')) > 800, 'SET KEEPTTL 保留原过期时间');
+
+    const wrongType = await env.api<{ error: { code: string } }>('/redis/key/value', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: writable, database: db, key: 'aidb_val_hash', value: 'x' }),
+    });
+    assert.equal(wrongType.status, 400);
+    assert.equal(wrongType.body.error.code, 'REDIS_TYPE');
+    assert.equal(await client.hget('aidb_val_hash', 'field'), 'value', '非 string 键不被覆盖');
+
+    const missing = await env.api('/redis/key/value', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: writable, database: db, key: 'aidb_val_ghost', value: 'x' }),
+    });
+    assert.equal(missing.status, 404);
+
+    const ro = await env.api('/redis/key/value', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: readonly, database: db, key: 'aidb_val_str', value: 'nope' }),
+    });
+    assert.equal(ro.status, 403);
+    assert.equal(await client.get('aidb_val_str'), 'after');
+
+    const audits = await env.api<{ entries: Array<{ tool: string; risk: string }> }>(`/audit?connectionId=${writable}&limit=30`);
+    assert.ok((audits.body.entries ?? []).some((entry) => entry.tool === 'redis.key.value' && entry.risk === 'write'));
+  } finally {
+    await client.del('aidb_val_str', 'aidb_val_hash');
+    await client.quit();
+  }
+});
+
 test('HTTP 新建键覆盖五种类型，拒绝重复键与只读连接', { skip: !PORT }, async () => {
   const env = await gateway();
   after(env.close);
@@ -240,7 +292,8 @@ test('HTTP 新建键覆盖五种类型，拒绝重复键与只读连接', { skip
     assert.deepEqual((await client.smembers('aidb_ck_set')).sort(), ['x', 'y']);
 
     assert.equal((await create('aidb_ck_zset', 'zset', { alice: 1, bob: 2 })).status, 200);
-    assert.deepEqual(await client.zrange('aidb_ck_zset', 0, -1, 'WITHSCORES'), ['alice', '1', 'bob', '2']);
+    assert.deepEqual(await client.zrange('aidb_ck_zset', '0', '-1'), ['alice', 'bob']);
+    assert.equal(await client.zscore('aidb_ck_zset', 'bob'), '2');
 
     const dup = await create('aidb_ck_str', 'string', 'again');
     assert.equal(dup.status, 409);

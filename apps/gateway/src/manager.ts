@@ -618,6 +618,22 @@ export class ConnectionManager {
     return result;
   }
 
+  /** 编辑 string 键的取值（SET KEEPTTL）；非 string 类型由驱动拒绝。 */
+  async setKeyValue(connectionId: string, key: string, value: string, opts: QueryOptions): Promise<{ key: string; type: string; ttl: number }> {
+    const { conn, driver } = await this.keyDriver(connectionId);
+    if (!key.trim()) throw new DbError('键名不能为空', { code: 'REDIS_KEY' });
+    const started = Date.now();
+    const result = await driver.setKeyValue(key, value, opts.database ?? conn.database);
+    this.store.addHistory({
+      connectionId,
+      database: opts.database ?? conn.database,
+      sql: JSON.stringify({ setKeyValue: { key: result.key } }),
+      status: 'ok',
+      durationMs: Date.now() - started,
+    });
+    return result;
+  }
+
   /** 向量/搜索引擎的对象创建（非 SQL DDL）：Qdrant 集合、ES/OpenSearch 索引、Weaviate class。 */
   async createObject(
     connectionId: string,
