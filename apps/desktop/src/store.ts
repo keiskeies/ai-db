@@ -649,6 +649,9 @@ export const useApp = create<AppStore>((set, get) => ({
         case 'text_delta':
           live.text += event.text;
           break;
+        case 'text_replace':
+          live.text = event.text;
+          break;
         case 'thinking_delta':
           live.thinking += event.text;
           break;

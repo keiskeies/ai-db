@@ -238,6 +238,7 @@ export interface QueryResult {
 type AgentEvent =
   | { type: 'start'; turnId: string; sessionId: string; model: string }
   | { type: 'text_delta'; text: string }
+  | { type: 'text_replace'; text: string }   // 模型把工具调用当文本吐出时，用更正后的正文替换已流出的内容
   | { type: 'thinking_delta'; text: string }
   | { type: 'tool_call'; callId: string; tool: string; args: unknown; risk: Risk }
   | { type: 'tool_result'; callId: string; result: ToolResult }

@@ -173,7 +173,7 @@ type ToolResult = {
 > 业务语义类记忆是问数准确率的直接来源，检索时走**独立配额**（术语 ≤ 20 条、示例 SQL ≤ 3 条），不挤占情景记忆的 6 条名额；排序打分额外 +0.10 作为同分区内的 tie-break，词法相关度仍然优先。
 
 ### 7.2 作用域
-`global | connection:<id> | database:<id>/<db> | table:<id>/<db>/<table>`。检索时按当前连接/库加权，global 兜底；不同连接的同名表不串味。
+`global | connection:<id> | database:<id>/<db> | table:<id>/<table>`。检索先按作用域**硬过滤**（global ∪ 本连接 ∪ 本库 ∪ 本连接下的表记忆），再在可见集合内按分数排序——只靠加权的话，A 库的字面相似记忆会串进 B 库；scopeMatch 现在只决定同作用域内部的先后。
 
 ### 7.3 写入（提取）
 - 触发：每轮 `done` 后异步；用户显式"记住…"；Agent 调用 `memory_write`。
@@ -229,6 +229,8 @@ pinned → +0.3 且不衰减
 |---|---|---|---|
 | Anthropic | Messages API (`/v1/messages`) | SSE | `tools` + `tool_use` blocks |
 | OpenAI Compatible | Chat Completions (`/v1/chat/completions`) | SSE | `tools` + `tool_calls` |
+
+> 兼容兜底：部分自定义/开源模型不会走结构化 `tool_calls`，而是把 Anthropic 风格的 `<function_calls><invoke name=…><parameter name=…>` 当正文吐出来。运行时会识别这种片段（含缺失闭合标签的情况），把能识别的调用捞回来执行，并从正文里删掉；已流式输出的文本用 `text_replace` 事件更正。代码块里的示例不参与解析。
 | Ollama | OpenAI 兼容 (`/v1/chat/completions`)，模型列表读原生 `/api/tags` | SSE | 同 OpenAI Compatible |
 | Local Reasoner | 进程内确定性规划器 | 模拟逐字 | 直接产生 tool_calls |
 

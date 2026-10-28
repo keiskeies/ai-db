@@ -158,3 +158,37 @@ test('update_plan is applied in-process and emits a plan event', async () => {
   const planEvent = events.find((e) => e.type === 'plan');
   assert.ok(planEvent && planEvent.type === 'plan' && planEvent.items.length === 2);
 });
+
+test('runtime rescues a tool call the model wrote as XML text', async () => {
+  const provider = new ScriptedProvider([
+    [
+      {
+        type: 'text',
+        text: '我先查一下结构。\n<function_calls>\n<invoke name="inspect_schema">\n<parameter name="connectionId">c1</parameter>\n</invoke>\n</function_calls>',
+      },
+      { type: 'done', stopReason: 'end_turn' },
+    ],
+    [{ type: 'text', text: '一共 3 张表。' }, { type: 'done', stopReason: 'end_turn' }],
+  ]);
+  const events: AgentEvent[] = [];
+  let executed = 0;
+  const runtime = new AgentRuntime({
+    provider,
+    buildSystem: () => 'system',
+    executeTool: async () => {
+      executed++;
+      return result();
+    },
+    requestApproval: async () => ({ decision: 'allow', scope: 'once' }),
+    emit: (event) => events.push(event),
+    generateId: () => `id_${Math.random().toString(36).slice(2, 8)}`,
+    now: () => Date.now(),
+  });
+  const outcome = await runtime.run({ ...baseInput, sessionAllowed: new Set(), alwaysAllowed: new Set() });
+  assert.equal(executed, 1);
+  assert.equal(outcome.toolCalls, 1);
+  assert.ok(events.some((e) => e.type === 'tool_call' && e.tool === 'inspect_schema'));
+  assert.ok(events.some((e) => e.type === 'text_replace'));
+  assert.ok(!outcome.text.includes('<invoke'), outcome.text);
+  assert.match(outcome.text, /一共 3 张表/);
+});

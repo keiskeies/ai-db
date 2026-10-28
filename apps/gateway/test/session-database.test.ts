@@ -84,3 +84,23 @@ test('召回记忆按「类型+标题」去重，同一问题不会占满名额'
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('召回只带当前库的记忆，不跨库串味', () => {
+  const dir = tempDir();
+  try {
+    const store = new Store(join(dir, 'aidb.db'), 'secret');
+    store.createMemory({ kind: 'fact', title: '收藏指的是 m_book_shelf', content: 'media 库里收藏关系放在 m_book_shelf' }, { connectionId: 'c1', database: 'media' });
+    store.createMemory({ kind: 'fact', title: '收藏指的是 m_star', content: 'nextcloud 库里收藏关系放在 m_star' }, { connectionId: 'c1', database: 'nextcloud' });
+    store.createMemory({ kind: 'fact', title: '收藏口径全局约定', content: '所有库的收藏都先确认业务方的定义' }, { connectionId: 'c1', database: 'media' });
+
+    const inMedia = store.recallForTurn('收藏指的是哪个表', { connectionId: 'c1', database: 'media' }).memories.map((m) => m.title);
+    const inNextcloud = store.recallForTurn('收藏指的是哪个表', { connectionId: 'c1', database: 'nextcloud' }).memories.map((m) => m.title);
+    assert.ok(inMedia.some((t) => t.includes('m_book_shelf')), `media 应召回本库记忆：${inMedia.join(' | ')}`);
+    assert.ok(!inMedia.some((t) => t.includes('m_star')), `media 不应召回 nextcloud 的记忆：${inMedia.join(' | ')}`);
+    assert.ok(inNextcloud.some((t) => t.includes('m_star')), `nextcloud 应召回本库记忆：${inNextcloud.join(' | ')}`);
+    assert.ok(!inNextcloud.some((t) => t.includes('m_book_shelf')), `nextcloud 不应召回 media 的记忆：${inNextcloud.join(' | ')}`);
+    store.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -121,6 +121,8 @@ export interface ApprovalPayload {
 export type AgentEvent =
   | { type: 'start'; turnId: string; sessionId: string; model: string }
   | { type: 'text_delta'; text: string }
+  /** 模型把工具调用当文本吐出来时，更正已经流出去的正文。 */
+  | { type: 'text_replace'; text: string }
   | { type: 'thinking_delta'; text: string }
   | { type: 'tool_call'; callId: string; tool: string; args: unknown; risk: Risk; summary: string }
   | { type: 'tool_result'; callId: string; tool: string; result: ToolResult }

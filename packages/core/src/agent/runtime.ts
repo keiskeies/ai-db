@@ -1,6 +1,7 @@
 import type { AgentPlanItem, Risk } from '../types';
 import { describeCall, evaluatePermission, resolveRisk, toolSignature } from './policy';
 import { getTool, providerTools } from './tools';
+import { rescueXmlToolCalls } from './xmlTools';
 import type {
   AgentEvent,
   AgentRunInput,
@@ -146,6 +147,15 @@ export class AgentRuntime {
         return { text: finalText.trim(), status: 'error', usage: { tokensIn, tokensOut }, toolCalls: toolCount, plan, error: providerError };
       }
 
+      if (!calls.length && stepText) {
+        // 兜底：模型没走结构化 tool_calls，而是把 XML 调用写进了正文
+        const rescued = rescueXmlToolCalls(stepText, (name) => Boolean(getTool(name)));
+        if (rescued.calls.length) {
+          calls.push(...rescued.calls);
+          stepText = rescued.text;
+          deps.emit({ type: 'text_replace', text: stepText });
+        }
+      }
       if (stepText) finalText += (finalText ? '\n\n' : '') + stepText;
       if (!calls.length) return finish('done');
 

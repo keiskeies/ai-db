@@ -874,7 +874,8 @@ export class Store {
     ctx: { connectionId?: string; database?: string; limit?: number; kinds?: MemoryKind[]; excludeKinds?: MemoryKind[] } = {},
   ): Memory[] {
     const all = this.listMemories({ includeArchived: false, limit: 500 });
-    const memories = filterKinds(all, ctx.kinds, ctx.excludeKinds);
+    // 作用域先硬过滤再排序：只按分数加权的话，A 库的业务口径会顶着字面相似度串到 B 库
+    const memories = filterKinds(all, ctx.kinds, ctx.excludeKinds).filter((memory) => this.memoryInScope(memory, ctx));
     const limit = ctx.limit ?? 8;
     if (!query.trim()) {
       return this.uniqueMemories(
@@ -887,6 +888,16 @@ export class Store {
     const unique = this.uniqueMemories(ranked, limit);
     this.markMemoriesUsed(unique.map((m) => m.id));
     return unique;
+  }
+
+  /** 记忆的可见范围：global 处处可见，connection / database / table 只在本作用域内召回。 */
+  private memoryInScope(memory: Memory, ctx: { connectionId?: string; database?: string }): boolean {
+    if (memory.scopeType === 'global') return true;
+    if (!ctx.connectionId) return false;
+    if (memory.scopeType === 'connection') return memory.scopeKey === ctx.connectionId;
+    if (memory.scopeType === 'database') return Boolean(ctx.database) && memory.scopeKey === `${ctx.connectionId}/${ctx.database}`;
+    if (memory.scopeType === 'table') return memory.scopeKey.startsWith(`${ctx.connectionId}/`);
+    return false;
   }
 
   /** 同一问题被反复提问会存成多条同标题的情景记忆；召回按「类型 + 标题」只留排序最前的那条。 */

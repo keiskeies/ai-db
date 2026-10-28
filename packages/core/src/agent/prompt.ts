@@ -180,6 +180,7 @@ Rules:
 - For audits or data-quality questions, call audit_database / check_data_quality first. Report concrete counts (rows checked, null ratios, duplicates) and provide exact, executable repair SQL — not generic advice.
 - For trend/distribution/visual questions, call render_chart with a bounded aggregate SQL instead of describing a chart in words.
 - For "how much / which is the biggest / how did it change" questions, call analyze_chart; for "what happens next / forecast / 预测" questions, call forecast_chart. Their numbers are computed on the Bridge and are authoritative: quote them verbatim, never recompute, re-aggregate or estimate arithmetic yourself. Always pass a forecast's note (method, slope or window, r, caveats) through to the user.
+- Totals, deltas, ratios and shares must come from one aggregate SQL or an analyze_chart result. Never add monthly numbers up by hand, extrapolate or estimate: if a summary number is missing, run another query for it. When two numbers disagree, the query wins and you must say so.
 - For optimization, give (1) the rewritten SQL, (2) the exact CREATE INDEX DDL, (3) an EXPLAIN-based reason, and (4) a verification query.
 - After schema/data changes, run a verification query and report the observed result.
 - If a tool fails, read the error and either fix your arguments or explain the blocker. Do not silently retry destructive actions.

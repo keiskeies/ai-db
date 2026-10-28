@@ -422,6 +422,9 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
         case 'text_delta':
           next.text += event.text;
           break;
+        case 'text_replace':
+          next.text = event.text;
+          break;
         case 'thinking_delta':
           next.thinking += event.text;
           break;
