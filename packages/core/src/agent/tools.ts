@@ -89,6 +89,70 @@ export const TOOLS: ToolDefinition[] = [
     summarize: (a) => String(a.sql ?? '').replace(/\s+/g, ' ').slice(0, 80),
   },
   {
+    name: 'run_mql',
+    description:
+      'Run a structured MongoDB query on a MongoDB connection. Use find/aggregate/count/distinct; never pass SQL. Filters and pipelines are JSON objects. Results are capped by maxRows.',
+    risk: 'dynamic',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connectionId', 'collection', 'op'],
+      properties: {
+        ...connectionProp,
+        ...databaseProp,
+        collection: { type: 'string', description: 'Collection name' },
+        op: { type: 'string', enum: ['find', 'aggregate', 'count', 'distinct'], description: 'Operation; defaults to find' },
+        filter: { type: 'object', description: 'MongoDB filter document, e.g. {"status":"paid"}' },
+        pipeline: { type: 'array', items: { type: 'object' }, description: 'Aggregation pipeline stages' },
+        projection: { type: 'object', description: 'Projection document' },
+        sort: { type: 'object', description: 'Sort document, e.g. {"createdAt":-1}' },
+        limit: { type: 'integer', minimum: 1, maximum: 1000 },
+        skip: { type: 'integer', minimum: 0 },
+        field: { type: 'string', description: 'Field for distinct' },
+        maxRows: { type: 'integer', minimum: 1, maximum: 1000 },
+      },
+    },
+    summarize: (a) => `MongoDB ${a.op ?? 'find'} ${a.collection ?? ''}`.trim(),
+  },
+  {
+    name: 'run_redis',
+    description:
+      'Execute one Redis command on a Redis connection. Prefer SCAN over KEYS. Dangerous commands (FLUSHALL, CONFIG, EVAL, SHUTDOWN) are classified and may require approval.',
+    risk: 'dynamic',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connectionId', 'command'],
+      properties: {
+        ...connectionProp,
+        ...databaseProp,
+        command: { type: 'string', description: 'Redis command, e.g. GET or HGETALL' },
+        args: { type: 'array', items: { type: 'string' }, description: 'Command arguments' },
+        maxRows: { type: 'integer', minimum: 1, maximum: 5000 },
+      },
+    },
+    summarize: (a) => `Redis ${a.command ?? ''} ${String((a.args as string[] | undefined)?.[0] ?? '')}`.trim(),
+  },
+  {
+    name: 'run_cypher',
+    description:
+      'Run a Cypher query on a Neo4j graph connection. Use $params for values. Read-only connections reject CREATE/MERGE/SET/DELETE/REMOVE/LOAD CSV and write procedures.',
+    risk: 'dynamic',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connectionId', 'query'],
+      properties: {
+        ...connectionProp,
+        ...databaseProp,
+        query: { type: 'string', description: 'Cypher statement, e.g. MATCH (n:Person) RETURN n LIMIT 10' },
+        params: { type: 'object', description: 'Cypher parameters' },
+        maxRows: { type: 'integer', minimum: 1, maximum: 1000 },
+      },
+    },
+    summarize: (a) => `Cypher ${String(a.query ?? '').replace(/\s+/g, ' ').slice(0, 60)}`,
+  },
+  {
     name: 'explain_sql',
     description: 'Get the query execution plan (EXPLAIN) for a SQL statement.',
     risk: 'read',

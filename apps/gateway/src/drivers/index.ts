@@ -1,8 +1,11 @@
-import { engineDefaultPort, type ConnectionConfig, type ConnectionSecret } from '@aidb/core';
+import { engineDefaultPort, engineMeta, type ConnectionConfig, type ConnectionSecret } from '@aidb/core';
 import { ClickHouseDriver } from './clickhouse';
+import { MongoDriver } from './mongodb';
 import { MysqlDriver } from './mysql';
+import { Neo4jDriver } from './neo4j';
 import { OracleDriver } from './oracle';
 import { PostgresDriver } from './postgres';
+import { RedisDriver } from './redis';
 import { SqliteDriver } from './sqlite';
 import { SqlServerDriver } from './sqlserver';
 import { openTunnel, type Tunnel } from './ssh';
@@ -14,7 +17,9 @@ export interface DriverBundle {
 }
 
 export async function createDriver(config: ConnectionConfig, secret: ConnectionSecret = {}): Promise<DriverBundle> {
-  if (config.engine === 'sqlite') {
+  const meta = engineMeta(config.engine);
+
+  if (meta.transport === 'sqlite-file') {
     if (!config.database) throw new DbError('SQLite 连接缺少文件路径', { code: 'NO_SQLITE_PATH' });
     const driver = new SqliteDriver(config.database, config.readonly);
     return { driver, close: () => driver.close() };
@@ -33,69 +38,113 @@ export async function createDriver(config: ConnectionConfig, secret: ConnectionS
   }
   const connectHost = tunnel ? tunnel.localHost : host;
   const connectPort = tunnel ? tunnel.localPort : port;
+  const closeWithTunnel = async (driver: Driver) => {
+    await driver.close();
+    await tunnel?.close();
+  };
 
-  if (config.engine === 'mysql' || config.engine === 'mariadb') {
-    const driver = new MysqlDriver(
-      {
+  switch (meta.transport) {
+    case 'mysql': {
+      const driver = new MysqlDriver(
+        {
+          host: connectHost,
+          port: connectPort,
+          user: config.username ?? 'root',
+          password: secret.password,
+          database: config.database,
+          ssl: config.ssl,
+        },
+        config.engine,
+      );
+      return { driver, close: () => closeWithTunnel(driver) };
+    }
+    case 'postgres': {
+      const driver = new PostgresDriver(
+        {
+          host: connectHost,
+          port: connectPort,
+          user: config.username ?? 'postgres',
+          password: secret.password,
+          database: config.database || 'postgres',
+          ssl: config.ssl,
+        },
+        config.engine,
+      );
+      return { driver, close: () => closeWithTunnel(driver) };
+    }
+    case 'tds': {
+      const driver = new SqlServerDriver({
         host: connectHost,
         port: connectPort,
-        user: config.username ?? 'root',
+        user: config.username ?? 'sa',
         password: secret.password,
         database: config.database,
         ssl: config.ssl,
-      },
-      config.engine,
-    );
-    return { driver, close: async () => { await driver.close(); await tunnel?.close(); } };
-  }
-  if (config.engine === 'postgresql' || config.engine === 'cockroachdb') {
-    const driver = new PostgresDriver(
-      {
+      });
+      return { driver, close: () => closeWithTunnel(driver) };
+    }
+    case 'oracle': {
+      const driver = new OracleDriver({
         host: connectHost,
         port: connectPort,
-        user: config.username ?? 'postgres',
+        user: config.username ?? 'system',
         password: secret.password,
-        database: config.database || 'postgres',
+        database: config.database || 'ORCL',
         ssl: config.ssl,
-      },
-      config.engine,
-    );
-    return { driver, close: async () => { await driver.close(); await tunnel?.close(); } };
+      });
+      return { driver, close: () => closeWithTunnel(driver) };
+    }
+    case 'clickhouse-http': {
+      const driver = new ClickHouseDriver({
+        host: connectHost,
+        port: connectPort,
+        user: config.username ?? 'default',
+        password: secret.password,
+        database: config.database || 'default',
+        ssl: config.ssl,
+      });
+      return { driver, close: () => closeWithTunnel(driver) };
+    }
+    case 'mongodb': {
+      const driver = new MongoDriver({
+        host: connectHost,
+        port: connectPort,
+        user: config.username,
+        password: secret.password,
+        database: config.database,
+        ssl: config.ssl,
+      });
+      return { driver, close: () => closeWithTunnel(driver) };
+    }
+    case 'redis': {
+      const driver = new RedisDriver({
+        host: connectHost,
+        port: connectPort,
+        username: config.username,
+        password: secret.password,
+        database: config.database,
+        ssl: config.ssl,
+      });
+      return { driver, close: () => closeWithTunnel(driver) };
+    }
+    case 'bolt': {
+      const driver = new Neo4jDriver({
+        host: connectHost,
+        port: connectPort,
+        user: config.username,
+        password: secret.password,
+        database: config.database,
+        ssl: config.ssl,
+      });
+      return { driver, close: () => closeWithTunnel(driver) };
+    }
+    case 'qdrant-http':
+    case 'milvus-grpc':
+    case 'weaviate-http':
+      throw new DbError(`${meta.label} 驱动尚未接入`, { code: 'UNSUPPORTED_ENGINE' });
+    default:
+      throw new DbError(`不支持的数据库类型：${config.engine}`, { code: 'UNSUPPORTED_ENGINE' });
   }
-  if (config.engine === 'sqlserver') {
-    const driver = new SqlServerDriver({
-      host: connectHost,
-      port: connectPort,
-      user: config.username ?? 'sa',
-      password: secret.password,
-      database: config.database,
-      ssl: config.ssl,
-    });
-    return { driver, close: async () => { await driver.close(); await tunnel?.close(); } };
-  }
-  if (config.engine === 'oracle') {
-    const driver = new OracleDriver({
-      host: connectHost,
-      port: connectPort,
-      user: config.username ?? 'system',
-      password: secret.password,
-      database: config.database || 'ORCL',
-      ssl: config.ssl,
-    });
-    return { driver, close: async () => { await driver.close(); await tunnel?.close(); } };
-  }
-  if (config.engine === 'clickhouse') {
-    const driver = new ClickHouseDriver({
-      host: connectHost,
-      port: connectPort,
-      user: config.username ?? 'default',
-      password: secret.password,
-      database: config.database || 'default',
-      ssl: config.ssl,
-    });
-    return { driver, close: async () => { await driver.close(); await tunnel?.close(); } };
-  }
-  throw new DbError(`不支持的数据库类型：${config.engine}`, { code: 'UNSUPPORTED_ENGINE' });
 }
 
 export type { Driver } from './types';

@@ -49,9 +49,10 @@ export function ConnectionModal() {
     setGroupName(c?.groupName ?? '默认');
     setNote(c?.note ?? '');
     setHost(c?.host ?? '127.0.0.1');
-    setPort(String(c?.port ?? (c?.engine === 'postgresql' ? 5432 : 3306)));
-    setDatabase(c?.database ?? '');
-    setUsername(c?.username ?? (c?.engine === 'postgresql' ? 'postgres' : 'root'));
+    const meta = engineMeta(c?.engine ?? 'sqlite');
+    setPort(String(c?.port ?? meta.defaultPort ?? ''));
+    setDatabase(c?.database ?? meta.defaultDatabase ?? '');
+    setUsername(c?.username ?? meta.defaultUsername ?? '');
     setPassword('');
     setSsl(Boolean(c?.ssl));
     setReadonly(Boolean(c?.readonly));
@@ -71,42 +72,41 @@ export function ConnectionModal() {
     const meta = engineMeta(next);
     setEngine(next);
     setPort(meta.defaultPort ? String(meta.defaultPort) : '');
-    if (next === 'postgresql' || next === 'cockroachdb') setUsername('postgres');
-    else if (next === 'sqlserver') setUsername('sa');
-    else if (next === 'oracle') setUsername('system');
-    else if (next === 'clickhouse') setUsername('default');
-    else if (next === 'mysql' || next === 'mariadb') setUsername('root');
-    if (next === 'sqlite') setDatabase('');
+    setUsername(meta.defaultUsername ?? '');
+    if (meta.fileBased || meta.model !== 'relational') setDatabase(meta.defaultDatabase ?? '');
     setTestResult(null);
   };
 
-  const buildBody = (): Record<string, unknown> => ({
-    name: name.trim(),
-    engine,
-    color,
-    environment,
-    groupName: groupName.trim() || '默认',
-    note: note.trim() || undefined,
-    host: engine === 'sqlite' ? undefined : host.trim(),
-    port: engine === 'sqlite' ? undefined : Number(port) || undefined,
-    database: database.trim() || undefined,
-    username: engine === 'sqlite' ? undefined : username.trim(),
-    password: password || undefined,
-    ssl,
-    readonly,
-    ssh:
-      engine !== 'sqlite' && sshEnabled
-        ? {
-            enabled: true,
-            host: sshHost.trim(),
-            port: Number(sshPort) || 22,
-            user: sshUser.trim(),
-            authMethod: sshAuth,
-            privateKeyPath: sshAuth === 'key' ? sshKeyPath.trim() : undefined,
-          }
-        : undefined,
-    sshPassword: sshAuth === 'password' ? sshPassword || undefined : undefined,
-  });
+  const buildBody = (): Record<string, unknown> => {
+    const meta = engineMeta(engine);
+    return {
+      name: name.trim(),
+      engine,
+      color,
+      environment,
+      groupName: groupName.trim() || '默认',
+      note: note.trim() || undefined,
+      host: meta.fileBased ? undefined : host.trim(),
+      port: meta.fileBased ? undefined : Number(port) || undefined,
+      database: database.trim() || undefined,
+      username: meta.fileBased ? undefined : username.trim(),
+      password: password || undefined,
+      ssl,
+      readonly,
+      ssh:
+        !meta.fileBased && sshEnabled
+          ? {
+              enabled: true,
+              host: sshHost.trim(),
+              port: Number(sshPort) || 22,
+              user: sshUser.trim(),
+              authMethod: sshAuth,
+              privateKeyPath: sshAuth === 'key' ? sshKeyPath.trim() : undefined,
+            }
+          : undefined,
+      sshPassword: sshAuth === 'password' ? sshPassword || undefined : undefined,
+    };
+  };
 
   const test = async () => {
     setTesting(true);
@@ -123,7 +123,7 @@ export function ConnectionModal() {
 
   const submit = async () => {
     if (!name.trim()) return;
-    if (engine === 'sqlite' && !database.trim()) return;
+    if (engineMeta(engine).fileBased && !database.trim()) return;
     setSaving(true);
     const result = await save(buildBody());
     setSaving(false);
@@ -217,11 +217,11 @@ export function ConnectionModal() {
             <>
               <div className="field">
                 <label>{t('host')}</label>
-                <input className="input" value={host} onChange={(e) => setHost(e.target.value)} />
+                <input className="input" value={host} onChange={(e) => setHost(e.target.value)} data-testid="connection-host" />
               </div>
               <div className="field">
                 <label>{t('port')}</label>
-                <input className="input" type="number" value={port} onChange={(e) => setPort(e.target.value)} />
+                <input className="input" type="number" value={port} onChange={(e) => setPort(e.target.value)} data-testid="connection-port" />
               </div>
               {engine === 'oracle' ? (
                 <div className="field">
@@ -237,11 +237,11 @@ export function ConnectionModal() {
               ) : null}
               <div className="field">
                 <label>{t('username')}</label>
-                <input className="input" value={username} onChange={(e) => setUsername(e.target.value)} />
+                <input className="input" value={username} onChange={(e) => setUsername(e.target.value)} data-testid="connection-username" />
               </div>
               <div className="field">
                 <label>{t('password')}</label>
-                <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={editor.connection?.hasPassword ? t('apiKeyHint') : ''} />
+                <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={editor.connection?.hasPassword ? t('apiKeyHint') : ''} data-testid="connection-password" />
               </div>
               {engineMeta(engine).supportsSsl ? (
                 <div className="field" style={{ justifyContent: 'flex-end' }}>
@@ -250,7 +250,19 @@ export function ConnectionModal() {
               ) : (
                 <div />
               )}
-              {engine === 'oracle' ? null : (
+              {engineMeta(engine).model !== 'relational' ? (
+                <div className="field">
+                  <label>{engineMeta(engine).model === 'keyvalue' ? 'DB 索引' : '数据库'}</label>
+                  <input
+                    className="input mono"
+                    value={database}
+                    onChange={(e) => setDatabase(e.target.value)}
+                    placeholder={engineMeta(engine).model === 'keyvalue' ? '0' : '例如 app'}
+                    data-testid="connection-database"
+                  />
+                </div>
+              ) : null}
+              {engine === 'oracle' || engineMeta(engine).model !== 'relational' ? null : (
                 <div className="field full">
                   <span className="hint" style={{ margin: 0 }}>无需填写数据库：连接成功后会自动列出服务器上所有可访问的库，展开某个库再加载它的表。</span>
                 </div>
@@ -277,6 +289,9 @@ export function ConnectionModal() {
                 {engineMeta(engine).label}
               </span>
               <span className="hint" style={{ margin: 0 }}>{engineMeta(engine).description}</span>
+              {engineMeta(engine).notes ? (
+                <span className="hint" style={{ margin: 0, color: 'var(--warning, #e0a155)' }}>{engineMeta(engine).notes}</span>
+              ) : null}
             </div>
           </div>
         </div>

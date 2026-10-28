@@ -1,6 +1,6 @@
 # AiDB Studio — 产品设计总览
 
-> 版本：v0.3 · 日期：2026-10-27 · 状态：已定稿并完成开发验证
+> 版本：v0.4-dev · 日期：2026-10-28 · 状态：多引擎扩展进行中（关系型 8 种 + MongoDB/Redis/Neo4j + 15 种国产协议别名）
 
 ## 1. 产品定位
 
@@ -23,7 +23,7 @@ AiDB Studio 是一款 **AI 原生、全平台** 的数据库连接与管理工�
 
 ## 3. 差异化能力（核心卖点）
 
-1. **Agent 全权操作**：24 个数据库工具 + 计划/待办 + 权限模式（只读 / 询问 / 自动 / 全自动）+ 破坏性操作二次确认 + 完整审计。
+1. **Agent 全权操作**：27 个数据库工具 + 计划/待办 + 权限模式（只读 / 询问 / 自动 / 全自动）+ 破坏性操作二次确认 + 完整审计。
 2. **记忆架构**：工作记忆（会话内压缩）、情景记忆（会话摘要）、语义记忆（库结构/业务事实/用户偏好）、程序记忆（可复用 SQL 剧本），跨会话检索并可在 UI 中查看、编辑、遗忘。
 3. **Claude Code 式体验**：`⏺ tool(args)` 工具卡、行内 diff、Todo 计划、verbose 折叠、`@table` 上下文引用、斜杠命令、Cmd/Ctrl+K 命令面板。
 4. **具体可交付的 AI 结果**：数据库体检（主键/外键索引/重复索引/空表）给出修复 SQL；数据质量给出空值率/重复主键；自然语言需求直接产出柱状/折线/饼图；SQL Copilot 输出改写 SQL + 索引 DDL + 验证查询。
@@ -45,9 +45,10 @@ AiDB Studio 是一款 **AI 原生、全平台** 的数据库连接与管理工�
 
 ## 5. 范围
 
-### 5.1 v0.3 交付（当前）
+### 5.1 当前交付（v0.4-dev）
 - 主界面：Navicat 式顶部 12 模块功能区、连接 / 对象树（表 / 视图 / 函数 / 查询 / 备份分组）、工作区 Tabs、AI 面板。
-- 连接管理：SQLite / MySQL / MariaDB / PostgreSQL / CockroachDB / SQL Server / Oracle / ClickHouse，SSH 隧道（设计+基础实现），测试连接、颜色标签、只读开关。
+- 连接管理：关系型 SQLite / MySQL / MariaDB / PostgreSQL / CockroachDB / SQL Server / Oracle / ClickHouse；文档型 MongoDB；键值型 Redis；图数据库 Neo4j；国产协议别名 金仓 / openGauss / GaussDB / OceanBase / TiDB / PolarDB / TDSQL / GBase 8a / Doris / StarRocks / 瀚高 / Vastbase / IvorySQL / GreatSQL / GoldenDB。支持 SSH 隧道、测试连接、颜色标签、只读开关。
+- 非关系型基础能力：MongoDB 集合浏览、采样字段推断、JSON MQL 查询与聚合；Redis DB 索引、SCAN 键浏览、命令控制台与类型化结果；Neo4j 节点标签 / 关系类型浏览与 Cypher 控制台；SQL 专属功能（DDL 设计器、结构同步、数据对比、SQL dump、审计体检、图表）在非 SQL 连接上明确禁用。详见 [多引擎架构](./09-multi-engine.md)。
 - 对象浏览器：库/Schema → 表/视图 → 列/索引/外键，搜索过滤，刷新，完整右键菜单。
 - 数据库操作：新建 / 重命名 / 删除（按引擎能力）、转储 SQL、数据库内查找、命令列、运行 SQL 文件。
 - 表操作：新建、设计、重命名、复制（结构 / 结构+数据）、查看 DDL、对象信息、清空、截断、删除、维护。
@@ -61,11 +62,12 @@ AiDB Studio 是一款 **AI 原生、全平台** 的数据库连接与管理工�
 - 移动端：连接列表、Agent 对话、会话同步、记忆查看、只读查询、设置。
 - 主题：深色/浅色；中/英 i18n（中文默认）。
 
-### 5.2 明确不做（v0.3）
+### 5.2 明确不做（v0.4-dev）
 - 报表设计器、可视化 ER 建模/反向工程编辑器、云协作/团队空间、HTTP Tunnel/SOCKS 代理、Excel 导入导出、行级数据 merge 同步（当前为行数/主键指纹 + 替换同步）、数据库监控历史采样、可视化编辑触发器/存储过程。
 - Navicat 式跨请求事务（开始事务 / 提交 / 回滚）；当前数据编辑即时提交。
 - 协同编辑、云端账号体系。
-- MongoDB 等其他非关系型驱动（保留驱动接口，未规划版本）。
+- 向量数据库驱动（Milvus / Qdrant / Weaviate 等）暂未接入；Neo4j 已接入浏览与 Cypher，图结果暂以表格/JSON 展示，图渲染后续。保留 Transport 层扩展点；先在关系型内支持 pgvector 能力，再接专用向量库。
+- 非关系型引擎的 DDL 设计器、结构同步、数据对比、SQL dump 备份、查询构建器与 ER 图不承诺；按 EngineMeta.capabilities 显式降级，不静默失败。
 
 ## 6. 质量目标
 

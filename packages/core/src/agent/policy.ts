@@ -1,5 +1,6 @@
 import type { Environment, PermissionMode, Risk } from '../types';
 import { classifySql, extractTableRef } from '../sql/classify';
+import { classifyCypher, classifyMql, classifyRedis, cypherQueryFromArgs, formatStructuredQuery, mqlQueryFromArgs, redisQueryFromArgs } from '../query';
 import type { ToolCall, ToolDefinition } from './types';
 
 export type PermissionVerdict = 'allow' | 'ask' | 'deny';
@@ -19,6 +20,9 @@ export function resolveRisk(call: ToolCall, tool: ToolDefinition): Risk {
       const sql = String(call.args.sql ?? '');
       return sql.trim() ? classifySql(sql).risk : 'ddl';
     }
+    if (call.name === 'run_mql') return classifyMql(mqlQueryFromArgs(call.args)).risk;
+    if (call.name === 'run_redis') return classifyRedis(redisQueryFromArgs(call.args)).risk;
+    if (call.name === 'run_cypher') return classifyCypher(cypherQueryFromArgs(call.args)).risk;
     if (call.name === 'alter_table') {
       const ops = Array.isArray(call.args.operations) ? (call.args.operations as Array<{ op?: string }>) : [];
       return ops.some((o) => o?.op === 'drop_column') ? 'destructive' : 'ddl';
@@ -34,6 +38,9 @@ export function toolSignature(call: ToolCall): string {
   const explicit = call.args.table ?? call.args.name;
   if (typeof explicit === 'string') target = explicit;
   else if (typeof call.args.sql === 'string') target = extractTableRef(String(call.args.sql)) ?? '';
+  else if (call.name === 'run_mql' && typeof call.args.collection === 'string') target = call.args.collection;
+  else if (call.name === 'run_redis' && typeof call.args.command === 'string') target = call.args.command;
+  else if (call.name === 'run_cypher' && typeof call.args.query === 'string') target = call.args.query.slice(0, 40);
   else if (call.args.index && typeof call.args.index === 'object') {
     const idx = call.args.index as Record<string, unknown>;
     if (typeof idx.name === 'string') target = idx.name;
@@ -48,6 +55,18 @@ export function describeCall(call: ToolCall): { summary: string; sql?: string } 
   switch (call.name) {
     case 'run_sql':
       return { summary: sql ? sql.slice(0, 240) : '执行 SQL', sql };
+    case 'run_mql': {
+      const query = mqlQueryFromArgs(a);
+      return { summary: `MongoDB ${query.op} ${query.collection}`.trim(), sql: formatStructuredQuery(query) };
+    }
+    case 'run_redis': {
+      const query = redisQueryFromArgs(a);
+      return { summary: `Redis ${query.command}`, sql: formatStructuredQuery(query) };
+    }
+    case 'run_cypher': {
+      const query = cypherQueryFromArgs(a);
+      return { summary: `Cypher ${query.text.replace(/\s+/g, ' ').slice(0, 200)}`, sql: query.text };
+    }
     case 'create_table':
       return { summary: `创建表 ${String(a.table ?? '')}`, sql };
     case 'alter_table':

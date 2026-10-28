@@ -1,12 +1,11 @@
+import { dialectOf } from '../engines';
 import type { Engine } from '../types';
-
-const MYSQL_LIKE = new Set<Engine>(['mysql', 'mariadb', 'clickhouse']);
-const DOLLAR_PARAMS = new Set<Engine>(['postgresql', 'cockroachdb']);
 
 export function quoteIdent(name: string, engine: Engine): string {
   if (name.includes('\u0000')) throw new Error('非法标识符');
-  if (MYSQL_LIKE.has(engine)) return '`' + name.replace(/`/g, '``') + '`';
-  if (engine === 'sqlserver') return '[' + name.replace(/]/g, ']]') + ']';
+  const dialect = dialectOf(engine);
+  if (dialect === 'mysql' || dialect === 'clickhouse') return '`' + name.replace(/`/g, '``') + '`';
+  if (dialect === 'mssql') return '[' + name.replace(/]/g, ']]') + ']';
   return '"' + name.replace(/"/g, '""') + '"';
 }
 
@@ -20,9 +19,10 @@ export function quoteLiteral(value: string): string {
 
 /** Parameter placeholder for the given engine, 1-based index. */
 export function placeholder(engine: Engine, index: number): string {
-  if (DOLLAR_PARAMS.has(engine)) return `$${index}`;
-  if (engine === 'oracle') return `:${index}`;
-  if (engine === 'sqlserver') return `@p${index}`;
+  const dialect = dialectOf(engine);
+  if (dialect === 'postgres') return `$${index}`;
+  if (dialect === 'oracle') return `:${index}`;
+  if (dialect === 'mssql') return `@p${index}`;
   return '?';
 }
 

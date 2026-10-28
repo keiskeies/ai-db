@@ -2,8 +2,10 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import {
   TOOLS,
   engineDefaultPort,
+  engineMeta,
   engineUsesSchema,
   isEngine,
+  isSqlEngine,
   buildAlterTable,
   buildCount,
   buildCreateTable,
@@ -92,6 +94,15 @@ function defaultSchema(conn: ConnectionConfig): string | undefined {
   if (conn.engine === 'oracle') return (conn.username ?? '').toUpperCase();
   if (conn.engine === 'clickhouse') return conn.database ?? 'default';
   return 'public';
+}
+
+function assertSqlEngine(conn: ConnectionConfig): void {
+  if (isSqlEngine(conn.engine)) return;
+  throw Object.assign(new Error(`${engineMeta(conn.engine).label} 不支持该功能`), {
+    code: 'UNSUPPORTED_ENGINE',
+    status: 400,
+    hint: conn.engine === 'mongodb' ? 'MongoDB 请使用查询窗口的 MQL 或 Agent 的 run_mql' : 'Redis 请使用命令窗口或 Agent 的 run_redis',
+  });
 }
 
 function classifyForAudit(sql: string) {
@@ -344,6 +355,7 @@ export function createApiRouter(deps: ApiDeps): Router {
       if (!connectionId || !tableName) throw Object.assign(new Error('connectionId 与 table 必填'), { code: 'INVALID_INPUT', status: 400 });
       const conn = store.getConnection(connectionId);
       if (!conn) throw Object.assign(new Error('连接不存在'), { code: 'CONNECTION_NOT_FOUND', status: 404 });
+      assertSqlEngine(conn);
       const database = str(req.query.database);
       const { table } = await manager.findTable(connectionId, database, tableName);
       const limit = num(req.query.limit, 100, 1, 1000);
@@ -392,6 +404,7 @@ export function createApiRouter(deps: ApiDeps): Router {
       if (!connectionId || !tableName || !op) throw Object.assign(new Error('connectionId/table/op 必填'), { code: 'INVALID_INPUT', status: 400 });
       const conn = store.getConnection(connectionId);
       if (!conn) throw Object.assign(new Error('连接不存在'), { code: 'CONNECTION_NOT_FOUND', status: 404 });
+      assertSqlEngine(conn);
       if (conn.readonly) throw Object.assign(new Error('只读连接禁止修改数据'), { code: 'READONLY', status: 403 });
       const database = str(body.database);
       const { table } = await manager.findTable(connectionId, database, tableName);
@@ -461,6 +474,7 @@ export function createApiRouter(deps: ApiDeps): Router {
       const body = obj(req.body, 'body');
       const conn = store.getConnection(String(body.connectionId));
       if (!conn) throw Object.assign(new Error('连接不存在'), { code: 'CONNECTION_NOT_FOUND', status: 404 });
+      assertSqlEngine(conn);
       const table = String(body.table ?? '');
       if (!table) throw Object.assign(new Error('表名必填'), { code: 'INVALID_INPUT', status: 400 });
       if (body.mode === 'alter') {
@@ -493,6 +507,9 @@ export function createApiRouter(deps: ApiDeps): Router {
       const body = obj(req.body, 'body');
       const connectionId = str(body.connectionId);
       if (!connectionId) throw Object.assign(new Error('connectionId 必填'), { code: 'INVALID_INPUT', status: 400 });
+      const conn = store.getConnection(connectionId);
+      if (!conn) throw Object.assign(new Error('连接不存在'), { code: 'CONNECTION_NOT_FOUND', status: 404 });
+      assertSqlEngine(conn);
       const statements = Array.isArray(body.statements) ? (body.statements as string[]) : str(body.sql) ? [String(body.sql)] : [];
       const sql = statements.join(';\n');
       if (!sql.trim()) throw Object.assign(new Error('没有可执行的语句'), { code: 'INVALID_INPUT', status: 400 });
@@ -528,6 +545,7 @@ export function createApiRouter(deps: ApiDeps): Router {
       if (!connectionId) throw Object.assign(new Error('connectionId 必填'), { code: 'INVALID_INPUT', status: 400 });
       const conn = store.getConnection(connectionId);
       if (!conn) throw Object.assign(new Error('连接不存在'), { code: 'CONNECTION_NOT_FOUND', status: 404 });
+      assertSqlEngine(conn);
       const database = str(body.database);
       const format = (['csv', 'json', 'sql', 'xml'].includes(String(body.format)) ? String(body.format) : 'csv') as 'csv' | 'json' | 'sql' | 'xml';
       const limit = num(body.limit, 10000, 1, 200000);
@@ -554,6 +572,9 @@ export function createApiRouter(deps: ApiDeps): Router {
       const body = obj(req.body, 'body');
       const connectionId = str(body.connectionId);
       if (!connectionId) throw Object.assign(new Error('connectionId 必填'), { code: 'INVALID_INPUT', status: 400 });
+      const conn = store.getConnection(connectionId);
+      if (!conn) throw Object.assign(new Error('连接不存在'), { code: 'CONNECTION_NOT_FOUND', status: 404 });
+      assertSqlEngine(conn);
       const result = await importCsv(store, manager, config, connectionId, {
         table: String(body.table ?? ''),
         csv: str(body.csv),

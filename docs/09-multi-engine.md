@@ -1,0 +1,158 @@
+# AiDB Studio — 多引擎架构与接入矩阵
+
+> 版本：v0.4-dev · 日期：2026-10-28 · 关联：[产品总览](./00-product-overview.md) · [功能规格](./02-feature-spec.md) · [Agent](./04-ai-agent-design.md)
+
+## 1. 目标
+
+v0.3 的 8 个关系型引擎已经覆盖 DB-Engines 前四（Oracle / MySQL / SQL Server / PostgreSQL）。v0.4 增加三类缺口：
+
+- 开发者最常用的非关系型：MongoDB（文档）、Redis（键值）。
+- 信创/国产数据库：金仓、openGauss、GaussDB、OceanBase、TiDB、PolarDB、TDSQL、GBase 8a、Doris、StarRocks、瀚高、Vastbase、IvorySQL、GreatSQL、GoldenDB。
+- 为后续向量库、图数据库预留统一的 Transport / Capability 扩展点。
+
+## 2. 四层模型
+
+```ts
+type Engine = 'mongodb' | 'redis' | 'kingbase' | /* ... */;
+type DataModel = 'relational' | 'document' | 'keyvalue' | 'vector' | 'graph' | 'widecolumn' | 'search' | 'timeseries';
+type Transport = 'sqlite-file' | 'mysql' | 'postgres' | 'tds' | 'oracle' | 'clickhouse-http'
+               | 'mongodb' | 'redis' | 'bolt' | 'qdrant-http' | 'milvus-grpc' | 'weaviate-http';
+type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickhouse';
+```
+
+| 层 | 作用 | 扩展方式 |
+|---|---|---|
+| 数据模型 `DataModel` | 决定对象树、编辑器语言、结果渲染 | 新增模型时加渲染器，不复制驱动 |
+| 传输 `Transport` | 决定使用哪个驱动实现 | 同一协议可挂多个产品（协议别名） |
+| 方言 `DialectId` | 决定 SQL 生成规则 | 新方言只加 `DialectProfile`，别名自动复用 |
+| 能力 `Capabilities` | 决定 UI/Agent 哪些功能可用 | 在 `EngineMeta.capabilities` 声明，不散落 `if` |
+
+核心定义在 [`packages/core/src/engines.ts`](../packages/core/src/engines.ts)、[`packages/core/src/types.ts`](../packages/core/src/types.ts)。SQL 方言函数统一通过 `dialectOf(engine)` 归一化，因此金仓、TiDB 等别名不需要复制 `ddl.ts` / `ident.ts`。
+
+## 3. 接入矩阵（26 种）
+
+| 分组 | 引擎 | Transport | Dialect | 能力 |
+|---|---|---|---|---|
+| 关系型 | SQLite | sqlite-file | sqlite | 全功能；无用户管理 |
+| 关系型 | MySQL / MariaDB | mysql | mysql | 全功能 |
+| 关系型 | PostgreSQL / CockroachDB | postgres | postgres | 全功能 |
+| 关系型 | SQL Server | tds | mssql | 无自动 EXPLAIN |
+| 关系型 | Oracle | oracle | oracle | thin 模式；无 SSL |
+| 分析型 | ClickHouse | clickhouse-http | clickhouse | 无结构同步/数据对比 |
+| 文档 | MongoDB | mongodb | —（MQL） | 浏览 + 查询 + 结果；无 DDL/备份 |
+| 键值 | Redis | redis | —（命令） | 浏览 + 命令 + 结果；无 DDL/备份 |
+| 图 | Neo4j | bolt | —（Cypher） | 标签/关系浏览 + Cypher + 计划；无 DDL/备份；图渲染后续 |
+| 国产 PG 系 | 金仓 KingbaseES | postgres | postgres | 全功能；默认端口 54321 |
+| 国产 PG 系 | openGauss / GaussDB | postgres | postgres | 全功能；注意 sha256 认证 |
+| 国产 PG 系 | 瀚高 / Vastbase / IvorySQL | postgres | postgres | 全功能 |
+| 国产 MySQL 系 | OceanBase / TiDB / PolarDB / TDSQL / GreatSQL / GoldenDB | mysql | mysql | 全功能；行为差异见 notes |
+| 国产分析型 | GBase 8a / Doris / StarRocks | mysql | mysql | 查询可用；DDL/结构同步关闭 |
+
+`EngineMeta.notes` 会展示在连接表单里，例如 openGauss 的认证限制、Redis 的 SCAN 采样说明。
+
+## 4. 非关系型能力边界
+
+### MongoDB
+
+- 对象树：database → collection / view。
+- 结构：采样 30 条文档推断字段，嵌套对象展开一层（如 `meta.city`）；`_id` 标为主键；不保证覆盖所有文档。
+- 查询：结构化 JSON MQL，`op` = `find | aggregate | count | distinct`；支持 `filter / pipeline / projection / sort / limit / skip / field`。
+- 结果：文档行；嵌套值 JSON 序列化，`ResultField.kind = 'json'`；`resultKind = 'documents'`。
+- 安全：只读连接拦截 `$out`、`$merge`、`$where`、`$function`、`$accumulator` 及系统诊断管道；聚合管道默认追加 `$limit`。
+- 不支持：DDL 设计器、结构同步、数据对比、SQL dump、用户权限、SQL 体检/图表工具。
+
+### Redis
+
+- 对象树：DB 索引 → `keys` 伪对象；`rowEstimate = DBSIZE`。
+- 浏览：`SCAN` 采样，不执行 `KEYS *`。
+- 查询：单条命令；支持 String / Hash / List / Set / ZSet / Stream 的常用读取命令。
+- 结果：`SCAN` 返回 key 列表；`HGETALL` 返回 field/value；`ZRANGE WITHSCORES` 返回 member/score；`INFO` 解析为 field/value。
+- 安全：只读连接拦截写命令；`FLUSHALL` / `FLUSHDB` / `CONFIG SET` / `EVAL` / `FCALL` / `SHUTDOWN` / `DEBUG` / `MODULE` 等判为 destructive；未知命令按 write 处理。
+- 不支持：DDL、备份、SQL 工具、事务型多命令。
+
+### Neo4j
+
+- 对象树：database → 节点标签 / 关系类型；采样 30 个节点/关系推断属性。
+- 查询：Cypher 控制台，支持 `$params`；`EXPLAIN` / `PROFILE` 的计划以 JSON 行返回。
+- 结果：节点/关系/路径序列化为 JSON 单元格，`resultKind = 'graph'`；标量查询仍为普通表格。
+- 安全：只读连接拦截 `CREATE` / `MERGE` / `SET` / `DELETE` / `DETACH DELETE` / `REMOVE` / `LOAD CSV` / `FOREACH` 及写型 `CALL`（APOC/GDS/非只读 DB 过程）。
+- 不支持：DDL、备份、SQL 工具、图可视化渲染（当前以表格/JSON 展示）。
+
+## 5. 安全模型
+
+只读在网关侧强制执行，不依赖 UI：
+
+- SQL：沿用 `readonlyViolation` 静态分类。
+- MQL：`classifyMql` 递归扫描 filter/pipeline/projection/sort，按 `$where` / `$function` / `$out` / `$merge` 等提升风险。
+- Redis：`classifyRedis` 按命令表与子命令（CONFIG / ACL / CLUSTER / MEMORY / FUNCTION）分类。
+- Cypher：`classifyCypher` 先屏蔽字符串/注释/反引号，再识别写子句与写型过程；`EXPLAIN` 为只读，`PROFILE` 按内部语句定级。
+- Agent：`resolveRisk` 对 `run_mql` / `run_redis` 动态取风险；审批弹窗展示结构化查询。
+- SQL 专属工具在非 SQL 连接上返回 `UNSUPPORTED_ENGINE`；HTTP 的 DDL / 数据编辑 / 结构同步 / 监控 / 用户 / 备份等路由同样拒绝。
+
+## 6. Agent 工具
+
+新增三个工具，工具总数 27：
+
+| 工具 | 作用 |
+|---|---|
+| `run_mql` | MongoDB 结构化查询（find/aggregate/count/distinct） |
+| `run_redis` | 单条 Redis 命令 |
+| `run_cypher` | Neo4j Cypher 查询（支持 `$params`） |
+
+系统提示会注入 `model=` 与 `queryLanguage=`，并按连接语言切换规则：SQL 连接保留审计/图表/EXPLAIN 等规则；MongoDB/Redis/Neo4j 连接改为对应查询规则，并明确禁止输出 SQL。
+
+## 7. UI 行为
+
+- 连接表单由 `EngineMeta` 驱动默认端口、默认用户名、默认数据库与限制；MongoDB/Redis/Neo4j 显示“数据库 / DB 索引”字段。
+- 对象树按数据模型渲染：关系型显示表/视图与完整右键菜单；MongoDB 显示“集合”；Redis 显示“键空间”；Neo4j 显示“标签”。非关系型只保留打开、查询、AI 解释、刷新、复制。
+- 查询窗口按语言切换：SQL 连接保留美化、EXPLAIN、查询构建器、图表、SQL 文件；MongoDB/Redis/Neo4j 显示 JSON/命令/Cypher 提示并隐藏 SQL 专属按钮。
+- `openData` 对非关系型自动改为打开查询标签：MongoDB 预填 `{collection, op:'find', filter:{}, limit:100}`，Redis 预填 `SCAN 0 COUNT 100`，Neo4j 预填 `MATCH (n) RETURN n LIMIT 100`。
+
+## 8. 测试
+
+```bash
+npm run typecheck --workspaces --if-present
+npm --workspace @aidb/core run test
+npm --workspace @aidb/gateway run test
+npm run build
+```
+
+真实实例契约测试通过环境变量启用，未设置时自动跳过：
+
+```bash
+# 临时容器（示例）
+docker run -d --rm --name aidb-test-mongo -p 27018:27017 mongo:7
+docker run -d --rm --name aidb-test-redis -p 6380:6379 redis:7-alpine
+docker run -d --rm --name aidb-test-neo4j -p 7688:7687 -e NEO4J_AUTH=neo4j/testpass neo4j:5
+
+AIDB_TEST_MONGO_PORT=27018 AIDB_TEST_REDIS_PORT=6380 AIDB_TEST_NEO4J_PORT=7688 AIDB_TEST_NEO4J_PASSWORD=testpass npm --workspace @aidb/gateway run test
+```
+
+覆盖：驱动工厂协议别名路由、MongoDB 采样/查找/聚合/count/distinct、Redis SET/GET/HGETALL/SCAN/INFO、Neo4j 标签/关系推断与 Cypher/EXPLAIN、HTTP `/schema` 与 `/query` 管线、非 SQL 连接的功能禁用。
+
+## 9. 已知限制
+
+- MongoDB 结构是采样推断，不能替代模型校验；authSource / replicaSet 可通过在 Host 字段填完整 `mongodb://` URI 传入。
+- Redis 键浏览基于 SCAN 采样，超大键空间只展示当前批次；`SELECT` 被拒绝，请用数据库下拉切换 DB。
+- Neo4j 结果为 JSON 单元格，尚未做图布局/可视化；属性推断基于 30 个样本，复杂图模型请用 `CALL db.labels()` / `db.schema.visualization()` 核对。
+- openGauss/GaussDB 的 sha256 认证与标准 `pg` 驱动不兼容；当前要求实例改用 md5 或使用兼容认证，后续可补 SASL/侧车。
+- 国产分析型（Doris/StarRocks/GBase 8a）只保证查询与浏览，DDL 设计器按能力位关闭。
+- 向量库尚未接入；`Transport` 已预留 `qdrant-http` / `milvus-grpc` / `weaviate-http`，下一步按 P1 接入 pgvector、Qdrant/Milvus。Neo4j 已接入浏览与 Cypher，图渲染仍待补。
+
+## 10. 后续路线
+
+| 阶段 | 内容 |
+|---|---|
+| P1 | Neo4j（已完成：浏览 + Cypher + 计划）、pgvector 能力面板、Qdrant / Milvus 只读检索、DM8（`dmdb`）、DuckDB、embedding provider |
+| P2 | Elasticsearch / OpenSearch、Cassandra / ScyllaDB、TDengine / InfluxDB、Memgraph / FalkorDB / ArangoDB、图渲染、Redis Stack |
+| P3 | 云数仓（Snowflake / BigQuery / Redshift / Databricks）、Db2 / SAP HANA、无 Node 驱动的国产库（神通 / GBase 8s / 崖山 / 虚谷） |
+
+## 11. 关键文件
+
+- 类型与注册：[`packages/core/src/types.ts`](../packages/core/src/types.ts)、[`packages/core/src/engines.ts`](../packages/core/src/engines.ts)
+- 结构化查询与安全：[`packages/core/src/query.ts`](../packages/core/src/query.ts)
+- 驱动接口：[`apps/gateway/src/drivers/types.ts`](../apps/gateway/src/drivers/types.ts)、[`apps/gateway/src/drivers/index.ts`](../apps/gateway/src/drivers/index.ts)
+- MongoDB / Redis / Neo4j：[`apps/gateway/src/drivers/mongodb.ts`](../apps/gateway/src/drivers/mongodb.ts)、[`redis.ts`](../apps/gateway/src/drivers/redis.ts)、[`neo4j.ts`](../apps/gateway/src/drivers/neo4j.ts)
+- 网关执行管线：[`apps/gateway/src/manager.ts`](../apps/gateway/src/manager.ts)
+- Agent 工具：[`packages/core/src/agent/tools.ts`](../packages/core/src/agent/tools.ts)、[`apps/gateway/src/executor.ts`](../apps/gateway/src/executor.ts)
+- UI：[`apps/desktop/src/components/ConnectionModal.tsx`](../apps/desktop/src/components/ConnectionModal.tsx)、[`Sidebar.tsx`](../apps/desktop/src/components/Sidebar.tsx)、[`QueryView.tsx`](../apps/desktop/src/components/QueryView.tsx)

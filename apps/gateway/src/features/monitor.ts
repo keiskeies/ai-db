@@ -1,5 +1,5 @@
 import { statSync } from 'node:fs';
-import { quoteLiteral, type ConnectionConfig, type QueryResult } from '@aidb/core';
+import { engineMeta, quoteLiteral, type ConnectionConfig, type QueryResult } from '@aidb/core';
 import type { ConnectionManager } from '../manager';
 import type { Store } from '../store';
 
@@ -52,6 +52,7 @@ function fmtBytes(value: number): string {
 export async function monitorConnection(store: Store, manager: ConnectionManager, connectionId: string): Promise<MonitorResult> {
   const conn = store.getConnection(connectionId);
   if (!conn) throw new Error('连接不存在');
+  const family = engineMeta(conn.engine).dialect;
   const driver = await manager.rawDriver(connectionId);
   const run = (sql: string, maxRows = 200, database?: string) => driver.run(sql, { maxRows, database: database ?? conn.database });
   const sampledAt = new Date().toISOString();
@@ -68,7 +69,7 @@ export async function monitorConnection(store: Store, manager: ConnectionManager
   };
 
   try {
-    if (conn.engine === 'sqlite') {
+    if (family === 'sqlite') {
       const pageCount = await run('PRAGMA page_count');
       const pageSize = await run('PRAGMA page_size');
       const free = await run('PRAGMA freelist_count');
@@ -98,7 +99,7 @@ export async function monitorConnection(store: Store, manager: ConnectionManager
           { label: '估算行数', value: schema.flatMap((item) => item.tables).reduce((sum, table) => sum + (table.rowEstimate ?? 0), 0).toLocaleString() },
         ],
       });
-    } else if (conn.engine === 'mysql' || conn.engine === 'mariadb') {
+    } else if (family === 'mysql') {
       const versionRes = await run('SELECT VERSION() AS v');
       version = String(rowValue(versionRes, 'v') ?? '');
       const status = await run('SHOW GLOBAL STATUS', 2000);
@@ -129,7 +130,7 @@ export async function monitorConnection(store: Store, manager: ConnectionManager
           elapsed: String(row[5] ?? ''),
         });
       }
-    } else if (conn.engine === 'postgresql' || conn.engine === 'cockroachdb') {
+    } else if (family === 'postgres') {
       const versionRes = await run('SELECT version() AS v');
       version = String(rowValue(versionRes, 'v') ?? '').split(' ').slice(0, 3).join(' ');
       const dbStat = await run(
@@ -158,7 +159,7 @@ export async function monitorConnection(store: Store, manager: ConnectionManager
         const get = (name: string) => row[names.indexOf(name)];
         sessions.push({ id: String(get('pid')), user: String(get('usename') ?? ''), database: String(get('datname') ?? ''), state: String(get('state') ?? ''), query: String(get('query') ?? ''), elapsed: `${get('elapsed') ?? 0}s` });
       }
-    } else if (conn.engine === 'sqlserver') {
+    } else if (family === 'mssql') {
       const versionRes = await run('SELECT @@VERSION AS v');
       version = String(rowValue(versionRes, 'v') ?? '').split('\n')[0];
       const sys = await run('SELECT cpu_count, physical_memory_kb, (SELECT COUNT(*) FROM sys.dm_exec_sessions) AS sessions FROM sys.dm_os_sys_info');
@@ -176,7 +177,7 @@ export async function monitorConnection(store: Store, manager: ConnectionManager
         const get = (name: string) => row[names.indexOf(name)];
         sessions.push({ id: String(get('session_id')), user: String(get('login_name') ?? ''), database: String(get('db') ?? ''), state: String(get('status') ?? ''), query: String(get('program_name') ?? '') });
       }
-    } else if (conn.engine === 'oracle') {
+    } else if (family === 'oracle') {
       const inst = await run('SELECT instance_name, status, version, startup_time FROM v$instance');
       version = String(rowValue(inst, 'version') ?? '');
       sections.push({
@@ -193,7 +194,7 @@ export async function monitorConnection(store: Store, manager: ConnectionManager
         const get = (name: string) => row[names.indexOf(name)];
         sessions.push({ id: `${get('sid')},${get('serial#')}`, user: String(get('username') ?? ''), state: String(get('status') ?? ''), query: String(get('program') ?? '') });
       }
-    } else if (conn.engine === 'clickhouse') {
+    } else if (family === 'clickhouse') {
       version = String(rowValue(await run('SELECT version() AS v'), 'v') ?? '');
       const metrics = await run(
         "SELECT metric, value FROM system.metrics WHERE metric IN ('Query','QueryThread','Merge','PartMutation','TCPConnection','HTTPConnection','MemoryTracking')",
@@ -217,20 +218,21 @@ export async function monitorConnection(store: Store, manager: ConnectionManager
 export async function killSession(store: Store, manager: ConnectionManager, connectionId: string, sessionId: string): Promise<{ sql: string }> {
   const conn = store.getConnection(connectionId);
   if (!conn) throw new Error('连接不存在');
-  if (conn.engine === 'sqlite') throw new Error('SQLite 没有会话概念');
+  const family = engineMeta(conn.engine).dialect;
+  if (family === 'sqlite') throw new Error('SQLite 没有会话概念');
   let sql: string;
   let params: unknown[] = [];
-  if (conn.engine === 'mysql' || conn.engine === 'mariadb' || conn.engine === 'sqlserver') {
+  if (family === 'mysql' || family === 'mssql') {
     if (!/^\d+$/.test(sessionId)) throw new Error('会话 ID 必须是数字');
     sql = `KILL ${sessionId}`;
-  } else if (conn.engine === 'postgresql' || conn.engine === 'cockroachdb') {
+  } else if (family === 'postgres') {
     if (!/^\d+$/.test(sessionId)) throw new Error('会话 ID 必须是数字');
     sql = 'SELECT pg_terminate_backend($1)';
     params = [Number(sessionId)];
-  } else if (conn.engine === 'oracle') {
+  } else if (family === 'oracle') {
     if (!/^\d+,\d+$/.test(sessionId)) throw new Error('Oracle 会话 ID 格式应为 sid,serial#');
     sql = `ALTER SYSTEM KILL SESSION ${quoteLiteral(sessionId)} IMMEDIATE`;
-  } else if (conn.engine === 'clickhouse') {
+  } else if (family === 'clickhouse') {
     if (!/^[\w-]+$/.test(sessionId)) throw new Error('非法 query_id');
     sql = `KILL QUERY WHERE query_id = ${quoteLiteral(sessionId)}`;
   } else {

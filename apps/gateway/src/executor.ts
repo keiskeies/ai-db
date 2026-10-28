@@ -8,14 +8,19 @@ import {
   buildExplain,
   buildSelectTable,
   classifySql,
+  cypherQueryFromArgs,
   deltas,
+  engineMeta,
   engineUsesSchema,
   forecastSeries,
   getTool,
   guessAxes,
+  isSqlEngine,
   isTimeSeries,
   looksLikeSecret,
+  mqlQueryFromArgs,
   quoteIdent,
+  redisQueryFromArgs,
   resolveRisk,
   round,
   summarize,
@@ -29,6 +34,7 @@ import {
   type ForecastMethod,
   type IndexDef,
   type MemoryCandidate,
+  type MqlQuery,
   type QueryResult,
   type StatPoint,
   type TableInfo,
@@ -55,8 +61,30 @@ const DB_TOOLS = new Set([
   'inspect_schema',
   'search_objects',
   'run_sql',
+  'run_mql',
+  'run_redis',
+  'run_cypher',
   'explain_sql',
   'sample_rows',
+  'profile_column',
+  'create_table',
+  'alter_table',
+  'drop_object',
+  'manage_index',
+  'export_result',
+  'import_csv',
+  'backup_database',
+  'audit_database',
+  'check_data_quality',
+  'render_chart',
+  'analyze_chart',
+  'forecast_chart',
+  'generate_data',
+]);
+
+const SQL_ONLY_TOOLS = new Set([
+  'run_sql',
+  'explain_sql',
   'profile_column',
   'create_table',
   'alter_table',
@@ -157,6 +185,22 @@ export class ToolExecutor {
 
   private async dispatch(call: ToolCall, ctx: ToolContext, started: number): Promise<ToolResult> {
     const a = call.args;
+    if (SQL_ONLY_TOOLS.has(call.name)) {
+      const conn = this.requireConnection(call, ctx);
+      if (!isSqlEngine(conn.engine)) {
+        throw new DbError(`${engineMeta(conn.engine).label} 不支持 ${call.name}`, {
+          code: 'UNSUPPORTED_ENGINE',
+          hint:
+            conn.engine === 'mongodb'
+              ? '请使用 run_mql 执行 MongoDB 查询'
+              : conn.engine === 'redis'
+                ? '请使用 run_redis 执行 Redis 命令'
+                : conn.engine === 'neo4j'
+                  ? '请使用 run_cypher 执行 Cypher'
+                  : '该功能仅支持 SQL 引擎',
+        });
+      }
+    }
     switch (call.name) {
       case 'list_connections': {
         const connections = this.store.listConnections();
@@ -248,6 +292,75 @@ export class ToolExecutor {
         });
       }
 
+      case 'run_mql': {
+        const conn = this.requireConnection(call, ctx);
+        if (conn.engine !== 'mongodb') {
+          throw new DbError('run_mql 仅用于 MongoDB 连接', { code: 'UNSUPPORTED_ENGINE', hint: 'SQL 连接请使用 run_sql' });
+        }
+        const query = mqlQueryFromArgs(a);
+        if (!query.collection) throw new DbError('collection 不能为空', { code: 'MQL_COLLECTION' });
+        const settings = this.getSettings();
+        const maxRows = Math.min(1000, Math.max(1, Number(a.maxRows) || settings.defaultLimit));
+        const batch = await this.manager.queryStructured(conn.id, query, {
+          database: this.databaseOf(call, conn),
+          maxRows,
+          timeoutMs: settings.queryTimeoutMs,
+          actor: 'agent',
+        });
+        const last = batch.sets[0];
+        return ok(started, `返回 ${last?.rowCount ?? 0} 条文档`, {
+          ...last,
+          messages: batch.messages,
+          durationMs: batch.durationMs,
+        });
+      }
+
+      case 'run_redis': {
+        const conn = this.requireConnection(call, ctx);
+        if (conn.engine !== 'redis') {
+          throw new DbError('run_redis 仅用于 Redis 连接', { code: 'UNSUPPORTED_ENGINE', hint: 'SQL 连接请使用 run_sql' });
+        }
+        const query = redisQueryFromArgs(a);
+        if (!query.command.trim()) throw new DbError('command 不能为空', { code: 'REDIS_EMPTY' });
+        const settings = this.getSettings();
+        const maxRows = Math.min(5000, Math.max(1, Number(a.maxRows) || settings.defaultLimit));
+        const batch = await this.manager.queryStructured(conn.id, query, {
+          database: this.databaseOf(call, conn),
+          maxRows,
+          timeoutMs: settings.queryTimeoutMs,
+          actor: 'agent',
+        });
+        const last = batch.sets[0];
+        return ok(started, `返回 ${last?.rowCount ?? 0} 行`, {
+          ...last,
+          messages: batch.messages,
+          durationMs: batch.durationMs,
+        });
+      }
+
+      case 'run_cypher': {
+        const conn = this.requireConnection(call, ctx);
+        if (conn.engine !== 'neo4j') {
+          throw new DbError('run_cypher 仅用于 Neo4j 连接', { code: 'UNSUPPORTED_ENGINE', hint: 'SQL 连接请使用 run_sql' });
+        }
+        const query = cypherQueryFromArgs(a);
+        if (!query.text.trim()) throw new DbError('Cypher 不能为空', { code: 'CYPHER_EMPTY' });
+        const settings = this.getSettings();
+        const maxRows = Math.min(1000, Math.max(1, Number(a.maxRows) || settings.defaultLimit));
+        const batch = await this.manager.queryStructured(conn.id, query, {
+          database: this.databaseOf(call, conn),
+          maxRows,
+          timeoutMs: settings.queryTimeoutMs,
+          actor: 'agent',
+        });
+        const last = batch.sets[0];
+        return ok(started, `返回 ${last?.rowCount ?? 0} 行`, {
+          ...last,
+          messages: batch.messages,
+          durationMs: batch.durationMs,
+        });
+      }
+
       case 'explain_sql': {
         const conn = this.requireConnection(call, ctx);
         const sql = String(a.sql ?? '').trim();
@@ -282,6 +395,43 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
         if (!tableName) throw new DbError('table 不能为空');
         const { table } = await this.manager.findTable(conn.id, database, tableName);
         const limit = Math.min(100, Math.max(1, Number(a.limit) || 10));
+        if (conn.engine === 'neo4j') {
+          const label = table.name.replace(/`/g, '``');
+          const text =
+            table.kind === 'edge_label'
+              ? `MATCH ()-[r:\`${label}\`]->() RETURN r LIMIT ${limit}`
+              : `MATCH (n:\`${label}\`) RETURN n LIMIT ${limit}`;
+          const batch = await this.manager.queryStructured(conn.id, { language: 'cypher', text }, {
+            database,
+            maxRows: limit,
+            timeoutMs: this.getSettings().queryTimeoutMs,
+            actor: 'agent',
+          });
+          const result = batch.sets[0];
+          if (result && a.maskSensitive !== false) {
+            const sensitive = result.columns.map((c) => SENSITIVE.test(c.name));
+            result.rows = result.rows.map((row) => row.map((v, i) => (sensitive[i] && v !== null ? '••••' : v)));
+          }
+          return ok(started, `读取 ${result?.rowCount ?? 0} 行样例`, { object: table.name, ...result });
+        }
+        if (conn.engine === 'mongodb') {
+          const query: MqlQuery = { language: 'mql', collection: table.name, op: 'find', limit };
+          const batch = await this.manager.queryStructured(conn.id, query, {
+            database,
+            maxRows: limit,
+            timeoutMs: this.getSettings().queryTimeoutMs,
+            actor: 'agent',
+          });
+          const result = batch.sets[0];
+          if (result && a.maskSensitive !== false) {
+            const sensitive = result.columns.map((c) => SENSITIVE.test(c.name));
+            result.rows = result.rows.map((row) => row.map((v, i) => (sensitive[i] && v !== null ? '••••' : v)));
+          }
+          return ok(started, `读取 ${result?.rowCount ?? 0} 条文档样例`, { collection: table.name, ...result });
+        }
+        if (!isSqlEngine(conn.engine)) {
+          throw new DbError(`${engineMeta(conn.engine).label} 请使用 run_redis 查看键值`, { code: 'UNSUPPORTED_ENGINE' });
+        }
         const sql = buildSelectTable(conn.engine, table.name, { schema: this.schemaFor(conn, table), limit });
         const batch = await this.manager.query(conn.id, sql, { database, maxRows: limit, allowMulti: false, autoLimit: false, actor: 'agent' });
         const result = batch.sets[0];

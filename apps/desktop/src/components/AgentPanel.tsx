@@ -30,7 +30,7 @@ import {
   Zap,
 } from 'lucide-react';
 import type { AgentMessageBlock, PermissionMode, QuestionSuggestion, Risk, TableInfo, ToolResult } from '@aidb/core';
-import { suggestionLabel } from '@aidb/core';
+import { engineMeta, suggestionLabel } from '@aidb/core';
 import { getModelProfile, supportsInput } from '@aidb/core';
 import { api, attachmentObjectUrl, type StoredAttachment } from '../lib/api';
 import { formatBytes, formatCell, formatDuration, formatRelative } from '../lib/format';
@@ -631,8 +631,9 @@ export function AgentPanel() {
   };
 
   // 猜你想问：服务端用本地规则从已加载 schema 推导，不查库、不调模型，离线模式同样可用
+  const suggestionsSupported = activeConnection ? engineMeta(activeConnection.engine).languages.includes('sql') : true;
   useEffect(() => {
-    if (!activeConnectionId) {
+    if (!activeConnectionId || !suggestionsSupported) {
       setSuggestions([]);
       return;
     }
@@ -648,7 +649,7 @@ export function AgentPanel() {
     return () => {
       cancelled = true;
     };
-  }, [activeConnectionId, activeConnection?.database, agentDatabase, tables.length]);
+  }, [activeConnectionId, activeConnection?.database, agentDatabase, tables.length, suggestionsSupported]);
 
   useEffect(() => {
     if (prefill) {

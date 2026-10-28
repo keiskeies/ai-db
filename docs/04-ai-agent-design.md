@@ -1,6 +1,6 @@
 # AiDB Studio — AI Agent 设计
 
-> 版本：v0.3 · 关联：[UI/UX](./03-ui-ux-design.md) · [数据模型](./05-data-and-api.md)
+> 版本：v0.4-dev · 关联：[UI/UX](./03-ui-ux-design.md) · [数据模型](./05-data-and-api.md)
 
 ## 1. 目标与边界
 
@@ -63,7 +63,7 @@ for (step = 0; step < maxSteps; step++) {
 
 **约束**：`maxSteps` 默认 12；同一工具相同参数连续失败 2 次 → 中止并解释；单工具超时 60s（查询 30s）；取消信号贯穿 Provider 与 Driver。
 
-## 4. 工具目录（24 个）
+## 4. 工具目录（27 个）
 
 风险等级：`read < write < ddl < destructive`。所有工具入参使用 JSON Schema（`additionalProperties: false`）。
 
@@ -93,8 +93,11 @@ for (step = 0; step < maxSteps; step++) {
 | 22 | `analyze_chart` | read | 执行聚合 SQL，在 Bridge 侧算好统计量（合计/均值/极值/TopN 占比/环比），模型只负责解读，不得自行重算 | `{ connectionId, sql, x?, y?, topN? }` |
 | 23 | `forecast_chart` | read | 时间序列外推：最小二乘或移动平均（按 \|r\| 自动选择），返回方法、斜率/窗口、拟合度、±1.28σ 粗略区间与原始序列；样本 <4 直接拒绝 | `{ connectionId, sql, x?, y?, periods?, method? }` |
 | 24 | `generate_data` | write | 按列语义/类型 + 外键生成并插入测试数据 | `{ connectionId, table, rows?, dryRun? }` |
+| 25 | `run_mql` | 动态* | MongoDB 结构化查询（find/aggregate/count/distinct），不接受 SQL | `{ connectionId, database?, collection, op, filter?, pipeline?, projection?, sort?, limit?, skip?, field?, maxRows? }` |
+| 26 | `run_redis` | 动态* | 执行单条 Redis 命令；SCAN 优先于 KEYS | `{ connectionId, database?, command, args?, maxRows? }` |
+| 27 | `run_cypher` | 动态* | 执行 Neo4j Cypher；支持 `$params`，只读连接拒绝写子句 | `{ connectionId, database?, query, params?, maxRows? }` |
 
-\* `run_sql` 风险按静态分类动态提升；`dryRun=true` 时 DDL 只返回将执行的 SQL（用于预览）。
+\* `run_sql`、`run_mql`、`run_redis`、`run_cypher` 风险按各自语言的安全分类动态提升；`dryRun=true` 时 DDL 只返回将执行的 SQL（用于预览）。`run_mql` / `run_redis` / `run_cypher` 仅用于对应模型的连接，SQL 专属工具（DDL、审计、图表等）在非 SQL 连接上明确返回不支持。
 \** 导出写文件为 `write`，不触碰数据库。
 
 ### 4.1 工具返回统一结构

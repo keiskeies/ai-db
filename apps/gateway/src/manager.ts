@@ -1,18 +1,30 @@
 import {
   applyLimit,
+  classifyCypher,
+  classifyMql,
+  classifyRedis,
+  engineMeta,
   engineUsesSchema,
+  formatStructuredQuery,
+  parseRedisCommandLine,
   readonlyViolation,
   splitStatements,
   type AppSettings,
   type ConnectionConfig,
   type ConnectionSecret,
+  type CypherQuery,
   type DatabaseSchema,
+  type MqlQuery,
   type QueryBatchResult,
   type QueryResult,
+  type RedisQuery,
+  type StructuredQuery,
   type TableInfo,
 } from '@aidb/core';
 import type { GatewayConfig } from './config';
 import { createDriver, DbError, type Driver } from './drivers';
+import { normalizeMql } from './drivers/mongodb';
+import { supportsStructuredQuery } from './drivers/types';
 import type { Store } from './store';
 
 interface CachedDriver {
@@ -86,7 +98,7 @@ export class ConnectionManager {
   async schema(connectionId: string, database?: string, refresh = false, ttlMs = 30000): Promise<DatabaseSchema[]> {
     const conn = this.store.getConnection(connectionId);
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
-    const dbKey = database ?? conn.database ?? (conn.engine === 'sqlite' ? 'main' : '');
+    const dbKey = database ?? conn.database ?? (conn.engine === 'sqlite' ? 'main' : conn.engine === 'redis' ? '0' : conn.engine === 'neo4j' ? 'neo4j' : '');
     const cached = this.store.getSchemaCache(connectionId, dbKey);
     if (!refresh && cached && Date.now() - new Date(cached.fetchedAt).getTime() < ttlMs) {
       try {
@@ -107,7 +119,8 @@ export class ConnectionManager {
       if (!groups.size) groups.set(dbKey || 'public', []);
       schemas = [...groups.entries()].map(([name, list]) => ({ name, tables: list }));
     } else {
-      schemas = [{ name: dbKey || 'main', tables }];
+      const fallback = conn.engine === 'mongodb' ? 'default' : conn.engine === 'redis' ? '0' : conn.engine === 'neo4j' ? 'neo4j' : 'main';
+      schemas = [{ name: dbKey || fallback, tables }];
     }
     this.store.setSchemaCache(connectionId, dbKey, schemas);
     return schemas;
@@ -123,9 +136,107 @@ export class ConnectionManager {
     throw new DbError(`表不存在：${name}`, { code: 'TABLE_NOT_FOUND', hint: '先用 inspect_schema 或 search_objects 确认表名' });
   }
 
+  private parseStructuredQuery(conn: ConnectionConfig, text: string): StructuredQuery {
+    if (conn.engine === 'mongodb') {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new DbError('MongoDB 查询需要 JSON，例如 {"collection":"users","op":"find","filter":{}}', { code: 'MQL_PARSE' });
+      }
+      return normalizeMql(parsed);
+    }
+    if (conn.engine === 'redis') {
+      const query = parseRedisCommandLine(text);
+      if (!query) throw new DbError('Redis 命令为空', { code: 'REDIS_EMPTY' });
+      return query;
+    }
+    if (conn.engine === 'neo4j') {
+      const trimmed = text.trim();
+      if (!trimmed) throw new DbError('Cypher 不能为空', { code: 'CYPHER_EMPTY' });
+      if (trimmed.startsWith('{')) {
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = JSON.parse(trimmed) as Record<string, unknown>;
+        } catch {
+          throw new DbError('Neo4j 查询需要合法的 JSON 或 Cypher 文本', { code: 'CYPHER_PARSE' });
+        }
+        const body = typeof parsed.query === 'string' ? parsed.query : typeof parsed.text === 'string' ? parsed.text : '';
+        if (!body.trim()) throw new DbError('Cypher 不能为空', { code: 'CYPHER_EMPTY' });
+        return {
+          language: 'cypher',
+          text: body,
+          params: parsed.params && typeof parsed.params === 'object' && !Array.isArray(parsed.params) ? (parsed.params as Record<string, unknown>) : undefined,
+        };
+      }
+      return { language: 'cypher', text: trimmed };
+    }
+    throw new DbError(`${engineMeta(conn.engine).label} 暂不支持查询`, { code: 'UNSUPPORTED_ENGINE' });
+  }
+
+  private async executeStructured(connectionId: string, conn: ConnectionConfig, query: StructuredQuery, opts: QueryOptions): Promise<QueryBatchResult> {
+    if (conn.readonly) {
+      const safety =
+        query.language === 'mql' ? classifyMql(query as MqlQuery) : query.language === 'redis' ? classifyRedis(query as RedisQuery) : classifyCypher(query as CypherQuery);
+      if (safety.kind !== 'read') {
+        const label = query.language === 'mql' ? 'MongoDB 写操作' : query.language === 'redis' ? (query as RedisQuery).command : 'Cypher 写操作';
+        throw new DbError(`只读连接不允许执行 ${label}${safety.reason ? `（${safety.reason}）` : ''}`, {
+          code: 'READONLY',
+          status: 403,
+          hint: '在连接设置中关闭只读后才可写入',
+        });
+      }
+    }
+    const driver = await this.driverFor(connectionId);
+    if (!supportsStructuredQuery(driver)) {
+      throw new DbError(`${engineMeta(conn.engine).label} 驱动不支持结构化查询`, { code: 'UNSUPPORTED_ENGINE' });
+    }
+    const started = Date.now();
+    try {
+      const result = await driver.executeQuery(query, {
+        database: opts.database,
+        maxRows: opts.maxRows,
+        timeoutMs: opts.timeoutMs,
+      });
+      this.store.addHistory({
+        connectionId,
+        database: opts.database ?? conn.database,
+        sql: formatStructuredQuery(query),
+        status: 'ok',
+        durationMs: result.durationMs,
+        rowCount: result.rowCount,
+      });
+      return {
+        sets: [result],
+        messages: [`${result.rowCount} 行 · ${result.durationMs}ms`],
+        durationMs: Date.now() - started,
+      };
+    } catch (err: any) {
+      this.store.addHistory({
+        connectionId,
+        database: opts.database ?? conn.database,
+        sql: formatStructuredQuery(query),
+        status: 'error',
+        durationMs: Date.now() - started,
+        error: err?.message ?? '执行失败',
+      });
+      throw err instanceof DbError ? err : new DbError(err?.message ?? '执行失败');
+    }
+  }
+
+  async queryStructured(connectionId: string, query: StructuredQuery, opts: QueryOptions): Promise<QueryBatchResult> {
+    const conn = this.store.getConnection(connectionId);
+    if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+    return this.executeStructured(connectionId, conn, query, opts);
+  }
+
   async query(connectionId: string, sql: string, opts: QueryOptions): Promise<QueryBatchResult> {
     const conn = this.store.getConnection(connectionId);
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+    if (!engineMeta(conn.engine).languages.includes('sql')) {
+      const query = this.parseStructuredQuery(conn, sql);
+      return this.executeStructured(connectionId, conn, query, opts);
+    }
     const statements = splitStatements(sql);
     if (!statements.length) throw new DbError('SQL 为空', { code: 'EMPTY_SQL' });
     if (statements.length > 1 && !opts.allowMulti) {
@@ -186,6 +297,9 @@ export class ConnectionManager {
   async runParams(connectionId: string, sql: string, params: unknown[], opts: { database?: string; timeoutMs?: number; actor: 'user' | 'agent' }): Promise<QueryResult> {
     const conn = this.store.getConnection(connectionId);
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+    if (!engineMeta(conn.engine).languages.includes('sql')) {
+      throw new DbError(`${engineMeta(conn.engine).label} 不支持参数化 SQL`, { code: 'UNSUPPORTED_ENGINE' });
+    }
     if (conn.readonly) throw new DbError('该连接为只读，禁止写入', { code: 'READONLY', status: 403 });
     const driver = await this.driverFor(connectionId);
     return driver.runParams(sql, params, { database: opts.database, timeoutMs: opts.timeoutMs });

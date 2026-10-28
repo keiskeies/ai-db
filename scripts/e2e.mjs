@@ -82,7 +82,40 @@ const api = async (path, init = {}) => {
 const boot = (await api('/bootstrap')).body;
 const demo = boot.connections.find((c) => c.engine === 'sqlite');
 check('bridge bootstrap', Boolean(demo), demo?.name);
-check('24 agent tools', boot.tools.length === 24, String(boot.tools.length));
+check('27 agent tools', boot.tools.length === 27, String(boot.tools.length));
+
+const MONGO_PORT = process.env.AIDB_TEST_MONGO_PORT ? Number(process.env.AIDB_TEST_MONGO_PORT) : undefined;
+const REDIS_PORT = process.env.AIDB_TEST_REDIS_PORT ? Number(process.env.AIDB_TEST_REDIS_PORT) : undefined;
+const NEO4J_PORT = process.env.AIDB_TEST_NEO4J_PORT ? Number(process.env.AIDB_TEST_NEO4J_PORT) : undefined;
+const NEO4J_PASSWORD = process.env.AIDB_TEST_NEO4J_PASSWORD ?? 'testpass';
+if (MONGO_PORT) {
+  const { MongoClient } = await import('mongodb');
+  const client = new MongoClient(`mongodb://127.0.0.1:${MONGO_PORT}`, { serverSelectionTimeoutMS: 5000 });
+  await client.connect();
+  await client.db('aidb_e2e').dropDatabase();
+  await client.db('aidb_e2e').collection('widgets').insertMany([
+    { name: 'alpha', weight: 1 },
+    { name: 'beta', weight: 2 },
+    { name: 'gamma', weight: 3 },
+  ]);
+  await client.close();
+}
+if (REDIS_PORT) {
+  const { Redis } = await import('ioredis');
+  const client = new Redis({ host: '127.0.0.1', port: REDIS_PORT, lazyConnect: true });
+  await client.connect();
+  await client.set('aidb:e2e:key', 'hello');
+  await client.quit();
+}
+if (NEO4J_PORT) {
+  const neo4j = (await import('neo4j-driver')).default;
+  const driver = neo4j.driver(`neo4j://127.0.0.1:${NEO4J_PORT}`, neo4j.auth.basic('neo4j', NEO4J_PASSWORD));
+  const session = driver.session({ database: 'neo4j' });
+  await session.run('MATCH (n) DETACH DELETE n');
+  await session.run('CREATE (a:Person {name: $a})-[:KNOWS {since: 2020}]->(b:Person {name: $b})', { a: 'Ada', b: 'Linus' });
+  await session.close();
+  await driver.close();
+}
 
 // Mobile static server
 const mime = { '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ttf': 'font/ttf' };
@@ -104,6 +137,9 @@ const desktopContext = await browser.newContext({ viewport: { width: 1440, heigh
 const page = await desktopContext.newPage();
 page.on('console', (msg) => msg.type() === 'error' && consoleErrors.push(`desktop: ${msg.text()}`));
 page.on('pageerror', (err) => consoleErrors.push(`desktop: ${err.message}`));
+page.on('response', (res) => {
+  if (res.status() >= 400) consoleErrors.push(`desktop: HTTP ${res.status()} ${res.url()} ${res.request().postData() ?? ''}`);
+});
 await page.goto(`${bridge}/#token=${TOKEN}`, { waitUntil: 'domcontentloaded' });
 await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
 await page.waitForTimeout(900);
@@ -142,10 +178,96 @@ await page.waitForTimeout(150);
 await page.click('[data-testid="sidebar-new-connection"]');
 await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
 const engineOptions = await page.locator('[data-testid="connection-engine"] option').count();
-check('connection form lists 8 engines', engineOptions === 8, String(engineOptions));
+check('connection form lists 26 engines', engineOptions === 26, String(engineOptions));
 await page.screenshot({ path: join(shots, 'desktop-connection-engines.png') });
 await page.locator('.modal-head .icon-btn').click();
 await page.waitForTimeout(200);
+
+if (MONGO_PORT) {
+  await page.click('[data-testid="sidebar-new-connection"]');
+  await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
+  await page.fill('[data-testid="connection-name"]', 'Mongo E2E');
+  await page.selectOption('[data-testid="connection-engine"]', 'mongodb');
+  await page.fill('[data-testid="connection-host"]', '127.0.0.1');
+  await page.fill('[data-testid="connection-port"]', String(MONGO_PORT));
+  await page.fill('[data-testid="connection-database"]', 'aidb_e2e');
+  await page.click('[data-testid="connection-save"]');
+  const mongoRow = page.locator('.conn-row', { hasText: 'Mongo E2E' });
+  await mongoRow.waitFor({ timeout: 15000 });
+  // saveConnection 已展开新连接并触发 loadSchema，不再点击（点击会收起）
+  try {
+    await page.waitForSelector('[title="集合 widgets"]', { timeout: 20000 });
+  } catch (err) {
+    console.error('SIDEBAR TEXT:\n', await page.locator('.sidebar').innerText());
+    console.error('GATEWAY LOGS:\n', gatewayLogs.join(''));
+    throw err;
+  }
+  check('Mongo connection expands to collections', true);
+  await page.click('[title="集合 widgets"]');
+  await page.waitForSelector('[data-testid="query-run"]', { timeout: 10000 });
+  await page.locator('[data-testid="query-run"]').last().click();
+  await page.waitForSelector('[data-testid="query-result-grid"] tbody tr', { timeout: 20000 });
+  const mongoRows = await page.locator('[data-testid="query-result-grid"] tbody tr').count();
+  check('Mongo MQL query returns documents', mongoRows === 3, `${mongoRows} rows`);
+  check('Mongo query hides SQL-only actions', (await page.locator('.query-actions').getByText('美化 SQL').count()) === 0);
+  await page.screenshot({ path: join(shots, 'desktop-mongodb.png') });
+}
+
+if (REDIS_PORT) {
+  await page.click('[data-testid="sidebar-new-connection"]');
+  await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
+  await page.fill('[data-testid="connection-name"]', 'Redis E2E');
+  await page.selectOption('[data-testid="connection-engine"]', 'redis');
+  await page.fill('[data-testid="connection-host"]', '127.0.0.1');
+  await page.fill('[data-testid="connection-port"]', String(REDIS_PORT));
+  await page.fill('[data-testid="connection-database"]', '0');
+  await page.click('[data-testid="connection-save"]');
+  const redisRow = page.locator('.conn-row', { hasText: 'Redis E2E' });
+  await redisRow.waitFor({ timeout: 15000 });
+  // saveConnection 已展开新连接并触发 loadSchema，不再点击（点击会收起）
+  await page.waitForSelector('[title="键空间 keys"]', { timeout: 20000 });
+  check('Redis connection expands to a key space', true);
+  await page.click('[title="键空间 keys"]');
+  await page.locator('[data-testid="query-run"]').last().click();
+  await page.waitForSelector('[data-testid="query-result-grid"] tbody tr', { timeout: 20000 });
+  const redisRows = await page.locator('[data-testid="query-result-grid"] tbody tr').count();
+  check('Redis SCAN returns keys', redisRows >= 1, `${redisRows} rows`);
+  await page.screenshot({ path: join(shots, 'desktop-redis.png') });
+}
+
+if (NEO4J_PORT) {
+  await page.click('[data-testid="sidebar-new-connection"]');
+  await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
+  await page.fill('[data-testid="connection-name"]', 'Neo4j E2E');
+  await page.selectOption('[data-testid="connection-engine"]', 'neo4j');
+  await page.fill('[data-testid="connection-host"]', '127.0.0.1');
+  await page.fill('[data-testid="connection-port"]', String(NEO4J_PORT));
+  await page.fill('[data-testid="connection-database"]', 'neo4j');
+  await page.fill('[data-testid="connection-username"]', 'neo4j');
+  await page.fill('[data-testid="connection-password"]', NEO4J_PASSWORD);
+  await page.click('[data-testid="connection-save"]');
+  const neo4jRow = page.locator('.conn-row', { hasText: 'Neo4j E2E' });
+  await neo4jRow.waitFor({ timeout: 15000 });
+  await page.waitForSelector('[title="节点标签 Person"]', { timeout: 25000 });
+  check('Neo4j connection expands to labels', true);
+  await page.click('[title="节点标签 Person"]');
+  await page.locator('[data-testid="query-run"]').last().click();
+  await page.waitForSelector('[data-testid="query-result-grid"] tbody tr', { timeout: 20000 });
+  const neo4jRows = await page.locator('[data-testid="query-result-grid"] tbody tr').count();
+  if (neo4jRows !== 2) {
+    console.error('NEO4J GRID:\n', await page.locator('[data-testid="query-result-grid"]').innerText());
+    console.error('NEO4J EDITOR:\n', await page.locator('.cm-content').last().innerText());
+  }
+  check('Neo4j Cypher query returns nodes', neo4jRows === 2, `${neo4jRows} rows`);
+  check('Neo4j query hides SQL-only actions', (await page.locator('.query-actions').getByText('美化 SQL').count()) === 0);
+}
+
+if (MONGO_PORT || REDIS_PORT || NEO4J_PORT) {
+  // 恢复初始工作区：bootstrap 会把 active connection 指回 demo，并重新出现欢迎页
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
+  await page.waitForTimeout(800);
+}
 
 await page.click('[data-testid="ribbon"] button[title="视图"]');
 await page.waitForSelector('.tools-modal', { timeout: 10000 });

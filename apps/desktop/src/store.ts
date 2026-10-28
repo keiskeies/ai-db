@@ -377,6 +377,18 @@ export const useApp = create<AppStore>((set, get) => ({
   toggleSchema: (key) => set((s) => ({ expandedSchemas: { ...s.expandedSchemas, [key]: !s.expandedSchemas[key] } })),
 
   openData: (connectionId, table, database) => {
+    const conn = get().connections.find((c) => c.id === connectionId);
+    const model = conn ? engineMeta(conn.engine).model : 'relational';
+    if (model === 'document' || model === 'keyvalue' || model === 'graph') {
+      const sql =
+        model === 'document'
+          ? JSON.stringify({ collection: table, op: 'find', filter: {}, limit: 100 }, null, 2)
+          : model === 'graph'
+            ? 'MATCH (n) RETURN n LIMIT 100'
+            : 'SCAN 0 COUNT 100';
+      get().openQuery(connectionId, sql, table, database);
+      return;
+    }
     const id = `data:${connectionId}:${database ?? ''}:${table}`;
     const existing = get().tabs.find((tab) => tab.id === id);
     if (existing) {
@@ -420,6 +432,12 @@ export const useApp = create<AppStore>((set, get) => ({
       set({ activeTabId: id });
       return;
     }
+    const conn = get().connections.find((c) => c.id === connId);
+    const meta = conn ? engineMeta(conn.engine) : undefined;
+    if (meta && !meta.capabilities.ddl) {
+      get().notify('warning', '该引擎不支持可视化建表', `${meta.label} 请直接执行 DDL`);
+      return;
+    }
     const tab: Tab = {
       id,
       kind: 'design',
@@ -437,6 +455,11 @@ export const useApp = create<AppStore>((set, get) => ({
     const connId = connectionId ?? get().activeConnectionId;
     if (!connId) {
       get().openConnectionEditor('new');
+      return;
+    }
+    const conn = get().connections.find((c) => c.id === connId);
+    if (conn && engineMeta(conn.engine).model !== 'relational') {
+      get().notify('warning', '该引擎没有关系图', engineMeta(conn.engine).label);
       return;
     }
     const id = `relations:${connId}:${database ?? ''}`;
@@ -486,12 +509,14 @@ export const useApp = create<AppStore>((set, get) => ({
       const current = get().connectionEditor;
       const result = current?.mode === 'edit' && current.connection ? await api.updateConnection(current.connection.id, body) : await api.createConnection(body);
       const { connections } = await api.connections();
+      const previousActive = get().activeConnectionId;
       set({
         connections,
         connectionEditor: undefined,
         activeConnectionId: result.connection.id,
         expandedConnections: { ...get().expandedConnections, [result.connection.id]: true },
         schemas: { ...get().schemas, [result.connection.id]: get().schemas[result.connection.id] ?? [] },
+        ...(previousActive !== result.connection.id ? { agentDatabase: '' } : {}),
       });
       get().notify('success', get().t('saved'));
       void get().loadSchema(result.connection.id);

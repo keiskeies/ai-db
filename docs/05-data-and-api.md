@@ -1,6 +1,6 @@
 # AiDB Studio — 数据模型与接口协议
 
-> 版本：v0.3 · 关联：[架构](./01-tech-architecture.md) · [Agent](./04-ai-agent-design.md)
+> 版本：v0.4-dev · 关联：[架构](./01-tech-architecture.md) · [Agent](./04-ai-agent-design.md)
 
 ## 1. 本地元数据库（Bridge · SQLite）
 
@@ -10,7 +10,7 @@
 CREATE TABLE IF NOT EXISTS connections (
   id            TEXT PRIMARY KEY,
   name          TEXT NOT NULL,
-  engine        TEXT NOT NULL CHECK (engine IN ('sqlite','mysql','postgresql')),
+  engine        TEXT NOT NULL, -- 取值见 §2 Engine；不设 CHECK，新增协议别名无需迁移
   color         TEXT NOT NULL DEFAULT 'blue',
   environment   TEXT NOT NULL DEFAULT 'dev' CHECK (environment IN ('dev','staging','prod')),
   group_name    TEXT NOT NULL DEFAULT '默认',
@@ -130,7 +130,11 @@ CREATE INDEX idx_agent_ctx ON agent_context(connection_id, database_name, kind);
 ## 2. 领域 DTO（`@aidb/core`）
 
 ```ts
-export type Engine = 'sqlite' | 'mysql' | 'mariadb' | 'postgresql' | 'cockroachdb' | 'sqlserver' | 'oracle' | 'clickhouse';
+export type Engine =
+  | 'sqlite' | 'mysql' | 'mariadb' | 'postgresql' | 'cockroachdb' | 'sqlserver' | 'oracle' | 'clickhouse'
+  | 'mongodb' | 'redis' | 'neo4j'
+  | 'kingbase' | 'opengauss' | 'gaussdb' | 'oceanbase' | 'tidb' | 'polardb' | 'tdsql' | 'gbase8a'
+  | 'doris' | 'starrocks' | 'highgo' | 'vastbase' | 'ivorysql' | 'greatsql' | 'goldendb';
 export type Environment = 'dev' | 'staging' | 'prod';
 export type PermissionMode = 'readonly' | 'ask' | 'auto' | 'full';
 export type Risk = 'read' | 'write' | 'ddl' | 'destructive';
@@ -149,7 +153,8 @@ export interface ColumnInfo {
 export interface IndexInfo { name: string; columns: string[]; unique: boolean; primary?: boolean }
 export interface ForeignKeyInfo { name?: string; columns: string[]; refTable: string; refColumns: string[]; onDelete?: string }
 export interface TableInfo {
-  name: string; type: 'table' | 'view'; schema?: string; rowEstimate?: number;
+  name: string; type: 'table' | 'view'; kind?: 'table' | 'view' | 'collection' | 'key';
+  schema?: string; rowEstimate?: number;
   columns?: ColumnInfo[]; indexes?: IndexInfo[]; foreignKeys?: ForeignKeyInfo[]; comment?: string;
 }
 
@@ -191,7 +196,7 @@ export interface QueryResult {
 | GET/POST | `/jobs` · PUT/DELETE `/jobs/:id` | 自动化任务 CRUD |
 | POST | `/jobs/:id/run` | 立即运行任务 |
 | POST | `/backups/:id/restore` | 从备份恢复 |
-| POST | `/query` | `{connectionId, database?, sql, limit?, offset?, mode?}` → QueryResult |
+| POST | `/query` | `{connectionId, database?, sql, limit?, offset?, mode?}` → QueryResult。SQL 连接执行 SQL；MongoDB 的 `sql` 为 JSON MQL（`{collection, op, filter?, pipeline?, limit?}`）；Redis 的 `sql` 为单条命令文本（如 `SCAN 0 COUNT 100`） |
 | GET | `/data` | `?connectionId&database&table&limit&offset&orderBy&where` |
 | POST | `/rows` | `{op:'insert'|'insertMany'|'update'|'delete'|'deleteMany', values?/rows?/key?/keys?}` |
 | POST | `/ddl/preview` | 结构化变更 → `{statements: string[]}` |

@@ -1,30 +1,34 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildAlterTable, buildCreateTable, buildDeleteMany, buildExplain, buildInsert, buildMonthlySeriesExpr, buildRenameTable, buildTableMaintenance } from '../src/sql/ddl';
-import { ENGINE_IDS } from '../src/engines';
-import type { Engine } from '../src/types';
+import { ENGINES } from '../src/engines';
+import type { DialectId } from '../src/types';
 
-// §12.6 第 3 条：离线趋势/预测要按月聚合，任何引擎落到通用 FORMAT 分支都会生成跑不通的 SQL
-const MONTHLY_FN: Record<Engine, string> = {
+// §12.6 第 3 条：离线趋势/预测要按月聚合，任何方言落到通用 FORMAT 分支都会生成跑不通的 SQL
+const MONTHLY_FN: Record<DialectId, string> = {
   sqlite: 'strftime',
   mysql: 'DATE_FORMAT',
-  mariadb: 'DATE_FORMAT',
-  postgresql: 'to_char',
-  cockroachdb: 'to_char',
-  sqlserver: 'FORMAT',
+  postgres: 'to_char',
+  mssql: 'FORMAT',
   oracle: 'to_char',
   clickhouse: 'formatDateTime',
 };
 
-test('buildMonthlySeriesExpr has dialect-correct SQL for every engine', () => {
-  for (const engine of ENGINE_IDS) {
-    const expr = buildMonthlySeriesExpr(engine, 'created_at');
-    assert.ok(expr.startsWith(`${MONTHLY_FN[engine]}(`), `${engine} -> ${expr}`);
-    assert.ok(expr.includes('created_at'), `${engine} -> ${expr}`);
-    assert.ok(/%Y-%m|YYYY-MM|yyyy-MM/.test(expr), `${engine} 缺少年月格式 -> ${expr}`);
+test('buildMonthlySeriesExpr has dialect-correct SQL for every SQL engine', () => {
+  const sqlEngines = ENGINES.filter((meta) => meta.dialect);
+  for (const meta of sqlEngines) {
+    const expr = buildMonthlySeriesExpr(meta.id, 'created_at');
+    assert.ok(expr.startsWith(`${MONTHLY_FN[meta.dialect!]}(`), `${meta.id} -> ${expr}`);
+    assert.ok(expr.includes('created_at'), `${meta.id} -> ${expr}`);
+    assert.ok(/%Y-%m|YYYY-MM|yyyy-MM/.test(expr), `${meta.id} 缺少年月格式 -> ${expr}`);
   }
-  // 引擎清单增删时这条必须失败，否则新引擎会静默走到通用兜底分支
-  assert.equal(ENGINE_IDS.length, Object.keys(MONTHLY_FN).length, '引擎清单变了，MONTHLY_FN 必须同步');
+  // 新增方言时必须同步 MONTHLY_FN；新增协议别名则自动复用所属方言
+  for (const dialect of Object.keys(MONTHLY_FN) as DialectId[]) {
+    assert.ok(
+      sqlEngines.some((meta) => meta.dialect === dialect),
+      `方言 ${dialect} 没有对应引擎`,
+    );
+  }
 });
 
 const cols = [

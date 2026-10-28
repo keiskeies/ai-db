@@ -1,5 +1,6 @@
 export * from './types';
 export * from './engines';
+export * from './query';
 export * from './protocol';
 export * from './sql/classify';
 export * from './sql/ident';

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildCreateTable, buildInsert, buildSelectTable } from '../src/sql/ddl';
+import { ENGINES, dialectOf, engineDefaultPort, engineMeta, engineUsesSchema, isEngine, isSqlEngine } from '../src/engines';
 
 const cols = [
   { name: 'id', type: 'INTEGER', nullable: false, primaryKey: true, autoIncrement: true },
@@ -43,4 +44,68 @@ test('parameter placeholders per engine', () => {
   assert.match(buildInsert('sqlserver', 't', ['a', 'b'], 2), /@p1, @p2\), \(@p3, @p4/);
   assert.match(buildInsert('cockroachdb', 't', ['a', 'b'], 2), /\$1, \$2\), \(\$3, \$4/);
   assert.match(buildInsert('clickhouse', 't', ['a', 'b'], 2), /\?, \?\), \(\?, \?\)/);
+});
+
+test('engine registry is internally consistent', () => {
+  assert.equal(new Set(ENGINES.map((meta) => meta.id)).size, ENGINES.length, '引擎 id 必须唯一');
+  assert.equal(new Set(ENGINES.map((meta) => meta.label)).size, ENGINES.length, '引擎 label 必须唯一');
+  for (const meta of ENGINES) {
+    assert.ok(isEngine(meta.id));
+    assert.equal(meta.fileBased, meta.transport === 'sqlite-file', `${meta.id} fileBased 与 transport 不一致`);
+    if (meta.fileBased) {
+      assert.equal(meta.defaultPort, undefined, `${meta.id} 文件库不应有端口`);
+      assert.equal(meta.supportsSsh, false, `${meta.id} 文件库不应支持 SSH`);
+    } else {
+      assert.ok(meta.defaultPort && meta.defaultPort > 0, `${meta.id} 缺少默认端口`);
+    }
+    assert.ok(meta.capabilities.objects.length > 0, `${meta.id} 缺少对象类型`);
+    if (meta.dialect) {
+      assert.ok(meta.languages.includes('sql'), `${meta.id} SQL 引擎应声明 sql 语言`);
+    } else {
+      assert.ok(!meta.languages.includes('sql'), `${meta.id} 非 SQL 引擎不应声明 sql`);
+      assert.throws(() => dialectOf(meta.id), /不使用 SQL 方言/);
+    }
+  }
+});
+
+test('Chinese protocol aliases reuse SQL dialects', () => {
+  const pgAliases = ['kingbase', 'opengauss', 'gaussdb', 'highgo', 'vastbase', 'ivorysql'] as const;
+  const mysqlAliases = ['oceanbase', 'tidb', 'polardb', 'tdsql', 'gbase8a', 'doris', 'starrocks', 'greatsql', 'goldendb'] as const;
+  for (const id of pgAliases) {
+    assert.equal(dialectOf(id), 'postgres', id);
+    assert.equal(engineUsesSchema(id), true, id);
+    assert.equal(engineMeta(id).transport, 'postgres');
+    assert.equal(engineDefaultPort(id), engineMeta(id).defaultPort);
+  }
+  for (const id of mysqlAliases) {
+    assert.equal(dialectOf(id), 'mysql', id);
+    assert.equal(engineUsesSchema(id), false, id);
+    assert.equal(engineMeta(id).transport, 'mysql');
+  }
+  assert.equal(isSqlEngine('mongodb'), false);
+  assert.equal(isSqlEngine('redis'), false);
+  assert.equal(isSqlEngine('kingbase'), true);
+});
+
+test('alias DDL follows the base dialect', () => {
+  const kingbase = buildCreateTable('kingbase', { table: 'tasks', columns: cols, schema: 'public' });
+  assert.match(kingbase, /"public"\."tasks"/);
+  assert.match(kingbase, /SERIAL/);
+  assert.doesNotMatch(kingbase, /AUTO_INCREMENT/);
+
+  const tidb = buildCreateTable('tidb', { table: 'tasks', columns: cols });
+  assert.match(tidb, /`tasks`/);
+  assert.match(tidb, /AUTO_INCREMENT/);
+  assert.match(tidb, /ENGINE=InnoDB/);
+});
+
+test('Neo4j is a graph engine with Cypher language', () => {
+  const meta = engineMeta('neo4j');
+  assert.equal(meta.model, 'graph');
+  assert.deepEqual(meta.languages, ['cypher']);
+  assert.equal(meta.defaultPort, 7687);
+  assert.equal(meta.defaultDatabase, 'neo4j');
+  assert.equal(meta.capabilities.gridEdit, false);
+  assert.equal(isSqlEngine('neo4j'), false);
+  assert.throws(() => dialectOf('neo4j'), /不使用 SQL 方言/);
 });

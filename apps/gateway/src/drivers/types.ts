@@ -1,4 +1,4 @@
-import type { Engine, QueryResult, TableInfo } from '@aidb/core';
+import type { Engine, QueryResult, StructuredQuery, TableInfo } from '@aidb/core';
 
 export interface RunOptions {
   maxRows?: number;
@@ -21,6 +21,15 @@ export interface Driver {
   run(sql: string, opts?: RunOptions): Promise<QueryResult>;
   runParams(sql: string, params: unknown[], opts?: RunOptions): Promise<QueryResult>;
   close(): Promise<void>;
+}
+
+/** 非 SQL 驱动实现的结构化查询入口；SQL 驱动不需要实现。 */
+export interface StructuredQueryDriver extends Driver {
+  executeQuery(query: StructuredQuery, opts?: RunOptions): Promise<QueryResult>;
+}
+
+export function supportsStructuredQuery(driver: Driver): driver is StructuredQueryDriver {
+  return typeof (driver as StructuredQueryDriver).executeQuery === 'function';
 }
 
 export interface ConnectionRecord {

@@ -1,4 +1,4 @@
-import { quoteIdent, quoteLiteral } from '@aidb/core';
+import { engineMeta, quoteIdent, quoteLiteral } from '@aidb/core';
 import type { ConnectionManager } from '../manager';
 import type { Store } from '../store';
 
@@ -44,13 +44,14 @@ function requirePassword(value: unknown): string {
 export async function listUsers(store: Store, manager: ConnectionManager, connectionId: string): Promise<UsersResult> {
   const conn = store.getConnection(connectionId);
   if (!conn) throw new Error('连接不存在');
+  const family = engineMeta(conn.engine).dialect;
   const query = async (sql: string) => {
     const batch = await manager.query(connectionId, sql, { database: conn.database, maxRows: 500, allowMulti: false, autoLimit: false, actor: 'user' });
     const set = batch.sets[0];
     return { names: set?.columns.map((column) => column.name) ?? [], rows: set?.rows ?? [] };
   };
-  if (conn.engine === 'sqlite') return { supported: false, users: [], note: 'SQLite 没有服务器账户体系，权限由文件系统决定。' };
-  if (conn.engine === 'mysql' || conn.engine === 'mariadb') {
+  if (family === 'sqlite') return { supported: false, users: [], note: 'SQLite 没有服务器账户体系，权限由文件系统决定。' };
+  if (family === 'mysql') {
     const result = await query('SELECT User, Host, plugin, account_locked FROM mysql.user ORDER BY User, Host');
     const names = result.names.map((name) => name.toLowerCase());
     return {
@@ -64,7 +65,7 @@ export async function listUsers(store: Store, manager: ConnectionManager, connec
       })),
     };
   }
-  if (conn.engine === 'postgresql' || conn.engine === 'cockroachdb') {
+  if (family === 'postgres') {
     const result = await query("SELECT rolname, rolsuper, rolcreaterole, rolcreatedb, rolcanlogin FROM pg_roles WHERE rolname NOT LIKE 'pg_%' ORDER BY rolname");
     const names = result.names.map((name) => name.toLowerCase());
     return {
@@ -81,7 +82,7 @@ export async function listUsers(store: Store, manager: ConnectionManager, connec
       })),
     };
   }
-  if (conn.engine === 'sqlserver') {
+  if (family === 'mssql') {
     const result = await query("SELECT name, type_desc, is_disabled FROM sys.server_principals WHERE type IN ('S','U','G') AND name NOT LIKE '##%' ORDER BY name");
     const names = result.names.map((name) => name.toLowerCase());
     return {
@@ -94,7 +95,7 @@ export async function listUsers(store: Store, manager: ConnectionManager, connec
       })),
     };
   }
-  if (conn.engine === 'oracle') {
+  if (family === 'oracle') {
     const result = await query('SELECT username, account_status, default_tablespace FROM all_users ORDER BY username');
     const names = result.names.map((name) => name.toLowerCase());
     return {
@@ -107,7 +108,7 @@ export async function listUsers(store: Store, manager: ConnectionManager, connec
       })),
     };
   }
-  if (conn.engine === 'clickhouse') {
+  if (family === 'clickhouse') {
     const result = await query('SELECT name, storage, auth_type FROM system.users ORDER BY name');
     const names = result.names.map((name) => name.toLowerCase());
     return {
@@ -131,9 +132,10 @@ export async function manageUser(
 ): Promise<{ sql: string[] }> {
   const conn = store.getConnection(connectionId);
   if (!conn) throw new Error('连接不存在');
+  const family = engineMeta(conn.engine).dialect;
   const name = requireUser(payload.name);
   const statements: string[] = [];
-  const isMysql = conn.engine === 'mysql' || conn.engine === 'mariadb';
+  const isMysql = family === 'mysql';
   if (isMysql) {
     const host = String(payload.host ?? '%').trim() || '%';
     if (!HOST_RE.test(host)) throw new Error('主机名不合法');
@@ -148,7 +150,7 @@ export async function manageUser(
       if (!SCOPE_RE.test(scope)) throw new Error('权限范围不合法');
       statements.push(`GRANT ${privileges} ON ${scope} TO ${quoteLiteral(name)}@${quoteLiteral(host)}`);
     }
-  } else if (conn.engine === 'postgresql' || conn.engine === 'cockroachdb') {
+  } else if (family === 'postgres') {
     const user = quoteIdent(name, conn.engine);
     if (action === 'create') statements.push(`CREATE ROLE ${user} LOGIN PASSWORD ${quoteLiteral(requirePassword(payload.password))}`);
     else if (action === 'drop') statements.push(`DROP ROLE ${user}`);
@@ -156,7 +158,7 @@ export async function manageUser(
       const role = requireRole(payload.role ?? payload.privileges);
       statements.push(`GRANT ${quoteIdent(role, conn.engine)} TO ${user}`);
     }
-  } else if (conn.engine === 'sqlserver') {
+  } else if (family === 'mssql') {
     const user = quoteIdent(name, conn.engine);
     if (action === 'create') {
       statements.push(`CREATE LOGIN ${user} WITH PASSWORD = ${quoteLiteral(requirePassword(payload.password))}`);
@@ -168,13 +170,13 @@ export async function manageUser(
       const role = requireRole(payload.role ?? payload.privileges);
       statements.push(`ALTER SERVER ROLE ${quoteIdent(role, conn.engine)} ADD MEMBER ${user}`);
     }
-  } else if (conn.engine === 'oracle') {
+  } else if (family === 'oracle') {
     const upper = name.toUpperCase();
     const user = quoteIdent(upper, conn.engine);
     if (action === 'create') statements.push(`CREATE USER ${user} IDENTIFIED BY ${quoteLiteral(requirePassword(payload.password))}`);
     else if (action === 'drop') statements.push(`DROP USER ${user} CASCADE`);
     else statements.push(`GRANT ${requireRole(payload.role ?? payload.privileges)} TO ${user}`);
-  } else if (conn.engine === 'clickhouse') {
+  } else if (family === 'clickhouse') {
     const user = quoteIdent(name, conn.engine);
     if (action === 'create') statements.push(`CREATE USER ${user} IDENTIFIED BY ${quoteLiteral(requirePassword(payload.password))}`);
     else if (action === 'drop') statements.push(`DROP USER ${user}`);

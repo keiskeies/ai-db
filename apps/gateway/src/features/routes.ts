@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { Router, type NextFunction, type Request, type Response } from 'express';
-import type { TableMaintenanceAction } from '@aidb/core';
+import { engineMeta, isSqlEngine, type TableMaintenanceAction } from '@aidb/core';
 import type { GatewayConfig } from '../config';
 import type { ConnectionManager } from '../manager';
 import type { Store } from '../store';
@@ -43,6 +43,47 @@ function str(value: unknown): string | undefined {
 export function createFeatureRouter(deps: FeatureDeps): Router {
   const { store, manager, config, scheduler } = deps;
   const router = Router();
+
+  const sqlOnlyPaths = [
+    '/databases/ops',
+    '/tables/ops',
+    '/data/replace',
+    '/schema/compare',
+    '/schema/sync',
+    '/transfer',
+    '/generate',
+    '/monitor',
+    '/users',
+    '/dictionary',
+    '/objects',
+    '/table-options',
+    '/data/compare',
+    '/jobs',
+    '/backups',
+  ];
+  router.use((req, res, next) => {
+    if (!sqlOnlyPaths.some((path) => req.path === path || req.path.startsWith(`${path}/`))) {
+      next();
+      return;
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const ids = [req.query.connectionId, body.connectionId, body.sourceId, body.targetId]
+      .filter((value): value is string => typeof value === 'string' && value.length > 0);
+    for (const id of ids) {
+      const conn = store.getConnection(id);
+      if (conn && !isSqlEngine(conn.engine)) {
+        next(
+          Object.assign(new Error(`${engineMeta(conn.engine).label} 不支持该功能`), {
+            code: 'UNSUPPORTED_ENGINE',
+            status: 400,
+            hint: conn.engine === 'mongodb' ? 'MongoDB 请使用查询窗口的 MQL 或 Agent 的 run_mql' : 'Redis 请使用命令窗口或 Agent 的 run_redis',
+          }),
+        );
+        return;
+      }
+    }
+    next();
+  });
 
   router.post(
     '/databases/ops',

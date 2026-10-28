@@ -1,12 +1,12 @@
 # AiDB Studio — 功能设计规格
 
-> 版本：v0.3 · 关联：[架构](./01-tech-architecture.md) · [UI/UX](./03-ui-ux-design.md) · [Agent](./04-ai-agent-design.md)
+> 版本：v0.4-dev · 关联：[架构](./01-tech-architecture.md) · [UI/UX](./03-ui-ux-design.md) · [Agent](./04-ai-agent-design.md)
 
 ## 1. 功能全景（Navicat 对标矩阵）
 
 | 能力域 | Navicat 对应 | AiDB v0.3 | 说明 / 差异 |
 |---|---|---|---|
-| 连接管理 | Connection | ✅ | SQLite/MySQL/MariaDB/PostgreSQL/CockroachDB/SQL Server/Oracle/ClickHouse；颜色、只读、SSH 隧道、测试连接 |
+| 连接管理 | Connection | ✅ | 8 种关系型 + MongoDB + Redis + Neo4j + 15 种国产协议别名；颜色、只读、SSH 隧道、测试连接 |
 | 对象浏览器 | 导航窗格 | ✅ | 库→表/视图→列/索引/外键；搜索、右键、刷新、懒加载 |
 | 数据网格 | 表数据查看器 | ✅ | 分页/排序/过滤/编辑/增删行/复制/导出；虚拟滚动 |
 | SQL 编辑器 | 查询编辑器 | ✅ | 多标签、高亮、执行选区、多结果集、历史、EXPLAIN、格式化 |
@@ -183,7 +183,7 @@
 ### 8.7.2 表操作
 | 操作 | 行为 | 引擎处理 |
 |---|---|---|
-| 新建 / 设计 | 可视化列、索引、DDL 预览与执行 | 8 引擎方言 |
+| 新建 / 设计 | 可视化列、索引、DDL 预览与执行 | SQL 方言（含国产协议别名） |
 | 重命名 | 表名迁移 | MySQL/MariaDB/ClickHouse `RENAME TABLE`；SQL Server `sp_rename`；其余 `ALTER TABLE ... RENAME` |
 | 复制 | 仅结构 / 结构+数据；自增列重新生成 | 通用 |
 | 查看 DDL | 从元数据还原 CREATE + 索引 + 外键 | MySQL 视图走 `SHOW CREATE VIEW` |
@@ -191,7 +191,7 @@
 | 删除 | 表 / 视图删除，UI 二次确认 | 通用 |
 | 维护 | 分析、优化、检查、修复、回收空间 | 引擎支持矩阵；不支持时明确提示 |
 | 对象信息 | 列、索引、外键、行数、注释 | 通用 |
-| 设置权限 | 跳转用户与权限工具 | 7 引擎（SQLite 除外） |
+| 设置权限 | 跳转用户与权限工具 | SQL 引擎（SQLite 除外） |
 
 ### 8.7.3 数据操作
 - **数据网格**：行号、记录区间与页码、筛选 / 排序 / 文本视图、WHERE 输入、可视化筛选构建器。
@@ -216,6 +216,18 @@
 | 命令列 / 运行 SQL 文件 | 打开查询窗口 |
 
 > 事务：当前编辑即时提交，尚未提供 Navicat 式“开始事务 / 提交 / 回滚”的跨请求事务模式。
+
+## 8.8 非关系型引擎（v0.4-dev）
+
+| 引擎 | 模型 | 对象浏览 | 查询 | 结果 | SQL 专属功能 |
+|---|---|---|---|---|---|
+| MongoDB | document | database → collection/view；采样 30 条推断字段（含一层嵌套字段） | JSON MQL：find / aggregate / count / distinct；支持 filter / pipeline / projection / sort / limit / skip | 文档行，嵌套值为 JSON 单元格 | 禁用 DDL 设计器、结构同步、数据对比、dump、审计体检、图表 |
+| Redis | keyvalue | DB 索引 → keys 伪对象；SCAN 浏览，不执行 `KEYS *` | 单条命令控制台；SCAN / HGETALL / ZRANGE 等类型化结果 | key/value、field/value、member/score 等 | 禁用 DDL、结构同步、备份、SQL 工具 |
+| Neo4j | graph | database → 节点标签 / 关系类型；采样 30 个节点/关系推断属性 | Cypher 控制台；支持 `$params`；`EXPLAIN` / `PROFILE` 计划以 JSON 返回 | 节点/关系/路径为 JSON 单元格，`resultKind=graph` | 禁用 SQL 工具、DDL、结构同步、备份、图渲染（后续） |
+
+协议别名：金仓 / openGauss / GaussDB / 瀚高 / Vastbase / IvorySQL 复用 PostgreSQL 驱动与方言；OceanBase / TiDB / PolarDB / TDSQL / GBase 8a / Doris / StarRocks / GreatSQL / GoldenDB 复用 MySQL 驱动与方言。openGauss/GaussDB 默认 sha256 认证需实例改为 md5 或使用兼容认证；Doris/StarRocks/GBase 8a 的 DDL 能力按 `EngineMeta.capabilities` 关闭设计器。
+
+安全：只读连接在网关侧按语言分类拦截；MongoDB 拦截 `$where` / `$function` / `$accumulator` / `$out` / `$merge` 等，Redis 拦截 `FLUSHALL` / `CONFIG SET` / `EVAL` / `SHUTDOWN` 等，Neo4j 拦截 `CREATE` / `MERGE` / `SET` / `DELETE` / `REMOVE` / `LOAD CSV` 与写型 `CALL`。非 SQL 连接上的 SQL 专属 Agent 工具返回 `UNSUPPORTED_ENGINE`，并提示改用 `run_mql` / `run_redis` / `run_cypher`。
 
 ## 9. AI Agent（摘要，详见 04）
 

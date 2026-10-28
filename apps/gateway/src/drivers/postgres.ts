@@ -1,6 +1,6 @@
 import pg from 'pg';
 import type { Pool } from 'pg';
-import type { ColumnInfo, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo } from '@aidb/core';
+import type { ColumnInfo, Engine, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions } from './types';
 import { DbError, toRowArray } from './types';
 
@@ -40,10 +40,10 @@ const OIDS: Record<number, string> = {
 const SYSTEM_SCHEMAS = `('pg_catalog','information_schema')`;
 
 export class PostgresDriver implements Driver {
-  engine: 'postgresql' | 'cockroachdb';
+  engine: Engine;
   private pools = new Map<string, Pool>();
 
-  constructor(private opts: PgOptions, engine: 'postgresql' | 'cockroachdb' = 'postgresql') {
+  constructor(private opts: PgOptions, engine: Engine = 'postgresql') {
     this.engine = engine;
   }
 

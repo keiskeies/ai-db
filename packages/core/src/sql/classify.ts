@@ -1,3 +1,4 @@
+import { dialectOf } from '../engines';
 import type { Engine, Risk } from '../types';
 
 export type SqlKind = 'read' | 'write' | 'ddl' | 'destructive' | 'unknown';
@@ -244,11 +245,12 @@ export function applyLimit(sql: string, limit: number, engine?: Engine): string 
   if (/\bLIMIT\b|\bFETCH\s+(FIRST|NEXT)\b|\bTOP\s+\d+\b|\bOFFSET\b/.test(code)) return sql;
   const clean = s.replace(/;\s*$/, '');
   const n = Math.floor(limit);
-  if (engine === 'sqlserver') {
+  const dialect = engine ? dialectOf(engine) : undefined;
+  if (dialect === 'mssql') {
     const hasOrder = /\bORDER\s+BY\b/.test(code);
     return `${clean}${hasOrder ? '' : ' ORDER BY (SELECT NULL)'} OFFSET 0 ROWS FETCH NEXT ${n} ROWS ONLY`;
   }
-  if (engine === 'oracle') return `${clean} FETCH FIRST ${n} ROWS ONLY`;
+  if (dialect === 'oracle') return `${clean} FETCH FIRST ${n} ROWS ONLY`;
   return `${clean} LIMIT ${n}`;
 }
 

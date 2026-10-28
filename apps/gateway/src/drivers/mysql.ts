@@ -1,6 +1,7 @@
 import mysql from 'mysql2/promise';
 import type { Pool, FieldPacket, ResultSetHeader } from 'mysql2/promise';
-import type { ColumnInfo, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo } from '@aidb/core';
+import { engineMeta } from '@aidb/core';
+import type { ColumnInfo, Engine, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions } from './types';
 import { DbError, toRowArray } from './types';
 
@@ -42,10 +43,10 @@ const MYSQL_TYPES: Record<number, string> = {
 };
 
 export class MysqlDriver implements Driver {
-  engine: 'mysql' | 'mariadb';
+  engine: Engine;
   private pools = new Map<string, Pool>();
 
-  constructor(private opts: MysqlOptions, engine: 'mysql' | 'mariadb' = 'mysql') {
+  constructor(private opts: MysqlOptions, engine: Engine = 'mysql') {
     this.engine = engine;
   }
 
@@ -78,7 +79,7 @@ export class MysqlDriver implements Driver {
     try {
       const [rows] = await this.pool().query('SELECT VERSION() AS v');
       const v = (rows as Array<{ v: string }>)[0]?.v;
-      return { ok: true, version: `${this.engine === 'mariadb' ? 'MariaDB' : 'MySQL'} ${v}`, latencyMs: Date.now() - started };
+      return { ok: true, version: `${engineMeta(this.engine).label} ${v}`, latencyMs: Date.now() - started };
     } catch (err: any) {
       return { ok: false, latencyMs: Date.now() - started, message: err.message };
     }

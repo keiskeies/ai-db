@@ -1,4 +1,56 @@
-export type Engine = 'sqlite' | 'mysql' | 'mariadb' | 'postgresql' | 'cockroachdb' | 'sqlserver' | 'oracle' | 'clickhouse';
+export type Engine =
+  | 'sqlite'
+  | 'mysql'
+  | 'mariadb'
+  | 'postgresql'
+  | 'cockroachdb'
+  | 'sqlserver'
+  | 'oracle'
+  | 'clickhouse'
+  | 'mongodb'
+  | 'redis'
+  | 'neo4j'
+  | 'kingbase'
+  | 'opengauss'
+  | 'gaussdb'
+  | 'oceanbase'
+  | 'tidb'
+  | 'polardb'
+  | 'tdsql'
+  | 'gbase8a'
+  | 'doris'
+  | 'starrocks'
+  | 'highgo'
+  | 'vastbase'
+  | 'ivorysql'
+  | 'greatsql'
+  | 'goldendb';
+
+/** 数据模型，决定对象树、编辑器语言和结果渲染方式。 */
+export type DataModel = 'relational' | 'document' | 'keyvalue' | 'vector' | 'graph' | 'widecolumn' | 'search' | 'timeseries';
+
+/** 驱动实现所用的线协议；同一协议可以被多个产品复用。 */
+export type Transport =
+  | 'sqlite-file'
+  | 'mysql'
+  | 'postgres'
+  | 'tds'
+  | 'oracle'
+  | 'clickhouse-http'
+  | 'mongodb'
+  | 'redis'
+  | 'bolt'
+  | 'qdrant-http'
+  | 'milvus-grpc'
+  | 'weaviate-http';
+
+/** SQL 方言；协议别名（金仓、TiDB 等）复用已有方言。 */
+export type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickhouse';
+
+export type QueryLanguage = 'sql' | 'mql' | 'redis' | 'cypher' | 'vector';
+
+export type DbObjectKind = 'table' | 'view' | 'collection' | 'key' | 'node_label' | 'edge_label' | 'vector_collection' | 'index';
+
 export type Environment = 'dev' | 'staging' | 'prod';
 export type PermissionMode = 'readonly' | 'ask' | 'auto' | 'full';
 export type Risk = 'read' | 'write' | 'ddl' | 'destructive';
@@ -76,6 +128,8 @@ export interface ForeignKeyInfo {
 export interface TableInfo {
   name: string;
   type: 'table' | 'view';
+  /** 非关系型对象的实际类型；缺省按 type 解释。 */
+  kind?: DbObjectKind;
   schema?: string;
   rowEstimate?: number;
   columns?: ColumnInfo[];
@@ -87,11 +141,39 @@ export interface TableInfo {
 export interface DatabaseSchema {
   name: string;
   tables: TableInfo[];
+  /** 非关系型引擎的通用对象列表；关系型引擎可继续只读 tables。 */
+  objects?: DbObject[];
+}
+
+export interface DbObjectStats {
+  rows?: number;
+  documents?: number;
+  keys?: number;
+  vectors?: number;
+  dimension?: number;
+  metric?: string;
+  ttlSeconds?: number;
+}
+
+/** 跨模型的对象描述：关系型表/视图、Mongo 集合、Redis 键、图标签等。 */
+export interface DbObject {
+  name: string;
+  kind: DbObjectKind;
+  schema?: string;
+  rowEstimate?: number;
+  columns?: ColumnInfo[];
+  indexes?: IndexInfo[];
+  foreignKeys?: ForeignKeyInfo[];
+  comment?: string;
+  stats?: DbObjectStats;
+  attributes?: Record<string, string | number | boolean>;
 }
 
 export interface ResultField {
   name: string;
   type?: string;
+  /** 非标量结果的前端渲染提示。 */
+  kind?: 'scalar' | 'json' | 'vector' | 'geometry';
 }
 
 export interface QueryResult {
@@ -104,6 +186,8 @@ export interface QueryResult {
   affected?: number;
   lastInsertId?: number | string;
   statement?: string;
+  /** 结果形态；缺省按 table 处理，非关系型引擎用它选择渲染器。 */
+  resultKind?: 'table' | 'documents' | 'keys' | 'graph' | 'vectors';
 }
 
 export interface QueryBatchResult {

@@ -7,6 +7,7 @@ import { keymap } from '@codemirror/view';
 import { MSSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql as sqlLang } from '@codemirror/lang-sql';
 import { AlignLeft, BarChart3, Bookmark, Database, Download, FileDown, FileUp, History, ListChecks, Play, Plus, Sparkles, Table2, TerminalSquare, Trash2, WandSparkles, Wrench } from 'lucide-react';
 import type { ConnectionConfig, QueryBatchResult } from '@aidb/core';
+import { engineMeta } from '@aidb/core';
 import { api } from '../lib/api';
 import { formatDuration } from '../lib/format';
 import { formatSql } from '../lib/sqlFormat';
@@ -33,10 +34,11 @@ const sqlHighlight = (dark: boolean) =>
   ]);
 
 function dialectFor(engine?: ConnectionConfig['engine']) {
-  if (engine === 'mysql' || engine === 'mariadb') return MySQL;
-  if (engine === 'postgresql' || engine === 'cockroachdb') return PostgreSQL;
-  if (engine === 'sqlserver') return MSSQL;
-  if (engine === 'oracle' || engine === 'clickhouse') return StandardSQL;
+  const dialect = engine ? engineMeta(engine).dialect : undefined;
+  if (dialect === 'mysql') return MySQL;
+  if (dialect === 'postgres') return PostgreSQL;
+  if (dialect === 'mssql') return MSSQL;
+  if (dialect === 'oracle' || dialect === 'clickhouse') return StandardSQL;
   return SQLite;
 }
 
@@ -50,6 +52,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const setActiveConnection = useApp((s) => s.setActiveConnection);
   const openTools = useApp((s) => s.openTools);
   const conn = connections.find((c) => c.id === tab.connectionId);
+  const isSql = conn ? engineMeta(conn.engine).languages.includes('sql') : true;
 
   const [sql, setSql] = useState(tab.sql);
   const [batch, setBatch] = useState<QueryBatchResult | null>(null);
@@ -71,12 +74,22 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | undefined>();
   const sqlRef = useRef(sql);
+  const tabIdRef = useRef(tab.id);
   const runRef = useRef<() => void>(() => undefined);
   const isDark = settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
+    if (tabIdRef.current !== tab.id) {
+      tabIdRef.current = tab.id;
+      sqlRef.current = tab.sql;
+      setSql(tab.sql);
+      setBatch(null);
+      setError(null);
+      setActiveSet(0);
+      setResultTab('results');
+    }
     const theme = EditorView.theme(
       {
         '&': { backgroundColor: 'var(--bg-app)', color: 'var(--text-primary)', height: '100%' },
@@ -156,7 +169,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const run = async () => {
     const text = currentSql().trim();
     if (!text) {
-      notify('warning', '请输入 SQL');
+      notify('warning', '请输入查询');
       return;
     }
     setRunning(true);
@@ -418,49 +431,65 @@ ${text}
       </div>
 
       <div className="toolbar query-actions">
-        <button className="btn small" onClick={saveSqlFile}>
-          <FileDown size={12} /> 保存
-        </button>
-        <button className="btn small" onClick={() => openTools('builder')} title="打开可视化查询构建器">
-          <Wrench size={12} /> 查询创建工具
-        </button>
-        <button className="btn small" onClick={format}>
-          <AlignLeft size={12} /> 美化 SQL
-        </button>
-        <button className="btn small" onClick={() => setResultTab('snippets')} title="SQL 代码段">
-          <Bookmark size={12} /> 代码段
-        </button>
-        <div className="sep" />
-        <button className="btn small" onClick={() => void explain()} disabled={running}>
-          <WandSparkles size={12} /> {t('explain')}
-        </button>
-        <button className="btn small ai" onClick={() => askCopilot('explain')} title="AI 解释执行计划">
-          <Sparkles size={12} /> AI 解释
-        </button>
-        <button className="btn small ai" onClick={() => askCopilot('optimize')} title="AI 优化 SQL 与索引">
-          <Sparkles size={12} /> AI 优化
-        </button>
+        {isSql ? (
+          <>
+            <button className="btn small" onClick={saveSqlFile}>
+              <FileDown size={12} /> 保存
+            </button>
+            <button className="btn small" onClick={() => openTools('builder')} title="打开可视化查询构建器">
+              <Wrench size={12} /> 查询创建工具
+            </button>
+            <button className="btn small" onClick={format}>
+              <AlignLeft size={12} /> 美化 SQL
+            </button>
+            <button className="btn small" onClick={() => setResultTab('snippets')} title="SQL 代码段">
+              <Bookmark size={12} /> 代码段
+            </button>
+            <div className="sep" />
+            <button className="btn small" onClick={() => void explain()} disabled={running}>
+              <WandSparkles size={12} /> {t('explain')}
+            </button>
+            <button className="btn small ai" onClick={() => askCopilot('explain')} title="AI 解释执行计划">
+              <Sparkles size={12} /> AI 解释
+            </button>
+            <button className="btn small ai" onClick={() => askCopilot('optimize')} title="AI 优化 SQL 与索引">
+              <Sparkles size={12} /> AI 优化
+            </button>
+          </>
+        ) : (
+          <span className="muted" style={{ fontSize: 11 }}>
+            {conn && engineMeta(conn.engine).languages.includes('mql')
+              ? 'MongoDB：使用 JSON 结构化查询（collection / op / filter / pipeline）'
+              : conn && engineMeta(conn.engine).languages.includes('cypher')
+                ? 'Neo4j：输入 Cypher，例如 MATCH (n) RETURN n LIMIT 100'
+                : 'Redis：输入单条命令，例如 SCAN 0 COUNT 100 或 HGETALL user:1'}
+          </span>
+        )}
         <div className="spacer" />
-        <button className="icon-btn" title="导出结果" onClick={() => void exportResult()}>
-          <Download size={13} />
-        </button>
-        <button className="icon-btn" title="执行整个脚本（允许多语句）" onClick={() => void runScript()} disabled={running}>
-          <ListChecks size={13} />
-        </button>
-        <button className="icon-btn" title="打开 SQL 文件" onClick={() => fileInputRef.current?.click()}>
-          <FileUp size={13} />
-        </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".sql,text/plain"
-          style={{ display: 'none' }}
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) void openSqlFile(file);
-            e.target.value = '';
-          }}
-        />
+        {isSql ? (
+          <>
+            <button className="icon-btn" title="导出结果" onClick={() => void exportResult()}>
+              <Download size={13} />
+            </button>
+            <button className="icon-btn" title="执行整个脚本（允许多语句）" onClick={() => void runScript()} disabled={running}>
+              <ListChecks size={13} />
+            </button>
+            <button className="icon-btn" title="打开 SQL 文件" onClick={() => fileInputRef.current?.click()}>
+              <FileUp size={13} />
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".sql,text/plain"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void openSqlFile(file);
+                e.target.value = '';
+              }}
+            />
+          </>
+        ) : null}
         <span className="kbd">Ctrl/⌘ + Enter</span>
       </div>
 

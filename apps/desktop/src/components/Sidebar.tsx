@@ -30,6 +30,7 @@ import {
   PanelLeftClose,
 } from 'lucide-react';
 import type { ConnectionConfig, DatabaseSchema, TableInfo } from '@aidb/core';
+import { engineMeta } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp, type ContextMenuItem } from '../store';
 import { TableOpsDialog, type TableDialogKind } from './TableOpsDialog';
@@ -152,9 +153,92 @@ export function Sidebar() {
     }
   };
 
+  const renderNonRelationalObject = (conn: ConnectionConfig, schema: DatabaseSchema, table: TableInfo, padding: number) => {
+    const meta = engineMeta(conn.engine);
+    const isMongo = meta.model === 'document';
+    const isGraph = meta.model === 'graph';
+    const isEdge = table.kind === 'edge_label';
+    const objectLabel = isMongo ? '集合' : isGraph ? (isEdge ? '关系类型' : '节点标签') : '键空间';
+    const openLabel = isMongo ? '打开集合' : isGraph ? (isEdge ? '打开关系类型' : '打开节点标签') : '浏览键';
+    const newQueryLabel = isMongo ? '新建 MQL 查询' : isGraph ? '新建 Cypher 查询' : '命令列';
+    const newQueryText = isMongo ? '' : isGraph ? 'MATCH (n) RETURN n LIMIT 100' : 'SCAN 0 COUNT 100';
+    const open = () => {
+      if (isMongo) {
+        openQuery(
+          conn.id,
+          JSON.stringify({ collection: table.name, op: 'find', filter: {}, limit: 100 }, null, 2),
+          table.name,
+          schema.name,
+        );
+      } else if (isGraph) {
+        const label = table.name.replace(/`/g, '``');
+        const text = isEdge
+          ? `MATCH ()-[r:\`${label}\`]->() RETURN r LIMIT 100`
+          : `MATCH (n:\`${label}\`) RETURN n LIMIT 100`;
+        openQuery(conn.id, text, table.name, schema.name);
+      } else {
+        openQuery(conn.id, 'SCAN 0 COUNT 100', `${meta.label} · ${schema.name}`, schema.name);
+      }
+    };
+    const items: ContextMenuItem[] = [
+      { label: openLabel, icon: <Database size={13} />, onClick: open },
+      {
+        label: newQueryLabel,
+        icon: <TerminalSquare size={13} />,
+        onClick: () => openQuery(conn.id, newQueryText, undefined, schema.name),
+      },
+      {
+        label: 'AI 解释此对象',
+        icon: <Sparkles size={13} />,
+        onClick: () =>
+          prefillAgent(
+            isMongo
+              ? `解释集合 ${table.name} 的字段、索引与典型用途，并给出 3 个 MQL 查询示例。`
+              : isGraph
+                ? `解释${objectLabel} ${table.name} 的属性和关系，并给出 3 个 Cypher 查询示例。`
+                : `总结 Redis 键空间 ${schema.name} 的键类型与常见前缀，并给出浏览与排查命令。`,
+          ),
+      },
+      { label: '', icon: null, sep: true, onClick: () => undefined },
+      { label: t('refresh'), icon: <RefreshCw size={13} />, onClick: () => void loadSchema(conn.id, true) },
+      {
+        label: t('copy'),
+        icon: <Copy size={13} />,
+        onClick: () => void navigator.clipboard.writeText(table.name).then(() => notify('success', t('copied'))),
+      },
+    ];
+    return (
+      <div
+        key={`${schema.name}.${table.name}`}
+        className="tree-node"
+        style={{ paddingLeft: padding }}
+        onClick={open}
+        onContextMenu={(e) => openMenu(e, items)}
+        title={`${objectLabel} ${table.name}`}
+      >
+        {isGraph ? <Network size={13} style={{ color: 'var(--accent)' }} /> : <Database size={13} style={{ color: 'var(--accent)' }} />}
+        <span className="node-label">{table.name}</span>
+        {table.rowEstimate !== undefined ? <span style={{ fontSize: 9.5, color: 'var(--text-muted)' }}>{table.rowEstimate}</span> : null}
+        <span className="node-actions">
+          <button
+            className="icon-btn"
+            title={openLabel}
+            onClick={(e) => {
+              e.stopPropagation();
+              open();
+            }}
+          >
+            <TerminalSquare size={12} />
+          </button>
+        </span>
+      </div>
+    );
+  };
+
   const renderTable = (conn: ConnectionConfig, schema: DatabaseSchema, table: TableInfo, padding: number) => {
     const q = query.trim().toLowerCase();
     if (q && !table.name.toLowerCase().includes(q)) return null;
+    if (engineMeta(conn.engine).model !== 'relational') return renderNonRelationalObject(conn, schema, table, padding);
     return (
       <div
         key={`${schema.name}.${table.name}`}
@@ -391,7 +475,32 @@ export function Sidebar() {
                                 if (willOpen && !loaded && !loading) void loadSchema(conn.id, false, schema.name);
                               }}
                               onContextMenu={(e) =>
-                                openMenu(e, [
+                                engineMeta(conn.engine).model !== 'relational'
+                                  ? openMenu(e, [
+                                      { label: '关闭数据库', icon: <FolderOpen size={13} />, onClick: () => toggleSchema(schemaKey) },
+                                      {
+                                        label: '新建查询',
+                                        icon: <TerminalSquare size={13} />,
+                                        onClick: () =>
+                                          openQuery(
+                                            conn.id,
+                                            engineMeta(conn.engine).languages.includes('mql')
+                                              ? '{\n  "collection": "",\n  "op": "find",\n  "filter": {}\n}'
+                                              : engineMeta(conn.engine).languages.includes('cypher')
+                                                ? 'MATCH (n) RETURN n LIMIT 100'
+                                                : 'SCAN 0 COUNT 100',
+                                            undefined,
+                                            schema.name,
+                                          ),
+                                      },
+                                      { label: t('refresh'), icon: <RefreshCw size={13} />, onClick: () => void loadSchema(conn.id, true) },
+                                      {
+                                        label: '复制名称',
+                                        icon: <Copy size={13} />,
+                                        onClick: () => void navigator.clipboard.writeText(schema.name).then(() => notify('success', t('copied'))),
+                                      },
+                                    ])
+                                  : openMenu(e, [
                                   { label: '关闭数据库', icon: <FolderOpen size={13} />, onClick: () => toggleSchema(schemaKey) },
                                   { label: '编辑数据库…', icon: <Pencil size={13} />, onClick: () => setDbDialog({ kind: 'rename', conn, database: schema.name }) },
                                   { label: '新建数据库…', icon: <Plus size={13} />, onClick: () => setDbDialog({ kind: 'create', conn, database: '' }) },
@@ -447,6 +556,45 @@ export function Sidebar() {
                                       const viewKey = `${schemaKey}:views`;
                                       const tablesOpen = groupOpen[tableKey] ?? true;
                                       const viewsOpen = groupOpen[viewKey] ?? false;
+                                      const model = engineMeta(conn.engine).model;
+                                      if (model !== 'relational') {
+                                        return (
+                                          <>
+                                            <div
+                                              className="tree-node folder-node"
+                                              style={{ paddingLeft: INDENT.folder }}
+                                              onClick={() => setGroupOpen((prev) => ({ ...prev, [tableKey]: !tablesOpen }))}
+                                            >
+                                              <ChevronRight size={12} className={`conn-toggle ${tablesOpen ? 'open' : ''}`} />
+                                              {model === 'graph' ? (
+                                                <Network size={13} style={{ color: 'var(--accent)' }} />
+                                              ) : (
+                                                <Database size={13} style={{ color: 'var(--accent)' }} />
+                                              )}
+                                              <span className="node-label">{model === 'document' ? '集合' : model === 'graph' ? '标签' : '键空间'}</span>
+                                              <span className="tree-count">{tables.length}</span>
+                                            </div>
+                                            {tablesOpen ? tables.map((table) => renderTable(conn, schema, table, INDENT.tableLeaf)) : null}
+                                            <div
+                                              className="tree-node obj-node"
+                                              style={{ paddingLeft: INDENT.folderLeaf }}
+                                              onClick={() =>
+                                                openQuery(
+                                                  conn.id,
+                                                  model === 'document'
+                                                    ? '{\n  "collection": "",\n  "op": "find",\n  "filter": {}\n}'
+                                                    : model === 'graph'
+                                                      ? 'MATCH (n) RETURN n LIMIT 100'
+                                                      : 'SCAN 0 COUNT 100',
+                                                )
+                                              }
+                                            >
+                                              <TerminalSquare size={13} style={{ color: 'var(--text-muted)' }} />
+                                              <span className="node-label">查询</span>
+                                            </div>
+                                          </>
+                                        );
+                                      }
                                       return (
                                         <>
                                           <div className="tree-node folder-node" style={{ paddingLeft: INDENT.folder }} onClick={() => setGroupOpen((prev) => ({ ...prev, [tableKey]: !tablesOpen }))}>

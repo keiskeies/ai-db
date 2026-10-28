@@ -171,7 +171,7 @@ test('compressSchema gives annotated tables priority for the column-detail budge
 
 test('compressSchema keeps its not-loaded placeholder regardless of bundle', () => {
   const bundle = bundleAgentContext([entry({ kind: 'table', table: 'x', enabled: false })], {});
-  const text = '(schema not loaded yet — call inspect_schema or search_objects before writing SQL)';
+  const text = '(schema not loaded yet — call inspect_schema or search_objects before querying)';
   assert.equal(compressSchema(undefined, [], 15, bundle), text);
   assert.equal(compressSchema([], [], 15, bundle), text);
 });
