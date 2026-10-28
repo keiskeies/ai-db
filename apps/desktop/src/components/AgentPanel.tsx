@@ -109,7 +109,7 @@ function MiniTable({ data, max = 8 }: { data: { columns?: Array<{ name: string }
   );
 }
 
-function ResultView({ result, onOpenEditor, showChart = true }: { result: ToolResult; onOpenEditor?: (sql: string) => void; showChart?: boolean }) {
+function ResultView({ result, onOpenEditor, showChart = true, chartMaxHeight }: { result: ToolResult; onOpenEditor?: (sql: string) => void; showChart?: boolean; chartMaxHeight?: number }) {
   const data = result.data as Record<string, any> | undefined;
   const sql = typeof data?.sql === 'string' ? data.sql : undefined;
   const chartData = data?.chart as ChartSpec | undefined;
@@ -184,6 +184,7 @@ function ResultView({ result, onOpenEditor, showChart = true }: { result: ToolRe
             <ChartView
               chart={chart}
               onOpenEditor={onOpenEditor}
+              maxHeight={chartMaxHeight}
               onExportCsv={chartSql && connectionId ? () => void exportCsv() : undefined}
             />
           ) : null}
@@ -585,11 +586,23 @@ export function AgentPanel() {
   const [pending, setPending] = useState<StoredAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [transcriptHeight, setTranscriptHeight] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const activeConnection = connections.find((c) => c.id === activeConnectionId);
   const tables = useMemo(() => (schemas ?? []).flatMap((s) => s.tables), [schemas]);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => setTranscriptHeight(el.clientHeight));
+    observer.observe(el);
+    setTranscriptHeight(el.clientHeight);
+    return () => observer.disconnect();
+  }, []);
+
+  // 图表固定 350px；窗口太矮时只缩不涨，留出卡片头/工具条的位置
+  const chartMaxHeight = Math.max(140, (transcriptHeight || 560) - 96);
   const busy = live?.status === 'streaming' || live?.status === 'awaiting';
   const profile = getModelProfile(settings.agent);
   const tierLevels = profile?.reasoning ? [...new Set((profile.reasoningTiers ?? []).map((tier) => tier.level))] : [];
@@ -746,7 +759,7 @@ export function AgentPanel() {
         {message.content ? <Markdown>{message.content}</Markdown> : null}
         {artifacts.map((artifact) => (
           <div className="agent-chart" data-testid="agent-chart" key={artifact.key}>
-            <ResultView result={artifact.result} onOpenEditor={(sql) => openQuery(undefined, sql)} />
+            <ResultView result={artifact.result} chartMaxHeight={chartMaxHeight} onOpenEditor={(sql) => openQuery(undefined, sql)} />
           </div>
         ))}
         {toolCount ? (
@@ -919,7 +932,7 @@ export function AgentPanel() {
                 .filter((tool) => (tool.result?.data as Record<string, any> | undefined)?.chart)
                 .map((tool) => (
                   <div className="agent-chart" data-testid="agent-chart" key={`art_${tool.callId}`}>
-                    <ResultView result={tool.result!} onOpenEditor={(sql) => openQuery(undefined, sql)} />
+                    <ResultView result={tool.result!} chartMaxHeight={chartMaxHeight} onOpenEditor={(sql) => openQuery(undefined, sql)} />
                   </div>
                 ))}
               {live.error ? <div className="risk-banner">{live.error}</div> : null}

@@ -327,7 +327,9 @@ body {
 }
 .chart-head { display: flex; align-items: center; gap: 6px; font-size: 10.5px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
 .chart-head .badge { margin-left: auto; }
-.chart-svg { width: 100%; height: auto; display: block; overflow: visible; }
+.chart-svg { width: 100%; height: auto; max-height: min(400px, 55vh); display: block; overflow: visible; }
+/* 双保险：Agent 面板里任何路径渲染的图表都不允许超过 350（含历史消息、工具卡内嵌） */
+.agent-panel .chart-svg { max-height: min(350px, max(200px, calc(100dvh - 420px))); }
 .chart-grid { stroke: var(--border-subtle); stroke-width: 1; stroke-dasharray: 2 4; }
 .chart-axis { fill: var(--text-muted); font-size: 8px; font-family: var(--font-mono); }
 .chart-foot { display: flex; align-items: center; gap: 6px; font-size: 8.5px; color: var(--text-muted); margin-top: 3px; }

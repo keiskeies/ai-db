@@ -248,6 +248,13 @@ await page.waitForTimeout(150);
 await page.locator('.result-tab').filter({ hasText: '图表' }).click();
 await page.waitForSelector('.query-chart-panel .chart-card', { timeout: 10000 });
 check('query result renders a chart tab', true);
+// 宽窗口下图表要收缩到 400px 以内，不能把窗口撑出滚动条
+await page.setViewportSize({ width: 1920, height: 900 });
+await page.waitForTimeout(500);
+const wideChart = await page.locator('.query-chart-panel [data-testid="chart-svg"]').boundingBox();
+check('chart height caps at 400px on a wide window', Boolean(wideChart) && wideChart.height <= 400.5 && wideChart.height <= 900 * 0.6, wideChart ? `${Math.round(wideChart.width)}x${Math.round(wideChart.height)}` : 'no chart');
+await page.setViewportSize({ width: 1440, height: 900 });
+await page.waitForTimeout(400);
 await page.screenshot({ path: join(shots, 'desktop-query-chart.png') });
 
 await page.getByRole('button', { name: /AI 优化/ }).click();
@@ -283,6 +290,29 @@ const execSections = page.locator('[data-testid="execution-section"]');
 const lastExec = execSections.last();
 check('execution steps fold away by default', (await lastExec.evaluate((el) => el.hasAttribute('open'))) === false);
 check('chart is hoisted into the conclusion, not nested in a tool card', (await page.locator('.tool-card [data-testid="chart-card"]').count()) === 0 && (await page.locator('[data-testid="agent-chart"]').count()) > 0);
+
+const settledChart = await page.locator('[data-testid="agent-chart"] [data-testid="chart-svg"]').boundingBox();
+check('agent chart is a stable 350px tall', Boolean(settledChart) && Math.abs(settledChart.height - 350) <= 1, settledChart ? `${Math.round(settledChart.width)}x${Math.round(settledChart.height)}` : 'no chart');
+
+// 图表高度要压在可见聊天区之内：先把 AI 面板拖宽，再压矮窗口
+const agentSplit = await page.locator('[data-testid="splitter-agent"]').boundingBox();
+await page.mouse.move(agentSplit.x + 2, agentSplit.y + 200);
+await page.mouse.down();
+await page.mouse.move(agentSplit.x - 300, agentSplit.y + 200, { steps: 8 });
+await page.mouse.up();
+await page.waitForTimeout(300);
+await page.setViewportSize({ width: 1440, height: 620 });
+await page.waitForTimeout(700);
+const shortTranscript = await page.locator('.agent-transcript').evaluate((el) => el.clientHeight);
+const shortChart = await page.locator('[data-testid="agent-chart"] [data-testid="chart-svg"]').boundingBox();
+check(
+  'agent chart shrinks into the visible transcript',
+  Boolean(shortChart) && shortChart.height <= shortTranscript && shortChart.height <= 400,
+  shortChart ? `${Math.round(shortChart.width)}x${Math.round(shortChart.height)} in ${shortTranscript}` : 'no chart',
+);
+await page.setViewportSize({ width: 1440, height: 900 });
+await page.locator('[data-testid="splitter-agent"]').dblclick();
+await page.waitForTimeout(600);
 await page.screenshot({ path: join(shots, 'desktop-chart.png') });
 
 // ---------------- P3 图表三 tab / 工具条 / PNG ----------------

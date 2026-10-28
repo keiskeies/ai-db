@@ -1,4 +1,4 @@
-import { useRef, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowUpRight, X } from 'lucide-react';
 import { useApp, type ContextMenuItem } from '../store';
@@ -35,9 +35,11 @@ export interface ChartViewProps {
   y?: string;
   onX?: (value: string) => void;
   onY?: (value: string) => void;
+  /** 可用高度上限（px）：Agent 面板按可见聊天区传入，缺省按窗口比例 */
+  maxHeight?: number;
 }
 
-export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, zoomed = false, onExportCsv, onTypeChange, columns, x, y, onX, onY }: ChartViewProps) {
+export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, zoomed = false, onExportCsv, onTypeChange, columns, x, y, onX, onY, maxHeight }: ChartViewProps) {
   const [localType, setLocalType] = useState<ChartType>(chart.type);
   const [exporting, setExporting] = useState(false);
   const [zoomOpen, setZoomOpen] = useState(false);
@@ -69,7 +71,7 @@ export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, z
   const body = type === 'pie' ? (
     <PieBody chart={chart} maxPoints={maxPoints} />
   ) : (
-    <AxisBody chart={chart} type={type} maxPoints={maxPoints} zoomed={zoomed} svgRef={svgRef} />
+    <AxisBody chart={chart} type={type} maxPoints={maxPoints} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} />
   );
 
   return (
@@ -153,10 +155,37 @@ interface AxisBodyProps {
   maxPoints: number;
   zoomed: boolean;
   svgRef: RefObject<SVGSVGElement>;
+  maxHeight?: number;
 }
 
-function AxisBody({ chart, type, maxPoints, zoomed, svgRef }: AxisBodyProps) {
+function useElementWidth(ref: RefObject<Element>, fallback: number): number {
+  const [width, setWidth] = useState(fallback);
+  useEffect(() => {
+    const measure = () => {
+      const next = Math.round(ref.current?.getBoundingClientRect().width ?? 0);
+      if (next > 0) setWidth(next);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    if (ref.current) observer.observe(ref.current);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [ref]);
+  return width;
+}
+
+/** 图表高度上限：不超过 400px，也不超过窗口可视高度的一半左右。 */
+function chartHeightCap(): number {
+  const viewport = typeof window === 'undefined' ? 800 : window.innerHeight;
+  return Math.max(160, Math.min(400, Math.round(viewport * 0.55)));
+}
+
+function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBodyProps) {
   const id = useStableId();
+  const measured = useElementWidth(svgRef, zoomed ? 720 : 380);
   const history = chart.series.slice(0, maxPoints);
   const forecast = type === 'line' ? (chart.forecast ?? []).slice(0, 12) : [];
   const all = [...history, ...forecast.map((p) => ({ label: p.label, value: p.value }))];
@@ -167,8 +196,15 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef }: AxisBodyProps) {
     return <div className="dash-empty" data-testid="chart-empty">没有可绘制的数据点（结果集为空或全为 NULL）。</div>;
   }
 
-  const width = zoomed ? 720 : 380;
-  const height = zoomed ? 320 : 176;
+  // viewBox 用容器实际像素宽：1:1 渲染，文字更清晰。
+  // Agent 面板给的是固定高度（350，窗口太矮时只缩不涨）；QueryView 仍随宽度增长，封顶 400。
+  const width = zoomed ? 720 : Math.max(260, Math.round(measured));
+  const naturalHeight = Math.round(width * (zoomed ? 320 / 720 : 176 / 380));
+  const height = zoomed
+    ? 320
+    : maxHeight !== undefined
+      ? Math.max(140, Math.min(350, maxHeight))
+      : Math.max(140, Math.min(chartHeightCap(), naturalHeight));
   const pad = { left: 42, right: 12, top: 12, bottom: 28 };
   const innerW = width - pad.left - pad.right;
   const innerH = height - pad.top - pad.bottom;
@@ -239,12 +275,13 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef }: AxisBodyProps) {
             const bottom = y(Math.min(point.value, 0));
             // 分类少时每根柱一个定性色（和饼图同一套），超过色板长度就退回单色，避免循环撞色
             const fill = history.length <= COLORS.length ? COLORS[index % COLORS.length] : COLORS[0];
+            const barWidth = Math.min(band * 0.6, 72);
             return (
               <rect
                 key={`${point.label}-${index}`}
-                x={pad.left + band * index + band * 0.2}
+                x={pad.left + band * index + (band - barWidth) / 2}
                 y={top}
-                width={band * 0.6}
+                width={barWidth}
                 height={Math.max(1, bottom - top)}
                 rx={2}
                 fill={fill}
