@@ -1,3 +1,4 @@
+import { listenRandom } from './helpers';
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -18,7 +19,7 @@ const gateway = await createGateway({
   host: '127.0.0.1',
   production: false,
 });
-await new Promise<void>((resolve) => gateway.server.listen(0, '127.0.0.1', () => resolve()));
+await listenRandom(gateway.server);
 const base = `http://127.0.0.1:${(gateway.server.address() as AddressInfo).port}`;
 
 after(async () => {

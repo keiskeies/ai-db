@@ -1,3 +1,4 @@
+import { listenRandom } from './helpers';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -25,7 +26,7 @@ test('pgvector search and embedding work through the HTTP pipeline', { skip: !PG
       res.end(JSON.stringify({ data: [{ embedding: [1, 0, 0] }] }));
     });
   });
-  await new Promise<void>((resolve) => embeddingServer.listen(0, '127.0.0.1', () => resolve()));
+  await listenRandom(embeddingServer);
   const embeddingPort = (embeddingServer.address() as AddressInfo).port;
 
   const home = mkdtempSync(join(tmpdir(), 'aidb-pgvector-http-'));
@@ -44,7 +45,7 @@ test('pgvector search and embedding work through the HTTP pipeline', { skip: !PG
     host: '127.0.0.1',
     production: false,
   });
-  await new Promise<void>((resolve) => gateway.server.listen(0, '127.0.0.1', () => resolve()));
+  await listenRandom(gateway.server);
   const port = (gateway.server.address() as AddressInfo).port;
   const headers = { 'content-type': 'application/json', authorization: 'Bearer it-token' };
   const api = async <T = any>(path: string, init: RequestInit = {}): Promise<{ status: number; body: T }> => {

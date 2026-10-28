@@ -1,3 +1,4 @@
+import { listenRandom } from './helpers';
 import test, { after, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
@@ -168,7 +169,7 @@ async function harness() {
     host: '127.0.0.1',
     production: false,
   });
-  await new Promise<void>((resolve) => gateway.server.listen(0, '127.0.0.1', () => resolve()));
+  await listenRandom(gateway.server);
   const port = (gateway.server.address() as AddressInfo).port;
   const headers = { 'content-type': 'application/json', authorization: 'Bearer it-token' };
   const api = async <T = any>(path: string, init: RequestInit = {}): Promise<{ status: number; body: T }> => {
