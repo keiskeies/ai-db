@@ -120,6 +120,11 @@ check('titlebar collapses the connection sidebar', (await page.locator('.sidebar
 await page.click('[data-testid="toggle-sidebar"]');
 await page.waitForTimeout(250);
 check('sidebar toggles back', (await page.locator('.sidebar').count()) === 1);
+await page.click('[data-testid="sidebar-collapse"]');
+await page.waitForTimeout(200);
+check('sidebar hides from its own header button', (await page.locator('.sidebar').count()) === 0);
+await page.click('[data-testid="toggle-sidebar"]');
+await page.waitForTimeout(250);
 const splitBox = await page.locator('[data-testid="splitter-sidebar"]').boundingBox();
 await page.mouse.move(splitBox.x + 2, splitBox.y + 60);
 await page.mouse.down();

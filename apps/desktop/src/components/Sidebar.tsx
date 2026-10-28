@@ -27,6 +27,7 @@ import {
   Info,
   KeyRound,
   Upload,
+  PanelLeftClose,
 } from 'lucide-react';
 import type { ConnectionConfig, DatabaseSchema, TableInfo } from '@aidb/core';
 import { api } from '../lib/api';
@@ -80,6 +81,7 @@ export function Sidebar() {
   const openTools = useApp((s) => s.openTools);
   const setSettingsOpen = useApp((s) => s.setSettingsOpen);
   const openContextMenu = useApp((s) => s.openContextMenu);
+  const toggleSidebar = useApp((s) => s.toggleSidebar);
 
   const [query, setQuery] = useState('');
   const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>({});
@@ -269,9 +271,14 @@ export function Sidebar() {
       <div className="sidebar-head">
         <div className="sidebar-title">
           <span>{t('connections')}</span>
-          <button className="icon-btn" title={t('newConnection')} onClick={() => openConnectionEditor('new')}>
-            <Plus size={14} />
-          </button>
+          <div className="row gap-4">
+            <button className="icon-btn" title={t('newConnection')} onClick={() => openConnectionEditor('new')}>
+              <Plus size={14} />
+            </button>
+            <button className="icon-btn" title="隐藏连接栏 (⌘B)" data-testid="sidebar-collapse" onClick={toggleSidebar}>
+              <PanelLeftClose size={14} />
+            </button>
+          </div>
         </div>
         <div className="search-box">
           <Search size={13} />
