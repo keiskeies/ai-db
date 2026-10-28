@@ -116,6 +116,15 @@ export function supportsKeyDetail(driver: Driver): driver is RedisKeyDriver {
   return typeof (driver as RedisKeyDriver).describeKey === 'function';
 }
 
+/** 时序引擎的行协议写入入口（InfluxDB v3 的 SQL 只读）。 */
+export interface LineProtocolDriver extends Driver {
+  writeLineProtocol(lines: string[], database?: string, timeoutMs?: number): Promise<{ written: number }>;
+}
+
+export function supportsLineProtocol(driver: Driver): driver is LineProtocolDriver {
+  return typeof (driver as LineProtocolDriver).writeLineProtocol === 'function';
+}
+
 /** 文档型驱动的结构化索引管理：不走 SQL DDL。 */
 export interface CollectionIndexInput {
   collection: string;

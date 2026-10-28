@@ -232,6 +232,8 @@ export const api = {
     request<{ result: { key: string; type: string; ttl: number } }>('/redis/key/create', { method: 'POST', body: JSON.stringify(body) }),
   setRedisKeyValue: (body: { connectionId: string; database?: string; key: string; value: string }) =>
     request<{ result: { key: string; type: string; ttl: number } }>('/redis/key/value', { method: 'POST', body: JSON.stringify(body) }),
+  writeLineProtocol: (body: { connectionId: string; database?: string; lines: string[] }) =>
+    request<{ result: { written: number } }>('/influx/write', { method: 'POST', body: JSON.stringify(body) }),
   renameKey: (body: { connectionId: string; database?: string; key: string; to: string }) =>
     request<{ result: { from: string; to: string } }>('/redis/key/rename', { method: 'POST', body: JSON.stringify(body) }),
   deleteRedisKeys: (body: { connectionId: string; database?: string; keys: string[] }) =>

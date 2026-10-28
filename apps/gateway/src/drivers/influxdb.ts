@@ -226,6 +226,32 @@ export class InfluxdbDriver implements Driver {
     return this.run(bindPositional(sql, params), opts);
   }
 
+  /**
+   * 行协议写入：v3 的 SQL 接口只读，写必须走 /api/v3/write_lp（纯文本 body），
+   * 所以不能复用强制 JSON 的 send()。
+   */
+  async writeLineProtocol(lines: string[], database?: string, timeoutMs = 30000): Promise<{ written: number }> {
+    const payload = lines.map((line) => line.trim()).filter(Boolean);
+    if (!payload.length) throw new DbError('行协议内容不能为空', { code: 'INFLUXDB_WRITE' });
+    const db = database || this.opts.database || 'aidb';
+    let response: Response;
+    try {
+      response = await fetch(`${this.base()}/api/v3/write_lp?db=${encodeURIComponent(db)}&precision=nanosecond`, {
+        method: 'POST',
+        headers: { 'content-type': 'text/plain', ...(this.opts.token ? { authorization: `Bearer ${this.opts.token}` } : {}) },
+        body: payload.join('\n'),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (err: any) {
+      throw new DbError(`InfluxDB 请求失败：${err?.message ?? '网络错误'}`, { code: 'INFLUXDB_NETWORK' });
+    }
+    if (!response.ok) {
+      const detail = (await response.text().catch(() => '')).trim();
+      throw new DbError(detail || `InfluxDB 写入失败：HTTP ${response.status}`, { code: `INFLUXDB_${response.status}` });
+    }
+    return { written: payload.length };
+  }
+
   async close(): Promise<void> {
     /* fetch has no persistent connection */
   }

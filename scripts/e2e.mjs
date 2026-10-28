@@ -1117,7 +1117,21 @@ if (INFLUXDB_PORT) {
   await page.click('[title="TABLE cpu"]');
   await page.waitForSelector('[data-testid="data-grid"] tbody tr', { timeout: 20000 });
   const influxRows = await page.locator('[data-testid="data-grid"] tbody tr').count();
-  check('InfluxDB data grid returns rows', influxRows === 2, `${influxRows} rows`);
+  // 时序库是追加写且 InfluxDB 3 不支持 DELETE，容器里的样本会跨轮累积，故只断言至少两行。
+  check('InfluxDB data grid returns rows', influxRows >= 2, `${influxRows} rows`);
+
+  await page.click('[data-testid="open-line-protocol"]');
+  await page.waitForSelector('[data-testid="line-protocol-input"]', { timeout: 10000 });
+  await page.fill('[data-testid="line-protocol-input"]', 'cpu,host=ui value=9.5 1700000120000000000');
+  await page.click('[data-testid="line-protocol-submit"]');
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
+  await page.click('[data-testid="data-refresh"]');
+  await page.waitForFunction(
+    () => document.querySelector('[data-testid="data-grid"]')?.innerText.includes('ui'),
+    null,
+    { timeout: 25000 },
+  );
+  check('InfluxDB line-protocol write adds a sample', true);
 }
 
 if (DUCKDB_E2E) {

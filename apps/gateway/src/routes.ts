@@ -769,6 +769,47 @@ export function createApiRouter(deps: ApiDeps): Router {
   );
 
   router.post(
+    '/influx/write',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const connectionId = str(body.connectionId);
+      if (!connectionId) throw Object.assign(new Error('connectionId 必填'), { code: 'INVALID_INPUT', status: 400 });
+      const raw = typeof body.lines === 'string' ? body.lines.split(/\r?\n/) : Array.isArray(body.lines) ? body.lines.map(String) : [];
+      const lines = raw.map((line) => line.trim()).filter(Boolean);
+      if (!lines.length) throw Object.assign(new Error('lines 需要至少一行行协议'), { code: 'INVALID_INPUT', status: 400 });
+      const database = str(body.database);
+      try {
+        const result = await manager.writeLineProtocol(connectionId, lines, { database, actor: 'user' });
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'influx.write',
+          sql: `write_lp ${result.written} 行`,
+          risk: 'write',
+          approval: 'manual',
+          status: 'ok',
+          meta: { written: result.written },
+        });
+        res.json({ result });
+      } catch (err: any) {
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'influx.write',
+          sql: `write_lp ${lines.length} 行`,
+          risk: 'write',
+          approval: 'manual',
+          status: 'error',
+          meta: { error: err.message },
+        });
+        throw err;
+      }
+    }),
+  );
+
+  router.post(
     '/redis/key/value',
     ah(async (req, res) => {
       const body = obj(req.body, 'body');

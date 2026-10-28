@@ -21,6 +21,7 @@ import {
   searchQueryFromArgs,
   splitStatements,
   vectorQueryFromArgs,
+  writesLineProtocol,
   type AppSettings,
   type AqlQuery,
   type ConnectionConfig,
@@ -42,7 +43,7 @@ import type { GatewayConfig } from './config';
 import { createDriver, DbError, type Driver } from './drivers';
 import { normalizeMql } from './drivers/mongodb';
 import type { CreateRedisKeyInput, RedisKeyDriver } from './drivers/types';
-import { supportsCollectionIndexes, supportsDocumentRead, supportsDocumentWrite, supportsFieldAdd, supportsKeyDetail, supportsObjectCreate, supportsStructuredQuery, supportsVectorSearch } from './drivers/types';
+import { supportsCollectionIndexes, supportsDocumentRead, supportsDocumentWrite, supportsFieldAdd, supportsKeyDetail, supportsLineProtocol, supportsObjectCreate, supportsStructuredQuery, supportsVectorSearch } from './drivers/types';
 import { embedText } from './embeddings';
 import type { Store } from './store';
 
@@ -628,6 +629,34 @@ export class ConnectionManager {
       connectionId,
       database: opts.database ?? conn.database,
       sql: JSON.stringify({ setKeyValue: { key: result.key } }),
+      status: 'ok',
+      durationMs: Date.now() - started,
+    });
+    return result;
+  }
+
+  /** 时序引擎的行协议写入（InfluxDB v3 的 SQL 只读，写走 /api/v3/write_lp）。 */
+  async writeLineProtocol(connectionId: string, lines: string[], opts: QueryOptions): Promise<{ written: number }> {
+    const conn = this.store.getConnection(connectionId);
+    if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+    const meta = engineMeta(conn.engine);
+    if (conn.readonly) {
+      throw new DbError('只读连接不允许写入', { code: 'READONLY', status: 403, hint: '在连接设置中关闭只读后才可写入' });
+    }
+    if (!writesLineProtocol(conn.engine)) {
+      throw new DbError(`${meta.label} 没有行协议写入入口`, { code: 'UNSUPPORTED_ENGINE' });
+    }
+    const driver = await this.driverFor(connectionId);
+    if (!supportsLineProtocol(driver)) {
+      throw new DbError(`${meta.label} 驱动不支持行协议写入`, { code: 'UNSUPPORTED_ENGINE' });
+    }
+    const started = Date.now();
+    const result = await driver.writeLineProtocol(lines, opts.database ?? conn.database, opts.timeoutMs);
+    this.invalidate(connectionId);
+    this.store.addHistory({
+      connectionId,
+      database: opts.database ?? conn.database,
+      sql: `write_lp ${result.written} 行`,
       status: 'ok',
       durationMs: Date.now() - started,
     });

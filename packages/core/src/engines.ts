@@ -23,6 +23,8 @@ export interface EngineCapabilities {
   fieldAdd?: boolean;
   /** 结果网格可双击整条记录读取并写回（驱动实现了 DocumentReadDriver）。 */
   recordEdit?: boolean;
+  /** 可按时序行协议写入（InfluxDB v3 的 SQL 只读，写入走 /api/v3/write_lp）。 */
+  lineProtocolWrite?: boolean;
 }
 
 export interface EngineMeta {
@@ -563,6 +565,7 @@ export const ENGINES: EngineMeta[] = [
       backup: 'none',
       gridEdit: false,
       users: false,
+      lineProtocolWrite: true,
     },
     defaultPort: 8086,
     defaultUsername: '',
@@ -981,6 +984,11 @@ export function addField(engine: Engine): boolean {
 /** 结果网格能否双击打开整条记录编辑（先读回原文再整体写回）。 */
 export function editsRecords(engine: Engine): boolean {
   return engineMeta(engine).capabilities.recordEdit === true;
+}
+
+/** 该引擎能否按时序行协议写入（InfluxDB v3 的 SQL 只读）。 */
+export function writesLineProtocol(engine: Engine): boolean {
+  return engineMeta(engine).capabilities.lineProtocolWrite === true;
 }
 
 /** 追加字段时可选的类型；不支持的引擎返回空数组。 */

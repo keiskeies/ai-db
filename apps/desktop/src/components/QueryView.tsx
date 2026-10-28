@@ -7,7 +7,7 @@ import { keymap } from '@codemirror/view';
 import { MSSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql as sqlLang } from '@codemirror/lang-sql';
 import { AlignLeft, BarChart3, Bookmark, Database, Download, FileDown, FilePlus, FileUp, History, ListChecks, Network, Play, Plus, Sparkles, Table2, TerminalSquare, Trash2, WandSparkles, Wrench } from 'lucide-react';
 import type { ConnectionConfig, QueryBatchResult } from '@aidb/core';
-import { engineMeta, editsRecords, writesDocuments } from '@aidb/core';
+import { engineMeta, editsRecords, writesDocuments, writesLineProtocol } from '@aidb/core';
 import { api } from '../lib/api';
 import { formatDuration } from '../lib/format';
 import { formatSql } from '../lib/sqlFormat';
@@ -20,6 +20,7 @@ import { DocumentWritePanel } from './DocumentWritePanel';
 import { DocumentEditDialog } from './DocumentEditDialog';
 import { RedisKeyDialog } from './RedisKeyDialog';
 import { RedisKeyCreateDialog } from './RedisKeyCreateDialog';
+import { LineProtocolPanel } from './LineProtocolPanel';
 import { Spinner } from './ui';
 
 type QueryTab = Extract<Tab, { kind: 'query' }>;
@@ -89,10 +90,12 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const canVector = conn ? engineMeta(conn.engine).model === 'vector' || engineMeta(conn.engine).dialect === 'postgres' : false;
   const canWriteDocuments = conn ? writesDocuments(conn.engine) : false;
   const canEditRecords = conn ? editsRecords(conn.engine) : false;
+  const canLineProtocol = conn ? writesLineProtocol(conn.engine) : false;
   const [vectorOpen, setVectorOpen] = useState(false);
   const [writeOpen, setWriteOpen] = useState(false);
   const [keyDialog, setKeyDialog] = useState<string | null>(null);
   const [keyCreateOpen, setKeyCreateOpen] = useState(false);
+  const [lineOpen, setLineOpen] = useState(false);
   const [docEdit, setDocEdit] = useState<{ collection: string; id: string } | null>(null);
 
   const [sql, setSql] = useState(tab.sql);
@@ -532,6 +535,11 @@ ${text}
             <Plus size={12} /> 新建键
           </button>
         ) : null}
+        {canLineProtocol && conn && !conn.readonly ? (
+          <button className="btn small ai" onClick={() => setLineOpen(true)} data-testid="open-line-protocol">
+            <FilePlus size={12} /> 写入行协议
+          </button>
+        ) : null}
         <button className="icon-btn" title="导出当前语句结果（CSV）" onClick={() => void exportResult()} data-testid="query-export">
           <Download size={13} />
         </button>
@@ -767,6 +775,14 @@ ${text}
           database={tab.database}
           onCreated={() => void run()}
           onClose={() => setKeyCreateOpen(false)}
+        />
+      ) : null}
+      {lineOpen && conn ? (
+        <LineProtocolPanel
+          connection={conn}
+          database={tab.database}
+          onDone={() => void run()}
+          onClose={() => setLineOpen(false)}
         />
       ) : null}
       {docEdit && conn ? (

@@ -17,10 +17,11 @@ import {
   Wrench,
   X,
 } from 'lucide-react';
-import { quoteIdent, quoteLiteral, type TableInfo } from '@aidb/core';
+import { quoteIdent, quoteLiteral, writesLineProtocol, type TableInfo } from '@aidb/core';
 import { api, type DataPage } from '../lib/api';
 import { useApp, type Tab } from '../store';
 import { DataGrid } from './DataGrid';
+import { LineProtocolPanel } from './LineProtocolPanel';
 import { EmptyState, Modal } from './ui';
 import { formatDuration } from '../lib/format';
 
@@ -90,6 +91,8 @@ export function DataView({ tab }: { tab: DataTab }) {
 
   const pkColumns = useMemo(() => (tableInfo?.columns ?? []).filter((c) => c.primaryKey), [tableInfo]);
   const canEdit = pkColumns.length > 0;
+  const canLineProtocol = conn ? writesLineProtocol(conn.engine) : false;
+  const [lineOpen, setLineOpen] = useState(false);
 
   const [page, setPage] = useState<DataPage | null>(null);
   const [loading, setLoading] = useState(false);
@@ -505,6 +508,11 @@ export function DataView({ tab }: { tab: DataTab }) {
         <button className="icon-btn" title={t('refresh')} onClick={() => { setRefreshKey((k) => k + 1); void loadSchema(tab.connectionId, true, tab.database); }} data-testid="data-refresh">
           <RefreshCw size={14} />
         </button>
+        {canLineProtocol && conn && !conn.readonly ? (
+          <button className="btn small ai" onClick={() => setLineOpen(true)} data-testid="open-line-protocol">
+            <Upload size={12} /> 写入行协议
+          </button>
+        ) : null}
         <div className="sep" />
         <div className="row gap-4">
           <Filter size={12} className="muted" />
@@ -934,6 +942,14 @@ export function DataView({ tab }: { tab: DataTab }) {
             />
           </div>
         </Modal>
+      ) : null}
+      {lineOpen && conn ? (
+        <LineProtocolPanel
+          connection={conn}
+          database={tab.database}
+          onDone={() => setRefreshKey((k) => k + 1)}
+          onClose={() => setLineOpen(false)}
+        />
       ) : null}
     </div>
   );
