@@ -1623,6 +1623,27 @@ await page.waitForTimeout(900);
 const legacyXlsResult = await api(`/data?connectionId=${demo.id}&table=orders&limit=5&where=${encodeURIComponent("channel='legacy-xls-e2e'")}`);
 check('legacy XLS import inserts a row', legacyXlsResult.status === 200 && legacyXlsResult.body.total >= 1, `total=${legacyXlsResult.body?.total}`);
 
+await page.selectOption('[data-testid="data-page-size"]', '500');
+await page.waitForFunction(() => (document.querySelector('.grid-foot')?.textContent ?? '').includes('1-500'), null, { timeout: 20000 });
+await page.evaluate(() => {
+  let el = document.querySelector('[data-testid="data-grid"]');
+  while (el && el !== document.body) {
+    if (el.scrollHeight > el.clientHeight + 10) el.scrollTop = el.scrollHeight;
+    el = el.parentElement;
+  }
+});
+await page.waitForSelector('[data-testid="grid-row-499"]', { timeout: 15000 });
+check('windowed data grid reaches the last row of a 500-row page', true);
+await page.locator('[data-testid="grid-row-499"] td').nth(5).dblclick();
+await page.waitForSelector('[data-testid="grid-row-499"] td.editing input', { timeout: 5000 });
+await page.locator('[data-testid="grid-row-499"] td.editing input').fill('deep-edit');
+await page.keyboard.press('Enter');
+await page.waitForTimeout(1000);
+const deepEdit = await api(`/data?connectionId=${demo.id}&table=orders&limit=5&where=${encodeURIComponent("channel='deep-edit'")}`);
+check('editing a deep row persists after windowed render', deepEdit.status === 200 && deepEdit.body.total >= 1, `total=${deepEdit.body?.total}`);
+await page.selectOption('[data-testid="data-page-size"]', '100');
+await page.waitForTimeout(600);
+
 await page.screenshot({ path: join(shots, 'desktop-data.png') });
 
 await page.locator('[title="TABLE orders"]').click({ button: 'right' });

@@ -646,11 +646,6 @@ export function DataView({ tab }: { tab: DataTab }) {
   return (
     <div className="view">
       <div className="toolbar data-toolbar">
-        <span className="title">
-          <Table2 size={14} style={{ color: 'var(--accent)' }} />
-          {tab.database && conn?.engine !== 'sqlite' ? `${tab.database}.` : ''}
-          {tab.table}
-        </span>
         <button className="icon-btn" title={t('refresh')} onClick={() => { setRefreshKey((k) => k + 1); void loadSchema(tab.connectionId, true, tab.database); }} data-testid="data-refresh">
           <RefreshCw size={14} />
         </button>
@@ -850,7 +845,7 @@ export function DataView({ tab }: { tab: DataTab }) {
         </span>
         {page?.batch.sets[0]?.truncated ? <span className="badge write">结果已截断</span> : null}
         <div className="pager">
-          <select className="select" style={{ height: 24, fontSize: 11 }} value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setOffset(0); }}>
+          <select className="select" style={{ height: 24, fontSize: 11 }} value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setOffset(0); }} data-testid="data-page-size">
             {[50, 100, 200, 500].map((n) => (
               <option key={n} value={n}>
                 {n} / 页
