@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import WebSocket from 'ws';
+import { inflateRawSync } from 'node:zlib';
 import type { AgentEvent, ConnectionConfig, DatabaseSchema, TableInfo, ToolResult } from '@aidb/core';
 import { createGateway } from '../src/server';
 
@@ -37,6 +38,35 @@ after(async () => {
 });
 
 const headers = { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` };
+
+function unzipEntry(buffer: Buffer, target: string): string | undefined {
+  let eocd = -1;
+  for (let i = buffer.length - 22; i >= Math.max(0, buffer.length - 66000); i -= 1) {
+    if (buffer.readUInt32LE(i) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) return undefined;
+  const count = buffer.readUInt16LE(eocd + 10);
+  let offset = buffer.readUInt32LE(eocd + 16);
+  for (let i = 0; i < count; i += 1) {
+    if (buffer.readUInt32LE(offset) !== 0x02014b50) break;
+    const method = buffer.readUInt16LE(offset + 10);
+    const compressedSize = buffer.readUInt32LE(offset + 20);
+    const nameLength = buffer.readUInt16LE(offset + 28);
+    const extraLength = buffer.readUInt16LE(offset + 30);
+    const commentLength = buffer.readUInt16LE(offset + 32);
+    const localOffset = buffer.readUInt32LE(offset + 42);
+    const name = buffer.subarray(offset + 46, offset + 46 + nameLength).toString('utf8');
+    offset += 46 + nameLength + extraLength + commentLength;
+    if (name !== target) continue;
+    const start = localOffset + 30 + buffer.readUInt16LE(localOffset + 26) + buffer.readUInt16LE(localOffset + 28);
+    const chunk = buffer.subarray(start, start + compressedSize);
+    return (method === 0 ? chunk : inflateRawSync(chunk)).toString('utf8');
+  }
+  return undefined;
+}
 
 async function api<T = any>(path: string, init: RequestInit = {}): Promise<{ status: number; body: T }> {
   const res = await fetch(`${base}/api${path}`, { ...init, headers: { ...headers, ...(init.headers ?? {}) } });
@@ -193,6 +223,10 @@ test('row CRUD, DDL, export and import', async () => {
   const xlsxBytes = readFileSync(xlsxExport.body.file.path);
   assert.equal(xlsxBytes.subarray(0, 2).toString(), 'PK');
   assert.ok(xlsxBytes.length > 500);
+  const sheetXml = unzipEntry(xlsxBytes, 'xl/worksheets/sheet1.xml');
+  assert.ok(sheetXml, 'xlsx 缺少工作表');
+  assert.match(sheetXml as string, /<t xml:space="preserve">name<\/t>/);
+  assert.match(sheetXml as string, /<t xml:space="preserve">alpha<\/t>/);
 
   await api('/ddl/execute', {
     method: 'POST',
