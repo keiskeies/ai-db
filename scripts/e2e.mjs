@@ -1385,6 +1385,12 @@ if (MYSQL_TX_PORT) {
   await page.waitForFunction(() => !document.querySelector('[data-testid="grid-load-more"]') && document.querySelectorAll('[data-testid^="grid-row-"]').length === 500, null, { timeout: 15000 });
   check('load more grows the rendered window to all rows', true);
 
+  await page.selectOption('[data-testid="query-export-format"]', 'xlsx');
+  const queryExportPromise = page.waitForResponse((res) => res.url().includes('/api/export') && (res.request().postData() ?? '').includes('"format":"xlsx"'), { timeout: 20000 }).catch(() => null);
+  await page.click('[data-testid="query-export"]');
+  const queryExportResponse = await queryExportPromise;
+  check('query result export supports XLSX', Boolean(queryExportResponse && queryExportResponse.status() === 200), queryExportResponse ? String(queryExportResponse.status()) : 'no response');
+
   const downloadPromise = page.waitForEvent('download', { timeout: 10000 }).catch(() => null);
   await page.keyboard.press('Control+S');
   const sqlDownload = await downloadPromise;

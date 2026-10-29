@@ -95,6 +95,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const canTransaction = conn ? supportsTransactions(conn.engine) : false;
   const [txSession, setTxSession] = useState<string | null>(null);
   const [queryLimit, setQueryLimit] = useState(settings.defaultLimit || 100);
+  const [queryExportFormat, setQueryExportFormat] = useState<'csv' | 'json' | 'sql' | 'xml' | 'xlsx'>('csv');
   const limitOptions = [...new Set([settings.defaultLimit || 100, 100, 500, 1000, 5000])].sort((a, b) => a - b);
   const [vectorOpen, setVectorOpen] = useState(false);
   const [writeOpen, setWriteOpen] = useState(false);
@@ -425,7 +426,7 @@ ${text}
     const text = currentSql().trim();
     if (!text) return;
     try {
-      const { file } = await api.exportData({ connectionId: tab.connectionId, database: tab.database, sql: text, format: 'csv', limit: 20000 });
+      const { file } = await api.exportData({ connectionId: tab.connectionId, database: tab.database, sql: text, format: queryExportFormat, limit: 20000 });
       notify('success', t('export'), `${file.rows} 行 · ${file.path}`);
     } catch (err: any) {
       notify('error', t('error'), err?.message);
@@ -638,7 +639,21 @@ ${text}
             <button className="btn small" onClick={() => void startTx()} data-testid="tx-begin">开始事务</button>
           )
         ) : null}
-        <button className="icon-btn" title="导出当前语句结果（CSV）" onClick={() => void exportResult()} data-testid="query-export">
+        <select
+          className="select"
+          style={{ height: 23, width: 72, fontSize: 10 }}
+          value={queryExportFormat}
+          onChange={(event) => setQueryExportFormat(event.target.value as typeof queryExportFormat)}
+          title="导出当前语句结果的格式"
+          data-testid="query-export-format"
+        >
+          <option value="csv">CSV</option>
+          <option value="json">JSON</option>
+          {isSql ? <option value="sql">SQL</option> : null}
+          <option value="xml">XML</option>
+          <option value="xlsx">XLSX</option>
+        </select>
+        <button className="icon-btn" title="导出当前语句结果" onClick={() => void exportResult()} data-testid="query-export">
           <Download size={13} />
         </button>
         {isSql ? (

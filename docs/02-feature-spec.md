@@ -97,7 +97,7 @@
 - 类型转换在服务端完成，错误以单元格级错误提示。
 
 ### 4.3 导出
-- 当前结果或整表 → CSV（UTF-8 BOM）/ JSON / SQL INSERT / XML；非 SQL 引擎导出当前语句结果（CSV/JSON/XML，不生成 INSERT），需要语句而非表名。
+- 当前结果或整表 → CSV（UTF-8 BOM）/ JSON / SQL INSERT / XML / XLSX；非 SQL 引擎导出当前语句结果（CSV/JSON/XML/XLSX，不生成 INSERT），需要语句而非表名。
 - 选择列、是否含表头、NULL 表示、行数上限。
 - 移动端：调用系统分享。
 
