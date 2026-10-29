@@ -1104,6 +1104,10 @@ export class ConnectionManager {
       await cached.close().catch(() => undefined);
       this.clients.delete(connectionId);
     }
+    // 驱动已关，它的固定连接也被回滚了；留着事务会话只会变成孤儿并阻塞同名会话。
+    for (const [sessionId, session] of [...this.txSessions]) {
+      if (session.connectionId === connectionId) this.txSessions.delete(sessionId);
+    }
   }
 
   async closeAll(): Promise<void> {
