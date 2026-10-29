@@ -11,6 +11,7 @@ ipcRenderer.on('open-table', (_event, payload) => {
 contextBridge.exposeInMainWorld('aidbDesktop', {
   platform: process.platform,
   createTableShortcut: (payload) => ipcRenderer.invoke('create-table-shortcut', payload),
+  saveExportedFile: (payload) => ipcRenderer.invoke('save-export-file', payload),
   onOpenTable: (callback) => {
     listeners.add(callback);
     if (pendingOpen) callback(pendingOpen);

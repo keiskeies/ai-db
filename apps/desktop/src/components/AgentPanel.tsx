@@ -33,6 +33,7 @@ import type { AgentMessageBlock, PermissionMode, QuestionSuggestion, Risk, Table
 import { engineMeta, suggestionLabel } from '@aidb/core';
 import { getModelProfile, supportsInput } from '@aidb/core';
 import { api, attachmentObjectUrl, type StoredAttachment } from '../lib/api';
+import { deliverExport } from '../lib/exportDelivery';
 import { formatBytes, formatCell, formatDuration, formatRelative } from '../lib/format';
 import { useApp, type LiveTool } from '../store';
 import { ChartView, type ChartSpec } from './ChartView';
@@ -132,7 +133,7 @@ function ResultView({ result, onOpenEditor, showChart = true, chartMaxHeight }: 
     if (!connectionId || !chartSql) return;
     try {
       const res = await api.exportData({ connectionId, sql: chartSql, format: 'csv' });
-      notify('success', '已导出 CSV', `${res.file.rows} 行 → ${res.file.path}`);
+      await deliverExport(res.file, '已导出 CSV');
     } catch (err) {
       notify('error', '导出失败', (err as Error)?.message ?? String(err));
     }

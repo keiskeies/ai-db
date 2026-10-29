@@ -15,6 +15,8 @@ export interface DataGridProps {
   onRowDelete?: (rowIndex: number) => void;
   newRowValues?: Record<number, string>;
   onNewRowChange?: (columnIndex: number, value: string) => void;
+  /** 新行编辑时按 Esc 取消。 */
+  onNewRowCancel?: () => void;
   selectedRows?: Set<number>;
   onToggleRow?: (rowIndex: number) => void;
   onToggleAll?: () => void;
@@ -45,6 +47,7 @@ export function DataGrid({
   onRowDelete,
   newRowValues,
   onNewRowChange,
+  onNewRowCancel,
   selectedRows,
   onToggleRow,
   onToggleAll,
@@ -163,6 +166,9 @@ export function DataGrid({
                     value={newRowValues[index] ?? ''}
                     placeholder={col.name}
                     onChange={(e) => onNewRowChange?.(index, e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') onNewRowCancel?.();
+                    }}
                   />
                 </td>
               ))}

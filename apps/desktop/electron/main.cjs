@@ -1,10 +1,11 @@
-const { app, BrowserWindow, ipcMain, shell, session } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, session } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
 const crypto = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
+const { backupBeforeUpgrade, markVersion } = require('./upgrade.cjs');
 
 let gatewayProcess = null;
 let mainWindow = null;
@@ -47,7 +48,40 @@ const EXPORT_FILTERS = {
   csv: { name: 'CSV 文件', extensions: ['csv'] },
   sql: { name: 'SQL 脚本', extensions: ['sql'] },
   json: { name: 'JSON 文件', extensions: ['json'] },
+  xml: { name: 'XML 文件', extensions: ['xml'] },
+  xlsx: { name: 'Excel 工作簿', extensions: ['xlsx'] },
 };
+
+// 数据导出由网关直接写进 userData/exports，界面上只拿到路径；桌面端在这里补系统
+// 「另存为」：只允许搬运导出目录内的文件，用户取消时原文件保留。
+ipcMain.handle('save-export-file', async (_event, payload) => {
+  const source = path.resolve(String(payload?.sourcePath ?? ''));
+  const root = path.join(app.getPath('userData'), 'exports');
+  const rel = path.relative(root, source);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return { ok: false, error: '只允许保存导出目录中的文件' };
+  try {
+    await fs.promises.access(source, fs.constants.R_OK);
+  } catch {
+    return { ok: false, error: '导出文件不存在，请重试' };
+  }
+  const name = path.basename(source);
+  const filter = EXPORT_FILTERS[path.extname(name).slice(1).toLowerCase()];
+  const options = {
+    title: '保存导出文件',
+    buttonLabel: '保存',
+    defaultPath: path.join(app.getPath('downloads'), name),
+    filters: filter ? [filter, { name: '所有文件', extensions: ['*'] }] : [{ name: '所有文件', extensions: ['*'] }],
+  };
+  const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+  if (path.resolve(result.filePath) === source) return { ok: true, path: result.filePath };
+  try {
+    await fs.promises.copyFile(source, result.filePath);
+    return { ok: true, path: result.filePath };
+  } catch (err) {
+    return { ok: false, error: String(err?.message ?? err) };
+  }
+});
 
 // 图表 PNG、ERD SVG、审计 CSV 这类导出在桌面端一律走原生「另存为」。Electron 不挂
 // 这个处理器时也会弹框，但没有类型过滤器，用户存出来的文件可能丢扩展名。
@@ -128,6 +162,10 @@ async function startEmbeddedGateway() {
     ? path.join(process.resourcesPath, 'gateway', 'index.js')
     : path.join(__dirname, '..', '..', 'gateway', 'dist', 'index.js');
   const staticDir = app.isPackaged ? path.join(process.resourcesPath, 'desktop') : path.join(__dirname, '..', 'dist');
+  if (app.isPackaged) {
+    const { backupDir } = backupBeforeUpgrade({ home: app.getPath('userData'), version: app.getVersion() });
+    if (backupDir) console.log('[desktop] pre-upgrade backup:', backupDir);
+  }
   // dmdb 需要 --openssl-legacy-provider，而 Electron 内置 Node 不接受该参数；
   // 有系统 Node（>=22.5）时优先用它启动 Bridge，否则回退到 Electron Node（达梦连接会给出明确提示）。
   const nodeBin = findSystemNode();
@@ -154,6 +192,7 @@ async function startEmbeddedGateway() {
     console.error('[desktop] gateway exited', code);
   });
   await waitForHealth(`http://127.0.0.1:${port}/api/health`);
+  if (app.isPackaged) markVersion(app.getPath('userData'), app.getVersion());
   return { port, token };
 }
 

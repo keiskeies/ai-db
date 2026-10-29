@@ -35,6 +35,7 @@ import { addField, engineMeta, managesIndexes, managesObjects } from '@aidb/core
 import { api } from '../lib/api';
 import { useApp, type ContextMenuItem } from '../store';
 import { desktopBridge } from '../lib/desktop';
+import { deliverExport } from '../lib/exportDelivery';
 import { TableOpsDialog, type TableDialogKind } from './TableOpsDialog';
 import { DatabaseOpsDialog, type DatabaseDialogKind } from './DatabaseOpsDialog';
 import { CreateObjectDialog } from './CreateObjectDialog';
@@ -208,7 +209,7 @@ export function Sidebar() {
   const exportTable = async (conn: ConnectionConfig, table: TableInfo, database?: string) => {
     try {
       const { file } = await api.exportData({ connectionId: conn.id, database, table: table.name, format: 'csv' });
-      notify('success', t('export'), `${file.rows} rows · ${file.path}`);
+      await deliverExport(file, t('export'));
     } catch (err: any) {
       notify('error', t('error'), err?.message);
     }

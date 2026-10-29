@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { quoteIdent, quoteLiteral, writesLineProtocol, type TableInfo } from '@aidb/core';
 import { api, type DataPage } from '../lib/api';
+import { deliverExport } from '../lib/exportDelivery';
 import { useApp, type Tab } from '../store';
 import { DataGrid } from './DataGrid';
 import { LineProtocolPanel } from './LineProtocolPanel';
@@ -547,7 +548,7 @@ export function DataView({ tab }: { tab: DataTab }) {
   const exportData = async (format: 'csv' | 'json' | 'sql' | 'xml' | 'xlsx') => {
     try {
       const { file } = await api.exportData({ connectionId: tab.connectionId, database: tab.database, table: tab.table, format, limit: 200000 });
-      notify('success', t('export'), `${file.rows} 行 · ${file.path}`);
+      await deliverExport(file, t('export'));
     } catch (err: any) {
       notify('error', t('error'), err?.message);
     }
@@ -732,14 +733,20 @@ export function DataView({ tab }: { tab: DataTab }) {
         </button>
         {selectedIndices.length ? <span className="badge write">已选 {selectedIndices.length}</span> : null}
         <div className="spacer" />
-        <button className="btn small" title={t('addRow')} onClick={() => setNewRow(newRow ? null : {})} disabled={!columns.length || !writable} data-testid="data-add-row">
-          <Plus size={12} /> <span className="btn-text">{t('addRow')}</span>
-        </button>
         {newRow ? (
-          <button className="btn primary small" onClick={() => void saveNewRow()} data-testid="data-save-new-row">
-            保存新行
+          <>
+            <button className="btn primary small" onClick={() => void saveNewRow()} data-testid="data-save-new-row">
+              保存新行
+            </button>
+            <button className="btn small" title="取消新增（Esc）" onClick={() => setNewRow(null)} data-testid="data-cancel-new-row">
+              <X size={12} /> <span className="btn-text">取消</span>
+            </button>
+          </>
+        ) : (
+          <button className="btn small" title={t('addRow')} onClick={() => setNewRow({})} disabled={!columns.length || !writable} data-testid="data-add-row">
+            <Plus size={12} /> <span className="btn-text">{t('addRow')}</span>
           </button>
-        ) : null}
+        )}
         <button className="btn small" title={t('import')} onClick={() => fileRef.current?.click()} disabled={!writable} data-testid="data-import">
           <Upload size={12} /> <span className="btn-text">{t('import')}</span>
         </button>
@@ -820,6 +827,7 @@ export function DataView({ tab }: { tab: DataTab }) {
           onRowDelete={deleteRow}
           newRowValues={newRow ?? undefined}
           onNewRowChange={(index, value) => setNewRow((prev) => ({ ...(prev ?? {}), [index]: value }))}
+          onNewRowCancel={() => setNewRow(null)}
           selectedRows={selected}
           onToggleRow={toggleRow}
           onToggleAll={toggleAll}

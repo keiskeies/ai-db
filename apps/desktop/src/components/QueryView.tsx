@@ -9,6 +9,7 @@ import { AlignLeft, BarChart3, Bookmark, Database, Download, FileDown, FilePlus,
 import type { ConnectionConfig, DatabaseSchema, QueryBatchResult } from '@aidb/core';
 import { engineMeta, editsRecords, supportsTransactions, writesDocuments, writesLineProtocol } from '@aidb/core';
 import { api } from '../lib/api';
+import { deliverExport } from '../lib/exportDelivery';
 import { formatDuration } from '../lib/format';
 import { formatSql } from '../lib/sqlFormat';
 import { useApp, type Tab } from '../store';
@@ -454,7 +455,7 @@ ${text}
     if (!text) return;
     try {
       const { file } = await api.exportData({ connectionId: tab.connectionId, database: tab.database, sql: text, format: 'csv', limit: 20000 });
-      notify('success', '已导出 CSV', `${file.rows} 行 · ${file.path}`);
+      await deliverExport(file, '已导出 CSV');
     } catch (err: any) {
       notify('error', '导出失败', err?.message);
     }
@@ -465,7 +466,7 @@ ${text}
     if (!text) return;
     try {
       const { file } = await api.exportData({ connectionId: tab.connectionId, database: tab.database, sql: text, format: queryExportFormat, limit: 20000 });
-      notify('success', t('export'), `${file.rows} 行 · ${file.path}`);
+      await deliverExport(file, t('export'));
     } catch (err: any) {
       notify('error', t('error'), err?.message);
     }
