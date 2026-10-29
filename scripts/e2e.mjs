@@ -2168,7 +2168,12 @@ check('connection groups render a collapse toggle', (await demoGroup.count()) ==
 await demoGroup.click();
 await page.waitForFunction(() => ![...document.querySelectorAll('.conn-row')].some((el) => (el.textContent ?? '').includes('Demo · Shop DB')), null, { timeout: 5000 });
 check('collapsed group hides its connections', true);
-await demoGroup.click();
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
+await page.waitForSelector('[data-testid="group-toggle-示例"]', { timeout: 20000 });
+const stillCollapsed = await page.evaluate(() => ![...document.querySelectorAll('.conn-row')].some((el) => (el.textContent ?? '').includes('Demo · Shop DB')));
+check('collapsed group stays collapsed after reload', stillCollapsed);
+await page.locator('[data-testid="group-toggle-示例"]').click();
 await page.waitForFunction(() => [...document.querySelectorAll('.conn-row')].some((el) => (el.textContent ?? '').includes('Demo · Shop DB')), null, { timeout: 5000 });
 
 const listGroups = () => page.$$eval('.group-label', (els) => els.map((el) => {

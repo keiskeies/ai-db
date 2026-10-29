@@ -68,7 +68,9 @@ export function Sidebar() {
   const schemaLoading = useApp((s) => s.schemaLoading);
   const expanded = useApp((s) => s.expandedConnections);
   const expandedSchemas = useApp((s) => s.expandedSchemas);
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const collapsedGroupList = useApp((s) => s.collapsedGroups);
+  const setCollapsedGroupList = useApp((s) => s.setCollapsedGroups);
+  const collapsedGroups = useMemo(() => new Set(collapsedGroupList), [collapsedGroupList]);
   const groupOrder = useApp((s) => s.groupOrder);
   const setGroupOrder = useApp((s) => s.setGroupOrder);
   const connectionOrder = useApp((s) => s.connectionOrder);
@@ -528,21 +530,19 @@ export function Sidebar() {
               role="button"
               tabIndex={0}
               className="group-label"
-              onClick={() => setCollapsedGroups((prev) => {
-                const next = new Set(prev);
+              onClick={() => {
+                const next = new Set(collapsedGroups);
                 if (next.has(group)) next.delete(group);
                 else next.add(group);
-                return next;
-              })}
+                setCollapsedGroupList([...next]);
+              }}
               onKeyDown={(event) => {
                 if (event.key !== 'Enter' && event.key !== ' ') return;
                 event.preventDefault();
-                setCollapsedGroups((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(group)) next.delete(group);
-                  else next.add(group);
-                  return next;
-                });
+                const next = new Set(collapsedGroups);
+                if (next.has(group)) next.delete(group);
+                else next.add(group);
+                setCollapsedGroupList([...next]);
               }}
               data-testid={`group-toggle-${group}`}
               onContextMenu={(event) => {

@@ -84,7 +84,7 @@ export interface ContextMenuState {
 
 const UI_KEY = 'aidb.ui';
 
-function readUiPrefs(): { sidebarOpen?: boolean; sidebarWidth?: number; agentWidth?: number; groupOrder?: string[]; connectionOrder?: string[]; hiddenColumns?: Record<string, string[]> } {
+function readUiPrefs(): { sidebarOpen?: boolean; sidebarWidth?: number; agentWidth?: number; groupOrder?: string[]; connectionOrder?: string[]; hiddenColumns?: Record<string, string[]>; collapsedGroups?: string[] } {
   try {
     return JSON.parse(localStorage.getItem(UI_KEY) ?? '{}');
   } catch {
@@ -92,7 +92,7 @@ function readUiPrefs(): { sidebarOpen?: boolean; sidebarWidth?: number; agentWid
   }
 }
 
-function saveUiPrefs(patch: { sidebarOpen?: boolean; sidebarWidth?: number; agentWidth?: number; groupOrder?: string[]; connectionOrder?: string[]; hiddenColumns?: Record<string, string[]> }): void {
+function saveUiPrefs(patch: { sidebarOpen?: boolean; sidebarWidth?: number; agentWidth?: number; groupOrder?: string[]; connectionOrder?: string[]; hiddenColumns?: Record<string, string[]>; collapsedGroups?: string[] }): void {
   try {
     localStorage.setItem(UI_KEY, JSON.stringify({ ...readUiPrefs(), ...patch }));
   } catch {
@@ -126,6 +126,8 @@ interface AppStore {
   setConnectionOrder: (order: string[]) => void;
   hiddenColumns: Record<string, string[]>;
   setHiddenColumns: (key: string, columns: string[]) => void;
+  collapsedGroups: string[];
+  setCollapsedGroups: (groups: string[]) => void;
   contextMenu?: ContextMenuState;
   agentSessionId?: string;
   agentSessionMeta?: AgentSessionMeta;
@@ -265,6 +267,7 @@ export const useApp = create<AppStore>((set, get) => ({
   groupOrder: readUiPrefs().groupOrder ?? [],
   connectionOrder: readUiPrefs().connectionOrder ?? [],
   hiddenColumns: readUiPrefs().hiddenColumns ?? {},
+  collapsedGroups: readUiPrefs().collapsedGroups ?? [],
   agentWidth: readUiPrefs().agentWidth ?? 384,
   agentMessages: [],
   agentFollowUps: [],
@@ -599,6 +602,10 @@ export const useApp = create<AppStore>((set, get) => ({
     const next = { ...get().hiddenColumns, [key]: columns };
     set({ hiddenColumns: next });
     saveUiPrefs({ hiddenColumns: next });
+  },
+  setCollapsedGroups: (groups) => {
+    set({ collapsedGroups: groups });
+    saveUiPrefs({ collapsedGroups: groups });
   },
 
   openContextMenu: (x, y, items) => set({ contextMenu: { x, y, items } }),
