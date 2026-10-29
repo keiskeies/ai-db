@@ -45,6 +45,8 @@ export class DmDriver implements Driver {
   engine: Engine = 'dm';
   private poolClient?: dmdb.Pool;
   private connecting?: Promise<dmdb.Pool>;
+  /** 跨请求事务：会话 id → 被固定的池内连接。 */
+  private txConnections = new Map<string, dmdb.Connection>();
 
   constructor(private opts: DmOptions) {}
 
@@ -257,7 +259,67 @@ export class DmDriver implements Driver {
     }
   }
 
+  /** 开启跨请求事务：固定一条池内连接，事务期间 autoCommit=false。 */
+  async beginTransaction(sessionId: string, _database?: string): Promise<void> {
+    if (this.txConnections.has(sessionId)) throw new DbError('该会话已有进行中的事务', { code: 'TX_ACTIVE' });
+    const pool = await this.pool();
+    const connection = await pool.getConnection();
+    this.txConnections.set(sessionId, connection);
+  }
+
+  async runInTransaction(sessionId: string, sql: string, params: unknown[], opts: RunOptions = {}): Promise<QueryResult> {
+    const connection = this.txConnections.get(sessionId);
+    if (!connection) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
+    const started = Date.now();
+    try {
+      const result = (await connection.execute(sql, params, {
+        autoCommit: false,
+        maxRows: opts.maxRows,
+        outFormat: dmdb.OUT_FORMAT_OBJECT,
+      })) as dmdb.Result<Record<string, unknown>>;
+      const columns = metaList(result.metaData).map((meta) => ({ name: meta.name, type: meta.dbTypeName }));
+      const rows = (result.rows ?? []).map((row) => columns.map((column) => normalizeValue(row[column.name])));
+      return {
+        columns,
+        rows,
+        rowCount: rows.length,
+        durationMs: Date.now() - started,
+        affected: result.rowsAffected,
+        statement: sql,
+      };
+    } catch (err: any) {
+      throw new DbError(err?.message ?? '达梦事务执行失败', { code: err?.errCode ? `DM_${err.errCode}` : 'DM_ERROR', hint: dmHint(err) });
+    }
+  }
+
+  async commitTransaction(sessionId: string): Promise<void> {
+    await this.finishTransaction(sessionId, 'commit');
+  }
+
+  async rollbackTransaction(sessionId: string): Promise<void> {
+    await this.finishTransaction(sessionId, 'rollback');
+  }
+
+  private async finishTransaction(sessionId: string, mode: 'commit' | 'rollback'): Promise<void> {
+    const connection = this.txConnections.get(sessionId);
+    if (!connection) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
+    this.txConnections.delete(sessionId);
+    try {
+      if (mode === 'commit') await connection.commit();
+      else await connection.rollback();
+    } catch (err: any) {
+      throw new DbError(err?.message ?? `${mode === 'commit' ? '提交' : '回滚'}事务失败`, {
+        code: mode === 'commit' ? 'TX_COMMIT' : 'TX_ROLLBACK',
+      });
+    } finally {
+      await connection.close().catch(() => undefined);
+    }
+  }
+
   async close(): Promise<void> {
+    for (const sessionId of [...this.txConnections.keys()]) {
+      await this.finishTransaction(sessionId, 'rollback').catch(() => undefined);
+    }
     await this.poolClient?.close().catch(() => undefined);
     this.poolClient = undefined;
     this.connecting = undefined;
