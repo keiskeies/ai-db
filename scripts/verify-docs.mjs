@@ -141,6 +141,26 @@ if (existsSync(executorFile)) {
   }
 }
 
+// 9. Transport matrix in docs/09 must use exactly the transports that exist in code —
+//    transport 决定走哪个驱动，写错等于文档承诺了一个连不上的协议。
+{
+  const engines = await import('../packages/core/src/engines.ts');
+  const codeTransports = [...new Set(engines.ENGINE_IDS.map((id) => engines.engineMeta(id).transport))].sort();
+  const multi = read('docs/09-multi-engine.md');
+  const documented = new Set();
+  for (const line of multi.split('\n')) {
+    const cells = line.split('|').map((c) => c.trim());
+    if (cells.length < 6) continue;
+    const transport = cells[3];
+    if (!transport || transport === 'Transport' || /^-+$/.test(transport)) continue;
+    if (/^[a-z][a-z0-9-]*$/.test(transport)) documented.add(transport);
+  }
+  const docList = [...documented].sort();
+  JSON.stringify(docList) === JSON.stringify(codeTransports)
+    ? ok('transport matrix matches code')
+    : fail('transport matrix matches code', `docs=[${docList.join(',')}] code=[${codeTransports.join(',')}]`);
+}
+
 // report
 const passed = checks.filter((c) => c.ok).length;
 console.log(`\nDocs contract: ${passed}/${checks.length} checks passed`);
