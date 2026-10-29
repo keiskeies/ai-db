@@ -110,7 +110,7 @@ export function DataView({ tab }: { tab: DataTab }) {
   const [where, setWhere] = useState('');
   const [newRow, setNewRow] = useState<Record<number, string> | null>(null);
   const [importDraft, setImportDraft] = useState<ImportDraft | null>(null);
-  const [exportFormat, setExportFormat] = useState<'csv' | 'json' | 'sql' | 'xml'>('csv');
+  const [exportFormat, setExportFormat] = useState<'csv' | 'json' | 'sql' | 'xml' | 'xlsx'>('csv');
   const [importing, setImporting] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -691,11 +691,12 @@ export function DataView({ tab }: { tab: DataTab }) {
             e.target.value = '';
           }}
         />
-        <select className="select" style={{ height: 23, width: 72, fontSize: 10 }} value={exportFormat} onChange={(e) => setExportFormat(e.target.value as typeof exportFormat)}>
+        <select className="select" style={{ height: 23, width: 72, fontSize: 10 }} value={exportFormat} onChange={(e) => setExportFormat(e.target.value as typeof exportFormat)} data-testid="data-export-format">
           <option value="csv">CSV</option>
           <option value="json">JSON</option>
           <option value="sql">SQL</option>
           <option value="xml">XML</option>
+          <option value="xlsx">XLSX</option>
         </select>
         <button className="btn small" onClick={() => void exportData()} data-testid="data-export">
           <Download size={12} /> {t('export')}

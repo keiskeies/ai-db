@@ -18,10 +18,11 @@ import {
 } from '@aidb/core';
 import type { GatewayConfig } from './config';
 import { DbError } from './drivers';
+import { toXlsx } from './xlsx';
 import type { ConnectionManager } from './manager';
 import type { Store } from './store';
 
-export type ExportFormat = 'csv' | 'json' | 'sql' | 'xml';
+export type ExportFormat = 'csv' | 'json' | 'sql' | 'xml' | 'xlsx';
 
 /** INSERT 脚本依赖 SQL 方言；非 SQL 引擎只能导出行数据。 */
 export function assertExportable(engine: Engine, format: ExportFormat): void {
@@ -77,7 +78,7 @@ export function writeExportFile(input: ExportInput): { path: string; bytes: numb
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const safeBase = (input.baseName || input.tableName || 'query').replace(/[^\w\u4e00-\u9fff-]+/g, '_').slice(0, 40);
   const path = join(input.dir, `${safeBase}-${stamp}.${input.format}`);
-  let content: string;
+  let content: string | Buffer;
   if (input.format === 'csv') content = toCsv(input.columns, input.rows);
   else if (input.format === 'xml') {
     const escapeXml = (value: unknown) => {
@@ -96,8 +97,11 @@ export function writeExportFile(input: ExportInput): { path: string; bytes: numb
           input.columns.map((column, index) => `<${tag(column)}>${escapeXml(row[index])}</${tag(column)}>`).join('') +
           '</row>',
       )
-      .join('\\n');
+      .join('\n');
     content = `<?xml version="1.0" encoding="UTF-8"?>\n<rows>\n${xmlRows}\n</rows>\n`;
+  }
+  else if (input.format === 'xlsx') {
+    content = toXlsx(input.columns, input.rows);
   }
   else if (input.format === 'json') {
     content = JSON.stringify(
@@ -111,7 +115,8 @@ export function writeExportFile(input: ExportInput): { path: string; bytes: numb
       toSqlInserts(input.engine, input.tableName || 'exported_data', input.columns, input.rows) +
       '\n';
   }
-  writeFileSync(path, content, 'utf8');
+  if (typeof content === 'string') writeFileSync(path, content, 'utf8');
+  else writeFileSync(path, content);
   return { path, bytes: statSync(path).size, rows: input.rows.length };
 }
 

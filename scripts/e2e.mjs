@@ -1565,6 +1565,12 @@ await page.waitForTimeout(900);
 const xlsxImportResult = await api(`/data?connectionId=${demo.id}&table=orders&limit=5&where=${encodeURIComponent("channel='xlsx-e2e'")}`);
 check('XLSX import inserts a row', xlsxImportResult.status === 200 && xlsxImportResult.body.total >= 1, `total=${xlsxImportResult.body?.total}`);
 
+await page.selectOption('[data-testid="data-export-format"]', 'xlsx');
+const exportResponsePromise = page.waitForResponse((res) => res.url().includes('/api/export') && (res.request().postData() ?? '').includes('"format":"xlsx"'), { timeout: 20000 }).catch(() => null);
+await page.click('[data-testid="data-export"]');
+const exportedXlsx = await exportResponsePromise;
+check('XLSX export writes a workbook', Boolean(exportedXlsx && exportedXlsx.status() === 200), exportedXlsx ? String(exportedXlsx.status()) : 'no response');
+
 await page.screenshot({ path: join(shots, 'desktop-data.png') });
 
 await page.locator('[title="TABLE orders"]').click({ button: 'right' });

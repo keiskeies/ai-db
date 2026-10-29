@@ -1,7 +1,7 @@
 import { listenRandom } from './helpers';
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -181,6 +181,15 @@ test('row CRUD, DDL, export and import', async () => {
   assert.equal(exported.status, 200);
   assert.ok(existsSync(exported.body.file.path));
   assert.equal(exported.body.file.rows, 1);
+
+  const xlsxExport = await api<{ file: { path: string; bytes: number } }>('/export', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: demo.id, table: 'it_items', format: 'xlsx' }),
+  });
+  assert.equal(xlsxExport.status, 200);
+  const xlsxBytes = readFileSync(xlsxExport.body.file.path);
+  assert.equal(xlsxBytes.subarray(0, 2).toString(), 'PK');
+  assert.ok(xlsxBytes.length > 500);
 
   await api('/ddl/execute', {
     method: 'POST',

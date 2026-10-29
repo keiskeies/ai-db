@@ -1626,7 +1626,7 @@ export function createApiRouter(deps: ApiDeps): Router {
       const conn = store.getConnection(connectionId);
       if (!conn) throw Object.assign(new Error('连接不存在'), { code: 'CONNECTION_NOT_FOUND', status: 404 });
       const database = str(body.database);
-      const format = (['csv', 'json', 'sql', 'xml'].includes(String(body.format)) ? String(body.format) : 'csv') as 'csv' | 'json' | 'sql' | 'xml';
+      const format = (['csv', 'json', 'sql', 'xml', 'xlsx'].includes(String(body.format)) ? String(body.format) : 'csv') as 'csv' | 'json' | 'sql' | 'xml' | 'xlsx';
       assertExportable(conn.engine, format);
       const limit = num(body.limit, 10000, 1, 200000);
       let sql: string;
