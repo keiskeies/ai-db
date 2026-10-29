@@ -15,6 +15,8 @@ export interface OracleOptions {
 export class OracleDriver implements Driver {
   engine = 'oracle' as const;
   private pools = new Map<string, oracledb.Pool>();
+  /** 跨请求事务：会话 id → 被固定的池内连接。 */
+  private txConnections = new Map<string, oracledb.Connection>();
   private owner: string;
 
   constructor(private opts: OracleOptions) {
@@ -193,21 +195,7 @@ export class OracleDriver implements Driver {
         autoCommit: true,
         maxRows: opts.maxRows && opts.maxRows > 0 ? opts.maxRows + 1 : undefined,
       });
-      if (result.metaData?.length) {
-        const columns = result.metaData.map((meta) => ({ name: meta.name, type: meta.dbTypeName }));
-        const all = (result.rows ?? []) as Array<Record<string, unknown>>;
-        const limit = opts.maxRows && opts.maxRows > 0 ? opts.maxRows : all.length;
-        const rows = all.slice(0, limit);
-        return {
-          columns,
-          rows: toRowArray(columns, rows),
-          rowCount: rows.length,
-          durationMs: Date.now() - started,
-          truncated: all.length > rows.length,
-          statement: sql,
-        };
-      }
-      return { columns: [], rows: [], rowCount: 0, affected: result.rowsAffected ?? 0, durationMs: Date.now() - started, statement: sql };
+      return this.toResult(result, started, sql, opts.maxRows);
     } catch (err: any) {
       throw new DbError(err.message ?? 'Oracle 执行失败', { code: err.code ?? 'ORACLE_ERROR' });
     } finally {
@@ -215,7 +203,74 @@ export class OracleDriver implements Driver {
     }
   }
 
+  private toResult(result: oracledb.Result<unknown>, started: number, sql: string, maxRows?: number): QueryResult {
+    if (result.metaData?.length) {
+      const columns = result.metaData.map((meta) => ({ name: meta.name, type: meta.dbTypeName }));
+      const all = (result.rows ?? []) as Array<Record<string, unknown>>;
+      const limit = maxRows && maxRows > 0 ? maxRows : all.length;
+      const rows = all.slice(0, limit);
+      return {
+        columns,
+        rows: toRowArray(columns, rows),
+        rowCount: rows.length,
+        durationMs: Date.now() - started,
+        truncated: all.length > rows.length,
+        statement: sql,
+      };
+    }
+    return { columns: [], rows: [], rowCount: 0, affected: result.rowsAffected ?? 0, durationMs: Date.now() - started, statement: sql };
+  }
+
+  /** 开启跨请求事务：签出一条池内连接固定住，事务期间不自动提交。 */
+  async beginTransaction(sessionId: string, database?: string): Promise<void> {
+    if (this.txConnections.has(sessionId)) throw new DbError('该会话已有进行中的事务', { code: 'TX_ACTIVE' });
+    const pool = await this.pool(database);
+    const connection = await pool.getConnection();
+    this.txConnections.set(sessionId, connection);
+  }
+
+  async runInTransaction(sessionId: string, sql: string, params: unknown[], opts: RunOptions = {}): Promise<QueryResult> {
+    const connection = this.txConnections.get(sessionId);
+    if (!connection) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
+    const started = Date.now();
+    try {
+      const result = await connection.execute(sql, params as any[], {
+        outFormat: oracledb.OUT_FORMAT_OBJECT,
+        autoCommit: false,
+        maxRows: opts.maxRows && opts.maxRows > 0 ? opts.maxRows + 1 : undefined,
+      });
+      return this.toResult(result, started, sql, opts.maxRows);
+    } catch (err: any) {
+      throw new DbError(err.message ?? 'Oracle 事务执行失败', { code: err.code ?? 'ORACLE_ERROR' });
+    }
+  }
+
+  async commitTransaction(sessionId: string): Promise<void> {
+    await this.finishTransaction(sessionId, true);
+  }
+
+  async rollbackTransaction(sessionId: string): Promise<void> {
+    await this.finishTransaction(sessionId, false);
+  }
+
+  private async finishTransaction(sessionId: string, commit: boolean): Promise<void> {
+    const connection = this.txConnections.get(sessionId);
+    if (!connection) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
+    this.txConnections.delete(sessionId);
+    try {
+      if (commit) await connection.commit();
+      else await connection.rollback();
+    } catch (err: any) {
+      throw new DbError(err?.message ?? `${commit ? '提交' : '回滚'}事务失败`, { code: commit ? 'TX_COMMIT' : 'TX_ROLLBACK' });
+    } finally {
+      await connection.close().catch(() => undefined);
+    }
+  }
+
   async close(): Promise<void> {
+    for (const [sessionId] of this.txConnections) {
+      await this.finishTransaction(sessionId, false).catch(() => undefined);
+    }
     await Promise.all([...this.pools.values()].map((pool) => pool.close(0).catch(() => undefined)));
     this.pools.clear();
   }

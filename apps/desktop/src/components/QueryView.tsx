@@ -92,7 +92,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const canWriteDocuments = conn ? writesDocuments(conn.engine) : false;
   const canEditRecords = conn ? editsRecords(conn.engine) : false;
   const canLineProtocol = conn ? writesLineProtocol(conn.engine) : false;
-  const canTransaction = conn ? conn.engine === 'mysql' || conn.engine === 'postgresql' : false;
+  const canTransaction = conn ? conn.engine === 'mysql' || conn.engine === 'postgresql' || conn.engine === 'oracle' : false;
   const [txSession, setTxSession] = useState<string | null>(null);
   const [vectorOpen, setVectorOpen] = useState(false);
   const [writeOpen, setWriteOpen] = useState(false);
