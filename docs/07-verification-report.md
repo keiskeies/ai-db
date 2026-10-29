@@ -286,7 +286,7 @@ Expo Web 构建在 390×844 视口通过：配对页、配对码真实兑换、A
 | 数据网格 | 行号、筛选/排序/文本、多选、复制/粘贴/复制行/批量删除、查找替换 | E2E / 集成测试 | ✅ |
 | 查询窗口 | 连接 / 数据库下拉、保存、查询创建工具、美化、代码段 | E2E「query window exposes connection and database selectors」 | ✅ |
 | 跨请求事务 | 开始事务 / 提交 / 回滚 | — | ✅ MySQL / PostgreSQL / Oracle / SQL Server / SQLite / DM8（其它引擎仍即时提交） |
-| 打印 / 快捷方式 / 管理组 | 打印预览（整表）+ 系统打印对话框；分组管理；Windows 桌面端可创建表快捷方式（.lnk 带 --open-table 深链），启动参数直达数据页 | 表菜单/Electron；E2E「electron deep link / shortcut」 | ✅（快捷方式限 Windows） |
+| 打印 / 快捷方式 / 管理组 | 打印预览（整表）+ 系统打印对话框；分组管理；Windows 桌面端可创建表快捷方式（.lnk 带 --open-table 深链），启动参数直达数据页；单实例锁会把二次启动的深链转发给已开窗口 | 表菜单/Electron；E2E「electron deep link / shortcut」 | ✅（快捷方式限 Windows） |
 | 图表多维 / 堆叠 / 双轴 | 分组柱 / 堆叠柱 / 多折线 / 单附加列右轴；饼图单序列 | E2E「multi-series chart」 | ✅ |
 | Excel 导入 / 导出 | .xlsx（ZIP + XML）导入按 workbook 关系取首个工作表、导出内联字符串工作表；Excel 2003 XML Spreadsheet(.xml) 与二进制 .xls（CFB/BIFF8）均可导入；BIFF5 未支持 | E2E「XLSX import / export」「Excel 2003 XML」；集成测试 | ✅ .xlsx/.xls/.xml / ⚠️ BIFF5 |
 | 报表设计器 / 云协作 / ER 编辑 | 设计明确不做 | — | ➖ 非目标 |

@@ -2131,6 +2131,20 @@ if (electronBinary) {
           try { unlinkSync(shortcut.path); } catch { /* ignore */ }
         }
         check('electron can create a table shortcut', Boolean(shortcut?.ok && /--open-table=/.test(shortcutArgs)), `${shortcut?.ok} ${shortcutArgs.slice(0, 60)}`);
+        const secondPayload = Buffer.from(JSON.stringify({ table: 'users' })).toString('base64');
+        const second = spawn(electronBinary, [join(root, 'apps/desktop'), '--no-sandbox', `--open-table=${secondPayload}`], { env, stdio: 'ignore' });
+        const secondExit = await new Promise((resolve) => {
+          const timer = setTimeout(() => resolve('timeout'), 20000);
+          second.once('exit', (code) => {
+            clearTimeout(timer);
+            resolve(code ?? -1);
+          });
+        });
+        const forwarded = await window
+          .waitForFunction(() => (document.querySelector('.tab.active')?.textContent ?? '').toLowerCase().includes('users'), null, { timeout: 15000 })
+          .then(() => true)
+          .catch(() => false);
+        check('second launch reuses the window and forwards the deep link', secondExit === 0 && forwarded, `exit=${secondExit} forwarded=${forwarded}`);
         await window.screenshot({ path: join(shots, 'electron-desktop.png') });
         exportDetail = await electronPngExport(app, window);
       } else lastError = 'no connections in Electron window';

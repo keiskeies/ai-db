@@ -9,8 +9,8 @@ const { spawn, spawnSync } = require('node:child_process');
 let gatewayProcess = null;
 let mainWindow = null;
 
-function readOpenTableArg() {
-  const arg = process.argv.find((item) => item.startsWith('--open-table='));
+function readOpenTableArg(argv = process.argv) {
+  const arg = argv.find((item) => item.startsWith('--open-table='));
   if (!arg) return null;
   try {
     return JSON.parse(Buffer.from(arg.slice('--open-table='.length), 'base64').toString('utf8'));
@@ -195,21 +195,37 @@ async function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
-  registerExportDialogs();
-  return createWindow();
-}).catch((err) => {
-  console.error('[desktop] failed to start', err);
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
   app.quit();
-});
+} else {
+  app.on('second-instance', (_event, argv) => {
+    const payload = readOpenTableArg(argv);
+    if (!mainWindow) {
+      void createWindow();
+      return;
+    }
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+    if (payload) mainWindow.webContents.send('open-table', payload);
+  });
 
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) void createWindow();
-});
+  app.whenReady().then(() => {
+    registerExportDialogs();
+    return createWindow();
+  }).catch((err) => {
+    console.error('[desktop] failed to start', err);
+    app.quit();
+  });
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) void createWindow();
+  });
+
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
+  });
+}
 
 app.on('before-quit', () => {
   if (gatewayProcess) {
