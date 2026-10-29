@@ -2060,6 +2060,10 @@ await page.locator('.context-menu').getByText('删除分组').click();
 await page.waitForFunction(() => !document.querySelector('[data-testid="group-toggle-组B"]'), null, { timeout: 15000 });
 const movedConn = (await api('/connections')).body.connections.find((item) => item.name === 'Group E2E');
 check('group delete moves connections to 默认', movedConn?.groupName === '默认', movedConn?.groupName ?? 'missing');
+await page.locator(`[data-testid="connection-${groupConn.body.connection.id}"]`).dragTo(page.locator('[data-testid="group-toggle-示例"]'));
+await page.waitForTimeout(900);
+const draggedConn = (await api('/connections')).body.connections.find((item) => item.id === groupConn.body.connection.id);
+check('dragging a connection onto a group moves it', draggedConn?.groupName === '示例', draggedConn?.groupName ?? 'missing');
 await api(`/connections/${groupConn.body.connection.id}`, { method: 'DELETE' });
 
 // ---------------- 只读连接：UI 收口写入入口 ----------------

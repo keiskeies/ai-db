@@ -141,6 +141,18 @@ export function Sidebar() {
     }
   };
 
+  const moveConnectionToGroup = async (connectionId: string, group: string) => {
+    const conn = connections.find((item) => item.id === connectionId);
+    if (!conn || (conn.groupName || '默认') === group) return;
+    try {
+      await api.updateConnection(connectionId, { groupName: group });
+      await useApp.getState().boot();
+      notify('success', '连接已移动', `${conn.name} → ${group}`);
+    } catch (err: any) {
+      notify('error', '移动失败', err?.message);
+    }
+  };
+
   const removeGroup = async (group: string) => {
     if (!window.confirm(`删除分组「${group}」？组内连接会移动到「默认」。`)) return;
     try {
@@ -495,6 +507,15 @@ export function Sidebar() {
                   { label: '删除分组', icon: <Trash2 size={13} />, danger: true, onClick: () => void removeGroup(group) },
                 ]);
               }}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'move';
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                const connectionId = event.dataTransfer.getData('text/aidb-connection');
+                if (connectionId) void moveConnectionToGroup(connectionId, group);
+              }}
             >
               <ChevronRight size={11} className={`conn-toggle ${collapsed ? '' : 'open'}`} />
               {group}
@@ -508,6 +529,11 @@ export function Sidebar() {
                 <div key={conn.id}>
                   <div
                     className={`conn-row ${activeConnectionId === conn.id ? 'active' : ''}`}
+                    draggable
+                    onDragStart={(event) => {
+                      event.dataTransfer.setData('text/aidb-connection', conn.id);
+                      event.dataTransfer.effectAllowed = 'move';
+                    }}
                     onClick={() => {
                       selectConnection(conn.id);
                       toggleConnection(conn.id);
