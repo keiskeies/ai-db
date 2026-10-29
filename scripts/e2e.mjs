@@ -91,6 +91,7 @@ const NEO4J_PASSWORD = process.env.AIDB_TEST_NEO4J_PASSWORD ?? 'testpass';
 const DM_PORT = process.env.AIDB_TEST_DM_PORT ? Number(process.env.AIDB_TEST_DM_PORT) : undefined;
 const DM_PASSWORD = process.env.AIDB_TEST_DM_PASSWORD ?? 'SYSDBA';
 const QDRANT_PORT = process.env.AIDB_TEST_QDRANT_PORT ? Number(process.env.AIDB_TEST_QDRANT_PORT) : undefined;
+const MYSQL_TX_PORT = process.env.AIDB_TEST_MYSQL_PORT ? Number(process.env.AIDB_TEST_MYSQL_PORT) : undefined;
 const MILVUS_PORT = process.env.AIDB_TEST_MILVUS_PORT ? Number(process.env.AIDB_TEST_MILVUS_PORT) : undefined;
 const ES_PORT = process.env.AIDB_TEST_ELASTICSEARCH_PORT ? Number(process.env.AIDB_TEST_ELASTICSEARCH_PORT) : undefined;
 const WEAVIATE_PORT = process.env.AIDB_TEST_WEAVIATE_PORT ? Number(process.env.AIDB_TEST_WEAVIATE_PORT) : undefined;
@@ -1153,6 +1154,74 @@ if (INFLUXDB_PORT) {
     { timeout: 25000 },
   );
   check('InfluxDB line-protocol write adds a sample', true);
+}
+
+if (MYSQL_TX_PORT) {
+  const mysqlTx = await import('mysql2/promise');
+  const root = await mysqlTx.createConnection({
+    host: '127.0.0.1',
+    port: MYSQL_TX_PORT,
+    user: 'root',
+    password: process.env.AIDB_TEST_MYSQL_PASSWORD ?? 'testpass',
+    database: 'aidb_tx',
+  });
+  await root.query('DROP TABLE IF EXISTS tx_ui');
+  await root.query('CREATE TABLE tx_ui (id INT PRIMARY KEY, note VARCHAR(32)) ENGINE=InnoDB');
+  await root.query("INSERT INTO tx_ui VALUES (1, 'seed')");
+  await root.end();
+
+  // 关系型连接的对话框没有 database 输入框，所以 SQL 一律用限定名，不依赖默认库。
+  await page.click('[data-testid="sidebar-new-connection"]');
+  await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
+  await page.fill('[data-testid="connection-name"]', 'MySQL TX E2E');
+  await page.selectOption('[data-testid="connection-engine"]', 'mysql');
+  await page.fill('[data-testid="connection-host"]', '127.0.0.1');
+  await page.fill('[data-testid="connection-port"]', String(MYSQL_TX_PORT));
+  await page.fill('[data-testid="connection-username"]', 'root');
+  await page.fill('[data-testid="connection-password"]', process.env.AIDB_TEST_MYSQL_PASSWORD ?? 'testpass');
+  await page.click('[data-testid="connection-save"]');
+  const mysqlTxRow = page.locator('.conn-row', { hasText: 'MySQL TX E2E' });
+  await mysqlTxRow.waitFor({ timeout: 20000 });
+  check('MySQL connection created for the transaction check', true);
+
+  // 选中该连接后用工具栏的全局「新建查询」，标签页必然绑定到它，不走右键菜单。
+  await mysqlTxRow.click();
+  await page.click('.tab-add');
+  await page.waitForSelector('[data-testid="query-run"]', { timeout: 20000 });
+  await page.waitForSelector('[data-testid="tx-begin"]', { timeout: 20000 });
+  check('MySQL transaction controls appear in the query toolbar', true);
+
+  const execSql = async (sql) => {
+    await page.fill('.cm-content', sql);
+    await page.locator('[data-testid="query-run"]').last().click();
+    await page.waitForTimeout(700);
+  };
+
+  await page.click('[data-testid="tx-begin"]');
+  await page.waitForSelector('[data-testid="tx-commit"]', { timeout: 15000 });
+  check('MySQL transaction starts from the query toolbar', true);
+
+  await execSql("INSERT INTO aidb_tx.tx_ui VALUES (2, 'in-tx')");
+  await page.click('[data-testid="tx-rollback"]');
+  await page.waitForSelector('[data-testid="tx-begin"]', { timeout: 15000 });
+  check('MySQL transaction rolls back from the query toolbar', true);
+
+  await execSql('SELECT COUNT(*) AS n FROM aidb_tx.tx_ui');
+  await page.waitForSelector('[data-testid="query-result-grid"]', { timeout: 20000 });
+  const rollbackGrid = await page.locator('[data-testid="query-result-grid"]').innerText();
+  // 网格文本只用于展示证据；回滚是否真的生效以独立客户端查询为准（见下一条断言）。
+  check('MySQL rollback query still returns the seeded rows', /1/.test(rollbackGrid), rollbackGrid.replace(/\s+/g, ' ').slice(0, 80));
+
+  const verify = await mysqlTx.createConnection({
+    host: '127.0.0.1',
+    port: MYSQL_TX_PORT,
+    user: 'root',
+    password: process.env.AIDB_TEST_MYSQL_PASSWORD ?? 'testpass',
+    database: 'aidb_tx',
+  });
+  const [rows] = await verify.query('SELECT COUNT(*) AS n FROM tx_ui');
+  await verify.end();
+  check('MySQL rollback left exactly the seeded row', Number(rows[0].n) === 1, `n=${rows[0].n}`);
 }
 
 

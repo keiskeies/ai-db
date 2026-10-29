@@ -1811,7 +1811,15 @@ export function createApiRouter(deps: ApiDeps): Router {
       if (!connectionId) throw Object.assign(new Error('connectionId 必填'), { code: 'INVALID_INPUT', status: 400 });
       const database = str(req.query.database);
       const limit = num(req.query.limit, 6, 1, 12);
-      const schemas = await manager.schema(connectionId, database);
+      // 建议只是锦上添花：连接还没选库（MySQL 常见）或库不可达时，返回空建议而不是 400，
+      // 否则每次打开查询页都会在控制台留下一个失败请求。
+      let schemas: Awaited<ReturnType<typeof manager.schema>> = [];
+      try {
+        schemas = await manager.schema(connectionId, database);
+      } catch {
+        res.json({ suggestions: [] });
+        return;
+      }
       const history = store.listHistory({ connectionId, limit: 50 }).flatMap((h) => tablesFromSql(h.sql));
       res.json({
         suggestions: suggestQuestions(schemas, { limit, history, bundle: store.agentContextBundle(connectionId, database) }),
