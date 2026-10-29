@@ -10,6 +10,7 @@ const TARGET_HOST = process.env.AIDB_TEST_SSH_TARGET_HOST;
 const TARGET_PORT = process.env.AIDB_TEST_SSH_TARGET_PORT ? Number(process.env.AIDB_TEST_SSH_TARGET_PORT) : 3306;
 const SSH_USER = process.env.AIDB_TEST_SSH_USER ?? 'root';
 const SSH_PASSWORD = process.env.AIDB_TEST_SSH_PASSWORD ?? 'testpass';
+const SSH_KEY = process.env.AIDB_TEST_SSH_KEY;
 const DB_PASSWORD = process.env.AIDB_TEST_MYSQL_PASSWORD ?? 'testpass';
 
 const skip = !SSH_PORT || !TARGET_HOST;
@@ -85,6 +86,32 @@ test('连接配置走 SSH 隧道完成 MySQL 查询', { skip }, async () => {
   } finally {
     await bundle.close();
   }
+});
+
+test('SSH 私钥认证转发目标端口', { skip: skip || !SSH_KEY }, async () => {
+  const tunnel = await openTunnel({ ...sshConfig(), authMethod: 'key', privateKeyPath: SSH_KEY }, TARGET_HOST!, TARGET_PORT);
+  let banner = '';
+  try {
+    banner = await new Promise<string>((resolve, reject) => {
+      const socket = net.connect(tunnel.localPort, tunnel.localHost);
+      const timer = setTimeout(() => {
+        socket.destroy();
+        reject(new Error('私钥隧道 5s 内没有转发任何数据'));
+      }, 5000);
+      socket.once('data', (chunk) => {
+        clearTimeout(timer);
+        socket.destroy();
+        resolve(chunk.toString('latin1'));
+      });
+      socket.once('error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+  } finally {
+    await tunnel.close();
+  }
+  assert.match(banner, /\d+\.\d+\.\d+/);
 });
 
 test('SSH 密码错误返回 SSH_CONNECT', { skip }, async () => {
