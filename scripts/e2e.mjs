@@ -1405,6 +1405,24 @@ await page.waitForFunction(() => !document.querySelector('[data-testid="columns-
 const headersShown = await page.locator('[data-testid="data-grid"] thead').innerText();
 check('column visibility restores a column', headersShown.includes('status'), headersShown.replace(/\s+/g, ' ').slice(0, 80));
 
+await page.click('[data-testid="data-sort"]');
+await page.waitForSelector('[data-testid="sort-row-0"]', { timeout: 5000 });
+await page.selectOption('[data-testid="sort-column-0"]', 'status');
+await page.click('[data-testid="sort-add"]');
+await page.selectOption('[data-testid="sort-column-1"]', 'total_cents');
+await page.selectOption('[data-testid="sort-dir-1"]', 'desc');
+const sortRequestPromise = page.waitForRequest((req) => req.url().includes('/api/data?')
+  && req.url().includes('orderBy=status%2Ctotal_cents')
+  && req.url().includes('orderDir=asc%2Cdesc'), { timeout: 10000 });
+await page.click('[data-testid="sort-apply"]');
+const multiSortRequest = await sortRequestPromise.catch(() => null);
+check('multi-column sort is sent to the data API', Boolean(multiSortRequest), multiSortRequest ? decodeURIComponent(multiSortRequest.url()).slice(0, 120) : 'request not observed');
+await page.waitForTimeout(700);
+await page.click('[data-testid="data-sort"]');
+await page.waitForSelector('[data-testid="sort-row-0"]', { timeout: 5000 });
+await page.click('[data-testid="sort-clear"]');
+await page.waitForTimeout(700);
+
 await page.screenshot({ path: join(shots, 'desktop-data.png') });
 
 await page.locator('[title="TABLE orders"]').click({ button: 'right' });

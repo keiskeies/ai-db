@@ -198,7 +198,7 @@ export interface QueryResult {
 | POST | `/backups/:id/restore` | 从备份恢复 |
 | POST | `/query` | `{connectionId, database?, sql, limit?, offset?, mode?}` → QueryResult。SQL 连接执行 SQL；MongoDB 为 JSON MQL；Redis 为单条命令；Cassandra/ScyllaDB 为 CQL；Qdrant/Milvus/Weaviate 为 JSON 向量查询；Elasticsearch/OpenSearch 为 JSON `_search` 请求 |
 | POST | `/vector/search` | `{connectionId, database?, collection, field?, vector?, text?, topK?, filter?}` → `{result}`；pgvector 需 field，Qdrant/Milvus 可选命名向量；text 走 Embedding |
-| GET | `/data` | `?connectionId&database&table&limit&offset&orderBy&where` |
+| GET | `/data` | `?connectionId&database&table&limit&offset&orderBy&orderDir&where`；`orderBy=a,b&orderDir=asc,desc` 为多列排序（最多 4 列） |
 | POST | `/rows` | `{op:'insert'|'insertMany'|'update'|'delete'|'deleteMany', values?/rows?/key?/keys?}` |
 | POST | `/ddl/preview` | 结构化变更 → `{statements: string[]}` |
 | POST | `/ddl/execute` | 执行 DDL（审批由 Agent 层负责；手工执行由 UI 确认） |

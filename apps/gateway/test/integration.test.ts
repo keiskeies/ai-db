@@ -84,6 +84,24 @@ test('query, pagination, sorting and readonly enforcement', async () => {
   const totals = page.body.batch.sets[0].rows.map((r) => Number(r[page.body.batch.sets[0].columns.findIndex((c) => c.name === 'total_cents')]));
   for (let i = 1; i < totals.length; i++) assert.ok(totals[i - 1] >= totals[i]);
 
+  const multi = await api<{ sql: string; batch: { sets: Array<{ rows: unknown[][]; columns: Array<{ name: string }> }> } }>(
+    `/data?connectionId=${demo.id}&table=orders&limit=8&offset=0&orderBy=status,total_cents&orderDir=asc,desc`,
+  );
+  assert.equal(multi.status, 200);
+  assert.match(multi.body.sql, /ORDER BY .*status.*ASC.*, .*total_cents.* DESC/i);
+  const columnIndex = (name: string) => multi.body.batch.sets[0].columns.findIndex((column) => column.name === name);
+  const statusIndex = columnIndex('status');
+  const multiTotalIndex = columnIndex('total_cents');
+  const multiRows = multi.body.batch.sets[0].rows;
+  for (let i = 1; i < multiRows.length; i += 1) {
+    const previous = String(multiRows[i - 1][statusIndex]);
+    const current = String(multiRows[i][statusIndex]);
+    assert.ok(previous <= current, `${previous} <= ${current}`);
+    if (previous === current) {
+      assert.ok(Number(multiRows[i - 1][multiTotalIndex]) >= Number(multiRows[i][multiTotalIndex]));
+    }
+  }
+
   const readonly = await api<{ connection: ConnectionConfig }>('/connections', {
     method: 'POST',
     body: JSON.stringify({ name: 'Readonly demo', engine: 'sqlite', database: demo.database, readonly: true }),

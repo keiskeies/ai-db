@@ -1418,12 +1418,13 @@ export function createApiRouter(deps: ApiDeps): Router {
       const { table } = await manager.findTable(connectionId, database, tableName);
       const limit = num(req.query.limit, 100, 1, 1000);
       const offset = num(req.query.offset, 0, 0, 10_000_000);
-      const orderCol = str(req.query.orderBy);
-      const direction = String(req.query.orderDir ?? 'asc').toLowerCase() === 'desc' ? 'DESC' : 'ASC';
-      let orderBy: string | undefined;
-      if (orderCol && (table.columns ?? []).some((c) => c.name === orderCol)) {
-        orderBy = `${quoteIdent(orderCol, conn.engine)} ${direction}`;
-      }
+      // 多列排序：orderBy=status,total_cents&orderDir=asc,desc，最多 4 列
+      const orderCols = (str(req.query.orderBy) ?? '').split(',').map((value) => value.trim()).filter(Boolean).slice(0, 4);
+      const directions = String(req.query.orderDir ?? 'asc').split(',').map((value) => value.trim().toLowerCase());
+      const orderParts = orderCols
+        .map((column, index) => ((table.columns ?? []).some((c) => c.name === column) ? `${quoteIdent(column, conn.engine)} ${directions[index] === 'desc' ? 'DESC' : 'ASC'}` : null))
+        .filter((part): part is string => Boolean(part));
+      const orderBy = orderParts.length ? orderParts.join(', ') : undefined;
       const sql = buildSelectTable(conn.engine, table.name, {
         schema: engineUsesSchema(conn.engine) ? table.schema : undefined,
         where: str(req.query.where),

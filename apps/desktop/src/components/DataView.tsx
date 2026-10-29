@@ -100,8 +100,7 @@ export function DataView({ tab }: { tab: DataTab }) {
   const [error, setError] = useState<string | null>(null);
   const [limit, setLimit] = useState(100);
   const [offset, setOffset] = useState(0);
-  const [orderBy, setOrderBy] = useState<string | undefined>();
-  const [orderDir, setOrderDir] = useState<'asc' | 'desc'>('asc');
+  const [sorts, setSorts] = useState<Array<{ column: string; dir: 'asc' | 'desc' }>>([]);
   const [whereInput, setWhereInput] = useState('');
   const [where, setWhere] = useState('');
   const [newRow, setNewRow] = useState<Record<number, string> | null>(null);
@@ -121,7 +120,7 @@ export function DataView({ tab }: { tab: DataTab }) {
   const [sortOpen, setSortOpen] = useState(false);
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [hiddenColumns, setHiddenColumns] = useState<string[]>([]);
-  const [sortDraft, setSortDraft] = useState<{ column: string; dir: 'asc' | 'desc' }>({ column: orderBy ?? '', dir: orderDir });
+  const [sortDraft, setSortDraft] = useState<Array<{ column: string; dir: 'asc' | 'desc' }>>([{ column: '', dir: 'asc' }]);
   const [conditions, setConditions] = useState<Array<{ column: string; op: string; value: string; connector: 'AND' | 'OR' }>>([
     { column: '', op: '=', value: '', connector: 'AND' },
   ]);
@@ -137,8 +136,8 @@ export function DataView({ tab }: { tab: DataTab }) {
         database: tab.database,
         limit,
         offset,
-        orderBy,
-        orderDir,
+        orderBy: sorts.length ? sorts.map((sort) => sort.column).join(',') : undefined,
+        orderDir: sorts.length ? sorts.map((sort) => sort.dir).join(',') : undefined,
         where: where || undefined,
       });
       setPage(result);
@@ -148,13 +147,15 @@ export function DataView({ tab }: { tab: DataTab }) {
     } finally {
       setLoading(false);
     }
-  }, [tab.connectionId, tab.table, tab.database, limit, offset, orderBy, orderDir, where]);
+  }, [tab.connectionId, tab.table, tab.database, limit, offset, sorts, where]);
 
   useEffect(() => {
     void load();
   }, [load, refreshKey]);
 
   const columns = page?.batch.sets[0]?.columns ?? [];
+  const orderBy = sorts[0]?.column;
+  const orderDir = sorts[0]?.dir ?? 'asc';
   const rows = page?.batch.sets[0]?.rows ?? [];
   const total = page?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / limit));
@@ -162,7 +163,7 @@ export function DataView({ tab }: { tab: DataTab }) {
 
   useEffect(() => {
     setSelected(new Set());
-  }, [tab.connectionId, tab.table, tab.database, limit, offset, orderBy, orderDir, where, refreshKey]);
+  }, [tab.connectionId, tab.table, tab.database, limit, offset, sorts, where, refreshKey]);
 
   useEffect(() => {
     setHiddenColumns([]);
@@ -175,16 +176,12 @@ export function DataView({ tab }: { tab: DataTab }) {
   }, [columns, replaceDraft.column]);
 
   const toggleSort = (column: string) => {
-    if (orderBy === column) {
-      if (orderDir === 'asc') setOrderDir('desc');
-      else {
-        setOrderBy(undefined);
-        setOrderDir('asc');
+    setSorts((prev) => {
+      if (prev.length === 1 && prev[0].column === column) {
+        return prev[0].dir === 'asc' ? [{ column, dir: 'desc' }] : [];
       }
-    } else {
-      setOrderBy(column);
-      setOrderDir('asc');
-    }
+      return [{ column, dir: 'asc' }];
+    });
     setOffset(0);
   };
 
@@ -555,7 +552,7 @@ export function DataView({ tab }: { tab: DataTab }) {
         <button className="btn small" title="筛选构建器" onClick={() => setFilterOpen(true)} data-testid="data-filter-builder">
           <ListFilter size={12} /> 筛选
         </button>
-        <button className="btn small" title="排序" onClick={() => { setSortDraft({ column: orderBy ?? columns[0]?.name ?? '', dir: orderDir }); setSortOpen(true); }} data-testid="data-sort">
+        <button className="btn small" title="排序" onClick={() => { setSortDraft(sorts.length ? sorts : [{ column: columns[0]?.name ?? '', dir: 'asc' }]); setSortOpen(true); }} data-testid="data-sort">
           <ArrowUpDown size={12} /> 排序
         </button>
         <button className={`btn small ${textMode ? 'active' : ''}`} title="文本视图" onClick={() => setTextMode((value) => !value)} data-testid="data-text-mode">
@@ -817,11 +814,11 @@ export function DataView({ tab }: { tab: DataTab }) {
           onClose={() => setSortOpen(false)}
           footer={
             <>
-              <button className="btn" onClick={() => { setOrderBy(undefined); setOrderDir('asc'); setOffset(0); setSortOpen(false); }}>不排序</button>
+              <button className="btn" onClick={() => { setSorts([]); setOffset(0); setSortOpen(false); }} data-testid="sort-clear">不排序</button>
               <button className="btn" onClick={() => setSortOpen(false)}>{t('cancel')}</button>
               <button
                 className="btn primary"
-                onClick={() => { setOrderBy(sortDraft.column || undefined); setOrderDir(sortDraft.dir); setOffset(0); setSortOpen(false); }}
+                onClick={() => { setSorts(sortDraft.filter((rule) => rule.column).slice(0, 3)); setOffset(0); setSortOpen(false); }}
                 data-testid="sort-apply"
               >
                 应用
@@ -829,15 +826,40 @@ export function DataView({ tab }: { tab: DataTab }) {
             </>
           }
         >
-          <div className="row gap-8">
-            <select className="select" value={sortDraft.column} onChange={(e) => setSortDraft({ ...sortDraft, column: e.target.value })}>
-              <option value="">选择排序列</option>
-              {columns.map((column) => <option key={column.name} value={column.name}>{column.name}</option>)}
-            </select>
-            <select className="select" value={sortDraft.dir} onChange={(e) => setSortDraft({ ...sortDraft, dir: e.target.value as 'asc' | 'desc' })}>
-              <option value="asc">升序 ASC</option>
-              <option value="desc">降序 DESC</option>
-            </select>
+          <div className="sort-rules">
+            {sortDraft.map((rule, index) => (
+              <div className="row gap-8" key={index} data-testid={`sort-row-${index}`}>
+                <select
+                  className="select"
+                  value={rule.column}
+                  onChange={(e) => setSortDraft((prev) => prev.map((item, i) => (i === index ? { ...item, column: e.target.value } : item)))}
+                  data-testid={`sort-column-${index}`}
+                >
+                  <option value="">选择排序列</option>
+                  {columns.map((column) => <option key={column.name} value={column.name}>{column.name}</option>)}
+                </select>
+                <select
+                  className="select"
+                  value={rule.dir}
+                  onChange={(e) => setSortDraft((prev) => prev.map((item, i) => (i === index ? { ...item, dir: e.target.value as 'asc' | 'desc' } : item)))}
+                  data-testid={`sort-dir-${index}`}
+                >
+                  <option value="asc">升序 ASC</option>
+                  <option value="desc">降序 DESC</option>
+                </select>
+                {sortDraft.length > 1 ? (
+                  <button className="icon-btn" title="移除该排序条件" onClick={() => setSortDraft((prev) => prev.filter((_, i) => i !== index))} data-testid={`sort-remove-${index}`}>
+                    <X size={12} />
+                  </button>
+                ) : null}
+              </div>
+            ))}
+            {sortDraft.length < 3 ? (
+              <button className="btn small" onClick={() => setSortDraft((prev) => [...prev, { column: '', dir: 'asc' }])} data-testid="sort-add">
+                <Plus size={12} /> 添加排序条件
+              </button>
+            ) : null}
+            <div className="muted" style={{ fontSize: 11 }}>先按第一列排序，值相同的行再按后续列排序（最多 3 列）。</div>
           </div>
         </Modal>
       ) : null}
