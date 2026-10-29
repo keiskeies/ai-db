@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
-import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -1458,6 +1458,28 @@ await page.click('[data-testid="data-form-mode"]');
 await page.waitForSelector('[data-testid="data-grid"] tbody tr', { timeout: 10000 });
 await page.waitForFunction(() => document.querySelector('[data-testid="data-grid"]')?.innerText.includes('form-e2e'), null, { timeout: 15000 });
 check('form view saves the edited row', true, `id=${formId} total=${formTotal}`);
+
+const jsonImportPath = join(home, 'import-e2e.json');
+writeFileSync(jsonImportPath, JSON.stringify([{ user_id: 1, status: 'paid', channel: 'json-e2e', total_cents: 4200, created_at: '2026-01-01T00:00:00.000Z' }]));
+const xmlImportPath = join(home, 'import-e2e.xml');
+writeFileSync(xmlImportPath, '<rows><row><user_id>2</user_id><status>paid</status><channel>xml-e2e</channel><total_cents>4300</total_cents><created_at>2026-01-02T00:00:00.000Z</created_at></row></rows>');
+await page.setInputFiles('[data-testid="data-import-file"]', jsonImportPath);
+await page.waitForSelector('[data-testid="import-confirm"]', { timeout: 5000 });
+check('JSON import preview maps columns', (await page.locator('.modal').innerText()).includes('json-e2e'));
+await page.click('[data-testid="import-confirm"]');
+await page.waitForFunction(() => !document.querySelector('[data-testid="import-confirm"]'), null, { timeout: 20000 });
+await page.waitForTimeout(900);
+const jsonImportResult = await api(`/data?connectionId=${demo.id}&table=orders&limit=5&where=${encodeURIComponent("channel='json-e2e'")}`);
+check('JSON import inserts a row', jsonImportResult.status === 200 && jsonImportResult.body.total >= 1, `total=${jsonImportResult.body?.total}`);
+
+await page.setInputFiles('[data-testid="data-import-file"]', xmlImportPath);
+await page.waitForSelector('[data-testid="import-confirm"]', { timeout: 5000 });
+check('XML import preview maps columns', (await page.locator('.modal').innerText()).includes('xml-e2e'));
+await page.click('[data-testid="import-confirm"]');
+await page.waitForFunction(() => !document.querySelector('[data-testid="import-confirm"]'), null, { timeout: 20000 });
+await page.waitForTimeout(900);
+const xmlImportResult = await api(`/data?connectionId=${demo.id}&table=orders&limit=5&where=${encodeURIComponent("channel='xml-e2e'")}`);
+check('XML import inserts a row', xmlImportResult.status === 200 && xmlImportResult.body.total >= 1, `total=${xmlImportResult.body?.total}`);
 
 await page.screenshot({ path: join(shots, 'desktop-data.png') });
 

@@ -29,6 +29,45 @@ import { formatDuration } from '../lib/format';
 
 type DataTab = Extract<Tab, { kind: 'data' }>;
 
+function csvCell(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  const text = typeof value === 'object' ? JSON.stringify(value) : String(value);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function rowsToCsv(rows: unknown[][]): string {
+  return rows.map((row) => row.map(csvCell).join(',')).join('\n');
+}
+
+function jsonToCsv(text: string): string {
+  const parsed: unknown = JSON.parse(text);
+  const list = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray((parsed as { rows?: unknown[] })?.rows)
+      ? (parsed as { rows: unknown[] }).rows
+      : [parsed];
+  if (!list.length) throw new Error('JSON 没有记录');
+  if (Array.isArray(list[0])) return rowsToCsv(list as unknown[][]);
+  const records = list as Array<Record<string, unknown>>;
+  const headers = [...new Set(records.flatMap((row) => Object.keys(row ?? {})))];
+  if (!headers.length) throw new Error('JSON 记录没有字段');
+  return rowsToCsv([headers, ...records.map((row) => headers.map((key) => row?.[key]))]);
+}
+
+function xmlToCsv(text: string): string {
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  if (doc.querySelector('parsererror')) throw new Error('XML 解析失败');
+  let records: Element[] = [];
+  for (const tag of ['row', 'record', 'item']) {
+    const found = [...doc.getElementsByTagName(tag)].filter((element) => element.children.length);
+    if (found.length > records.length) records = found;
+  }
+  if (!records.length) throw new Error('XML 里没有 <row>/<record>/<item> 记录');
+  const headers = [...new Set(records.flatMap((record) => [...record.children].map((child) => child.tagName)))];
+  const rows = records.map((record) => headers.map((tag) => [...record.children].find((child) => child.tagName === tag)?.textContent ?? ''));
+  return rowsToCsv([headers, ...rows]);
+}
+
 function parseCsvPreview(text: string, delimiter: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
@@ -519,8 +558,11 @@ export function DataView({ tab }: { tab: DataTab }) {
 
   const importFile = async (file: File) => {
     try {
-      const csv = await file.text();
+      const name = file.name.toLowerCase();
+      let csv = await file.text();
       const delimiter = file.name.toLowerCase().endsWith('.tsv') ? '\t' : ',';
+      if (name.endsWith('.json')) csv = jsonToCsv(csv);
+      else if (name.endsWith('.xml')) csv = xmlToCsv(csv);
       const rows = parseCsvPreview(csv, delimiter);
       if (!rows.length) {
         notify('warning', 'CSV 没有内容');
@@ -660,14 +702,15 @@ export function DataView({ tab }: { tab: DataTab }) {
             保存新行
           </button>
         ) : null}
-        <button className="btn small" onClick={() => fileRef.current?.click()} disabled={!writable}>
+        <button className="btn small" onClick={() => fileRef.current?.click()} disabled={!writable} data-testid="data-import">
           <Upload size={12} /> {t('import')}
         </button>
         <input
           ref={fileRef}
           type="file"
-          accept=".csv,text/csv"
+          accept=".csv,.tsv,.txt,.json,.xml"
           style={{ display: 'none' }}
+          data-testid="data-import-file" 
           onChange={(e) => {
             const file = e.target.files?.[0];
             if (file) void importFile(file);
@@ -792,7 +835,7 @@ export function DataView({ tab }: { tab: DataTab }) {
 
       {importDraft ? (
         <Modal
-          title={`导入 CSV · ${importDraft.name}`}
+          title={`导入数据 · ${importDraft.name}`}
           onClose={() => setImportDraft(null)}
           footer={
             <>
@@ -800,7 +843,7 @@ export function DataView({ tab }: { tab: DataTab }) {
                 预览 {Math.max(0, importDraft.rows.length - (importDraft.hasHeader ? 1 : 0))} 行 · 目标 {tab.table}
               </span>
               <button className="btn" onClick={() => setImportDraft(null)}>{t('cancel')}</button>
-              <button className="btn primary" onClick={() => void confirmImport()} disabled={importing}>
+              <button className="btn primary" onClick={() => void confirmImport()} disabled={importing} data-testid="import-confirm">
                 {importing ? '导入中…' : t('import')}
               </button>
             </>

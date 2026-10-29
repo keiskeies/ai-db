@@ -74,7 +74,7 @@
 
 1. `/health`、`/bootstrap`、40 工具与 demo 种子。
 2. 查询计数、分页 / 排序、只读连接拒绝写入（403 `READONLY`）。
-3. 行更新、DDL 预览 / 执行、CSV 导出、CSV 导入。
+3. 行更新、DDL 预览 / 执行、CSV 导出、CSV/JSON/XML 导入。
 4. Agent：schema 检查、`run_sql`、**审批后建表**、记忆写入 / 检索、审计、历史。
 5. 配对码 → 设备令牌 → 吊销后 401。
 6. WebSocket 完整回合（start → tool_call → done → turn_end）。
@@ -288,7 +288,7 @@ Expo Web 构建在 390×844 视口通过：配对页、配对码真实兑换、A
 | 跨请求事务 | 开始事务 / 提交 / 回滚 | — | ✅ MySQL / PostgreSQL / Oracle / SQL Server / SQLite / DM8（其它引擎仍即时提交） |
 | 打印 / 快捷方式 / 管理组 | 表菜单对应项 | — | ⚠️ 未实现 |
 | 图表多维 / 堆叠 | 单序列柱 / 折线 / 饼 | — | ⚠️ 未实现 |
-| Excel / XML 导入 | 仅 CSV 导入 | — | ⚠️ 未实现 |
+| Excel 导入 | JSON / XML 导入已支持；Excel 需解析二进制工作簿 | E2E「JSON/XML import」 | ⚠️ Excel 未实现 |
 | 报表设计器 / 云协作 / ER 编辑 | 设计明确不做 | — | ➖ 非目标 |
 
 ### 11.2 回归结果
