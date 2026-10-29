@@ -66,6 +66,7 @@ export function Sidebar() {
   const schemaLoading = useApp((s) => s.schemaLoading);
   const expanded = useApp((s) => s.expandedConnections);
   const expandedSchemas = useApp((s) => s.expandedSchemas);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const activeConnectionId = useApp((s) => s.activeConnectionId);
   const t = useApp((s) => s.t);
   const toggleConnection = useApp((s) => s.toggleConnection);
@@ -451,10 +452,26 @@ export function Sidebar() {
             </div>
           </div>
         ) : null}
-        {grouped.map(([group, list]) => (
+        {grouped.map(([group, list]) => {
+          const collapsed = collapsedGroups.has(group) && !query.trim();
+          return (
           <div key={group}>
-            <div className="group-label">{group}</div>
+            <button
+              className="group-label"
+              onClick={() => setCollapsedGroups((prev) => {
+                const next = new Set(prev);
+                if (next.has(group)) next.delete(group);
+                else next.add(group);
+                return next;
+              })}
+              data-testid={`group-toggle-${group}`}
+            >
+              <ChevronRight size={11} className={`conn-toggle ${collapsed ? '' : 'open'}`} />
+              {group}
+              <span className="group-count">{list.length}</span>
+            </button>
             {list.map((conn) => {
+              if (collapsed) return null;
               const isOpen = expanded[conn.id] || Boolean(query.trim());
               const connSchemas = schemas[conn.id];
               return (
@@ -739,7 +756,8 @@ export function Sidebar() {
               );
             })}
           </div>
-        ))}
+          );
+        })}
         {connections.length && !filtered.length ? <div className="muted" style={{ padding: 14, fontSize: 11.5 }}>没有匹配的连接或表</div> : null}
       </div>
       <div className="sidebar-foot">

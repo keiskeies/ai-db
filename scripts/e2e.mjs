@@ -1939,6 +1939,15 @@ if (electronBinary) {
   console.log('SKIP  electron shell — no Electron binary installed');
 }
 
+// ---------------- 连接分组折叠 ----------------
+const demoGroup = page.locator('[data-testid="group-toggle-示例"]');
+check('connection groups render a collapse toggle', (await demoGroup.count()) === 1);
+await demoGroup.click();
+await page.waitForFunction(() => ![...document.querySelectorAll('.conn-row')].some((el) => (el.textContent ?? '').includes('Demo · Shop DB')), null, { timeout: 5000 });
+check('collapsed group hides its connections', true);
+await demoGroup.click();
+await page.waitForFunction(() => [...document.querySelectorAll('.conn-row')].some((el) => (el.textContent ?? '').includes('Demo · Shop DB')), null, { timeout: 5000 });
+
 // ---------------- 只读连接：UI 收口写入入口 ----------------
 await api(`/connections/${demo.id}`, { method: 'PUT', body: JSON.stringify({ readonly: true }) });
 await page.reload({ waitUntil: 'domcontentloaded' });
