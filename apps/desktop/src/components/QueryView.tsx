@@ -121,6 +121,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const [snippetsLoading, setSnippetsLoading] = useState(false);
   const [chartX, setChartX] = useState('');
   const [chartY, setChartY] = useState('');
+  const [extraY, setExtraY] = useState<string[]>([]);
   const [databases, setDatabases] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -498,13 +499,39 @@ ${text}
     if (!effectiveX || !effectiveY || effectiveX === effectiveY) return null;
     const xIndex = names.indexOf(effectiveX);
     const yIndex = names.indexOf(effectiveY);
-    const series = set.rows
+    const extraColumns = extraY
+      .filter((name) => name !== effectiveY && names.includes(name))
+      .map((name) => ({ name, index: names.indexOf(name) }));
+    const points = set.rows
       .slice(0, 24)
-      .map((row) => ({ label: String(row[xIndex] ?? '—'), value: Number(row[yIndex]) }))
+      .map((row) => ({
+        label: String(row[xIndex] ?? '—'),
+        value: Number(row[yIndex]),
+        extras: extraColumns.map((column) => {
+          const value = Number(row[column.index]);
+          return Number.isFinite(value) ? value : 0;
+        }),
+      }))
       .filter((point) => Number.isFinite(point.value));
-    if (!series.length) return null;
-    return { type: chartType, title: `${effectiveY} by ${effectiveX}`, xLabel: effectiveX, yLabel: effectiveY, series };
-  }, [set, chartX, chartY, chartType]);
+    if (!points.length) return null;
+    return {
+      type: chartType,
+      title: `${effectiveY} by ${effectiveX}`,
+      xLabel: effectiveX,
+      yLabel: effectiveY,
+      series: points.map((point) => ({ label: point.label, value: point.value })),
+      extraSeries: extraColumns.length
+        ? extraColumns.map((column, offset) => ({ name: column.name, values: points.map((point) => point.extras[offset]) }))
+        : undefined,
+    };
+  }, [set, chartX, chartY, chartType, extraY]);
+
+  const numericColumns = useMemo(() => {
+    if (!set) return [];
+    return set.columns
+      .filter((_, index) => set.rows.some((row) => Number.isFinite(Number(row[index]))))
+      .map((column) => column.name);
+  }, [set]);
 
   const applyHistory = (text: string) => {
     const view = viewRef.current;
@@ -804,6 +831,24 @@ ${text}
           {resultTab === 'chart' ? (
             <div className="query-chart-panel">
               {chartSpec ? (
+                <>
+                {numericColumns.length > 1 ? (
+                  <div className="row gap-4" style={{ padding: '6px 10px', flexWrap: 'wrap' }} data-testid="chart-extra-columns">
+                    <span className="muted" style={{ fontSize: 11 }}>对比列</span>
+                    {numericColumns
+                      .filter((name) => name !== chartSpec.yLabel)
+                      .map((name) => (
+                        <button
+                          key={name}
+                          className={`btn small ${extraY.includes(name) ? 'active' : ''}`}
+                          onClick={() => setExtraY((prev) => (prev.includes(name) ? prev.filter((item) => item !== name) : [...prev, name]))}
+                          data-testid={`chart-extra-${name}`}
+                        >
+                          {name}
+                        </button>
+                      ))}
+                  </div>
+                ) : null}
                 <ChartView
                   chart={chartSpec}
                   typeOverride={chartType}
@@ -815,6 +860,7 @@ ${text}
                   onX={setChartX}
                   onY={setChartY}
                 />
+                </>
               ) : (
                 <div className="dash-empty">当前结果没有可绘制的数值列。</div>
               )}

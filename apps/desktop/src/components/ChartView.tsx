@@ -11,6 +11,8 @@ export interface ChartSpec {
   yLabel: string;
   sql?: string;
   series: Array<{ label: string; value: number }>;
+  /** 多列对比：与 series 等长的附加数值列（柱状/折线） */
+  extraSeries?: Array<{ name: string; values: number[] }>;
   /** forecast_chart 的外推段：虚线 + 半透明区间带，接在 series 之后 */
   forecast?: Array<{ label: string; value: number; lower: number; upper: number }>;
   /** forecast_chart 的方法说明，必须原样展示给用户 */
@@ -187,6 +189,12 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
   const id = useStableId();
   const measured = useElementWidth(svgRef, zoomed ? 720 : 380);
   const history = chart.series.slice(0, maxPoints);
+  const extras = (chart.extraSeries ?? []).filter((extra) => extra.values.length === history.length);
+  const multi = extras.length > 0;
+  const seriesList = [
+    { name: chart.yLabel, values: history.map((point) => point.value), color: '#45c8c3' },
+    ...extras.map((extra, index) => ({ name: extra.name, values: extra.values, color: COLORS[(index + 1) % COLORS.length] })),
+  ];
   const forecast = type === 'line' ? (chart.forecast ?? []).slice(0, 12) : [];
   const all = [...history, ...forecast.map((p) => ({ label: p.label, value: p.value }))];
 
@@ -211,6 +219,7 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
   const band = innerW / all.length;
 
   const values = all.map((point) => point.value);
+  for (const entry of seriesList.slice(1)) values.push(...entry.values);
   if (forecast.length) {
     values.push(0);
     for (const point of forecast) values.push(point.lower, point.upper);
@@ -243,6 +252,7 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
   const labelStep = Math.max(1, Math.ceil(all.length / (zoomed ? 10 : 6)));
 
   return (
+    <>
     <svg
       ref={svgRef}
       viewBox={`0 0 ${width} ${height}`}
@@ -269,7 +279,7 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
         );
       })}
       {lo < 0 ? <line x1={pad.left} x2={width - pad.right} y1={y(0)} y2={y(0)} className="chart-zero" /> : null}
-      {type === 'bar'
+      {type === 'bar' && !multi
         ? history.map((point, index) => {
             const top = y(Math.max(point.value, 0));
             const bottom = y(Math.min(point.value, 0));
@@ -292,11 +302,46 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
             );
           })
         : null}
+      {type === 'bar' && multi
+        ? history.map((point, index) => {
+            const groupWidth = Math.min(band * 0.82, 96);
+            const barWidth = groupWidth / seriesList.length;
+            return seriesList.map((entry, entryIndex) => {
+              const value = entry.values[index] ?? 0;
+              const top = y(Math.max(value, 0));
+              const bottom = y(Math.min(value, 0));
+              return (
+                <rect
+                  key={`${entry.name}-${point.label}-${index}`}
+                  x={pad.left + band * index + (band - groupWidth) / 2 + entryIndex * barWidth}
+                  y={top}
+                  width={Math.max(1, barWidth - 2)}
+                  height={Math.max(1, bottom - top)}
+                  rx={2}
+                  fill={entry.color}
+                  fillOpacity={0.92}
+                >
+                  <title>{`${entry.name} · ${point.label}: ${value.toLocaleString()}`}</title>
+                </rect>
+              );
+            });
+          })
+        : null}
       {type === 'line' ? (
         <>
-          {areaPath ? <path d={areaPath} fill={`url(#area-${id})`} /> : null}
-          {bandPath ? <path d={bandPath} fill="#e0af63" fillOpacity="0.16" stroke="none" data-testid="chart-forecast-band" /> : null}
-          {linePath ? <path d={linePath} fill="none" stroke="#45c8c3" strokeWidth="2" /> : null}
+          {!multi && areaPath ? <path d={areaPath} fill={`url(#area-${id})`} /> : null}
+          {!multi && bandPath ? <path d={bandPath} fill="#e0af63" fillOpacity="0.16" stroke="none" data-testid="chart-forecast-band" /> : null}
+          {multi
+            ? seriesList.map((entry) => (
+                <path
+                  key={entry.name}
+                  d={entry.values.map((value, index) => `${index === 0 ? 'M' : 'L'} ${cx(index)} ${y(value)}`).join(' ')}
+                  fill="none"
+                  stroke={entry.color}
+                  strokeWidth="2"
+                />
+              ))
+            : linePath ? <path d={linePath} fill="none" stroke="#45c8c3" strokeWidth="2" /> : null}
           {forecastPath ? (
             <path d={forecastPath} fill="none" stroke="#e0af63" strokeWidth="2" strokeDasharray="4 3" data-testid="chart-forecast-line" />
           ) : null}
@@ -320,6 +365,17 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
         ) : null,
       )}
     </svg>
+    {multi ? (
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, padding: '0 4px 2px', fontSize: 11, color: 'var(--text-secondary)' }} data-testid="chart-series-legend">
+        {seriesList.map((entry) => (
+          <span key={entry.name} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <i style={{ width: 8, height: 8, borderRadius: 2, background: entry.color, display: 'inline-block' }} />
+            {entry.name}
+          </span>
+        ))}
+      </div>
+    ) : null}
+    </>
   );
 }
 

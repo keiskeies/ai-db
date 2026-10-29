@@ -1689,7 +1689,7 @@ check(
   (await page.locator('[data-testid="query-connection"]').count()) === 1 && (await page.locator('[data-testid="query-database"]').count()) === 1,
 );
 await page.locator('.cm-content').click();
-await page.keyboard.type('SELECT status, COUNT(*) AS n FROM orders GROUP BY status ORDER BY n DESC;');
+await page.keyboard.type('SELECT status, COUNT(*) AS n, SUM(total_cents) AS total FROM orders GROUP BY status ORDER BY n DESC;');
 await page.keyboard.press('Control+Enter');
 await page.waitForSelector('[data-testid="query-result-grid"]', { timeout: 20000 });
 const queryRows = await page.locator('[data-testid="query-result-grid"] tbody tr').count();
@@ -1713,6 +1713,12 @@ await page.waitForTimeout(150);
 await page.locator('.result-tab').filter({ hasText: '图表' }).click();
 await page.waitForSelector('.query-chart-panel .chart-card', { timeout: 10000 });
 check('query result renders a chart tab', true);
+await page.click('[data-testid="chart-extra-total"]');
+await page.waitForSelector('[data-testid="chart-series-legend"]', { timeout: 5000 });
+const legendItems = await page.locator('[data-testid="chart-series-legend"] span').count();
+check('multi-series chart shows both series in the legend', legendItems === 2, `${legendItems} series`);
+const multiBars = await page.locator('.query-chart-panel [data-testid="chart-svg"] rect').count();
+check('multi-series chart renders grouped bars', multiBars >= queryRows * 2, `${multiBars} bars`);
 // 宽窗口下图表要收缩到 400px 以内，不能把窗口撑出滚动条
 await page.setViewportSize({ width: 1920, height: 900 });
 await page.waitForTimeout(500);
