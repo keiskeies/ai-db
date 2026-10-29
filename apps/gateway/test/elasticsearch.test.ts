@@ -40,8 +40,17 @@ test('Elasticsearch/OpenSearch driver contract', { skip: !ES_PORT }, async () =>
 
   const all = await driver.executeQuery({ language: 'search', index: 'aidb_test', body: { query: { match_all: {} } }, size: 10 });
   assert.equal(all.rowCount, 2);
+  assert.equal(all.truncated, false);
   assert.equal(all.resultKind, 'documents');
   assert.deepEqual(all.columns.slice(0, 2).map((column) => column.name), ['_id', '_score']);
+
+  // 取满整页但总数正好等于 size 时不算截断；真正少于 total 才标记
+  const exact = await driver.run(JSON.stringify({ index: 'aidb_test', query: { match_all: {} }, size: 2 }));
+  assert.equal(exact.rowCount, 2);
+  assert.equal(exact.truncated, false);
+  const limited = await driver.run(JSON.stringify({ index: 'aidb_test', query: { match_all: {} }, size: 1 }));
+  assert.equal(limited.rowCount, 1);
+  assert.equal(limited.truncated, true);
 
   const filtered = await driver.run(JSON.stringify({ index: 'aidb_test', query: { term: { kind: 'math' } }, size: 10 }));
   assert.equal(filtered.rowCount, 1);

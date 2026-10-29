@@ -179,7 +179,11 @@ export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDri
       opts.timeoutMs ?? 30000,
     );
     const hits = response?.hits?.hits ?? [];
-    return hitsToResult(hits, started, JSON.stringify({ ...query, size }), hits.length >= size);
+    // 用 total 判断是否真的还有未返回的命中；只看 hits.length >= size 会把“刚好取满”误报为截断。
+    const total = Number(response?.hits?.total?.value ?? hits.length);
+    const relation = String(response?.hits?.total?.relation ?? 'eq');
+    const truncated = relation === 'gte' ? hits.length >= size : total > hits.length;
+    return hitsToResult(hits, started, JSON.stringify({ ...query, size }), truncated);
   }
 
   async run(sql: string, opts: RunOptions = {}): Promise<QueryResult> {

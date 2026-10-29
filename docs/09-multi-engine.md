@@ -133,7 +133,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 
 - 对象树：索引 → mapping 字段，展示文档数/health。
 - 查询：JSON `_search` DSL（`{index, query, body, size}`），默认 `match_all`。
-- 结果：`_id`、`_score`、`_source` 字段，`resultKind = 'documents'`。
+- 结果：`_id`、`_score`、`_source` 字段，`resultKind = 'documents'`；截断按 `hits.total` 判断，取满整页但总数正好等于 `size` 时不算截断，只有总数更多时才在结果栏显示「结果已截断」。
 - 写入：`upsert_document` 批量索引、`import_documents` CSV 导入（id 列映射为 `_id`）、`delete_documents` 按 `_id` 删除；不支持 DDL 与备份。
 - 编辑：结果网格双击文档行打开编辑对话框，`GET /{index}/_doc/{id}` 读回 `_source` 原文，改完按 `_id` 整条索引写回；文档不存在（404 + `found:false`）与索引不存在分开报错；只读连接仍可读回但不可写回。
 - 字段：对象信息面板可给 mapping 追加字段（`PUT /{index}/_mapping`，类型白名单外的输入退回 keyword），Agent 的 `alter_table` 在同一条通道上只允许 `add_column`。
