@@ -33,6 +33,7 @@ export function RedisKeyDialog({
   const [valueText, setValueText] = useState('');
   const [memberInput, setMemberInput] = useState('');
   const [memberScore, setMemberScore] = useState('');
+  const [listItem, setListItem] = useState<{ index: number; value: string } | null>(null);
   const [editField, setEditField] = useState<{ field: string; value: string } | null>(null);
   const [mutating, setMutating] = useState(false);
   const connections = useApp((s) => s.connections);
@@ -65,6 +66,22 @@ export function RedisKeyDialog({
       notify('success', '键值已保存', keyName);
     } catch (err: any) {
       setError(err?.message ?? '保存键值失败');
+    } finally {
+      setMutating(false);
+    }
+  };
+
+  const saveListItem = async () => {
+    if (!listItem) return;
+    setMutating(true);
+    setError(null);
+    try {
+      await api.setListItem({ connectionId, database, key: keyName, index: listItem.index, value: listItem.value });
+      notify('success', '列表元素已改写', `#${listItem.index}`);
+      setListItem(null);
+      await load();
+    } catch (err: any) {
+      setError(err?.message ?? '改写失败');
     } finally {
       setMutating(false);
     }
@@ -390,9 +407,21 @@ export function RedisKeyDialog({
           ) : (detail.type === 'list' || detail.type === 'set' || detail.type === 'zset') && conn && !conn.readonly ? (
             <>
               <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>
-                {detail.type === 'list' ? '新成员追加到列表尾部' : '按成员名增删'}；下方可逐个删除，删空后整键会消失。
+                {detail.type === 'list' ? '双击行按索引改写；新成员追加到列表尾部' : '按成员名增删'}；下方可逐个删除，删空后整键会消失。
               </div>
-              <DataGrid columns={detail.columns} rows={detail.rows} testId="redis-key-grid" />
+              <DataGrid
+                columns={detail.columns}
+                rows={detail.rows}
+                testId="redis-key-grid"
+                onRowActivate={
+                  detail.type === 'list'
+                    ? (rowIndex) => {
+                        const row = detail.rows[rowIndex] ?? [];
+                        setListItem({ index: Number(row[0] ?? 0), value: String(row[1] ?? '') });
+                      }
+                    : undefined
+                }
+              />
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
                 {detail.rows.map((row, index) => {
                   const member = String((detail.type === 'list' ? row[1] : row[0]) ?? '');
@@ -410,6 +439,24 @@ export function RedisKeyDialog({
                   );
                 })}
               </div>
+              {detail.type === 'list' && listItem ? (
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }} data-testid="list-item-editor">
+                  <span className="muted" style={{ fontSize: 11 }}>#{listItem.index}</span>
+                  <input
+                    className="input"
+                    style={{ flex: 1, minWidth: 200 }}
+                    value={listItem.value}
+                    onChange={(event) => setListItem({ ...listItem, value: event.target.value })}
+                    data-testid="list-item-value"
+                  />
+                  <button className="btn small primary" onClick={() => void saveListItem()} disabled={mutating} data-testid="list-item-save">
+                    {mutating ? <Spinner /> : null} 保存
+                  </button>
+                  <button className="btn small" onClick={() => setListItem(null)} disabled={mutating}>
+                    取消
+                  </button>
+                </div>
+              ) : null}
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }} data-testid="member-add-form">
                 <input
                   className="input"

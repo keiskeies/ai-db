@@ -471,3 +471,52 @@ test('HTTP 增删 list/set/zset 成员，删空后整键消失', { skip: !PORT }
     await client.quit();
   }
 });
+
+test('HTTP 按索引改写 list 元素，越界与类型不符被拒', { skip: !PORT }, async () => {
+  const env = await gateway();
+  after(env.close);
+  const writable = await env.connect('redis-lset', false);
+  const readonly = await env.connect('redis-lset-ro', true);
+  const db = '9';
+
+  const client = new Redis({ host: '127.0.0.1', port: PORT!, db: Number(db), lazyConnect: true });
+  await client.connect();
+  try {
+    await client.del('aidb_lset', 'aidb_lset_str');
+    await client.rpush('aidb_lset', 'one', 'two');
+    await client.set('aidb_lset_str', 'plain');
+
+    const set = (key: string, index: number, value: string, connectionId = writable) =>
+      env.api<{ result: { key: string; index: number; value: string } }>('/redis/key/list-item', {
+        method: 'POST',
+        body: JSON.stringify({ connectionId, database: db, key, index, value }),
+      });
+
+    const ok = await set('aidb_lset', 0, 'first');
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.deepEqual(await client.lrange('aidb_lset', 0, -1), ['first', 'two'], '按索引改写后原位置被替换');
+
+    const outOfRange = await set('aidb_lset', 9, 'x');
+    assert.equal(outOfRange.status, 400);
+    assert.equal((outOfRange.body as any).error.code, 'REDIS_LSET');
+
+    const onString = await set('aidb_lset_str', 0, 'x');
+    assert.equal(onString.status, 400);
+    assert.equal((onString.body as any).error.code, 'REDIS_TYPE');
+
+    const badIndex = await env.api('/redis/key/list-item', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: writable, database: db, key: 'aidb_lset', index: -1, value: 'x' }),
+    });
+    assert.equal(badIndex.status, 400);
+
+    const ro = await set('aidb_lset', 0, 'nope', readonly);
+    assert.equal(ro.status, 403);
+
+    const audits = await env.api<{ entries: Array<{ tool: string; risk: string }> }>(`/audit?connectionId=${writable}&limit=40`);
+    assert.ok((audits.body.entries ?? []).some((entry) => entry.tool === 'redis.key.list-item' && entry.risk === 'write'));
+  } finally {
+    await client.del('aidb_lset', 'aidb_lset_str');
+    await client.quit();
+  }
+});

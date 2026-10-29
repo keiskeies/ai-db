@@ -248,6 +248,8 @@ export const api = {
     request<{ result: { key: string; type: string; added: boolean } }>('/redis/key/member', { method: 'POST', body: JSON.stringify(body) }),
   removeKeyMember: (body: { connectionId: string; database?: string; key: string; member: string }) =>
     request<{ result: { key: string; member: string; deleted: number; keyGone: boolean } }>('/redis/key/member/delete', { method: 'POST', body: JSON.stringify(body) }),
+  setListItem: (body: { connectionId: string; database?: string; key: string; index: number; value: string }) =>
+    request<{ result: { key: string; index: number; value: string } }>('/redis/key/list-item', { method: 'POST', body: JSON.stringify(body) }),
   renameKey: (body: { connectionId: string; database?: string; key: string; to: string }) =>
     request<{ result: { from: string; to: string } }>('/redis/key/rename', { method: 'POST', body: JSON.stringify(body) }),
   deleteRedisKeys: (body: { connectionId: string; database?: string; keys: string[] }) =>

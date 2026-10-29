@@ -874,6 +874,50 @@ export function createApiRouter(deps: ApiDeps): Router {
   );
 
   router.post(
+    '/redis/key/list-item',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const connectionId = str(body.connectionId);
+      const key = str(body.key);
+      if (!connectionId || !key) throw Object.assign(new Error('connectionId 与 key 必填'), { code: 'INVALID_INPUT', status: 400 });
+      if (typeof body.value !== 'string') throw Object.assign(new Error('value 需要是字符串'), { code: 'INVALID_INPUT', status: 400 });
+      const index = Number(body.index);
+      if (!Number.isInteger(index) || index < 0) {
+        throw Object.assign(new Error('index 需要是非负整数'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      const database = str(body.database);
+      const value = body.value;
+      try {
+        const result = await manager.setListItem(connectionId, key, index, value, { database, actor: 'user' });
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'redis.key.list-item',
+          sql: JSON.stringify({ key, index }),
+          risk: 'write',
+          approval: 'manual',
+          status: 'ok',
+        });
+        res.json({ result });
+      } catch (err: any) {
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'redis.key.list-item',
+          sql: JSON.stringify({ key, index }),
+          risk: 'write',
+          approval: 'manual',
+          status: 'error',
+          meta: { error: err.message },
+        });
+        throw err;
+      }
+    }),
+  );
+
+  router.post(
     '/redis/key/member',
     ah(async (req, res) => {
       const body = obj(req.body, 'body');

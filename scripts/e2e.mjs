@@ -134,7 +134,7 @@ if (REDIS_PORT) {
   const client = new Redis({ host: '127.0.0.1', port: REDIS_PORT, lazyConnect: true });
   await client.connect();
   await client.set('aidb:e2e:key', 'hello');
-  await client.del('aidb:e2e:key_renamed', 'aidb:e2e:created', 'aidb:e2e:members');
+  await client.del('aidb:e2e:key_renamed', 'aidb:e2e:created', 'aidb:e2e:members', 'aidb:e2e:list');
   await client.set('aidb:e2e:del', 'throwaway');
   if (REDIS_STACK) {
     await client.call('FT.DROPINDEX', 'aidb_e2e').catch(() => undefined);
@@ -657,6 +657,34 @@ if (REDIS_PORT) {
     { timeout: 20000 },
   );
   check('Redis set member removed from the key detail dialog', true);
+  await page.locator('.modal-head .icon-btn').last().click();
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 10000 });
+
+  // list 键：双击行按索引改写
+  await page.click('[data-testid="open-key-create"]');
+  await page.waitForSelector('[data-testid="key-create-name"]', { timeout: 10000 });
+  await page.fill('[data-testid="key-create-name"]', 'aidb:e2e:list');
+  await page.selectOption('[data-testid="key-create-type"]', 'list');
+  await page.fill('[data-testid="key-create-value"]', '["one"]');
+  await page.click('[data-testid="key-create-submit"]');
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
+  await page.waitForFunction(
+    () => document.querySelector('[data-testid="query-result-grid"]')?.innerText.includes('aidb:e2e:list'),
+    null,
+    { timeout: 20000 },
+  );
+  await page.locator('[data-testid="query-result-grid"] tbody tr', { hasText: 'aidb:e2e:list' }).first().dblclick();
+  await page.waitForSelector('[data-testid="redis-key-grid"] tbody tr', { timeout: 10000 });
+  await page.locator('[data-testid="redis-key-grid"] tbody tr').first().dblclick();
+  await page.waitForSelector('[data-testid="list-item-value"]', { timeout: 10000 });
+  await page.fill('[data-testid="list-item-value"]', 'rewritten');
+  await page.click('[data-testid="list-item-save"]');
+  await page.waitForFunction(
+    () => document.querySelector('[data-testid="redis-key-grid"]')?.innerText.includes('rewritten'),
+    null,
+    { timeout: 20000 },
+  );
+  check('Redis list element rewritten by index from the key detail dialog', true);
   await page.locator('.modal-head .icon-btn').last().click();
   await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 10000 });
 

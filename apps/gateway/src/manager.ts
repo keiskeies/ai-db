@@ -684,6 +684,21 @@ export class ConnectionManager {
     return result;
   }
 
+  /** 按索引改写 list 元素。 */
+  async setListItem(connectionId: string, key: string, index: number, value: string, opts: QueryOptions): Promise<{ key: string; index: number; value: string }> {
+    const { conn, driver } = await this.keyDriver(connectionId);
+    const started = Date.now();
+    const result = await driver.setListItem(key, index, value, opts.database ?? conn.database);
+    this.store.addHistory({
+      connectionId,
+      database: opts.database ?? conn.database,
+      sql: JSON.stringify({ setListItem: { key: result.key, index: result.index } }),
+      status: 'ok',
+      durationMs: Date.now() - started,
+    });
+    return result;
+  }
+
   /** 编辑 string 键的取值（SET KEEPTTL）；非 string 类型由驱动拒绝。 */
   async setKeyValue(connectionId: string, key: string, value: string, opts: QueryOptions): Promise<{ key: string; type: string; ttl: number }> {
     const { conn, driver } = await this.keyDriver(connectionId);

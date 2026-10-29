@@ -692,6 +692,23 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
     return { key: name, member: value, deleted, keyGone: (await client.exists(name)) === 0 };
   }
 
+  /** 按索引改写 list 元素（LSET）；索引越界由 Redis 拒绝，这里转成明确错误。 */
+  async setListItem(key: string, index: number, value: string, database?: string): Promise<{ key: string; index: number; value: string }> {
+    const name = key.trim();
+    if (!name) throw new DbError('键名不能为空', { code: 'REDIS_KEY' });
+    if (!Number.isInteger(index) || index < 0) throw new DbError('索引需要是非负整数', { code: 'REDIS_INDEX' });
+    const client = await this.ready(database);
+    const type = String(await client.type(name));
+    if (type === 'none') throw new DbError(`键不存在：${name}`, { code: 'REDIS_KEY_NOT_FOUND', status: 404 });
+    if (type !== 'list') throw new DbError(`只能按索引改写 list，当前类型为 ${type}`, { code: 'REDIS_TYPE' });
+    try {
+      await client.lset(name, index, value);
+    } catch (err: any) {
+      throw new DbError(err?.message ?? '改写 list 元素失败', { code: 'REDIS_LSET' });
+    }
+    return { key: name, index, value };
+  }
+
   /** 编辑 string 键的取值；KEEPTTL 保留原过期时间，非 string 类型拒绝以免 SET 覆盖整个键。 */
   async setKeyValue(key: string, value: string, database?: string): Promise<{ key: string; type: string; ttl: number }> {
     const name = key.trim();
