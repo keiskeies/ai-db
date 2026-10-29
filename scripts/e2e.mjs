@@ -1374,6 +1374,17 @@ if (MYSQL_TX_PORT) {
   await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 150, null, { timeout: 15000 });
   check('query row limit can be raised to 500', true);
 
+  await page.fill('.cm-content', 'WITH RECURSIVE seq AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM seq WHERE n < 500) SELECT n FROM seq');
+  await page.locator('[data-testid="query-run"]').last().click();
+  await page.waitForSelector('[data-testid="grid-load-more"]', { timeout: 20000 });
+  const firstBatch = await page.locator('[data-testid^="grid-row-"]').count();
+  check('large results render in batches', firstBatch === 200, `${firstBatch} rows`);
+  await page.click('[data-testid="grid-load-more"]');
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid^="grid-row-"]').length === 400, null, { timeout: 10000 });
+  await page.click('[data-testid="grid-load-more"]');
+  await page.waitForFunction(() => !document.querySelector('[data-testid="grid-load-more"]') && document.querySelectorAll('[data-testid^="grid-row-"]').length === 500, null, { timeout: 15000 });
+  check('load more grows the rendered window to all rows', true);
+
   const downloadPromise = page.waitForEvent('download', { timeout: 10000 }).catch(() => null);
   await page.keyboard.press('Control+S');
   const sqlDownload = await downloadPromise;

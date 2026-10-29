@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Copy, Trash2 } from 'lucide-react';
 import type { ResultField } from '@aidb/core';
 import { formatCell } from '../lib/format';
@@ -55,10 +55,15 @@ export function DataGrid({
   testId = 'data-grid',
 }: DataGridProps) {
   const [edit, setEdit] = useState<EditState | null>(null);
+  const [renderLimit, setRenderLimit] = useState(200);
   const inputRef = useRef<HTMLInputElement>(null);
   const visibleColumns = columns
     .map((col, index) => ({ col, index }))
     .filter(({ col }) => !hiddenColumns?.includes(col.name));
+  useEffect(() => {
+    setRenderLimit(200);
+  }, [rows]);
+  const renderedRows = rows.length > renderLimit ? rows.slice(0, renderLimit) : rows;
 
   const beginEdit = (row: number, col: number) => {
     if (!editable || !onCellEdit) return;
@@ -124,7 +129,7 @@ export function DataGrid({
               {onRowDelete ? <td className="row-actions new-row" /> : null}
             </tr>
           ) : null}
-          {rows.map((row, rowIndex) => (
+          {renderedRows.map((row, rowIndex) => (
             <tr
               key={rowIndex}
               data-testid={`grid-row-${rowIndex}`}
@@ -193,6 +198,15 @@ export function DataGrid({
               ) : null}
             </tr>
           ))}
+          {rows.length > renderedRows.length ? (
+            <tr className="grid-more">
+              <td colSpan={visibleColumns.length + 1 + (onToggleRow ? 1 : 0) + (onRowDelete ? 1 : 0)}>
+                <button className="btn small" onClick={() => setRenderLimit((value) => value + 200)} data-testid="grid-load-more">
+                  加载更多（剩余 {rows.length - renderedRows.length} 行）
+                </button>
+              </td>
+            </tr>
+          ) : null}
         </tbody>
       </table>
       {!rows.length ? <div className="empty-state" style={{ padding: 30 }}>没有数据</div> : null}
