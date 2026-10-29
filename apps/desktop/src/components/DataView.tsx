@@ -9,6 +9,7 @@ import {
   Filter,
   ListFilter,
   Plus,
+  Printer,
   RefreshCw,
   Rows3,
   Search,
@@ -165,6 +166,8 @@ export function DataView({ tab }: { tab: DataTab }) {
   const [formRow, setFormRow] = useState(0);
   const [formDraft, setFormDraft] = useState<Record<string, string> | null>(null);
   const [formSaving, setFormSaving] = useState(false);
+  const [printOpen, setPrintOpen] = useState(false);
+  const printFrameRef = useRef<HTMLIFrameElement>(null);
   const [sortDraft, setSortDraft] = useState<Array<{ column: string; dir: 'asc' | 'desc' }>>([{ column: '', dir: 'asc' }]);
   const [conditions, setConditions] = useState<Array<{ column: string; op: string; value: string; connector: 'AND' | 'OR' }>>([
     { column: '', op: '=', value: '', connector: 'AND' },
@@ -203,6 +206,13 @@ export function DataView({ tab }: { tab: DataTab }) {
   const orderDir = sorts[0]?.dir ?? 'asc';
   const rows = page?.batch.sets[0]?.rows ?? [];
   const total = page?.total ?? 0;
+  const printHtml = useMemo(() => {
+    const escape = (value: unknown) => String(value ?? '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const head = columns.map((column) => `<th>${escape(column.name)}</th>`).join('');
+    const body = rows.map((row) => `<tr>${row.map((cell) => `<td>${escape(typeof cell === 'object' && cell !== null ? JSON.stringify(cell) : cell)}</td>`).join('')}</tr>`).join('');
+    return `<!doctype html><html><head><meta charset="utf-8"><title>${escape(tab.table)}</title><style>body{font-family:system-ui,sans-serif;color:#111;margin:24px}h1{font-size:18px;margin:0 0 4px}.meta{font-size:11px;color:#555;margin-bottom:12px}table{border-collapse:collapse;width:100%;font-size:11px}th,td{border:1px solid #ccc;padding:4px 6px;text-align:left;vertical-align:top}th{background:#f1f2f3}</style></head><body><h1>${escape(tab.table)}</h1><div class="meta">${escape(tab.database ?? '')} · 当前页 ${rows.length} 条（共 ${total} 条）</div><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></body></html>`;
+  }, [columns, rows, tab.table, tab.database, total]);
   const totalPages = Math.max(1, Math.ceil(total / limit));
   const currentPage = Math.floor(offset / limit) + 1;
 
@@ -726,6 +736,9 @@ export function DataView({ tab }: { tab: DataTab }) {
         <button className="btn small" onClick={() => void exportData()} data-testid="data-export">
           <Download size={12} /> {t('export')}
         </button>
+        <button className="btn small" onClick={() => setPrintOpen(true)} disabled={!rows.length} data-testid="data-print">
+          <Printer size={12} /> 打印
+        </button>
         <button className="btn small" onClick={() => openDesign(tab.connectionId, tab.table, tab.database)}>
           <Wrench size={12} /> {t('design')}
         </button>
@@ -917,6 +930,27 @@ export function DataView({ tab }: { tab: DataTab }) {
           </div>
         </Modal>
       ) : null}
+      {printOpen ? (
+        <Modal
+          title={`打印预览 · ${tab.table}`}
+          onClose={() => setPrintOpen(false)}
+          footer={
+            <>
+              <button className="btn" onClick={() => setPrintOpen(false)}>关闭</button>
+              <button className="btn primary" onClick={() => printFrameRef.current?.contentWindow?.print()} data-testid="print-confirm">打印</button>
+            </>
+          }
+        >
+          <iframe
+            ref={printFrameRef}
+            title="print-preview"
+            data-testid="print-frame"
+            srcDoc={printHtml}
+            style={{ width: '100%', height: 420, border: '1px solid var(--border)', borderRadius: 6, background: '#fff' }}
+          />
+        </Modal>
+      ) : null}
+
       {columnsOpen ? (
         <Modal
           title={`列显示 · ${tab.table}`}
