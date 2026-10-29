@@ -456,11 +456,31 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
       };
     }
     if (type === 'list') {
-      const values = await client.lrange(name, 0, limit - 1);
-      return { key: name, type, ttl, size, encoding, columns: [{ name: 'index', type: 'integer' }, { name: 'value', type: 'string' }], rows: values.map((value, index) => [index, value]) };
+      // 多取一条用于判断是否还有更多，避免截断时不作声。
+      const values = await client.lrange(name, 0, limit);
+      const truncated = values.length > limit;
+      const shown = truncated ? values.slice(0, limit) : values;
+      return {
+        key: name,
+        type,
+        ttl,
+        size,
+        encoding,
+        columns: [{ name: 'index', type: 'integer' }, { name: 'value', type: 'string' }],
+        rows: shown.map((value, index) => [index, value]),
+        note: truncated ? `仅显示前 ${limit} 个元素（共 ${size ?? '更多'} 个）` : undefined,
+      };
     }
     if (type === 'set') {
-      const members = await client.smembers(name);
+      // 超大集合不能整个 SMEMBERS 拉回内存，用游标扫到 limit+1 即可。
+      let cursor = '0';
+      const members: string[] = [];
+      do {
+        const [next, batch] = (await client.sscan(name, cursor, 'COUNT', Math.max(limit, 100))) as [string, string[]];
+        cursor = String(next);
+        members.push(...(batch ?? []));
+      } while (cursor !== '0' && members.length <= limit);
+      const truncated = members.length > limit;
       return {
         key: name,
         type,
@@ -469,12 +489,23 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
         encoding,
         columns: [{ name: 'member', type: 'string' }],
         rows: members.slice(0, limit).map((member) => [member]),
-        note: members.length > limit ? `仅显示前 ${limit} 个成员` : undefined,
+        note: truncated ? `仅显示前 ${limit} 个成员（共 ${size ?? '更多'} 个）` : undefined,
       };
     }
     if (type === 'zset') {
-      const data = pairs(flattenPairs(await client.call('ZRANGE', name, '0', String(limit - 1), 'WITHSCORES')), 'member', 'score');
-      return { key: name, type, ttl, size, encoding, columns: data.columns, rows: data.rows };
+      const raw = await client.call('ZRANGE', name, '0', String(limit), 'WITHSCORES');
+      const all = pairs(flattenPairs(raw), 'member', 'score');
+      const truncated = all.rows.length > limit;
+      return {
+        key: name,
+        type,
+        ttl,
+        size,
+        encoding,
+        columns: all.columns,
+        rows: truncated ? all.rows.slice(0, limit) : all.rows,
+        note: truncated ? `仅显示前 ${limit} 个成员（共 ${size ?? '更多'} 个）` : undefined,
+      };
     }
     if (type === 'stream') {
       const raw = (await client.call('XRANGE', name, '-', '+', 'COUNT', String(limit))) as unknown[];

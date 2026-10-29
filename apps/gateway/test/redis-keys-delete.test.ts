@@ -520,3 +520,47 @@ test('HTTP 按索引改写 list 元素，越界与类型不符被拒', { skip: !
     await client.quit();
   }
 });
+
+test('超大 list/set/zset 的详情会提示截断，set 走游标扫描', { skip: !PORT }, async () => {
+  const env = await gateway();
+  after(env.close);
+  const writable = await env.connect('redis-trunc', false);
+  const db = '9';
+
+  const client = new Redis({ host: '127.0.0.1', port: PORT!, db: Number(db), lazyConnect: true });
+  await client.connect();
+  try {
+    await client.del('aidb_trunc_list', 'aidb_trunc_set', 'aidb_trunc_zset');
+    const items = Array.from({ length: 201 }, (_, i) => `m${i}`);
+    await client.rpush('aidb_trunc_list', ...items);
+    await client.sadd('aidb_trunc_set', ...items);
+    const zargs: (string | number)[] = [];
+    items.forEach((m, i) => zargs.push(i, m));
+    await client.zadd('aidb_trunc_zset', ...(zargs as any));
+
+    for (const [key, label] of [
+      ['aidb_trunc_list', '元素'],
+      ['aidb_trunc_set', '成员'],
+      ['aidb_trunc_zset', '成员'],
+    ] as const) {
+      const detail = await env.api<{ detail: { rows: unknown[][]; note?: string } }>(
+        `/redis/key?connectionId=${writable}&database=${db}&key=${key}`,
+      );
+      assert.equal(detail.status, 200, JSON.stringify(detail.body));
+      assert.equal(detail.body.detail.rows.length, 200, `${key} 只返回 200 行`);
+      assert.ok(detail.body.detail.note?.includes('仅显示前 200'), `${key} 应提示截断：${detail.body.detail.note}`);
+      assert.ok(detail.body.detail.note?.includes(label), `${key} 提示应包含单位 ${label}`);
+    }
+
+    // 小集合不应出现截断提示。
+    await client.del('aidb_trunc_small');
+    await client.sadd('aidb_trunc_small', 'only');
+    const small = await env.api<{ detail: { note?: string } }>(
+      `/redis/key?connectionId=${writable}&database=${db}&key=aidb_trunc_small`,
+    );
+    assert.equal(small.body.detail.note, undefined, '未截断时不显示提示');
+  } finally {
+    await client.del('aidb_trunc_list', 'aidb_trunc_set', 'aidb_trunc_zset', 'aidb_trunc_small');
+    await client.quit();
+  }
+});
