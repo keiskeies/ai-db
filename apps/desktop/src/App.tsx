@@ -1,5 +1,6 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { ContextMenuItem } from './store';
+import { desktopBridge, type OpenTablePayload } from './lib/desktop';
 import {
   Archive,
   BarChart3,
@@ -114,6 +115,17 @@ function buildDefaultMenu(target: HTMLElement): ContextMenuItem[] {
 export default function App() {
   const boot = useApp((s) => s.boot);
   const booted = useApp((s) => s.booted);
+  const [pendingOpenTable, setPendingOpenTable] = useState<OpenTablePayload | null>(null);
+
+  useEffect(() => desktopBridge?.onOpenTable((payload) => setPendingOpenTable(payload)), []);
+
+  useEffect(() => {
+    if (!booted || !pendingOpenTable?.table) return;
+    const state = useApp.getState();
+    const connectionId = pendingOpenTable.connectionId ?? state.activeConnectionId ?? state.connections[0]?.id;
+    if (connectionId) state.openData(connectionId, pendingOpenTable.table, pendingOpenTable.database);
+    setPendingOpenTable(null);
+  }, [booted, pendingOpenTable]);
   const bootError = useApp((s) => s.bootError);
   const settings = useApp((s) => s.settings);
   const t = useApp((s) => s.t);

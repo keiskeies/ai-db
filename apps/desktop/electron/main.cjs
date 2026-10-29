@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, session } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, session } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -8,6 +8,38 @@ const { spawn, spawnSync } = require('node:child_process');
 
 let gatewayProcess = null;
 let mainWindow = null;
+
+function readOpenTableArg() {
+  const arg = process.argv.find((item) => item.startsWith('--open-table='));
+  if (!arg) return null;
+  try {
+    return JSON.parse(Buffer.from(arg.slice('--open-table='.length), 'base64').toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+ipcMain.handle('create-table-shortcut', async (_event, payload) => {
+  if (process.platform !== 'win32') return { ok: false, error: '仅 Windows 支持 .lnk 快捷方式' };
+  const connectionId = String(payload?.connectionId ?? '');
+  const table = String(payload?.table ?? '');
+  if (!connectionId || !table) return { ok: false, error: '缺少连接或表名' };
+  const safeName = String(payload?.name || table).replace(/[\/:*?"<>|]+/g, '_').slice(0, 60) || 'AiDB';
+  const file = path.join(app.getPath('desktop'), `${safeName}.lnk`);
+  const args = `--open-table=${Buffer.from(JSON.stringify({ connectionId, table, database: payload?.database })).toString('base64')}`;
+  try {
+    const ok = shell.writeShortcutLink(file, fs.existsSync(file) ? 'update' : 'create', {
+      target: process.execPath,
+      args,
+      description: `AiDB Studio · ${table}`,
+      icon: process.execPath,
+      iconIndex: 0,
+    });
+    return ok ? { ok: true, path: file } : { ok: false, error: '写入快捷方式失败' };
+  } catch (err) {
+    return { ok: false, error: String(err?.message ?? err) };
+  }
+});
 
 const EXPORT_FILTERS = {
   png: { name: 'PNG 图片', extensions: ['png'] },
@@ -146,9 +178,14 @@ async function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      preload: path.join(__dirname, 'preload.cjs'),
     },
   });
   mainWindow.loadURL(url);
+  mainWindow.webContents.once('did-finish-load', () => {
+    const openTable = readOpenTableArg();
+    if (openTable) mainWindow?.webContents.send('open-table', openTable);
+  });
   mainWindow.webContents.setWindowOpenHandler(({ url: target }) => {
     shell.openExternal(target).catch(() => undefined);
     return { action: 'deny' };

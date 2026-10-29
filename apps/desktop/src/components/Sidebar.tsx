@@ -34,6 +34,7 @@ import type { ConnectionConfig, DatabaseSchema, Engine, TableInfo } from '@aidb/
 import { addField, engineMeta, managesIndexes, managesObjects } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp, type ContextMenuItem } from '../store';
+import { desktopBridge } from '../lib/desktop';
 import { TableOpsDialog, type TableDialogKind } from './TableOpsDialog';
 import { DatabaseOpsDialog, type DatabaseDialogKind } from './DatabaseOpsDialog';
 import { CreateObjectDialog } from './CreateObjectDialog';
@@ -155,6 +156,18 @@ export function Sidebar() {
     } catch (err: any) {
       notify('error', '重命名失败', err?.message);
     }
+  };
+
+  const createShortcut = async (conn: ConnectionConfig, schema: DatabaseSchema, table: TableInfo) => {
+    if (!desktopBridge) return;
+    const result = await desktopBridge.createTableShortcut({
+      connectionId: conn.id,
+      database: schema.name,
+      table: table.name,
+      name: `${conn.name}-${table.name}`,
+    });
+    if (result.ok) notify('success', '快捷方式已创建', result.path ?? '');
+    else notify('error', '创建失败', result.error ?? '未知错误');
   };
 
   const moveConnectionToGroup = async (connectionId: string, group: string) => {
@@ -377,6 +390,7 @@ export function Sidebar() {
                   },
                   { label: '', icon: null, sep: true, onClick: () => undefined },
                   { label: '查看 DDL', icon: <FileCode2 size={13} />, onClick: () => setTableDialog({ kind: 'ddl', conn, schema, table }) },
+                  ...(desktopBridge?.platform === 'win32' ? [{ label: '创建快捷方式', icon: <Archive size={13} />, onClick: () => void createShortcut(conn, schema, table) } as ContextMenuItem] : []),
                   { label: '打印表', icon: <Printer size={13} />, onClick: () => { openData(conn.id, table.name, schema.name); useApp.getState().requestPrint(); } },
                   { label: '删除视图', icon: <Trash2 size={13} />, danger: true, onClick: () => void quickTableOp('drop', conn, schema, table) },
                   {
@@ -409,6 +423,7 @@ export function Sidebar() {
                   { label: '复制表（仅结构）…', icon: <Copy size={13} />, onClick: () => setTableDialog({ kind: 'duplicate', conn, schema, table, withData: false }) },
                   { label: '', icon: null, sep: true, onClick: () => undefined },
                   { label: '查看 DDL', icon: <FileCode2 size={13} />, onClick: () => setTableDialog({ kind: 'ddl', conn, schema, table }) },
+                  ...(desktopBridge?.platform === 'win32' ? [{ label: '创建快捷方式', icon: <Archive size={13} />, onClick: () => void createShortcut(conn, schema, table) } as ContextMenuItem] : []),
                   { label: '打印表', icon: <Printer size={13} />, onClick: () => { openData(conn.id, table.name, schema.name); useApp.getState().requestPrint(); } },
                   { label: '维护表…', icon: <Hammer size={13} />, onClick: () => setTableDialog({ kind: 'maintenance', conn, schema, table }) },
                   { label: '对象信息', icon: <Info size={13} />, onClick: () => setInfoTable({ table, database: schema.name }) },

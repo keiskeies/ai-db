@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
-import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -2037,7 +2037,12 @@ async function electronPngExport(app, window) {
       });
     }, saveTo);
 
-    await window.click('[data-testid="welcome-new-query"]');
+    // 深链会先打开数据页，欢迎页不再存在；两种情况都从工具栏新建查询
+    if (await window.locator('[data-testid="welcome-new-query"]').count()) {
+      await window.click('[data-testid="welcome-new-query"]');
+    } else {
+      await window.click('.tab-add');
+    }
     await window.waitForSelector('[data-testid="query-run"]', { timeout: 15000 });
     const conn = window.locator('[data-testid="query-connection"]');
     const options = await conn.locator('option').allTextContents();
@@ -2105,12 +2110,27 @@ if (electronBinary) {
   for (let attempt = 1; attempt <= 2 && !electronOk; attempt++) {
     let app;
     try {
-      app = await electron.launch({ executablePath: electronBinary, args: [join(root, 'apps/desktop'), '--no-sandbox'], env, timeout: 90000 });
+      const openPayload = Buffer.from(JSON.stringify({ table: 'orders' })).toString('base64');
+      app = await electron.launch({ executablePath: electronBinary, args: [join(root, 'apps/desktop'), '--no-sandbox', `--open-table=${openPayload}`], env, timeout: 90000 });
       const window = await app.firstWindow();
       await window.waitForSelector('[data-testid="app-root"]', { timeout: 45000 });
       await window.waitForTimeout(1500);
       electronOk = (await window.locator('.conn-row').count()) >= 1;
       if (electronOk) {
+        const openedTable = await window
+          .waitForFunction(() => (document.querySelector('.tab.active')?.textContent ?? '').toLowerCase().includes('orders'), null, { timeout: 25000 })
+          .then(() => true)
+          .catch(() => false);
+        check('electron deep link opens the table', openedTable);
+        const shortcut = await window.evaluate((id) => window.aidbDesktop?.createTableShortcut({ connectionId: id, table: 'orders', name: 'AIDB-E2E-Shortcut' }), demo.id);
+        let shortcutArgs = '';
+        if (shortcut?.ok && shortcut.path) {
+          shortcutArgs = await app.evaluate(({ shell }, file) => {
+            try { return shell.readShortcutLink(file).args ?? ''; } catch { return ''; }
+          }, shortcut.path);
+          try { unlinkSync(shortcut.path); } catch { /* ignore */ }
+        }
+        check('electron can create a table shortcut', Boolean(shortcut?.ok && /--open-table=/.test(shortcutArgs)), `${shortcut?.ok} ${shortcutArgs.slice(0, 60)}`);
         await window.screenshot({ path: join(shots, 'electron-desktop.png') });
         exportDetail = await electronPngExport(app, window);
       } else lastError = 'no connections in Electron window';
