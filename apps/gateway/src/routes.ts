@@ -1494,12 +1494,19 @@ export function createApiRouter(deps: ApiDeps): Router {
       const { table } = await manager.findTable(connectionId, database, tableName);
       const known = new Set((table.columns ?? []).map((c) => c.name));
       const typeOf = new Map((table.columns ?? []).map((c) => [c.name, c.type]));
+      const rejectUnknown = (keys: string[]) => {
+        const unknown = keys.filter((column) => !known.has(column));
+        if (unknown.length) {
+          throw Object.assign(new Error(`列不存在：${unknown.join(', ')}`), { code: 'UNKNOWN_COLUMN', status: 400 });
+        }
+      };
       const schema = engineUsesSchema(conn.engine) ? table.schema : undefined;
       let sql: string;
       let params: unknown[] = [];
       let risk = 'write';
       if (op === 'insert') {
         const values = obj(body.values, 'values');
+        rejectUnknown(Object.keys(values));
         const columns = Object.keys(values).filter((c) => known.has(c));
         if (!columns.length) throw Object.assign(new Error('没有可插入的列'), { code: 'INVALID_INPUT', status: 400 });
         sql = buildInsert(conn.engine, table.name, columns, 1, schema);
@@ -1507,6 +1514,7 @@ export function createApiRouter(deps: ApiDeps): Router {
       } else if (op === 'insertMany') {
         const records = Array.isArray(body.rows) ? body.rows.filter((row) => row && typeof row === 'object') as Record<string, unknown>[] : [];
         if (!records.length) throw Object.assign(new Error('没有可插入的行'), { code: 'INVALID_INPUT', status: 400 });
+        rejectUnknown([...new Set(records.flatMap((row) => Object.keys(row)))]);
         const columns = [...new Set(records.flatMap((row) => Object.keys(row)))].filter((c) => known.has(c));
         if (!columns.length) throw Object.assign(new Error('没有可插入的列'), { code: 'INVALID_INPUT', status: 400 });
         sql = buildInsert(conn.engine, table.name, columns, records.length, schema);
@@ -1514,6 +1522,8 @@ export function createApiRouter(deps: ApiDeps): Router {
       } else if (op === 'update') {
         const values = obj(body.values, 'values');
         const key = obj(body.key, 'key');
+        rejectUnknown(Object.keys(values));
+        rejectUnknown(Object.keys(key));
         const setCols = Object.keys(values).filter((c) => known.has(c));
         const whereCols = Object.keys(key).filter((c) => known.has(c));
         if (!setCols.length || !whereCols.length) throw Object.assign(new Error('更新需要 values 与主键 key'), { code: 'INVALID_INPUT', status: 400 });
@@ -1521,6 +1531,7 @@ export function createApiRouter(deps: ApiDeps): Router {
         params = [...setCols.map((c) => coerceValue(values[c], typeOf.get(c) ?? 'text')), ...whereCols.map((c) => coerceValue(key[c], typeOf.get(c) ?? 'text'))];
       } else if (op === 'delete') {
         const key = obj(body.key, 'key');
+        rejectUnknown(Object.keys(key));
         const whereCols = Object.keys(key).filter((c) => known.has(c));
         if (!whereCols.length) throw Object.assign(new Error('删除需要主键 key'), { code: 'INVALID_INPUT', status: 400 });
         sql = buildDelete(conn.engine, table.name, whereCols, schema);
@@ -1529,6 +1540,7 @@ export function createApiRouter(deps: ApiDeps): Router {
       } else if (op === 'deleteMany') {
         const keys = Array.isArray(body.keys) ? body.keys.filter((key) => key && typeof key === 'object') as Record<string, unknown>[] : [];
         if (!keys.length) throw Object.assign(new Error('删除需要主键列表'), { code: 'INVALID_INPUT', status: 400 });
+        rejectUnknown(Object.keys(keys[0]));
         const whereCols = Object.keys(keys[0]).filter((c) => known.has(c));
         if (!whereCols.length) throw Object.assign(new Error('删除需要主键列'), { code: 'INVALID_INPUT', status: 400 });
         if (keys.some((key) => whereCols.some((c) => key[c] === undefined))) {

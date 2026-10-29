@@ -180,6 +180,12 @@ test('row CRUD, DDL, export and import', async () => {
     body: JSON.stringify({ connectionId: demo.id, table: 'products', op: 'update', values: { name: 'IT TEST' }, key: { id: 1 } }),
   });
   assert.equal(update.status, 200);
+  const badUpdate = await api('/rows', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: demo.id, table: 'products', op: 'update', values: { nmae: 'typo' }, key: { id: 1 } }),
+  });
+  assert.equal(badUpdate.status, 400);
+  assert.equal((badUpdate.body as any).error.code, 'UNKNOWN_COLUMN');
   const check = await api<{ batch: { sets: Array<{ rows: unknown[][] }> } }>('/query', {
     method: 'POST',
     body: JSON.stringify({ connectionId: demo.id, sql: 'SELECT name FROM products WHERE id = 1' }),
