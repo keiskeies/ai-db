@@ -288,7 +288,7 @@ Expo Web 构建在 390×844 视口通过：配对页、配对码真实兑换、A
 | 跨请求事务 | 开始事务 / 提交 / 回滚 | — | ✅ MySQL / PostgreSQL / Oracle / SQL Server / SQLite / DM8（其它引擎仍即时提交） |
 | 打印 / 快捷方式 / 管理组 | 打印预览（当前页）+ 系统打印对话框；快捷方式、管理组未实现 | 数据工具栏；E2E「print preview」 | ⚠️ 部分实现 |
 | 图表多维 / 堆叠 | 单序列柱 / 折线 / 饼 | — | ⚠️ 未实现 |
-| Excel 导入 / 导出 | .xlsx（ZIP + XML）导入按 workbook 关系取首个工作表、导出内联字符串工作表；旧 .xls（BIFF）未支持 | E2E「XLSX import / export」；集成测试 | ✅ .xlsx / ⚠️ .xls |
+| Excel 导入 / 导出 | .xlsx（ZIP + XML）导入按 workbook 关系取首个工作表、导出内联字符串工作表；Excel 2003 XML Spreadsheet(.xml) 可导入；二进制 .xls（BIFF）未支持 | E2E「XLSX import / export」「Excel 2003 XML」；集成测试 | ✅ .xlsx/.xml / ⚠️ .xls |
 | 报表设计器 / 云协作 / ER 编辑 | 设计明确不做 | — | ➖ 非目标 |
 
 ### 11.2 回归结果

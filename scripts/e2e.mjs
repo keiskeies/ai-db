@@ -1588,6 +1588,17 @@ await page.click('[data-testid="data-export"]');
 const exportedXlsx = await exportResponsePromise;
 check('XLSX export writes a workbook', Boolean(exportedXlsx && exportedXlsx.status() === 200), exportedXlsx ? String(exportedXlsx.status()) : 'no response');
 
+const spreadsheetPath = join(home, 'spreadsheet-e2e.xml');
+writeFileSync(spreadsheetPath, '<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Worksheet ss:Name="Data"><Table><Row><Cell><Data ss:Type="String">user_id</Data></Cell><Cell><Data ss:Type="String">status</Data></Cell><Cell><Data ss:Type="String">channel</Data></Cell><Cell><Data ss:Type="String">total_cents</Data></Cell><Cell><Data ss:Type="String">created_at</Data></Cell></Row><Row><Cell><Data ss:Type="Number">6</Data></Cell><Cell><Data ss:Type="String">paid</Data></Cell><Cell><Data ss:Type="String">spreadsheet-e2e</Data></Cell><Cell><Data ss:Type="Number">4600</Data></Cell><Cell><Data ss:Type="String">2026-01-05T00:00:00.000Z</Data></Cell></Row></Table></Worksheet></Workbook>');
+await page.setInputFiles('[data-testid="data-import-file"]', spreadsheetPath);
+await page.waitForSelector('[data-testid="import-confirm"]', { timeout: 5000 });
+check('Excel 2003 XML preview maps columns', (await page.locator('.modal').innerText()).includes('spreadsheet-e2e'));
+await page.click('[data-testid="import-confirm"]');
+await page.waitForFunction(() => !document.querySelector('[data-testid="import-confirm"]'), null, { timeout: 20000 });
+await page.waitForTimeout(900);
+const spreadsheetResult = await api(`/data?connectionId=${demo.id}&table=orders&limit=5&where=${encodeURIComponent("channel='spreadsheet-e2e'")}`);
+check('Excel 2003 XML import inserts a row', spreadsheetResult.status === 200 && spreadsheetResult.body.total >= 1, `total=${spreadsheetResult.body?.total}`);
+
 await page.screenshot({ path: join(shots, 'desktop-data.png') });
 
 await page.locator('[title="TABLE orders"]').click({ button: 'right' });

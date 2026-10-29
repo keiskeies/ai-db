@@ -31,8 +31,23 @@ export function xmlToCsv(text: string): string {
     const found = [...doc.getElementsByTagName(tag)].filter((element) => element.children.length);
     if (found.length > records.length) records = found;
   }
-  if (!records.length) throw new Error('XML 里没有 <row>/<record>/<item> 记录');
-  const headers = [...new Set(records.flatMap((record) => [...record.children].map((child) => child.tagName)))];
-  const rows = records.map((record) => headers.map((tag) => [...record.children].find((child) => child.tagName === tag)?.textContent ?? ''));
-  return rowsToCsv([headers, ...rows]);
+  if (records.length) {
+    const headers = [...new Set(records.flatMap((record) => [...record.children].map((child) => child.tagName)))];
+    const rows = records.map((record) => headers.map((tag) => [...record.children].find((child) => child.tagName === tag)?.textContent ?? ''));
+    return rowsToCsv([headers, ...rows]);
+  }
+  // Excel 2003 XML Spreadsheet：<Worksheet><Table><Row><Cell><Data>
+  const spreadsheetRows = [...doc.getElementsByTagName('Row')].filter((row) => row.getElementsByTagName('Cell').length);
+  if (!spreadsheetRows.length) throw new Error('XML 里没有 <row>/<record>/<item> 或 Excel SpreadsheetML <Row> 记录');
+  const table = spreadsheetRows.map((row) => {
+    const cells: string[] = [];
+    for (const cell of [...row.getElementsByTagName('Cell')]) {
+      const indexAttr = cell.getAttribute('ss:Index') ?? cell.getAttributeNS('urn:schemas-microsoft-com:office:spreadsheet', 'Index');
+      const index = indexAttr ? Number(indexAttr) - 1 : cells.length;
+      while (cells.length < index) cells.push('');
+      cells[index] = cell.getElementsByTagName('Data')[0]?.textContent ?? '';
+    }
+    return cells;
+  });
+  return rowsToCsv(table);
 }
