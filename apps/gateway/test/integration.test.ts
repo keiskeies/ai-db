@@ -114,6 +114,18 @@ test('query, pagination, sorting and readonly enforcement', async () => {
   const totals = page.body.batch.sets[0].rows.map((r) => Number(r[page.body.batch.sets[0].columns.findIndex((c) => c.name === 'total_cents')]));
   for (let i = 1; i < totals.length; i++) assert.ok(totals[i - 1] >= totals[i]);
 
+  const pageA = await api<{ batch: { sets: Array<{ rows: unknown[][]; columns: Array<{ name: string }> }> } }>(
+    `/data?connectionId=${demo.id}&table=orders&limit=5&offset=0`,
+  );
+  const pageB = await api<{ batch: { sets: Array<{ rows: unknown[][]; columns: Array<{ name: string }> }> } }>(
+    `/data?connectionId=${demo.id}&table=orders&limit=5&offset=5`,
+  );
+  const idIndex = pageA.body.batch.sets[0].columns.findIndex((column) => column.name === 'id');
+  const idsA = pageA.body.batch.sets[0].rows.map((row) => Number(row[idIndex]));
+  const idsB = pageB.body.batch.sets[0].rows.map((row) => Number(row[idIndex]));
+  assert.equal(new Set([...idsA, ...idsB]).size, 10, '默认分页不应重复');
+  assert.ok(Math.max(...idsA) < Math.min(...idsB), '默认按主键升序分页');
+
   const multi = await api<{ sql: string; batch: { sets: Array<{ rows: unknown[][]; columns: Array<{ name: string }> }> } }>(
     `/data?connectionId=${demo.id}&table=orders&limit=8&offset=0&orderBy=status,total_cents&orderDir=asc,desc`,
   );

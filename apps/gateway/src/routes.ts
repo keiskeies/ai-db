@@ -1445,7 +1445,11 @@ export function createApiRouter(deps: ApiDeps): Router {
       const orderParts = orderCols
         .map((column, index) => ((table.columns ?? []).some((c) => c.name === column) ? `${quoteIdent(column, conn.engine)} ${directions[index] === 'desc' ? 'DESC' : 'ASC'}` : null))
         .filter((part): part is string => Boolean(part));
-      const orderBy = orderParts.length ? orderParts.join(', ') : undefined;
+      // 未指定排序时按主键升序，确保 offset 分页稳定（否则不同引擎可能重复或漏行）
+      const fallbackOrder = (table.columns ?? [])
+        .filter((column) => column.primaryKey)
+        .map((column) => `${quoteIdent(column.name, conn.engine)} ASC`);
+      const orderBy = orderParts.length ? orderParts.join(', ') : fallbackOrder.length ? fallbackOrder.join(', ') : undefined;
       const sql = buildSelectTable(conn.engine, table.name, {
         schema: engineUsesSchema(conn.engine) ? table.schema : undefined,
         where: str(req.query.where),
