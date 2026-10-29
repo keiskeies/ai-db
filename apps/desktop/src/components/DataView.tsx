@@ -27,47 +27,10 @@ import { DataGrid } from './DataGrid';
 import { LineProtocolPanel } from './LineProtocolPanel';
 import { EmptyState, Modal } from './ui';
 import { formatDuration } from '../lib/format';
+import { jsonToCsv, xmlToCsv } from '../lib/importConvert';
+import { xlsxToCsv } from '../lib/xlsx';
 
 type DataTab = Extract<Tab, { kind: 'data' }>;
-
-function csvCell(value: unknown): string {
-  if (value === null || value === undefined) return '';
-  const text = typeof value === 'object' ? JSON.stringify(value) : String(value);
-  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-}
-
-function rowsToCsv(rows: unknown[][]): string {
-  return rows.map((row) => row.map(csvCell).join(',')).join('\n');
-}
-
-function jsonToCsv(text: string): string {
-  const parsed: unknown = JSON.parse(text);
-  const list = Array.isArray(parsed)
-    ? parsed
-    : Array.isArray((parsed as { rows?: unknown[] })?.rows)
-      ? (parsed as { rows: unknown[] }).rows
-      : [parsed];
-  if (!list.length) throw new Error('JSON 没有记录');
-  if (Array.isArray(list[0])) return rowsToCsv(list as unknown[][]);
-  const records = list as Array<Record<string, unknown>>;
-  const headers = [...new Set(records.flatMap((row) => Object.keys(row ?? {})))];
-  if (!headers.length) throw new Error('JSON 记录没有字段');
-  return rowsToCsv([headers, ...records.map((row) => headers.map((key) => row?.[key]))]);
-}
-
-function xmlToCsv(text: string): string {
-  const doc = new DOMParser().parseFromString(text, 'application/xml');
-  if (doc.querySelector('parsererror')) throw new Error('XML 解析失败');
-  let records: Element[] = [];
-  for (const tag of ['row', 'record', 'item']) {
-    const found = [...doc.getElementsByTagName(tag)].filter((element) => element.children.length);
-    if (found.length > records.length) records = found;
-  }
-  if (!records.length) throw new Error('XML 里没有 <row>/<record>/<item> 记录');
-  const headers = [...new Set(records.flatMap((record) => [...record.children].map((child) => child.tagName)))];
-  const rows = records.map((record) => headers.map((tag) => [...record.children].find((child) => child.tagName === tag)?.textContent ?? ''));
-  return rowsToCsv([headers, ...rows]);
-}
 
 function parseCsvPreview(text: string, delimiter: string): string[][] {
   const rows: string[][] = [];
@@ -573,6 +536,7 @@ export function DataView({ tab }: { tab: DataTab }) {
       const delimiter = file.name.toLowerCase().endsWith('.tsv') ? '\t' : ',';
       if (name.endsWith('.json')) csv = jsonToCsv(csv);
       else if (name.endsWith('.xml')) csv = xmlToCsv(csv);
+      else if (name.endsWith('.xlsx')) csv = await xlsxToCsv(await file.arrayBuffer());
       const rows = parseCsvPreview(csv, delimiter);
       if (!rows.length) {
         notify('warning', 'CSV 没有内容');
@@ -718,7 +682,7 @@ export function DataView({ tab }: { tab: DataTab }) {
         <input
           ref={fileRef}
           type="file"
-          accept=".csv,.tsv,.txt,.json,.xml"
+          accept=".csv,.tsv,.txt,.json,.xml,.xlsx"
           style={{ display: 'none' }}
           data-testid="data-import-file" 
           onChange={(e) => {

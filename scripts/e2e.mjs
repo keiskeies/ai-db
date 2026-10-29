@@ -7,12 +7,46 @@ import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, _electron as electron } from 'playwright-core';
+import zlib from 'node:zlib';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const desktopDist = join(root, 'apps', 'desktop', 'dist');
 const mobileDist = join(root, 'apps', 'mobile', 'dist');
 const gatewayEntry = join(root, 'apps', 'gateway', 'dist', 'index.js');
 const shots = join(root, 'docs', 'screenshots');
+
+// 生成最小 xlsx（ZIP + deflate + sharedStrings），用于导入联机用例
+function writeXlsx(path) {
+  const files = {
+    'xl/sharedStrings.xml': `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${['user_id', 'status', 'channel', 'total_cents', 'created_at', 'xlsx-e2e', 'paid', '2026-01-04T00:00:00.000Z'].map((t) => `<si><t>${t}</t></si>`).join('')}</sst>`,
+    'xl/worksheets/sheet1.xml': `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1">${['A', 'B', 'C', 'D', 'E'].map((c, i) => `<c r="${c}1" t="s"><v>${i}</v></c>`).join('')}</row><row r="2"><c r="A2"><v>5</v></c><c r="B2" t="s"><v>6</v></c><c r="C2" t="s"><v>5</v></c><c r="D2"><v>4500</v></c><c r="E2" t="s"><v>7</v></c></row></sheetData></worksheet>`,
+  };
+  const parts = [];
+  const central = [];
+  let offset = 0;
+  for (const [name, content] of Object.entries(files)) {
+    const data = Buffer.from(content, 'utf8');
+    const compressed = zlib.deflateRawSync(data);
+    const crc = zlib.crc32(data);
+    const nameBuf = Buffer.from(name, 'utf8');
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(0x0800, 6); local.writeUInt16LE(8, 8);
+    local.writeUInt32LE(crc, 14); local.writeUInt32LE(compressed.length, 18); local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(nameBuf.length, 26);
+    parts.push(local, nameBuf, compressed);
+    const entry = Buffer.alloc(46);
+    entry.writeUInt32LE(0x02014b50, 0); entry.writeUInt16LE(20, 4); entry.writeUInt16LE(20, 6); entry.writeUInt16LE(0x0800, 8); entry.writeUInt16LE(8, 10);
+    entry.writeUInt32LE(crc, 16); entry.writeUInt32LE(compressed.length, 20); entry.writeUInt32LE(data.length, 24);
+    entry.writeUInt16LE(nameBuf.length, 28); entry.writeUInt32LE(offset, 42);
+    central.push(entry, nameBuf);
+    offset += local.length + nameBuf.length + compressed.length;
+  }
+  const centralBuf = Buffer.concat(central);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(Object.keys(files).length, 8); eocd.writeUInt16LE(Object.keys(files).length, 10);
+  eocd.writeUInt32LE(centralBuf.length, 12); eocd.writeUInt32LE(offset, 16);
+  writeFileSync(path, Buffer.concat([...parts, centralBuf, eocd]));
+}
 
 for (const required of [desktopDist, mobileDist, gatewayEntry]) {
   if (!existsSync(required)) {
@@ -1506,6 +1540,17 @@ check('print preview renders the current page', (await printFrame.locator('table
 check('print preview shows the table title', (await printFrame.locator('h1').innerText()).includes('orders'));
 await page.locator('.modal-head .icon-btn').click();
 await page.waitForFunction(() => !document.querySelector('[data-testid="print-frame"]'), null, { timeout: 5000 });
+
+const xlsxImportPath = join(home, 'import-e2e.xlsx');
+writeXlsx(xlsxImportPath);
+await page.setInputFiles('[data-testid="data-import-file"]', xlsxImportPath);
+await page.waitForSelector('[data-testid="import-confirm"]', { timeout: 5000 });
+check('XLSX import preview maps columns', (await page.locator('.modal').innerText()).includes('xlsx-e2e'));
+await page.click('[data-testid="import-confirm"]');
+await page.waitForFunction(() => !document.querySelector('[data-testid="import-confirm"]'), null, { timeout: 20000 });
+await page.waitForTimeout(900);
+const xlsxImportResult = await api(`/data?connectionId=${demo.id}&table=orders&limit=5&where=${encodeURIComponent("channel='xlsx-e2e'")}`);
+check('XLSX import inserts a row', xlsxImportResult.status === 200 && xlsxImportResult.body.total >= 1, `total=${xlsxImportResult.body?.total}`);
 
 await page.screenshot({ path: join(shots, 'desktop-data.png') });
 
