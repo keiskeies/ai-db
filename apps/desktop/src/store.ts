@@ -165,6 +165,9 @@ interface AppStore {
   toggleSchema: (key: string) => void;
 
   openData: (connectionId: string, table: string, database?: string) => void;
+  printRequested: boolean;
+  requestPrint: () => void;
+  consumePrint: () => void;
   openQuery: (connectionId?: string, sql?: string, title?: string, database?: string) => void;
   openDesign: (connectionId?: string, table?: string, database?: string) => void;
   openRelations: (connectionId?: string, database?: string) => void;
@@ -248,6 +251,7 @@ export const useApp = create<AppStore>((set, get) => ({
   expandedSchemas: {},
   tabs: [WELCOME],
   activeTabId: 'welcome',
+  printRequested: false,
   agentOpen: true,
   agentExpanded: false,
   sidebarOpen: readUiPrefs().sidebarOpen ?? true,
@@ -376,6 +380,8 @@ export const useApp = create<AppStore>((set, get) => ({
 
   toggleSchema: (key) => set((s) => ({ expandedSchemas: { ...s.expandedSchemas, [key]: !s.expandedSchemas[key] } })),
 
+  requestPrint: () => set({ printRequested: true }),
+  consumePrint: () => set({ printRequested: false }),
   openData: (connectionId, table, database) => {
     const conn = get().connections.find((c) => c.id === connectionId);
     const model = conn ? engineMeta(conn.engine).model : 'relational';

@@ -83,6 +83,8 @@ export function DataView({ tab }: { tab: DataTab }) {
   const notify = useApp((s) => s.notify);
   const openDesign = useApp((s) => s.openDesign);
   const loadSchema = useApp((s) => s.loadSchema);
+  const printRequested = useApp((s) => s.printRequested);
+  const consumePrint = useApp((s) => s.consumePrint);
 
   const conn = connections.find((c) => c.id === tab.connectionId);
   const tableInfo: TableInfo | undefined = useMemo(() => {
@@ -199,6 +201,13 @@ export function DataView({ tab }: { tab: DataTab }) {
     });
     return draft;
   };
+
+  useEffect(() => {
+    if (printRequested && rows.length) {
+      setPrintOpen(true);
+      consumePrint();
+    }
+  }, [printRequested, rows, consumePrint]);
 
   useEffect(() => {
     if (!formMode || !rows.length) {

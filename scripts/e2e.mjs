@@ -1608,6 +1608,14 @@ check('table DDL dialog renders create statement', ddlOk, ddlText.replace(/\s+/g
 await page.locator('.modal-head .icon-btn').click();
 await page.waitForTimeout(250);
 
+await page.locator('[title="TABLE orders"]').click({ button: 'right' });
+await page.waitForSelector('.context-menu', { timeout: 5000 });
+await page.locator('.context-menu').getByText('打印表').click();
+await page.waitForSelector('[data-testid="print-frame"]', { timeout: 15000 });
+check('table context menu opens print preview', true);
+await page.locator('.modal-head .icon-btn').click();
+await page.waitForFunction(() => !document.querySelector('[data-testid="print-frame"]'), null, { timeout: 5000 });
+
 await page.locator('.db-node').first().click({ button: 'right' });
 await page.waitForSelector('.context-menu', { timeout: 5000 });
 const dbMenu = await page.locator('.context-menu').innerText();

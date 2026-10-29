@@ -8,6 +8,7 @@ import {
   MoreHorizontal,
   Network,
   Plus,
+  Printer,
   RefreshCw,
   Search,
   Sparkles,
@@ -361,6 +362,7 @@ export function Sidebar() {
                   },
                   { label: '', icon: null, sep: true, onClick: () => undefined },
                   { label: '查看 DDL', icon: <FileCode2 size={13} />, onClick: () => setTableDialog({ kind: 'ddl', conn, schema, table }) },
+                  { label: '打印表', icon: <Printer size={13} />, onClick: () => { openData(conn.id, table.name, schema.name); useApp.getState().requestPrint(); } },
                   { label: '删除视图', icon: <Trash2 size={13} />, danger: true, onClick: () => void quickTableOp('drop', conn, schema, table) },
                   {
                     label: 'AI 解释此视图',
@@ -392,6 +394,7 @@ export function Sidebar() {
                   { label: '复制表（仅结构）…', icon: <Copy size={13} />, onClick: () => setTableDialog({ kind: 'duplicate', conn, schema, table, withData: false }) },
                   { label: '', icon: null, sep: true, onClick: () => undefined },
                   { label: '查看 DDL', icon: <FileCode2 size={13} />, onClick: () => setTableDialog({ kind: 'ddl', conn, schema, table }) },
+                  { label: '打印表', icon: <Printer size={13} />, onClick: () => { openData(conn.id, table.name, schema.name); useApp.getState().requestPrint(); } },
                   { label: '维护表…', icon: <Hammer size={13} />, onClick: () => setTableDialog({ kind: 'maintenance', conn, schema, table }) },
                   { label: '对象信息', icon: <Info size={13} />, onClick: () => setInfoTable({ table, database: schema.name }) },
                   { label: '设置权限…', icon: <KeyRound size={13} />, onClick: () => openTools('users') },
