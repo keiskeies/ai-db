@@ -1,4 +1,7 @@
-import * as mssql from 'mssql';
+// mssql 是 CJS 包：命名空间导入在 Node ESM/tsx 下拿不到 ConnectionPool（只有 esbuild 打包才正常），
+// 因此用默认导入取运行时值，类型走 import type。
+import mssql from 'mssql';
+import type { ConnectionPool, Transaction } from 'mssql';
 import type { ColumnInfo, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions } from './types';
 import { DbError, toRowArray } from './types';
@@ -18,11 +21,13 @@ interface PgAgg {
 
 export class SqlServerDriver implements Driver {
   engine = 'sqlserver' as const;
-  private pools = new Map<string, mssql.ConnectionPool>();
+  private pools = new Map<string, ConnectionPool>();
+  /** 跨请求事务：会话 id → 已开启的 mssql 事务。 */
+  private txTransactions = new Map<string, Transaction>();
 
   constructor(private opts: SqlServerOptions) {}
 
-  private async pool(database?: string): Promise<mssql.ConnectionPool> {
+  private async pool(database?: string): Promise<ConnectionPool> {
     const key = database || this.opts.database || 'master';
     let pool = this.pools.get(key);
     if (!pool) {
@@ -184,31 +189,81 @@ export class SqlServerDriver implements Driver {
       const request = pool.request();
       params.forEach((value, index) => request.input(`p${index + 1}`, value as any));
       const result = await request.query(sql);
-      const sets = (result.recordsets ?? []) as Array<Record<string, any>[]>;
-      const last = sets.length ? sets[sets.length - 1] : undefined;
-      if (last) {
-        const fields = Object.values((last as any).columns ?? {}) as Array<{ name: string; type?: { declaration?: string } }>;
-        const columns = fields.map((field) => ({ name: field.name, type: field.type?.declaration }));
-        const all = last as Array<Record<string, unknown>>;
-        const limit = opts.maxRows && opts.maxRows > 0 ? opts.maxRows : all.length;
-        const rows = all.slice(0, limit);
-        return {
-          columns,
-          rows: toRowArray(columns, rows),
-          rowCount: rows.length,
-          durationMs: Date.now() - started,
-          truncated: all.length > rows.length,
-          statement: sql,
-        };
-      }
-      const affected = (result.rowsAffected ?? []).reduce((a: number, b: number) => a + (b || 0), 0);
-      return { columns: [], rows: [], rowCount: 0, affected, durationMs: Date.now() - started, statement: sql };
+      return this.toResult(result, started, sql, opts.maxRows);
     } catch (err: any) {
       throw new DbError(err.message ?? 'SQL Server 执行失败', { code: err.code ?? 'MSSQL_ERROR' });
     }
   }
 
+  private toResult(result: any, started: number, sql: string, maxRows?: number): QueryResult {
+    const sets = (result.recordsets ?? []) as Array<Record<string, any>[]>;
+    const last = sets.length ? sets[sets.length - 1] : undefined;
+    if (last) {
+      const fields = Object.values((last as any).columns ?? {}) as Array<{ name: string; type?: { declaration?: string } }>;
+      const columns = fields.map((field) => ({ name: field.name, type: field.type?.declaration }));
+      const all = last as Array<Record<string, unknown>>;
+      const limit = maxRows && maxRows > 0 ? maxRows : all.length;
+      const rows = all.slice(0, limit);
+      return {
+        columns,
+        rows: toRowArray(columns, rows),
+        rowCount: rows.length,
+        durationMs: Date.now() - started,
+        truncated: all.length > rows.length,
+        statement: sql,
+      };
+    }
+    const affected = (result.rowsAffected ?? []).reduce((a: number, b: number) => a + (b || 0), 0);
+    return { columns: [], rows: [], rowCount: 0, affected, durationMs: Date.now() - started, statement: sql };
+  }
+
+  /** 开启跨请求事务：mssql 的 Transaction 会独占池内一条连接直到提交/回滚。 */
+  async beginTransaction(sessionId: string, database?: string): Promise<void> {
+    if (this.txTransactions.has(sessionId)) throw new DbError('该会话已有进行中的事务', { code: 'TX_ACTIVE' });
+    const pool = await this.pool(database);
+    const transaction = new mssql.Transaction(pool);
+    await transaction.begin();
+    this.txTransactions.set(sessionId, transaction);
+  }
+
+  async runInTransaction(sessionId: string, sql: string, params: unknown[], opts: RunOptions = {}): Promise<QueryResult> {
+    const transaction = this.txTransactions.get(sessionId);
+    if (!transaction) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
+    const started = Date.now();
+    try {
+      const request = new mssql.Request(transaction);
+      params.forEach((value, index) => request.input(`p${index + 1}`, value as any));
+      const result = await request.query(sql);
+      return this.toResult(result, started, sql, opts.maxRows);
+    } catch (err: any) {
+      throw new DbError(err.message ?? 'SQL Server 事务执行失败', { code: err.code ?? 'MSSQL_ERROR' });
+    }
+  }
+
+  async commitTransaction(sessionId: string): Promise<void> {
+    await this.finishTransaction(sessionId, true);
+  }
+
+  async rollbackTransaction(sessionId: string): Promise<void> {
+    await this.finishTransaction(sessionId, false);
+  }
+
+  private async finishTransaction(sessionId: string, commit: boolean): Promise<void> {
+    const transaction = this.txTransactions.get(sessionId);
+    if (!transaction) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
+    this.txTransactions.delete(sessionId);
+    try {
+      if (commit) await transaction.commit();
+      else await transaction.rollback();
+    } catch (err: any) {
+      throw new DbError(err?.message ?? `${commit ? '提交' : '回滚'}事务失败`, { code: commit ? 'TX_COMMIT' : 'TX_ROLLBACK' });
+    }
+  }
+
   async close(): Promise<void> {
+    for (const [sessionId] of this.txTransactions) {
+      await this.finishTransaction(sessionId, false).catch(() => undefined);
+    }
     await Promise.all([...this.pools.values()].map((pool) => pool.close().catch(() => undefined)));
     this.pools.clear();
   }
