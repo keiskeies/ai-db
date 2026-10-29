@@ -83,7 +83,7 @@ npm --workspace apps/mobile run start
 
 | 关卡 | 命令 / 方式 | 结果 |
 |---|---|---|
-| 文档契约 | `npm run verify:docs` | 227/227 通过 |
+| 文档契约 | `npm run verify:docs` | 267/267 通过 |
 | 类型检查 | `npm run typecheck`（core / gateway / desktop / mobile） | 全部通过 |
 | 单元测试 | `npm test` → core | 137/137 通过 |
 | 集成测试 | gateway（HTTP / SSE / WebSocket / 审批 / 配对 / 引擎方言 / 工具箱 / 表与数据操作 / 跨请求事务） | 126 个用例 · 115 通过 · 11 跳过（跳过项是需要 `AIDB_TEST_*_PORT` 的联机引擎，未配置即跳过） |

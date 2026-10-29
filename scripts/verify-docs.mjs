@@ -123,6 +123,24 @@ if (existsSync(executorFile)) {
   }
 }
 
+// 8. Documented risk level must equal the ToolDefinition risk — 风险标错等于把破坏性操作写成只读。
+{
+  const { TOOLS } = await import('../packages/core/src/agent/tools.ts');
+  const byName = new Map(TOOLS.map((t) => [t.name, t.risk]));
+  for (const row of toolRows) {
+    const documented = row.risk === '动态*' ? 'dynamic' : row.risk.replace('/', '-');
+    const actual = byName.get(row.name);
+    if (actual === undefined) {
+      fail(`tool risk ${row.name}`, 'documented but not defined in tools.ts');
+      continue;
+    }
+    const normalized = actual === 'dynamic' ? 'dynamic' : String(actual);
+    normalized === documented
+      ? ok(`tool risk ${row.name} matches code`)
+      : fail(`tool risk ${row.name}`, `docs=${row.risk} code=${actual}`);
+  }
+}
+
 // report
 const passed = checks.filter((c) => c.ok).length;
 console.log(`\nDocs contract: ${passed}/${checks.length} checks passed`);
