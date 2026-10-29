@@ -66,7 +66,7 @@ export interface QueryOptions {
 export class ConnectionManager {
   private clients = new Map<string, CachedDriver>();
   /** 跨请求事务会话：会话 id → 连接与开始时间（用于超时回收）。 */
-  private txSessions = new Map<string, { connectionId: string; database?: string; startedAt: number }>();
+  private txSessions = new Map<string, { connectionId: string; database?: string; startedAt: number; lastUsedAt: number }>();
 
   constructor(
     private store: Store,
@@ -927,12 +927,41 @@ export class ConnectionManager {
     return { conn, driver };
   }
 
+/** 事务会话最长空闲时间；超过就在下次事务操作时回滚，避免永久占住池内连接。 */
+  private static readonly TX_IDLE_MS = 15 * 60 * 1000;
+
+  /** 回滚并释放超时的事务会话，返回被回收的 id 列表。 */
+  async reapIdleTransactions(): Promise<string[]> {
+    const now = Date.now();
+    const expired = [...this.txSessions.entries()].filter(([, s]) => now - s.lastUsedAt > ConnectionManager.TX_IDLE_MS);
+    const reaped: string[] = [];
+    for (const [sessionId, session] of expired) {
+      this.txSessions.delete(sessionId);
+      try {
+        const driver = await this.driverFor(session.connectionId);
+        if (supportsTransaction(driver)) await driver.rollbackTransaction(sessionId);
+      } catch {
+        /* 驱动已断开时忽略，连接随之释放 */
+      }
+      this.store.addHistory({
+        connectionId: session.connectionId,
+        database: session.database,
+        sql: 'ROLLBACK (超时回收)',
+        status: 'ok',
+        durationMs: now - session.startedAt,
+      });
+      reaped.push(sessionId);
+    }
+    return reaped;
+  }
+
   async beginTransaction(sessionId: string, connectionId: string, opts: QueryOptions): Promise<{ sessionId: string; database?: string }> {
+    await this.reapIdleTransactions();
     const { conn, driver } = await this.txDriver(connectionId);
     if (this.txSessions.has(sessionId)) throw new DbError('该会话已有进行中的事务', { code: 'TX_ACTIVE' });
     const database = opts.database ?? conn.database;
     await driver.beginTransaction(sessionId, database);
-    this.txSessions.set(sessionId, { connectionId, database, startedAt: Date.now() });
+    this.txSessions.set(sessionId, { connectionId, database, startedAt: Date.now(), lastUsedAt: Date.now() });
     this.store.addHistory({
       connectionId,
       database,
@@ -1006,6 +1035,7 @@ export class ConnectionManager {
     // 事务会话里的语句必须走被固定的那条连接，否则 COMMIT/ROLLBACK 作用不到。
     const txSession = opts.sessionId ? this.txSessions.get(opts.sessionId) : undefined;
     const txDriver = txSession && supportsTransaction(driver) ? driver : undefined;
+    if (txSession) txSession.lastUsedAt = Date.now();
     const started = Date.now();
     const sets: QueryResult[] = [];
     const messages: string[] = [];
