@@ -425,6 +425,17 @@ ${text}
     prefillAgent(prompt);
   };
 
+  const exportChartCsv = async () => {
+    const text = currentSql().trim();
+    if (!text) return;
+    try {
+      const { file } = await api.exportData({ connectionId: tab.connectionId, database: tab.database, sql: text, format: 'csv', limit: 20000 });
+      notify('success', '已导出 CSV', `${file.rows} 行 · ${file.path}`);
+    } catch (err: any) {
+      notify('error', '导出失败', err?.message);
+    }
+  };
+
   const exportResult = async () => {
     const text = currentSql().trim();
     if (!text) return;
@@ -521,6 +532,7 @@ ${text}
       title: `${effectiveY} by ${effectiveX}`,
       xLabel: effectiveX,
       yLabel: effectiveY,
+      sql: set.statement,
       series: points.map((point) => ({ label: point.label, value: point.value })),
       extraSeries: extraColumns.length
         ? extraColumns.map((column, offset) => ({ name: column.name, values: points.map((point) => point.extras[offset]) }))
@@ -881,6 +893,7 @@ ${text}
                   y={chartY}
                   onX={setChartX}
                   onY={setChartY}
+                  onExportCsv={() => void exportChartCsv()}
                 />
                 </>
               ) : (

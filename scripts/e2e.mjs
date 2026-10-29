@@ -1730,6 +1730,10 @@ await page.click('[data-testid="chart-dual"]');
 await page.waitForFunction(() => document.querySelector('.query-chart-panel [data-testid="chart-svg"]')?.getAttribute('data-dual') === 'true', null, { timeout: 5000 });
 check('dual-axis chart draws a right axis', (await page.locator('.query-chart-panel [data-testid="chart-axis-right"]').count()) === 1);
 check('dual-axis chart draws the secondary line', (await page.locator('.query-chart-panel [data-testid="chart-dual-line"]').count()) === 1);
+const chartCsvPromise = page.waitForResponse((res) => res.url().includes('/api/export') && (res.request().postData() ?? '').includes('"format":"csv"'), { timeout: 20000 }).catch(() => null);
+await page.click('[data-testid="chart-export-csv"]');
+const chartCsvResponse = await chartCsvPromise;
+check('query chart exports CSV from the toolbar', Boolean(chartCsvResponse && chartCsvResponse.status() === 200), chartCsvResponse ? String(chartCsvResponse.status()) : 'no response');
 // 宽窗口下图表要收缩到 400px 以内，不能把窗口撑出滚动条
 await page.setViewportSize({ width: 1920, height: 900 });
 await page.waitForTimeout(500);
