@@ -68,6 +68,9 @@ const DB_TOOLS = new Set([
   'inspect_schema',
   'search_objects',
   'run_sql',
+  'begin_transaction',
+  'commit_transaction',
+  'rollback_transaction',
   'run_mql',
   'run_redis',
   'run_cypher',
@@ -115,6 +118,11 @@ const SQL_ONLY_TOOLS = new Set([
   'forecast_chart',
   'generate_data',
 ]);
+
+/** Agent 的事务键：与 UI 的 sessionId 命名空间分开，避免撞车。 */
+function agentTxKey(ctx: ToolContext): string {
+  return `agent:${ctx.sessionId}`;
+}
 
 const SENSITIVE = /pass|secret|token|api[_-]?key|phone|mobile|email|ssn|card|身份证|手机|邮箱/i;
 
@@ -284,6 +292,27 @@ export class ToolExecutor {
         return ok(started, `找到 ${matches.length} 个匹配对象`, { matches, total: matches.length });
       }
 
+      case 'begin_transaction': {
+        const conn = this.requireConnection(call, ctx);
+        const database = this.databaseOf(call, conn);
+        const result = await this.manager.beginTransaction(agentTxKey(ctx), conn.id, { database, actor: 'agent' });
+        return ok(started, '事务已开启', result);
+      }
+
+      case 'commit_transaction': {
+        const conn = this.requireConnection(call, ctx);
+        const result = await this.manager.commitTransaction(agentTxKey(ctx));
+        this.manager.invalidate(conn.id);
+        return ok(started, '事务已提交', result);
+      }
+
+      case 'rollback_transaction': {
+        const conn = this.requireConnection(call, ctx);
+        const result = await this.manager.rollbackTransaction(agentTxKey(ctx));
+        this.manager.invalidate(conn.id);
+        return ok(started, '事务已回滚', result);
+      }
+
       case 'run_sql': {
         const conn = this.requireConnection(call, ctx);
         const sql = String(a.sql ?? '').trim();
@@ -304,6 +333,8 @@ export class ToolExecutor {
           allowMulti: settings.allowMultiStatement,
           autoLimit: settings.autoLimit,
           actor: 'agent',
+          // 事务已开启时让语句走被固定的那条连接，否则提交/回滚作用不到。
+          sessionId: this.manager.transactionOf(agentTxKey(ctx))?.connectionId === conn.id ? agentTxKey(ctx) : undefined,
         });
         if (/^\s*(create|alter|drop|rename)/i.test(sql)) this.manager.invalidate(conn.id);
         const last = batch.sets[batch.sets.length - 1];

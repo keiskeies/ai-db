@@ -6,7 +6,7 @@
 
 ### 1.1 方法
 
-1. 自动化契约脚本 `scripts/verify-docs.mjs`：文档存在性、章节、内部链接、五端覆盖、37 工具清单与代码注册表一致性、权限模式、记忆层、API/事件、技术栈关键词。
+1. 自动化契约脚本 `scripts/verify-docs.mjs`：文档存在性、章节、内部链接、五端覆盖、40 工具清单与代码注册表一致性、权限模式、记忆层、API/事件、技术栈关键词。
 2. 人工交叉复核：功能 ↔ UI ↔ Agent ↔ 数据模型 ↔ 验证方案。
 3. 可行性核对：Node 24 + `node:sqlite` 实测、npm 镜像、Chrome/Playwright、Electron 45、Android SDK。
 
@@ -25,7 +25,7 @@
 ### 1.3 交叉一致性结论
 
 - 平台矩阵、权限矩阵、工具清单、SSE 事件、元数据表名在文档与实现中一一对应（契约脚本会读取 `tools.ts` 校验）。
-- 文档中的 37 个工具全部在 `packages/core/src/agent/tools.ts` 注册，并由 `apps/gateway/src/executor.ts` 实现。
+- 文档中的 40 个工具全部在 `packages/core/src/agent/tools.ts` 注册，并由 `apps/gateway/src/executor.ts` 实现。
 - 权限矩阵与 `packages/core/src/agent/policy.ts` 一致；SSE / WS 共用 `AgentEvent` 类型。
 
 ## 2. 验证环境
@@ -72,7 +72,7 @@
 
 ### 4.2 Bridge 集成（9）
 
-1. `/health`、`/bootstrap`、37 工具与 demo 种子。
+1. `/health`、`/bootstrap`、40 工具与 demo 种子。
 2. 查询计数、分页 / 排序、只读连接拒绝写入（403 `READONLY`）。
 3. 行更新、DDL 预览 / 执行、CSV 导出、CSV 导入。
 4. Agent：schema 检查、`run_sql`、**审批后建表**、记忆写入 / 检索、审计、历史。
@@ -86,7 +86,7 @@
 
 | # | 检查 | 结果 |
 |---|---|---|
-| 1–2 | Bridge 启动、demo 连接、37 工具 | ✅ |
+| 1–2 | Bridge 启动、demo 连接、40 工具 | ✅ |
 | 3 | 桌面 UI 启动、连接树 | ✅ |
 | 4 | 连接表单列出 8 种引擎 | ✅ |
 | 5 | 工具箱暴露 11 个 Navicat 生产力模块 | ✅ |
@@ -176,9 +176,9 @@ Expo Web 构建在 390×844 视口通过：配对页、配对码真实兑换、A
 |---|---|---|
 | Navicat 式连接 / 对象树 / 数据网格 / SQL / 设计器 / 导入导出 / 备份恢复 / 关系图 / 历史 / 审计 | 桌面 UI 组件 + Bridge API + 集成测试 + E2E + 截图 | ✅ v0.3 覆盖 |
 | Navicat 生产力工具：搜索 / 查询构建 / 结构对比同步 / 数据对比 / 传输 / 生成 / 监控 / 调度 / 用户 / 字典 / 高级对象 | 11 模块工具箱 + `/features` API + 集成测试 + E2E | ✅ |
-| AI Agent 可全权操作数据库 | 37 工具注册表 + 执行器 + 审批 + 审计；离线全链路与集成测试 | ✅ |
+| AI Agent 可全权操作数据库 | 40 工具注册表 + 执行器 + 审批 + 审计；离线全链路与集成测试 | ✅ |
 | Claude Code 式对话与内容展示 | `AgentPanel`：工具卡、Todo、审批、思考、`@`、斜杠、结束统计；截图 | ✅ |
-| 工具 + 记忆架构 | 37 工具；四层记忆（会话/摘要、情景、语义、程序）；检索/去重/衰减/编辑；记忆抽屉；跨端共享 | ✅ |
+| 工具 + 记忆架构 | 40 工具；四层记忆（会话/摘要、情景、语义、程序）；检索/去重/衰减/编辑；记忆抽屉；跨端共享 | ✅ |
 | 多端：Windows | 打包产物真实启动验证 | ✅ |
 | 多端：Linux | `linux-unpacked` 构建；Dockerfile 校验 | ✅ 构建级 |
 | 多端：macOS | Electron 配置、构建脚本 | ⚠️ 未在 macOS 产出 dmg |
@@ -299,7 +299,7 @@ Expo Web 构建在 390×844 视口通过：配对页、配对码真实兑换、A
 | 类型检查 | core / gateway / desktop / mobile 全部通过 |
 | Core 单测 | **136/136**（含结构 diff / 表维护 / 批量删除 / 多引擎能力位用例） |
 | Bridge 集成 | **115 个用例 · 107 通过 · 8 跳过**（跳过项为未配置 `AIDB_TEST_*_PORT` 的联机引擎） |
-| E2E | **146/146**（Navicat 布局、表/库菜单、行号、筛选、查找替换、查询下拉、工具箱、37 工具、多引擎读写与对象生命周期、移动端、Electron） |
+| E2E | **146/146**（Navicat 布局、表/库菜单、行号、筛选、查找替换、查询下拉、工具箱、40 工具、多引擎读写与对象生命周期、移动端、Electron） |
 | 构建 | core / gateway / desktop / mobile web（2.07MB）成功 |
 | 控制台错误 | 0 |
 

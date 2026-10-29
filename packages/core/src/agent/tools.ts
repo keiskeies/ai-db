@@ -665,6 +665,50 @@ export const TOOLS: ToolDefinition[] = [
     summarize: (a) => `生成 ${a.rows ?? 10} 行测试数据 → ${a.table}`,
   },
   {
+    name: 'begin_transaction',
+    description:
+      'Begin a cross-statement transaction on a relational connection (MySQL, PostgreSQL, Oracle, SQL Server, SQLite, DM8). After this, run_sql calls on the same connection join the transaction until commit_transaction or rollback_transaction. Always finish with one of them; an open transaction holds a database connection.',
+    risk: 'write',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connectionId'],
+      properties: {
+        ...connectionProp,
+        ...databaseProp,
+      },
+    },
+    summarize: () => '开启事务',
+  },
+  {
+    name: 'commit_transaction',
+    description: 'Commit the transaction opened by begin_transaction on this session. Fails if there is no open transaction.',
+    risk: 'write',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connectionId'],
+      properties: {
+        ...connectionProp,
+      },
+    },
+    summarize: () => '提交事务',
+  },
+  {
+    name: 'rollback_transaction',
+    description: 'Roll back (discard) everything written since begin_transaction on this session. Fails if there is no open transaction.',
+    risk: 'destructive',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connectionId'],
+      properties: {
+        ...connectionProp,
+      },
+    },
+    summarize: () => '回滚事务',
+  },
+  {
     name: 'render_chart',
     description:
       'Execute a SELECT and render the result as a chart in the agent transcript. Use for trends (line), distributions (bar) and proportions (pie). x/y refer to result column names.',
