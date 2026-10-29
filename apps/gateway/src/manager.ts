@@ -654,6 +654,36 @@ export class ConnectionManager {
     return result;
   }
 
+  /** list/set/zset 的成员增删（键详情用）。 */
+  async addKeyMember(connectionId: string, key: string, member: string, opts: QueryOptions & { score?: number }): Promise<{ key: string; type: string; added: boolean }> {
+    const { conn, driver } = await this.keyDriver(connectionId);
+    const started = Date.now();
+    const result = await driver.addKeyMember(key, member, opts.score, opts.database ?? conn.database);
+    this.store.addHistory({
+      connectionId,
+      database: opts.database ?? conn.database,
+      sql: JSON.stringify({ addKeyMember: { key: result.key, type: result.type } }),
+      status: 'ok',
+      durationMs: Date.now() - started,
+    });
+    return result;
+  }
+
+  async removeKeyMember(connectionId: string, key: string, member: string, opts: QueryOptions): Promise<{ key: string; member: string; deleted: number; keyGone: boolean }> {
+    const { conn, driver } = await this.keyDriver(connectionId);
+    const started = Date.now();
+    const result = await driver.removeKeyMember(key, member, opts.database ?? conn.database);
+    this.invalidate(connectionId);
+    this.store.addHistory({
+      connectionId,
+      database: opts.database ?? conn.database,
+      sql: JSON.stringify({ removeKeyMember: { key: result.key, deleted: result.deleted } }),
+      status: 'ok',
+      durationMs: Date.now() - started,
+    });
+    return result;
+  }
+
   /** 编辑 string 键的取值（SET KEEPTTL）；非 string 类型由驱动拒绝。 */
   async setKeyValue(connectionId: string, key: string, value: string, opts: QueryOptions): Promise<{ key: string; type: string; ttl: number }> {
     const { conn, driver } = await this.keyDriver(connectionId);

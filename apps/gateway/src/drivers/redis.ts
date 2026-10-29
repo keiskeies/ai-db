@@ -652,6 +652,46 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
     return { key: name, field: target, deleted, keyGone };
   }
 
+  /** list / set / zset 的成员增删；string 与 hash 走各自的取值/字段接口。 */
+  async addKeyMember(key: string, member: string, score?: number, database?: string): Promise<{ key: string; type: string; added: boolean }> {
+    const name = key.trim();
+    const value = member.trim();
+    if (!name) throw new DbError('键名不能为空', { code: 'REDIS_KEY' });
+    if (!value) throw new DbError('成员不能为空', { code: 'REDIS_MEMBER' });
+    const client = await this.ready(database);
+    const type = String(await client.type(name));
+    if (type === 'none') throw new DbError(`键不存在：${name}`, { code: 'REDIS_KEY_NOT_FOUND', status: 404 });
+    if (type === 'list') {
+      await client.rpush(name, value);
+      return { key: name, type, added: true };
+    }
+    if (type === 'set') {
+      return { key: name, type, added: Number(await client.sadd(name, value)) > 0 };
+    }
+    if (type === 'zset') {
+      if (score === undefined || !Number.isFinite(score)) throw new DbError('zset 成员需要数字分数', { code: 'REDIS_SCORE' });
+      return { key: name, type, added: Number(await client.zadd(name, score, value)) > 0 };
+    }
+    throw new DbError(`只能在 list/set/zset 上增删成员，当前类型为 ${type}`, { code: 'REDIS_TYPE' });
+  }
+
+  /** 删成员：list 删第一个匹配项，set/zset 按成员名删；删空后键会被 Redis 自动删除。 */
+  async removeKeyMember(key: string, member: string, database?: string): Promise<{ key: string; member: string; deleted: number; keyGone: boolean }> {
+    const name = key.trim();
+    const value = member.trim();
+    if (!name) throw new DbError('键名不能为空', { code: 'REDIS_KEY' });
+    if (!value) throw new DbError('成员不能为空', { code: 'REDIS_MEMBER' });
+    const client = await this.ready(database);
+    const type = String(await client.type(name));
+    if (type === 'none') throw new DbError(`键不存在：${name}`, { code: 'REDIS_KEY_NOT_FOUND', status: 404 });
+    let deleted = 0;
+    if (type === 'list') deleted = Number(await client.lrem(name, 1, value));
+    else if (type === 'set') deleted = Number(await client.srem(name, value));
+    else if (type === 'zset') deleted = Number(await client.zrem(name, value));
+    else throw new DbError(`只能在 list/set/zset 上增删成员，当前类型为 ${type}`, { code: 'REDIS_TYPE' });
+    return { key: name, member: value, deleted, keyGone: (await client.exists(name)) === 0 };
+  }
+
   /** 编辑 string 键的取值；KEEPTTL 保留原过期时间，非 string 类型拒绝以免 SET 覆盖整个键。 */
   async setKeyValue(key: string, value: string, database?: string): Promise<{ key: string; type: string; ttl: number }> {
     const name = key.trim();

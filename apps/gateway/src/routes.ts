@@ -874,6 +874,94 @@ export function createApiRouter(deps: ApiDeps): Router {
   );
 
   router.post(
+    '/redis/key/member',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const connectionId = str(body.connectionId);
+      const key = str(body.key);
+      const member = str(body.member);
+      if (!connectionId || !key || !member) {
+        throw Object.assign(new Error('connectionId、key 与 member 必填'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      const database = str(body.database);
+      const score = body.score === undefined || body.score === null || body.score === '' ? undefined : Number(body.score);
+      if (score !== undefined && !Number.isFinite(score)) {
+        throw Object.assign(new Error('score 需要是数字'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      try {
+        const result = await manager.addKeyMember(connectionId, key, member, { database, actor: 'user', score });
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'redis.key.member',
+          sql: JSON.stringify({ key, member, score }),
+          risk: 'write',
+          approval: 'manual',
+          status: 'ok',
+          meta: { added: result.added },
+        });
+        res.json({ result });
+      } catch (err: any) {
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'redis.key.member',
+          sql: JSON.stringify({ key, member }),
+          risk: 'write',
+          approval: 'manual',
+          status: 'error',
+          meta: { error: err.message },
+        });
+        throw err;
+      }
+    }),
+  );
+
+  router.post(
+    '/redis/key/member/delete',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const connectionId = str(body.connectionId);
+      const key = str(body.key);
+      const member = str(body.member);
+      if (!connectionId || !key || !member) {
+        throw Object.assign(new Error('connectionId、key 与 member 必填'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      const database = str(body.database);
+      try {
+        const result = await manager.removeKeyMember(connectionId, key, member, { database, actor: 'user' });
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'redis.key.member.delete',
+          sql: JSON.stringify({ key, member }),
+          risk: 'destructive',
+          approval: 'manual',
+          status: 'ok',
+          meta: { deleted: result.deleted, keyGone: result.keyGone },
+        });
+        res.json({ result });
+      } catch (err: any) {
+        store.addAudit({
+          actor: 'user',
+          connectionId,
+          database,
+          tool: 'redis.key.member.delete',
+          sql: JSON.stringify({ key, member }),
+          risk: 'destructive',
+          approval: 'manual',
+          status: 'error',
+          meta: { error: err.message },
+        });
+        throw err;
+      }
+    }),
+  );
+
+  router.post(
     '/redis/hash/field',
     ah(async (req, res) => {
       const body = obj(req.body, 'body');

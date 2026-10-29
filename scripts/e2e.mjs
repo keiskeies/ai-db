@@ -134,7 +134,7 @@ if (REDIS_PORT) {
   const client = new Redis({ host: '127.0.0.1', port: REDIS_PORT, lazyConnect: true });
   await client.connect();
   await client.set('aidb:e2e:key', 'hello');
-  await client.del('aidb:e2e:key_renamed', 'aidb:e2e:created');
+  await client.del('aidb:e2e:key_renamed', 'aidb:e2e:created', 'aidb:e2e:members');
   await client.set('aidb:e2e:del', 'throwaway');
   if (REDIS_STACK) {
     await client.call('FT.DROPINDEX', 'aidb_e2e').catch(() => undefined);
@@ -626,6 +626,39 @@ if (REDIS_PORT) {
     { timeout: 20000 },
   );
   check('Redis hash field delete removes the emptied key', true);
+
+  // set 键：新建后在详情里加成员、再按成员删除
+  await page.click('[data-testid="open-key-create"]');
+  await page.waitForSelector('[data-testid="key-create-name"]', { timeout: 10000 });
+  await page.fill('[data-testid="key-create-name"]', 'aidb:e2e:members');
+  await page.selectOption('[data-testid="key-create-type"]', 'set');
+  await page.fill('[data-testid="key-create-value"]', '["alpha"]');
+  await page.click('[data-testid="key-create-submit"]');
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
+  await page.waitForFunction(
+    () => document.querySelector('[data-testid="query-result-grid"]')?.innerText.includes('aidb:e2e:members'),
+    null,
+    { timeout: 20000 },
+  );
+  await page.locator('[data-testid="query-result-grid"] tbody tr', { hasText: 'aidb:e2e:members' }).first().dblclick();
+  await page.waitForSelector('[data-testid="member-input"]', { timeout: 10000 });
+  await page.fill('[data-testid="member-input"]', 'beta');
+  await page.click('[data-testid="member-add"]');
+  await page.waitForFunction(
+    () => document.querySelector('[data-testid="redis-key-grid"]')?.innerText.includes('beta'),
+    null,
+    { timeout: 20000 },
+  );
+  check('Redis set member added from the key detail dialog', true);
+  await page.click('[data-testid="member-delete-beta"]');
+  await page.waitForFunction(
+    () => !document.querySelector('[data-testid="redis-key-grid"]')?.innerText.includes('beta'),
+    null,
+    { timeout: 20000 },
+  );
+  check('Redis set member removed from the key detail dialog', true);
+  await page.locator('.modal-head .icon-btn').last().click();
+  await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 10000 });
 
   if (REDIS_STACK) {
     await page.waitForSelector('[title="搜索索引 aidb_e2e"]', { timeout: 20000 });

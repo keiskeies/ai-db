@@ -31,6 +31,8 @@ export function RedisKeyDialog({
   const [ttlInput, setTtlInput] = useState('');
   const [renameTo, setRenameTo] = useState('');
   const [valueText, setValueText] = useState('');
+  const [memberInput, setMemberInput] = useState('');
+  const [memberScore, setMemberScore] = useState('');
   const [editField, setEditField] = useState<{ field: string; value: string } | null>(null);
   const [mutating, setMutating] = useState(false);
   const connections = useApp((s) => s.connections);
@@ -63,6 +65,52 @@ export function RedisKeyDialog({
       notify('success', '键值已保存', keyName);
     } catch (err: any) {
       setError(err?.message ?? '保存键值失败');
+    } finally {
+      setMutating(false);
+    }
+  };
+
+  const addMember = async () => {
+    const member = memberInput.trim();
+    if (!member) {
+      setError('成员不能为空');
+      return;
+    }
+    setMutating(true);
+    setError(null);
+    try {
+      const score = detail?.type === 'zset' ? Number(memberScore) : undefined;
+      if (detail?.type === 'zset' && !Number.isFinite(score)) {
+        setError('zset 成员需要数字分数');
+        setMutating(false);
+        return;
+      }
+      await api.addKeyMember({ connectionId, database, key: keyName, member, score });
+      setMemberInput('');
+      setMemberScore('');
+      await load();
+      notify('success', '成员已写入', member);
+    } catch (err: any) {
+      setError(err?.message ?? '写入成员失败');
+    } finally {
+      setMutating(false);
+    }
+  };
+
+  const removeMember = async (member: string) => {
+    setMutating(true);
+    setError(null);
+    try {
+      const { result } = await api.removeKeyMember({ connectionId, database, key: keyName, member });
+      notify('success', result.deleted ? '成员已删除' : '成员已不存在', result.keyGone ? `${member}（键已空，整键删除）` : member);
+      if (result.keyGone) {
+        void loadSchema(connectionId, true, database).catch(() => undefined);
+        onClose();
+        return;
+      }
+      await load();
+    } catch (err: any) {
+      setError(err?.message ?? '删除成员失败');
     } finally {
       setMutating(false);
     }
@@ -338,6 +386,53 @@ export function RedisKeyDialog({
                   </div>
                 </div>
               ) : null}
+            </>
+          ) : (detail.type === 'list' || detail.type === 'set' || detail.type === 'zset') && conn && !conn.readonly ? (
+            <>
+              <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>
+                {detail.type === 'list' ? '新成员追加到列表尾部' : '按成员名增删'}；下方可逐个删除，删空后整键会消失。
+              </div>
+              <DataGrid columns={detail.columns} rows={detail.rows} testId="redis-key-grid" />
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                {detail.rows.map((row, index) => {
+                  const member = String((detail.type === 'list' ? row[1] : row[0]) ?? '');
+                  return (
+                    <button
+                      key={`${member}-${index}`}
+                      className="btn small"
+                      disabled={mutating || deleting}
+                      onClick={() => void removeMember(member)}
+                      title={`删除成员 ${member}`}
+                      data-testid={`member-delete-${member}`}
+                    >
+                      × {member}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }} data-testid="member-add-form">
+                <input
+                  className="input"
+                  style={{ width: 200 }}
+                  value={memberInput}
+                  placeholder="新成员"
+                  onChange={(event) => setMemberInput(event.target.value)}
+                  data-testid="member-input"
+                />
+                {detail.type === 'zset' ? (
+                  <input
+                    className="input"
+                    style={{ width: 100 }}
+                    value={memberScore}
+                    placeholder="分数"
+                    onChange={(event) => setMemberScore(event.target.value)}
+                    data-testid="member-score"
+                  />
+                ) : null}
+                <button className="btn small primary" onClick={() => void addMember()} disabled={mutating || !memberInput.trim()} data-testid="member-add">
+                  {mutating ? <Spinner /> : null} 添加成员
+                </button>
+              </div>
             </>
           ) : detail.rows.length ? (
             <DataGrid columns={detail.columns} rows={detail.rows} testId="redis-key-grid" />

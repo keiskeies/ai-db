@@ -244,6 +244,10 @@ export const api = {
     request<{ result: { key: string; field: string; created: boolean } }>('/redis/hash/field', { method: 'POST', body: JSON.stringify(body) }),
   deleteHashField: (body: { connectionId: string; database?: string; key: string; field: string }) =>
     request<{ result: { key: string; field: string; deleted: boolean; keyGone: boolean } }>('/redis/hash/field/delete', { method: 'POST', body: JSON.stringify(body) }),
+  addKeyMember: (body: { connectionId: string; database?: string; key: string; member: string; score?: number }) =>
+    request<{ result: { key: string; type: string; added: boolean } }>('/redis/key/member', { method: 'POST', body: JSON.stringify(body) }),
+  removeKeyMember: (body: { connectionId: string; database?: string; key: string; member: string }) =>
+    request<{ result: { key: string; member: string; deleted: number; keyGone: boolean } }>('/redis/key/member/delete', { method: 'POST', body: JSON.stringify(body) }),
   renameKey: (body: { connectionId: string; database?: string; key: string; to: string }) =>
     request<{ result: { from: string; to: string } }>('/redis/key/rename', { method: 'POST', body: JSON.stringify(body) }),
   deleteRedisKeys: (body: { connectionId: string; database?: string; keys: string[] }) =>

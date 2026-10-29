@@ -399,3 +399,75 @@ test('HTTP 新建键覆盖五种类型，拒绝重复键与只读连接', { skip
     await client.quit();
   }
 });
+
+test('HTTP 增删 list/set/zset 成员，删空后整键消失', { skip: !PORT }, async () => {
+  const env = await gateway();
+  after(env.close);
+  const writable = await env.connect('redis-member', false);
+  const readonly = await env.connect('redis-member-ro', true);
+  const db = '9';
+
+  const client = new Redis({ host: '127.0.0.1', port: PORT!, db: Number(db), lazyConnect: true });
+  await client.connect();
+  const keys = ['aidb_mem_list', 'aidb_mem_set', 'aidb_mem_zset', 'aidb_mem_str'];
+  try {
+    await client.del(...keys);
+    await client.rpush('aidb_mem_list', 'a');
+    await client.sadd('aidb_mem_set', 'x');
+    await client.zadd('aidb_mem_zset', 1, 'alice');
+    await client.set('aidb_mem_str', 'plain');
+
+    const add = (key: string, member: string, score?: number) =>
+      env.api<{ result: { key: string; type: string; added: boolean } }>('/redis/key/member', {
+        method: 'POST',
+        body: JSON.stringify({ connectionId: writable, database: db, key, member, score }),
+      });
+    const del = (key: string, member: string) =>
+      env.api<{ result: { deleted: number; keyGone: boolean } }>('/redis/key/member/delete', {
+        method: 'POST',
+        body: JSON.stringify({ connectionId: writable, database: db, key, member }),
+      });
+
+    assert.equal((await add('aidb_mem_list', 'b')).status, 200);
+    assert.deepEqual(await client.lrange('aidb_mem_list', 0, -1), ['a', 'b'], 'list 追加到尾部');
+
+    assert.equal((await add('aidb_mem_set', 'y')).status, 200);
+    assert.equal((await add('aidb_mem_set', 'y')).body.result.added, false, 'set 重复成员不算新增');
+    assert.deepEqual((await client.smembers('aidb_mem_set')).sort(), ['x', 'y']);
+
+    assert.equal((await add('aidb_mem_zset', 'bob', 2)).status, 200);
+    assert.equal(await client.zscore('aidb_mem_zset', 'bob'), '2');
+    const noScore = await env.api<{ error: { code: string } }>('/redis/key/member', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: writable, database: db, key: 'aidb_mem_zset', member: 'carol' }),
+    });
+    assert.equal(noScore.status, 400);
+    assert.equal(noScore.body.error.code, 'REDIS_SCORE');
+
+    // 类型不匹配的键必须拒绝。
+    const onString = await add('aidb_mem_str', 'nope');
+    assert.equal(onString.status, 400);
+    assert.equal((await onString.body as any).error.code, 'REDIS_TYPE');
+
+    // 删空后整键消失。
+    assert.equal((await del('aidb_mem_list', 'a')).body.result.deleted, 1);
+    const lastOne = await del('aidb_mem_list', 'b');
+    assert.equal(lastOne.body.result.keyGone, true);
+    assert.equal(await client.exists('aidb_mem_list'), 0);
+
+    // 只读连接拒绝。
+    const ro = await env.api('/redis/key/member', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: readonly, database: db, key: 'aidb_mem_set', member: 'z' }),
+    });
+    assert.equal(ro.status, 403);
+
+    const audits = await env.api<{ entries: Array<{ tool: string; risk: string }> }>(`/audit?connectionId=${writable}&limit=40`);
+    const tools = new Map((audits.body.entries ?? []).map((entry) => [entry.tool, entry.risk]));
+    assert.equal(tools.get('redis.key.member'), 'write');
+    assert.equal(tools.get('redis.key.member.delete'), 'destructive');
+  } finally {
+    await client.del(...keys);
+    await client.quit();
+  }
+});
