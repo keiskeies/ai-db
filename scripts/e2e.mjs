@@ -1917,7 +1917,24 @@ if (electronBinary) {
   console.log('SKIP  electron shell — no Electron binary installed');
 }
 
+// ---------------- 只读连接：UI 收口写入入口 ----------------
+await api(`/connections/${demo.id}`, { method: 'PUT', body: JSON.stringify({ readonly: true }) });
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
+await page.waitForTimeout(700);
+await page.click('[data-testid="welcome-open-demo"]');
+await page.waitForSelector('[data-testid="data-grid"] tbody tr', { timeout: 20000 });
+const readonlyWriteEntry = (await page.locator('[data-testid="data-add-row"]').isDisabled())
+  && (await page.locator('[data-testid="data-paste-rows"]').isDisabled())
+  && (await page.locator('[data-testid="data-find-replace"]').isDisabled())
+  && (await page.locator('[data-testid="data-duplicate-rows"]').isDisabled());
+check('readonly connection disables write entry points', readonlyWriteEntry);
+await page.locator('[data-testid="grid-row-0"] td').nth(2).dblclick();
+await page.waitForTimeout(300);
+check('readonly connection keeps cells non-editable', (await page.locator('[data-testid="grid-row-0"] td.editing').count()) === 0);
+
 // ---------------- Cleanup & report ----------------
+await api(`/connections/${demo.id}`, { method: 'PUT', body: JSON.stringify({ readonly: false }) });
 await api('/ddl/execute', { method: 'POST', body: JSON.stringify({ connectionId: demo.id, statements: ['DROP TABLE IF EXISTS "e2e_tasks"'] }) });
 await desktopContext.close();
 await mobileContext.close();

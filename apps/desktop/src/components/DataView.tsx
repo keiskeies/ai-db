@@ -92,7 +92,8 @@ export function DataView({ tab }: { tab: DataTab }) {
   }, [schemas, tab.database, tab.table]);
 
   const pkColumns = useMemo(() => (tableInfo?.columns ?? []).filter((c) => c.primaryKey), [tableInfo]);
-  const canEdit = pkColumns.length > 0;
+  const writable = !conn?.readonly;
+  const canEdit = pkColumns.length > 0 && writable;
   const canLineProtocol = conn ? writesLineProtocol(conn.engine) : false;
   const [lineOpen, setLineOpen] = useState(false);
 
@@ -631,7 +632,7 @@ export function DataView({ tab }: { tab: DataTab }) {
         <button className={`btn small ${hiddenColumns.length ? 'active' : ''}`} title="列显示管理" onClick={() => setColumnsOpen(true)} data-testid="data-columns">
           <Columns3 size={12} /> 列{hiddenColumns.length ? ` ${hiddenColumns.length}` : ''}
         </button>
-        <button className="btn small" title="查找替换" onClick={() => setReplaceOpen(true)} data-testid="data-find-replace">
+        <button className="btn small" title="查找替换" onClick={() => setReplaceOpen(true)} disabled={!writable} data-testid="data-find-replace">
           <Search size={12} /> 查找
         </button>
       </div>
@@ -640,10 +641,10 @@ export function DataView({ tab }: { tab: DataTab }) {
         <button className="btn small" title="复制所选行（TSV）" onClick={() => void copySelected()} data-testid="data-copy-rows">
           <ClipboardCopy size={12} /> 复制
         </button>
-        <button className="btn small" title="粘贴行" onClick={() => setPasteOpen(true)} data-testid="data-paste-rows">
+        <button className="btn small" title="粘贴行" onClick={() => setPasteOpen(true)} disabled={!writable} data-testid="data-paste-rows">
           <ClipboardPaste size={12} /> 粘贴
         </button>
-        <button className="btn small" title="复制所选行到表尾" onClick={() => void duplicateSelected()} disabled={!selectedIndices.length} data-testid="data-duplicate-rows">
+        <button className="btn small" title="复制所选行到表尾" onClick={() => void duplicateSelected()} disabled={!selectedIndices.length || !canEdit} data-testid="data-duplicate-rows">
           <CopyPlus size={12} /> 复制行
         </button>
         <button className="btn small danger" title="删除所选行" onClick={() => void deleteSelected()} disabled={!selectedIndices.length || !canEdit} data-testid="data-delete-rows">
@@ -651,7 +652,7 @@ export function DataView({ tab }: { tab: DataTab }) {
         </button>
         {selectedIndices.length ? <span className="badge write">已选 {selectedIndices.length}</span> : null}
         <div className="spacer" />
-        <button className="btn small" onClick={() => setNewRow(newRow ? null : {})} disabled={!columns.length} data-testid="data-add-row">
+        <button className="btn small" onClick={() => setNewRow(newRow ? null : {})} disabled={!columns.length || !writable} data-testid="data-add-row">
           <Plus size={12} /> {t('addRow')}
         </button>
         {newRow ? (
@@ -659,7 +660,7 @@ export function DataView({ tab }: { tab: DataTab }) {
             保存新行
           </button>
         ) : null}
-        <button className="btn small" onClick={() => fileRef.current?.click()}>
+        <button className="btn small" onClick={() => fileRef.current?.click()} disabled={!writable}>
           <Upload size={12} /> {t('import')}
         </button>
         <input
@@ -727,7 +728,7 @@ export function DataView({ tab }: { tab: DataTab }) {
                 );
               })}
             </div>
-            {!canEdit ? <div className="muted" style={{ marginTop: 8, fontSize: 11 }}>该表没有主键，表单只读。</div> : null}
+            {!writable ? <div className="muted" style={{ marginTop: 8, fontSize: 11 }}>只读连接，表单不可保存。</div> : !canEdit ? <div className="muted" style={{ marginTop: 8, fontSize: 11 }}>该表没有主键，表单只读。</div> : null}
           </div>
         ) : (
         <DataGrid
@@ -757,7 +758,7 @@ export function DataView({ tab }: { tab: DataTab }) {
         </div>
       ) : (
         <EmptyState icon={<Table2 size={20} />} title={t('noResults')}>
-          {canEdit ? '这张表还没有数据，点击“新增行”开始。' : '该表没有主键，当前以只读方式展示。'}
+          {!writable ? '只读连接，当前以只读方式展示。' : canEdit ? '这张表还没有数据，点击“新增行”开始。' : '该表没有主键，当前以只读方式展示。'}
         </EmptyState>
       )}
 
@@ -766,7 +767,7 @@ export function DataView({ tab }: { tab: DataTab }) {
           第 {total ? offset + 1 : 0}-{Math.min(offset + rows.length, total)} 条记录（共 {total.toLocaleString()} 条）· 第 {currentPage}/{totalPages} 页
           {page?.batch.sets[0] ? ` · ${formatDuration(page.batch.durationMs)}` : ''}
           {selectedIndices.length ? ` · 已选 ${selectedIndices.length} 行` : ''}
-          {!canEdit ? ' · 只读（无主键）' : ''}
+          {!writable ? ' · 只读连接' : !canEdit ? ' · 只读（无主键）' : ''}
         </span>
         {page?.batch.sets[0]?.truncated ? <span className="badge write">结果已截断</span> : null}
         <div className="pager">

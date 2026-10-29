@@ -280,7 +280,7 @@ export function ConnectionModal() {
           </div>
           <div className="field full">
             <label className="checkbox">
-              <input type="checkbox" checked={readonly} onChange={(e) => setReadonly(e.target.checked)} /> {t('readonly')}（服务端强制，Agent 同样受限）
+              <input type="checkbox" checked={readonly} onChange={(e) => setReadonly(e.target.checked)} data-testid="connection-readonly" /> {t('readonly')}（服务端强制，Agent 同样受限）
             </label>
           </div>
           <div className="field full">
