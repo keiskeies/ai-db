@@ -1500,6 +1500,15 @@ export function createApiRouter(deps: ApiDeps): Router {
           throw Object.assign(new Error(`列不存在：${unknown.join(', ')}`), { code: 'UNKNOWN_COLUMN', status: 400 });
         }
       };
+      const primaryKeys = (table.columns ?? []).filter((column) => column.primaryKey).map((column) => column.name);
+      const requirePrimaryKey = (whereColumns: string[]) => {
+        if (!primaryKeys.length) {
+          throw Object.assign(new Error('该表没有主键，不能按行更新或删除'), { code: 'NO_PRIMARY_KEY', status: 400 });
+        }
+        if (whereColumns.length !== primaryKeys.length || primaryKeys.some((name) => !whereColumns.includes(name))) {
+          throw Object.assign(new Error(`更新/删除必须使用完整主键：${primaryKeys.join(', ')}`), { code: 'KEY_NOT_PRIMARY', status: 400 });
+        }
+      };
       const schema = engineUsesSchema(conn.engine) ? table.schema : undefined;
       let sql: string;
       let params: unknown[] = [];
@@ -1527,6 +1536,7 @@ export function createApiRouter(deps: ApiDeps): Router {
         const setCols = Object.keys(values).filter((c) => known.has(c));
         const whereCols = Object.keys(key).filter((c) => known.has(c));
         if (!setCols.length || !whereCols.length) throw Object.assign(new Error('更新需要 values 与主键 key'), { code: 'INVALID_INPUT', status: 400 });
+        requirePrimaryKey(whereCols);
         sql = buildUpdate(conn.engine, table.name, setCols, whereCols, schema);
         params = [...setCols.map((c) => coerceValue(values[c], typeOf.get(c) ?? 'text')), ...whereCols.map((c) => coerceValue(key[c], typeOf.get(c) ?? 'text'))];
       } else if (op === 'delete') {
@@ -1534,6 +1544,7 @@ export function createApiRouter(deps: ApiDeps): Router {
         rejectUnknown(Object.keys(key));
         const whereCols = Object.keys(key).filter((c) => known.has(c));
         if (!whereCols.length) throw Object.assign(new Error('删除需要主键 key'), { code: 'INVALID_INPUT', status: 400 });
+        requirePrimaryKey(whereCols);
         sql = buildDelete(conn.engine, table.name, whereCols, schema);
         params = whereCols.map((c) => coerceValue(key[c], typeOf.get(c) ?? 'text'));
         risk = 'destructive';
@@ -1543,6 +1554,7 @@ export function createApiRouter(deps: ApiDeps): Router {
         rejectUnknown(Object.keys(keys[0]));
         const whereCols = Object.keys(keys[0]).filter((c) => known.has(c));
         if (!whereCols.length) throw Object.assign(new Error('删除需要主键列'), { code: 'INVALID_INPUT', status: 400 });
+        requirePrimaryKey(whereCols);
         if (keys.some((key) => whereCols.some((c) => key[c] === undefined))) {
           throw Object.assign(new Error('批量删除的主键列必须一致'), { code: 'INVALID_INPUT', status: 400 });
         }

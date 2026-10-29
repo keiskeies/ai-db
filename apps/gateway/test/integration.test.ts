@@ -186,6 +186,22 @@ test('row CRUD, DDL, export and import', async () => {
   });
   assert.equal(badUpdate.status, 400);
   assert.equal((badUpdate.body as any).error.code, 'UNKNOWN_COLUMN');
+  const nonPkUpdate = await api('/rows', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: demo.id, table: 'products', op: 'update', values: { price_cents: 1 }, key: { name: 'IT TEST' } }),
+  });
+  assert.equal(nonPkUpdate.status, 400);
+  assert.equal((nonPkUpdate.body as any).error.code, 'KEY_NOT_PRIMARY');
+  await api('/ddl/execute', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: demo.id, statements: ['CREATE TABLE IF NOT EXISTS "it_nopk" ("label" TEXT)'] }),
+  });
+  const noPkDelete = await api('/rows', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: demo.id, table: 'it_nopk', op: 'delete', key: { label: 'x' } }),
+  });
+  assert.equal(noPkDelete.status, 400);
+  assert.equal((noPkDelete.body as any).error.code, 'NO_PRIMARY_KEY');
   const check = await api<{ batch: { sets: Array<{ rows: unknown[][] }> } }>('/query', {
     method: 'POST',
     body: JSON.stringify({ connectionId: demo.id, sql: 'SELECT name FROM products WHERE id = 1' }),
