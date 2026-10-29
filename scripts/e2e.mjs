@@ -1717,6 +1717,14 @@ const queryRows = await page.locator('[data-testid="query-result-grid"] tbody tr
 check('SQL editor runs with Ctrl+Enter', queryRows >= 4, `${queryRows} rows`);
 await page.screenshot({ path: join(shots, 'desktop-query.png') });
 
+await page.locator('.cm-content').click();
+await page.keyboard.press('Control+A');
+await page.keyboard.type('SELECT * FROM ord');
+await page.waitForSelector('.cm-tooltip-autocomplete', { timeout: 8000 });
+const completionText = await page.locator('.cm-tooltip-autocomplete').innerText();
+check('SQL editor completes table names from the schema', /orders/i.test(completionText), completionText.replace(/\s+/g, ' ').slice(0, 60));
+await page.keyboard.press('Escape');
+
 await page.locator('[data-testid="tab-query"]').first().click({ button: 'right' });
 await page.waitForSelector('[data-testid="context-menu"]', { timeout: 5000 });
 const tabMenu = await page.locator('[data-testid="context-menu"]').innerText();

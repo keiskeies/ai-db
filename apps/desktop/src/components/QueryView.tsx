@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { basicSetup, EditorView } from 'codemirror';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
-import { EditorState, Prec } from '@codemirror/state';
+import { Compartment, EditorState, Prec } from '@codemirror/state';
 import { tags as t } from '@lezer/highlight';
 import { keymap } from '@codemirror/view';
-import { MSSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql as sqlLang } from '@codemirror/lang-sql';
+import { MSSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql as sqlLang, type SQLNamespace } from '@codemirror/lang-sql';
 import { AlignLeft, BarChart3, Bookmark, Database, Download, FileDown, FilePlus, FileUp, History, ListChecks, Network, Play, Plus, Sparkles, Star, Table2, TerminalSquare, Trash2, WandSparkles, Wrench } from 'lucide-react';
-import type { ConnectionConfig, QueryBatchResult } from '@aidb/core';
+import type { ConnectionConfig, DatabaseSchema, QueryBatchResult } from '@aidb/core';
 import { engineMeta, editsRecords, supportsTransactions, writesDocuments, writesLineProtocol } from '@aidb/core';
 import { api } from '../lib/api';
 import { formatDuration } from '../lib/format';
@@ -67,6 +67,17 @@ const sqlHighlight = (dark: boolean) =>
     { tag: t.invalid, color: dark ? '#f07c86' : '#bd3546' },
   ]);
 
+function buildSqlSchema(schemas: DatabaseSchema[] | undefined, database?: string): SQLNamespace {
+  const tables: Record<string, string[]> = {};
+  for (const schema of schemas ?? []) {
+    if (database && schema.name !== database) continue;
+    for (const table of schema.tables ?? []) {
+      tables[table.name] = (table.columns ?? []).map((column) => column.name);
+    }
+  }
+  return tables;
+}
+
 function dialectFor(engine?: ConnectionConfig['engine']) {
   const dialect = engine ? engineMeta(engine).dialect : undefined;
   if (dialect === 'mysql') return MySQL;
@@ -95,6 +106,19 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const canTransaction = conn ? supportsTransactions(conn.engine) : false;
   const [txSession, setTxSession] = useState<string | null>(null);
   const [queryLimit, setQueryLimit] = useState(settings.defaultLimit || 100);
+  const schemasForTab = useApp((s) => s.schemas[tab.connectionId]);
+  const sqlSchema = useMemo(() => buildSqlSchema(schemasForTab, tab.database), [schemasForTab, tab.database]);
+  const sqlSchemaRef = useRef(sqlSchema);
+  sqlSchemaRef.current = sqlSchema;
+  const languageCompartment = useRef(new Compartment());
+  useEffect(() => {
+    if (!schemasForTab) void loadSchema(tab.connectionId);
+  }, [schemasForTab, tab.connectionId, loadSchema]);
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({ effects: languageCompartment.current.reconfigure(sqlLang({ dialect: dialectFor(conn?.engine), schema: sqlSchema })) });
+  }, [sqlSchema, conn?.engine]);
   const [queryExportFormat, setQueryExportFormat] = useState<'csv' | 'json' | 'sql' | 'xml' | 'xlsx'>('csv');
   const limitOptions = [...new Set([settings.defaultLimit || 100, 100, 500, 1000, 5000])].sort((a, b) => a - b);
   const [vectorOpen, setVectorOpen] = useState(false);
@@ -176,7 +200,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
           ]),
         ),
         basicSetup,
-        sqlLang({ dialect: dialectFor(conn?.engine) }),
+        languageCompartment.current.of(sqlLang({ dialect: dialectFor(conn?.engine), schema: sqlSchemaRef.current })),
         syntaxHighlighting(sqlHighlight(isDark)),
         theme,
         EditorView.updateListener.of((update) => {
@@ -425,8 +449,8 @@ ${text}
     prefillAgent(prompt);
   };
 
-  const exportChartCsv = async () => {
-    const text = currentSql().trim();
+  const exportChartCsv = async (sql?: string) => {
+    const text = (sql ?? currentSql()).trim();
     if (!text) return;
     try {
       const { file } = await api.exportData({ connectionId: tab.connectionId, database: tab.database, sql: text, format: 'csv', limit: 20000 });
@@ -893,7 +917,7 @@ ${text}
                   y={chartY}
                   onX={setChartX}
                   onY={setChartY}
-                  onExportCsv={() => void exportChartCsv()}
+                  onExportCsv={() => void exportChartCsv(chartSpec.sql)}
                 />
                 </>
               ) : (
