@@ -86,7 +86,7 @@ npm --workspace apps/mobile run start
 | 文档契约 | `npm run verify:docs` | 211/211 通过 |
 | 类型检查 | `npm run typecheck`（core / gateway / desktop / mobile） | 全部通过 |
 | 单元测试 | `npm test` → core | 136/136 通过 |
-| 集成测试 | gateway（HTTP / SSE / WebSocket / 审批 / 配对 / 引擎方言 / 工具箱 / 表与数据操作 / 跨请求事务） | 124 个用例 · 113 通过 · 11 跳过（跳过项是需要 `AIDB_TEST_*_PORT` 的联机引擎，未配置即跳过） |
+| 集成测试 | gateway（HTTP / SSE / WebSocket / 审批 / 配对 / 引擎方言 / 工具箱 / 表与数据操作 / 跨请求事务） | 125 个用例 · 114 通过 · 11 跳过（跳过项是需要 `AIDB_TEST_*_PORT` 的联机引擎，未配置即跳过） |
 | 构建 | core、gateway（esbuild）、desktop（Vite）、mobile web（2.07MB） | 成功 |
 | E2E | `npm run e2e`（桌面 Web + 移动 Web + Electron Shell + Navicat 布局 / 表与数据操作 / 工具箱 / 搜索 / 图表 / 体检） | 152/152 通过（37 项基线 + 115 项联机引擎/Agent/移动端检查） |
 | Windows 打包 | `electron-builder --dir --win --x64` + 启动 `win-unpacked/AiDB Studio.exe` | 成功；内置 Bridge、1 个连接、Agent 面板可见、无异常 |

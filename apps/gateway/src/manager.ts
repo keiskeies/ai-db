@@ -1033,7 +1033,9 @@ export class ConnectionManager {
     }
     const driver = await this.driverFor(connectionId);
     // 事务会话里的语句必须走被固定的那条连接，否则 COMMIT/ROLLBACK 作用不到。
-    const txSession = opts.sessionId ? this.txSessions.get(opts.sessionId) : undefined;
+    // 同时也必须校验归属：别的连接的事务 id 混进来时应当普通执行，而不是抛 TX_NOT_FOUND。
+    const candidate = opts.sessionId ? this.txSessions.get(opts.sessionId) : undefined;
+    const txSession = candidate && candidate.connectionId === connectionId ? candidate : undefined;
     const txDriver = txSession && supportsTransaction(driver) ? driver : undefined;
     if (txSession) txSession.lastUsedAt = Date.now();
     const started = Date.now();
