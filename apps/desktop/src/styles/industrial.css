@@ -5,26 +5,15 @@ body {
   letter-spacing: 0.05px;
 }
 .app {
-  background: radial-gradient(820px 340px at 50% -12%, var(--glow-accent), transparent 62%), var(--bg-app);
+  background: var(--bg-app);
 }
 .titlebar {
   height: 34px;
   flex-basis: 34px;
   padding: 0 8px;
   gap: 8px;
-  background: color-mix(in srgb, var(--bg-panel) 88%, transparent);
-  backdrop-filter: blur(12px);
+  background: var(--bg-chrome);
   position: relative;
-}
-.titlebar::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--accent) 32%, var(--accent) 68%, transparent);
-  opacity: 0.35;
 }
 .brand { gap: 7px; padding-left: 2px; }
 .brand-mark {
@@ -49,7 +38,7 @@ body {
 .sidebar {
   width: var(--sidebar-w, 244px);
   flex-basis: var(--sidebar-w, 244px);
-  background: color-mix(in srgb, var(--bg-panel) 94%, transparent);
+  background: var(--bg-rail);
 }
 .sidebar-head { padding: 8px 8px 7px; gap: 6px; }
 .sidebar-title { font-size: 9.5px; letter-spacing: 1px; }
@@ -59,7 +48,7 @@ body {
   font-size: 11px;
   background: var(--bg-app);
 }
-.sidebar-body { padding: 4px 5px 10px; }
+.sidebar-body { padding: 4px 0 10px; }
 .group-label { font-size: 9px; padding: 8px 7px 3px; letter-spacing: 0.9px; }
 .conn-row { height: 27px; gap: 6px; padding: 0 5px; border-radius: var(--radius-md); }
 .conn-name { font-size: 11.5px; }
@@ -73,15 +62,14 @@ body {
 .sidebar-foot { padding: 6px; gap: 5px; }
 .sidebar-foot .btn { height: 26px; font-size: 11px; }
 
-.workspace { background: transparent; }
+.workspace { background: var(--bg-panel); }
 .tabs {
   height: 31px;
   flex-basis: 31px;
-  background: color-mix(in srgb, var(--bg-panel) 80%, transparent);
-  backdrop-filter: blur(8px);
+  background: var(--bg-chrome);
 }
 .tab { font-size: 11px; padding: 0 9px; gap: 6px; border-right-color: var(--border-subtle); }
-.tab.active { background: var(--bg-app); }
+.tab.active { background: var(--bg-panel); }
 .tab.active::after {
   height: 2px;
   background: var(--accent);
@@ -93,8 +81,7 @@ body {
   flex-basis: 34px;
   gap: 5px;
   padding: 0 8px;
-  background: color-mix(in srgb, var(--bg-panel) 86%, transparent);
-  backdrop-filter: blur(8px);
+  background: var(--bg-panel);
 }
 .toolbar .title { font-size: 11.5px; gap: 5px; margin-right: 3px; }
 .toolbar .sep { height: 15px; }
@@ -137,7 +124,6 @@ body {
   padding: 0 8px;
   font-size: 9.5px;
   letter-spacing: 0.45px;
-  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
   color: var(--text-muted);
   border-bottom-color: var(--border-strong);
 }
@@ -160,17 +146,7 @@ body {
 .agent-panel {
   width: var(--agent-w, 384px);
   flex-basis: var(--agent-w, 384px);
-  background: color-mix(in srgb, var(--bg-panel) 96%, transparent);
-}
-.agent-panel::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--violet), transparent);
-  opacity: .45;
+  background: var(--bg-rail);
 }
 .agent-head { height: 40px; flex-basis: 40px; padding: 0 7px 0 10px; }
 .agent-head .agent-title { font-size: 11.5px; gap: 6px; }
@@ -265,7 +241,7 @@ body {
 .welcome h1 { font-size: 21px; margin-bottom: 4px; letter-spacing: -0.4px; }
 .welcome .lead { font-size: 12px; line-height: 1.55; }
 .welcome-grid { grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 16px 0; }
-.welcome-card { padding: 11px; min-height: 96px; gap: 6px; border-radius: var(--radius-lg); background: color-mix(in srgb, var(--bg-panel) 92%, transparent); }
+.welcome-card { padding: 11px; min-height: 96px; gap: 6px; border-radius: var(--radius-lg); background: var(--bg-elevated); }
 .welcome-card:hover { border-color: color-mix(in srgb, var(--accent) 45%, transparent); box-shadow: 0 8px 24px rgba(0,0,0,.18); }
 .welcome-card .wc-icon { width: 25px; height: 25px; border-radius: 7px; background: var(--accent-soft); }
 .welcome-card h3 { font-size: 11.5px; }

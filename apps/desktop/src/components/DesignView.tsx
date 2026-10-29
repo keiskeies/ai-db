@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
+  ChevronDown,
   ChevronRight,
   Code2,
   Database,
@@ -494,6 +495,16 @@ export function DesignView({ tab }: { tab: DesignTab }) {
 
   const patchColumn = (id: string, patch: Partial<EditableColumn>) => setColumns((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
 
+  const openTypeMenu = (event: React.MouseEvent<HTMLButtonElement>, col: EditableColumn) => {
+    const cell = event.currentTarget.closest('td')?.getBoundingClientRect();
+    if (!cell) return;
+    useApp.getState().openContextMenu(
+      cell.left,
+      cell.bottom + 2,
+      typeListFor(engine).map((type) => ({ label: type, onClick: () => patchColumn(col.id, { base: type }) })),
+    );
+  };
+
   const addColumn = (at?: number) => {
     setColumns((prev) => {
       const next = [...prev];
@@ -813,7 +824,12 @@ export function DesignView({ tab }: { tab: DesignTab }) {
                     <input value={col.name} disabled={Boolean(col.originalName)} placeholder="column" onChange={(e) => patchColumn(col.id, { name: e.target.value })} />
                   </td>
                   <td>
-                    <input list="designer-types" value={col.base} onChange={(e) => patchColumn(col.id, { base: e.target.value })} />
+                    <div className="type-cell">
+                      <input value={col.base} onChange={(e) => patchColumn(col.id, { base: e.target.value })} />
+                      <button className="icon-btn type-pick" title="选择类型" onClick={(event) => openTypeMenu(event, col)}>
+                        <ChevronDown size={11} />
+                      </button>
+                    </div>
                   </td>
                   <td>
                     <input value={col.length} disabled={Boolean(col.generated)} onChange={(e) => patchColumn(col.id, { length: e.target.value.replace(/[^\d]/g, '') })} />
@@ -1108,12 +1124,6 @@ export function DesignView({ tab }: { tab: DesignTab }) {
       </div>
 
       {detailPanel()}
-
-      <datalist id="designer-types">
-        {typeListFor(engine).map((type) => (
-          <option key={type} value={type} />
-        ))}
-      </datalist>
 
       <div className="designer-status">
         {statusText().map((text) => (

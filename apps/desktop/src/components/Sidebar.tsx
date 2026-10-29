@@ -353,18 +353,20 @@ export function Sidebar() {
         title={`${objectLabel} ${table.name}`}
       >
         {isGraph ? <Network size={13} style={{ color: 'var(--accent)' }} /> : <Database size={13} style={{ color: 'var(--accent)' }} />}        <span className="node-label">{table.name}</span>
-        {table.rowEstimate !== undefined ? <span style={{ fontSize: 9.5, color: 'var(--text-muted)' }}>{table.rowEstimate}</span> : null}
-        <span className="node-actions">
-          <button
-            className="icon-btn"
-            title={openLabel}
-            onClick={(e) => {
-              e.stopPropagation();
-              open();
-            }}
-          >
-            <TerminalSquare size={12} />
-          </button>
+        <span className="node-tail">
+          {table.rowEstimate !== undefined ? <span style={{ fontSize: 9.5, color: 'var(--text-muted)' }}>{table.rowEstimate}</span> : null}
+          <span className="node-actions">
+            <button
+              className="icon-btn"
+              title={openLabel}
+              onClick={(e) => {
+                e.stopPropagation();
+                open();
+              }}
+            >
+              <TerminalSquare size={12} />
+            </button>
+          </span>
         </span>
       </div>
     );
@@ -462,28 +464,30 @@ export function Sidebar() {
       >
         {table.type === 'view' ? <Eye size={13} style={{ color: 'var(--text-muted)' }} /> : <Table2 size={13} style={{ color: 'var(--accent)' }} />}
         <span className="node-label">{table.name}</span>
-        {table.rowEstimate !== undefined ? <span style={{ fontSize: 9.5, color: 'var(--text-muted)' }}>{table.rowEstimate}</span> : null}
-        <span className="node-actions">
-          <button
-            className="icon-btn"
-            title={t('newQuery')}
-            onClick={(e) => {
-              e.stopPropagation();
-              openQuery(conn.id, `SELECT * FROM ${quoteName(table.name, conn.engine)} LIMIT 100;`);
-            }}
-          >
-            <TerminalSquare size={12} />
-          </button>
-          <button
-            className="icon-btn"
-            title={t('design')}
-            onClick={(e) => {
-              e.stopPropagation();
-              openDesign(conn.id, table.name, schema.name);
-            }}
-          >
-            <Wrench size={12} />
-          </button>
+        <span className="node-tail">
+          {table.rowEstimate !== undefined ? <span style={{ fontSize: 9.5, color: 'var(--text-muted)' }}>{table.rowEstimate}</span> : null}
+          <span className="node-actions">
+            <button
+              className="icon-btn"
+              title={t('newQuery')}
+              onClick={(e) => {
+                e.stopPropagation();
+                openQuery(conn.id, `SELECT * FROM ${quoteName(table.name, conn.engine)} LIMIT 100;`);
+              }}
+            >
+              <TerminalSquare size={12} />
+            </button>
+            <button
+              className="icon-btn"
+              title={t('design')}
+              onClick={(e) => {
+                e.stopPropagation();
+                openDesign(conn.id, table.name, schema.name);
+              }}
+            >
+              <Wrench size={12} />
+            </button>
+          </span>
         </span>
       </div>
     );

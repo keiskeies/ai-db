@@ -40,7 +40,7 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
   height: var(--titlebar-h);
   flex: 0 0 var(--titlebar-h);
   display: flex; align-items: center; gap: 10px;
-  padding: 0 10px; border-bottom: 1px solid var(--border-subtle);
+  padding: 0 10px; border-bottom: 1px solid var(--border-panel);
   background: linear-gradient(180deg, var(--bg-panel), var(--bg-app));
   -webkit-app-region: drag;
   user-select: none;
@@ -69,7 +69,7 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 
 .sidebar {
   width: var(--sidebar-w, 244px); flex: 0 0 var(--sidebar-w, 244px); min-width: 200px;
-  border-right: 1px solid var(--border-subtle); background: var(--bg-panel);
+  border-right: 1px solid var(--border-panel); background: var(--bg-panel);
   display: flex; flex-direction: column;
 }
 .sidebar-head { padding: 10px 10px 8px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--border-subtle); }
@@ -78,7 +78,7 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .search-box svg { position: absolute; left: 8px; color: var(--text-muted); }
 .search-box input { width: 100%; height: 28px; padding: 0 8px 0 28px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); background: var(--bg-elevated); outline: none; font-size: 12px; }
 .search-box input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
-.sidebar-body { flex: 1; overflow: auto; padding: 6px 6px 14px; }
+.sidebar-body { flex: 1; overflow: auto; padding: 6px 0 14px; }
 .group-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .7px; padding: 10px 8px 4px; }
 .group-label { display: flex; align-items: center; gap: 3px; width: 100%; background: none; border: 0; cursor: pointer; text-align: left; font-family: inherit; }
 .group-label .group-count { margin-left: auto; letter-spacing: 0; text-transform: none; }
@@ -89,28 +89,39 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .conn-row:hover { background: var(--bg-hover); color: var(--text-primary); }
 .conn-row.active { background: var(--accent-soft); color: var(--text-primary); }
 .conn-color { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 7px; }
-.conn-name { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.conn-name { font-size: 12.5px; overflow: visible; white-space: nowrap; flex: 1; }
 .conn-toggle { width: 16px; display: grid; place-items: center; color: var(--text-muted); transition: transform .15s; }
 .conn-toggle.open { transform: rotate(90deg); }
 .tree-node { display: flex; align-items: center; gap: 6px; height: 25px; padding-right: 4px; border-radius: var(--radius-sm); cursor: pointer; color: var(--text-secondary); }
 .tree-node:hover { background: var(--bg-hover); color: var(--text-primary); }
 .tree-node.active { background: var(--bg-active); color: var(--text-primary); }
-.tree-node .node-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.tree-node .node-label { flex: 1; overflow: visible; white-space: nowrap; font-size: 12px; }
+/* 连接树不截断文字：整行按内容撑宽，由 sidebar-body 横向滚动查看完整名称 */
+.sidebar-body .conn-row,
+.sidebar-body .tree-node { width: max-content; min-width: 100%; }
+/* 行尾数字与操作按钮吸附在可视区右侧，长表名从它们下面滚过 */
+.node-tail {
+  position: sticky; right: 0; z-index: 1;
+  margin-left: auto; display: flex; align-items: center; gap: 6px;
+  padding: 0 6px 0 10px; background: var(--bg-rail);
+}
+.tree-node:hover > .node-tail { background: var(--bg-hover); }
+.tree-node.active > .node-tail { background: var(--bg-active); }
 .tree-node .node-actions { display: none; gap: 2px; }
 .tree-node:hover .node-actions { display: flex; }
 .node-actions .icon-btn { width: 20px; height: 20px; }
 .db-node { font-weight: 600; color: var(--text-secondary); }
 .sidebar-foot { border-top: 1px solid var(--border-subtle); padding: 8px; display: flex; gap: 6px; }
 
-.workspace { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-app); }
-.tabs { height: 35px; flex: 0 0 35px; display: flex; align-items: stretch; border-bottom: 1px solid var(--border-subtle); background: var(--bg-panel); overflow-x: auto; overflow-y: hidden; }
+.workspace { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-panel); }
+.tabs { height: 35px; flex: 0 0 35px; display: flex; align-items: stretch; background: var(--bg-chrome); overflow-x: auto; overflow-y: hidden; }
 .tab {
   display: flex; align-items: center; gap: 7px; padding: 0 10px; max-width: 220px;
   border: none; background: transparent; color: var(--text-secondary); font-size: 12px;
   border-right: 1px solid var(--border-subtle); position: relative; white-space: nowrap;
 }
 .tab:hover { background: var(--bg-hover); color: var(--text-primary); }
-.tab.active { background: var(--bg-app); color: var(--text-primary); }
+.tab.active { background: var(--bg-panel); color: var(--text-primary); }
 .tab.active::after { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--accent); }
 .tab .tab-close { display: grid; place-items: center; width: 17px; height: 17px; border-radius: 4px; color: var(--text-muted); opacity: 0; }
 .tab:hover .tab-close, .tab.active .tab-close { opacity: 1; }
@@ -121,7 +132,7 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .toolbar {
   height: 38px; flex: 0 0 38px; display: flex; align-items: center; gap: 6px; padding: 0 10px;
-  border-bottom: 1px solid var(--border-subtle); background: var(--bg-panel);
+  background: var(--bg-panel);
 }
 .toolbar .sep { width: 1px; height: 18px; background: var(--border-subtle); margin: 0 3px; }
 .toolbar .title { font-weight: 600; font-size: 12.5px; margin-right: 6px; display: flex; align-items: center; gap: 6px; }
@@ -139,6 +150,7 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
   font-size: 12px; white-space: nowrap;
 }
 .btn:hover { color: var(--text-primary); border-color: var(--text-muted); background: var(--bg-hover); }
+.btn-caret { margin-left: -2px; opacity: .6; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-solid); }
 .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); background: var(--danger-soft); }
@@ -184,7 +196,7 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .grid-wrap { flex: 1; overflow: auto; position: relative; }
 .data-grid { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; font-size: 12px; }
 .data-grid th {
-  position: sticky; top: 0; z-index: 2; background: var(--bg-elevated); text-align: left;
+  position: sticky; top: 0; z-index: 2; background: color-mix(in srgb, var(--bg-panel) 93%, var(--text-primary)); text-align: left;
   padding: 6px 10px; border-bottom: 1px solid var(--border-strong); border-right: 1px solid var(--border-subtle);
   font-weight: 600; font-size: 11px; color: var(--text-secondary); white-space: nowrap; user-select: none;
 }
@@ -228,11 +240,11 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .welcome-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 26px 0; }
 .welcome-card {
   text-align: left; padding: 14px; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle);
-  background: var(--bg-panel); display: flex; flex-direction: column; gap: 8px; min-height: 116px;
+  background: var(--bg-elevated); display: flex; flex-direction: column; gap: 8px; min-height: 116px;
   transition: border-color .15s, transform .15s;
 }
 .welcome-card:hover { border-color: var(--border-strong); transform: translateY(-1px); }
-.welcome-card .wc-icon { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: var(--bg-elevated); color: var(--accent); }
+.welcome-card .wc-icon { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: var(--bg-app); color: var(--accent); }
 .welcome-card h3 { margin: 0; font-size: 12.5px; }
 .welcome-card p { margin: 0; color: var(--text-muted); font-size: 11.5px; line-height: 1.5; }
 .welcome-section { margin-top: 26px; }
@@ -319,6 +331,14 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 }
 .designer-grid td input:hover:not(:disabled), .designer-grid td select:hover { border-color: var(--border-subtle); }
 .designer-grid td input:focus, .designer-grid td select:focus { border-color: var(--accent); background: var(--bg-app); }
+/* 选中行上的输入框自带底色，文字不能再沿用行内的 on-solid，否则黑字黑底 / 白字白底 */
+.designer-grid tr.selected td input:focus,
+.designer-grid tr.selected td select:focus { background: var(--bg-elevated); color: var(--text-primary); border-color: var(--on-solid); }
+.designer-grid .type-cell { display: flex; align-items: center; }
+.designer-grid .type-cell input { flex: 1; width: auto; min-width: 0; }
+.designer-grid .type-cell .type-pick { flex: 0 0 16px; width: 16px; height: 18px; color: var(--text-muted); }
+.designer-grid tr.selected .type-cell .type-pick { color: var(--on-solid); }
+.designer-grid tr.selected .type-cell .type-pick:hover { background: color-mix(in srgb, var(--on-solid) 16%, transparent); color: var(--on-solid); }
 .designer-grid tr.selected td { background: var(--accent); color: var(--on-solid); }
 .designer-grid tr.selected td input, .designer-grid tr.selected td select { color: var(--on-solid); }
 .designer-grid tr.selected .col-mark { color: var(--on-solid); }
@@ -362,7 +382,7 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 
 /* ---------- agent ---------- */
 .agent-panel {
-  width: var(--agent-w, 384px); flex: 0 0 var(--agent-w, 384px); min-width: 320px; border-left: 1px solid var(--border-subtle);
+  width: var(--agent-w, 384px); flex: 0 0 var(--agent-w, 384px); min-width: 320px; border-left: 1px solid var(--border-panel);
   background: var(--bg-panel); display: flex; flex-direction: column; min-height: 0; position: relative;
 }
 .agent-panel.expanded { width: 58%; flex-basis: 58%; }
@@ -644,7 +664,7 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 /* ---------- status / toasts ---------- */
 .statusbar {
   height: var(--statusbar-h); flex: 0 0 var(--statusbar-h); display: flex; align-items: center; gap: 12px;
-  padding: 0 10px; border-top: 1px solid var(--border-subtle); background: var(--bg-panel);
+  padding: 0 10px; border-top: 1px solid var(--border-panel); background: var(--bg-chrome);
   font-size: 10.5px; color: var(--text-muted); user-select: none;
 }
 .statusbar .item { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
@@ -762,19 +782,48 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 /* ---------- Navicat-style ribbon ---------- */
 .ribbon {
   flex: 0 0 68px; height: 68px; display: flex; align-items: center; gap: 2px;
-  padding: 4px 10px; border-bottom: 1px solid var(--border-subtle);
-  background: linear-gradient(180deg, var(--bg-panel), var(--bg-app));
+  padding: 4px 10px; border-bottom: 1px solid var(--border-panel);
+  background: var(--bg-ribbon);
 }
 .ribbon-btn {
+  --tone: var(--text-muted);
   min-width: 58px; height: 58px; padding: 4px 8px; border-radius: 8px;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
   background: transparent; border: 1px solid transparent; color: var(--text-secondary);
+  transition: background .15s ease, color .15s ease;
 }
-.ribbon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.ribbon-btn:hover { background: color-mix(in srgb, var(--tone) 12%, transparent); color: var(--text-primary); }
 .ribbon-btn.active { background: var(--accent-soft); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 22%, transparent); }
 .ribbon-icon { display: grid; place-items: center; height: 26px; }
+.ribbon-btn:hover .ribbon-icon svg { filter: drop-shadow(0 0 5px color-mix(in srgb, var(--tone) 45%, transparent)); }
 .ribbon-label { font-size: 10px; line-height: 1; white-space: nowrap; }
 .ribbon-sep { width: 1px; height: 42px; background: var(--border-subtle); margin: 0 5px; }
+/* 图标描边走渐变；色值与 App.tsx 的 RIBBON_TONES 一一对应 */
+.ribbon-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+.ribbon-btn[data-tone='teal'] { --tone: #14b8a6; }
+.ribbon-btn[data-tone='sky'] { --tone: #3b9eff; }
+.ribbon-btn[data-tone='emerald'] { --tone: #22c55e; }
+.ribbon-btn[data-tone='violet'] { --tone: #8b5cf6; }
+.ribbon-btn[data-tone='amber'] { --tone: #f59e0b; }
+.ribbon-btn[data-tone='rose'] { --tone: #f43f5e; }
+.ribbon-btn[data-tone='orange'] { --tone: #f97316; }
+.ribbon-btn[data-tone='indigo'] { --tone: #6366f1; }
+.ribbon-btn[data-tone='lime'] { --tone: #84cc16; }
+.ribbon-btn[data-tone='cyan'] { --tone: #0ea5e9; }
+.ribbon-btn[data-tone='fuchsia'] { --tone: #d946ef; }
+.ribbon-btn[data-tone='pink'] { --tone: #ec4899; }
+.ribbon-btn[data-tone='teal'] .ribbon-icon svg { stroke: url(#rb-teal); }
+.ribbon-btn[data-tone='sky'] .ribbon-icon svg { stroke: url(#rb-sky); }
+.ribbon-btn[data-tone='emerald'] .ribbon-icon svg { stroke: url(#rb-emerald); }
+.ribbon-btn[data-tone='violet'] .ribbon-icon svg { stroke: url(#rb-violet); }
+.ribbon-btn[data-tone='amber'] .ribbon-icon svg { stroke: url(#rb-amber); }
+.ribbon-btn[data-tone='rose'] .ribbon-icon svg { stroke: url(#rb-rose); }
+.ribbon-btn[data-tone='orange'] .ribbon-icon svg { stroke: url(#rb-orange); }
+.ribbon-btn[data-tone='indigo'] .ribbon-icon svg { stroke: url(#rb-indigo); }
+.ribbon-btn[data-tone='lime'] .ribbon-icon svg { stroke: url(#rb-lime); }
+.ribbon-btn[data-tone='cyan'] .ribbon-icon svg { stroke: url(#rb-cyan); }
+.ribbon-btn[data-tone='fuchsia'] .ribbon-icon svg { stroke: url(#rb-fuchsia); }
+.ribbon-btn[data-tone='pink'] .ribbon-icon svg { stroke: url(#rb-pink); }
 [data-density='compact'] .ribbon { flex-basis: 60px; height: 60px; }
 [data-density='compact'] .ribbon-btn { min-width: 54px; height: 52px; }
 .tree-count { margin-left: auto; font-size: 9px; color: var(--text-muted); padding-right: 6px; }
@@ -793,4 +842,17 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 .btn.active { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); background: var(--accent-soft); }
 .view > .toolbar { overflow-x: auto; scrollbar-width: thin; }
 .toolbar.data-toolbar { height: 36px; flex: 0 0 36px; }
-.toolbar.data-toolbar-2 { height: 34px; flex: 0 0 34px; background: var(--bg-app); gap: 4px; }
+.toolbar.data-toolbar-2 { height: 34px; flex: 0 0 34px; background: var(--bg-rail); gap: 4px; }
+/* 宽度不足时按钮只留图标，文字靠 title 做 hover 提示。
+   两排内容不同：下面一排按钮多、折叠收益大，先折叠；上面一排带 WHERE 输入框，标签也短，后折叠。 */
+.toolbar.data-toolbar { container: data-filter-row / inline-size; }
+.toolbar.data-toolbar-2 { container: data-ops-row / inline-size; }
+@container data-ops-row (max-width: 720px) {
+  .btn-text { display: none; }
+}
+@container data-filter-row (max-width: 670px) {
+  .btn-text { display: none; }
+}
+/* WHERE 输入框吃掉工具栏剩余宽度，而不是留一块空白 */
+.data-toolbar .data-filter-box { flex: 1 1 180px; min-width: 0; max-width: 640px; }
+.data-toolbar .data-filter-box .inline-input { flex: 1; width: auto; min-width: 90px; }

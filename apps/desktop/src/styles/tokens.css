@@ -1,13 +1,19 @@
 :root {
   /* 中性石墨底盘 + 品牌青；金色只做第二数据色，不参与界面装饰 */
-  --bg-app: #0b0d0d;
-  --bg-panel: #111414;
-  --bg-elevated: #171b1b;
-  --bg-hover: #1a1f1f;
-  --bg-active: #1e2323;
+  /* 四层表面：外壳(chrome) < 侧栏/助手(rail) < 内容面(panel) < 控件(bg-elevated)，靠明度差分区而不是到处画线 */
+  --bg-app: #0a0c0c;
+  --bg-chrome: #0b0e0e;
+  --bg-ribbon: #1a201f;
+  --bg-rail: #101413;
+  --bg-panel: #1d2322;
+  --bg-elevated: #272e2c;
+  --bg-hover: #262c2b;
+  --bg-active: #2d3331;
   --bg-overlay: rgba(6, 8, 8, 0.78);
-  --border-subtle: rgba(255, 255, 255, 0.07);
-  --border-strong: rgba(255, 255, 255, 0.14);
+  --border-subtle: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.17);
+  /* 模块级分界：只用在面板与内容之间，比 subtle 明确一档 */
+  --border-panel: rgba(255, 255, 255, 0.15);
   --text-primary: #f1f3f1;
   --text-secondary: #b8beba;
   --text-muted: #858d88;
@@ -46,14 +52,18 @@
 }
 
 [data-theme='light'] {
-  --bg-app: #f4f5f4;
+  --bg-app: #e4e7e5;
+  --bg-chrome: #e7eae8;
+  --bg-ribbon: #f7f8f7;
+  --bg-rail: #eef1ef;
   --bg-panel: #ffffff;
-  --bg-elevated: #eef0ef;
+  --bg-elevated: #f4f6f5;
   --bg-hover: #e7eae9;
   --bg-active: #dee2e0;
   --bg-overlay: rgba(16, 20, 20, 0.4);
-  --border-subtle: rgba(0, 0, 0, 0.08);
-  --border-strong: rgba(0, 0, 0, 0.16);
+  --border-subtle: rgba(0, 0, 0, 0.1);
+  --border-strong: rgba(0, 0, 0, 0.2);
+  --border-panel: rgba(0, 0, 0, 0.14);
   --text-primary: #131716;
   --text-secondary: #4c5350;
   --text-muted: #6a726e;

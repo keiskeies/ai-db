@@ -35,21 +35,54 @@ import { Sidebar } from './components/Sidebar';
 import { Toasts } from './components/ui';
 import { Workspace } from './components/Workspace';
 
+/** 图标描边渐变：lucide 图标是单色 stroke，用 userSpaceOnUse 保证整枚图标共用一条 0→24 的渐变。 */
+const RIBBON_TONES: Record<string, [string, string]> = {
+  teal: ['#5eead4', '#14b8a6'],
+  sky: ['#93c5fd', '#3b82f6'],
+  emerald: ['#86efac', '#22c55e'],
+  violet: ['#c4b5fd', '#7c3aed'],
+  amber: ['#fde68a', '#f59e0b'],
+  rose: ['#fecdd3', '#f43f5e'],
+  orange: ['#fdba74', '#f97316'],
+  indigo: ['#c7d2fe', '#6366f1'],
+  lime: ['#d9f99d', '#84cc16'],
+  cyan: ['#a5f3fc', '#0ea5e9'],
+  fuchsia: ['#f5d0fe', '#d946ef'],
+  pink: ['#fbcfe8', '#ec4899'],
+};
+
+function RibbonGradients() {
+  return (
+    <svg className="ribbon-defs" width="0" height="0" aria-hidden="true" focusable="false">
+      <defs>
+        {Object.entries(RIBBON_TONES).map(([tone, [from, to]]) => (
+          <linearGradient key={tone} id={`rb-${tone}`} gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="24">
+            <stop offset="0" stopColor={from} />
+            <stop offset="1" stopColor={to} />
+          </linearGradient>
+        ))}
+      </defs>
+    </svg>
+  );
+}
+
 function RibbonButton({
   icon,
   label,
   onClick,
   active,
   testId,
+  tone,
 }: {
   icon: ReactNode;
   label: string;
   onClick: () => void;
   active?: boolean;
   testId?: string;
+  tone?: keyof typeof RIBBON_TONES;
 }) {
   return (
-    <button className={`ribbon-btn ${active ? 'active' : ''}`} onClick={onClick} title={label} data-testid={testId}>
+    <button className={`ribbon-btn ${active ? 'active' : ''}`} onClick={onClick} title={label} data-testid={testId} data-tone={tone}>
       <span className="ribbon-icon">{icon}</span>
       <span className="ribbon-label">{label}</span>
     </button>
@@ -285,12 +318,14 @@ export default function App() {
       </div>
 
       <div className="ribbon" data-testid="ribbon">
-        <RibbonButton icon={<Cable size={20} />} label="连接" onClick={() => openConnectionEditor('new')} />
+        <RibbonGradients />
+        <RibbonButton icon={<Cable size={20} />} label="连接" tone="teal" onClick={() => openConnectionEditor('new')} />
         <div className="ribbon-sep" />
-        <RibbonButton icon={<TerminalSquare size={20} />} label="新建查询" onClick={() => openQuery()} testId="ribbon-new-query" />
+        <RibbonButton icon={<TerminalSquare size={20} />} label="新建查询" tone="sky" onClick={() => openQuery()} testId="ribbon-new-query" />
         <RibbonButton
           icon={<Table2 size={20} />}
           label="表"
+          tone="emerald"
           active={activeTab?.kind === 'data'}
           onClick={() => {
             const id = activeConnectionId ?? connections[0]?.id;
@@ -302,18 +337,18 @@ export default function App() {
             if (!useApp.getState().expandedConnections[id]) toggleConnection(id);
           }}
         />
-        <RibbonButton icon={<Eye size={20} />} label="视图" onClick={() => openTools('objects')} />
-        <RibbonButton icon={<Braces size={20} />} label="函数" onClick={() => openTools('objects')} />
+        <RibbonButton icon={<Eye size={20} />} label="视图" tone="violet" onClick={() => openTools('objects')} />
+        <RibbonButton icon={<Braces size={20} />} label="函数" tone="amber" onClick={() => openTools('objects')} />
         <div className="ribbon-sep" />
-        <RibbonButton icon={<Users size={20} />} label="用户" onClick={() => openTools('users')} />
-        <RibbonButton icon={<Boxes size={20} />} label="其它" onClick={() => openTools('objects')} />
+        <RibbonButton icon={<Users size={20} />} label="用户" tone="rose" onClick={() => openTools('users')} />
+        <RibbonButton icon={<Boxes size={20} />} label="其它" tone="orange" onClick={() => openTools('objects')} />
         <div className="ribbon-sep" />
-        <RibbonButton icon={<History size={20} />} label="查询" onClick={() => openQuery()} />
-        <RibbonButton icon={<Archive size={20} />} label="备份" onClick={() => setSettingsOpen(true)} />
+        <RibbonButton icon={<History size={20} />} label="查询" tone="indigo" onClick={() => openQuery()} />
+        <RibbonButton icon={<Archive size={20} />} label="备份" tone="lime" onClick={() => setSettingsOpen(true)} />
         <div className="ribbon-sep" />
-        <RibbonButton icon={<Clock size={20} />} label="自动运行" onClick={() => openTools('jobs')} />
-        <RibbonButton icon={<Network size={20} />} label="模型" onClick={() => openRelations()} />
-        <RibbonButton icon={<BarChart3 size={20} />} label="图表" onClick={() => openQuery()} />
+        <RibbonButton icon={<Clock size={20} />} label="自动运行" tone="cyan" onClick={() => openTools('jobs')} />
+        <RibbonButton icon={<Network size={20} />} label="模型" tone="fuchsia" onClick={() => openRelations()} />
+        <RibbonButton icon={<BarChart3 size={20} />} label="图表" tone="pink" onClick={() => openQuery()} />
       </div>
 
       <div className="shell" style={{ ['--sidebar-w' as string]: `${sidebarWidth}px`, ['--agent-w' as string]: `${agentWidth}px` }}>

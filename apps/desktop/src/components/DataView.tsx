@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUpDown,
+  ChevronDown,
   ClipboardCopy,
   ClipboardPaste,
   Columns3,
@@ -87,6 +88,7 @@ export function DataView({ tab }: { tab: DataTab }) {
   const printRequested = useApp((s) => s.printRequested);
   const consumePrint = useApp((s) => s.consumePrint);
   const persistHiddenColumns = useApp((s) => s.setHiddenColumns);
+  const openContextMenu = useApp((s) => s.openContextMenu);
   const columnKey = `${tab.connectionId}:${tab.database ?? ''}:${tab.table}`;
 
   const conn = connections.find((c) => c.id === tab.connectionId);
@@ -115,7 +117,6 @@ export function DataView({ tab }: { tab: DataTab }) {
   const [where, setWhere] = useState('');
   const [newRow, setNewRow] = useState<Record<number, string> | null>(null);
   const [importDraft, setImportDraft] = useState<ImportDraft | null>(null);
-  const [exportFormat, setExportFormat] = useState<'csv' | 'json' | 'sql' | 'xml' | 'xlsx'>('csv');
   const [importing, setImporting] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -543,13 +544,24 @@ export function DataView({ tab }: { tab: DataTab }) {
     }
   };
 
-  const exportData = async () => {
+  const exportData = async (format: 'csv' | 'json' | 'sql' | 'xml' | 'xlsx') => {
     try {
-      const { file } = await api.exportData({ connectionId: tab.connectionId, database: tab.database, table: tab.table, format: exportFormat, limit: 200000 });
+      const { file } = await api.exportData({ connectionId: tab.connectionId, database: tab.database, table: tab.table, format, limit: 200000 });
       notify('success', t('export'), `${file.rows} 行 · ${file.path}`);
     } catch (err: any) {
       notify('error', t('error'), err?.message);
     }
+  };
+
+  const openExportMenu = (event: React.MouseEvent<HTMLButtonElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    openContextMenu(rect.left, rect.bottom + 4, [
+      { label: '导出为 CSV', onClick: () => void exportData('csv') },
+      { label: '导出为 JSON', onClick: () => void exportData('json') },
+      { label: '导出为 SQL', onClick: () => void exportData('sql') },
+      { label: '导出为 XML', onClick: () => void exportData('xml') },
+      { label: '导出为 XLSX', onClick: () => void exportData('xlsx') },
+    ]);
   };
 
   const openPrint = async () => {
@@ -650,16 +662,15 @@ export function DataView({ tab }: { tab: DataTab }) {
           <RefreshCw size={14} />
         </button>
         {canLineProtocol && conn && !conn.readonly ? (
-          <button className="btn small ai" onClick={() => setLineOpen(true)} data-testid="open-line-protocol">
-            <Upload size={12} /> 写入行协议
+          <button className="btn small ai" title="写入行协议" onClick={() => setLineOpen(true)} data-testid="open-line-protocol">
+            <Upload size={12} /> <span className="btn-text">写入行协议</span>
           </button>
         ) : null}
         <div className="sep" />
-        <div className="row gap-4">
+        <div className="row gap-4 data-filter-box">
           <Filter size={12} className="muted" />
           <input
             className="inline-input mono"
-            style={{ width: 230 }}
             placeholder="WHERE id > 10 AND status = 'completed'"
             value={whereInput}
             onChange={(e) => setWhereInput(e.target.value)}
@@ -687,50 +698,50 @@ export function DataView({ tab }: { tab: DataTab }) {
         </div>
         <div className="sep" />
         <button className="btn small" title="筛选构建器" onClick={() => setFilterOpen(true)} data-testid="data-filter-builder">
-          <ListFilter size={12} /> 筛选
+          <ListFilter size={12} /> <span className="btn-text">筛选</span>
         </button>
         <button className="btn small" title="排序" onClick={() => { setSortDraft(sorts.length ? sorts : [{ column: columns[0]?.name ?? '', dir: 'asc' }]); setSortOpen(true); }} data-testid="data-sort">
-          <ArrowUpDown size={12} /> 排序
+          <ArrowUpDown size={12} /> <span className="btn-text">排序</span>
         </button>
         <button className={`btn small ${textMode ? 'active' : ''}`} title="文本视图" onClick={() => setTextMode((value) => !value)} data-testid="data-text-mode">
-          <Type size={12} /> 文本
+          <Type size={12} /> <span className="btn-text">文本</span>
         </button>
         <button className={`btn small ${formMode ? 'active' : ''}`} title="表单视图（逐行编辑）" onClick={() => { setFormMode((value) => !value); setFormRow(0); }} data-testid="data-form-mode">
-          <Rows3 size={12} /> 表单
+          <Rows3 size={12} /> <span className="btn-text">表单</span>
         </button>
         <button className={`btn small ${hiddenColumns.length ? 'active' : ''}`} title="列显示管理" onClick={() => setColumnsOpen(true)} data-testid="data-columns">
-          <Columns3 size={12} /> 列{hiddenColumns.length ? ` ${hiddenColumns.length}` : ''}
+          <Columns3 size={12} /> <span className="btn-text">列{hiddenColumns.length ? ` ${hiddenColumns.length}` : ''}</span>
         </button>
         <button className="btn small" title="查找替换" onClick={() => setReplaceOpen(true)} disabled={!writable} data-testid="data-find-replace">
-          <Search size={12} /> 查找
+          <Search size={12} /> <span className="btn-text">查找</span>
         </button>
       </div>
 
       <div className="toolbar data-toolbar-2">
         <button className="btn small" title="复制所选行（TSV）" onClick={() => void copySelected()} data-testid="data-copy-rows">
-          <ClipboardCopy size={12} /> 复制
+          <ClipboardCopy size={12} /> <span className="btn-text">复制</span>
         </button>
         <button className="btn small" title="粘贴行" onClick={() => setPasteOpen(true)} disabled={!writable} data-testid="data-paste-rows">
-          <ClipboardPaste size={12} /> 粘贴
+          <ClipboardPaste size={12} /> <span className="btn-text">粘贴</span>
         </button>
         <button className="btn small" title="复制所选行到表尾" onClick={() => void duplicateSelected()} disabled={!selectedIndices.length || !canEdit} data-testid="data-duplicate-rows">
-          <CopyPlus size={12} /> 复制行
+          <CopyPlus size={12} /> <span className="btn-text">复制行</span>
         </button>
         <button className="btn small danger" title="删除所选行" onClick={() => void deleteSelected()} disabled={!selectedIndices.length || !canEdit} data-testid="data-delete-rows">
-          <Trash2 size={12} /> 删除所选
+          <Trash2 size={12} /> <span className="btn-text">删除所选</span>
         </button>
         {selectedIndices.length ? <span className="badge write">已选 {selectedIndices.length}</span> : null}
         <div className="spacer" />
-        <button className="btn small" onClick={() => setNewRow(newRow ? null : {})} disabled={!columns.length || !writable} data-testid="data-add-row">
-          <Plus size={12} /> {t('addRow')}
+        <button className="btn small" title={t('addRow')} onClick={() => setNewRow(newRow ? null : {})} disabled={!columns.length || !writable} data-testid="data-add-row">
+          <Plus size={12} /> <span className="btn-text">{t('addRow')}</span>
         </button>
         {newRow ? (
           <button className="btn primary small" onClick={() => void saveNewRow()} data-testid="data-save-new-row">
             保存新行
           </button>
         ) : null}
-        <button className="btn small" onClick={() => fileRef.current?.click()} disabled={!writable} data-testid="data-import">
-          <Upload size={12} /> {t('import')}
+        <button className="btn small" title={t('import')} onClick={() => fileRef.current?.click()} disabled={!writable} data-testid="data-import">
+          <Upload size={12} /> <span className="btn-text">{t('import')}</span>
         </button>
         <input
           ref={fileRef}
@@ -744,21 +755,14 @@ export function DataView({ tab }: { tab: DataTab }) {
             e.target.value = '';
           }}
         />
-        <select className="select" style={{ height: 23, width: 72, fontSize: 10 }} value={exportFormat} onChange={(e) => setExportFormat(e.target.value as typeof exportFormat)} data-testid="data-export-format">
-          <option value="csv">CSV</option>
-          <option value="json">JSON</option>
-          <option value="sql">SQL</option>
-          <option value="xml">XML</option>
-          <option value="xlsx">XLSX</option>
-        </select>
-        <button className="btn small" onClick={() => void exportData()} data-testid="data-export">
-          <Download size={12} /> {t('export')}
+        <button className="btn small" title={t('export')} onClick={openExportMenu} data-testid="data-export">
+          <Download size={12} /> <span className="btn-text">{t('export')}</span> <ChevronDown size={10} className="btn-caret" />
         </button>
-        <button className="btn small" onClick={() => void openPrint()} disabled={!rows.length || printLoading} data-testid="data-print">
-          <Printer size={12} /> 打印
+        <button className="btn small" title="打印" onClick={() => void openPrint()} disabled={!rows.length || printLoading} data-testid="data-print">
+          <Printer size={12} /> <span className="btn-text">打印</span>
         </button>
-        <button className="btn small" onClick={() => openDesign(tab.connectionId, tab.table, tab.database)}>
-          <Wrench size={12} /> {t('design')}
+        <button className="btn small" title={t('design')} onClick={() => openDesign(tab.connectionId, tab.table, tab.database)}>
+          <Wrench size={12} /> <span className="btn-text">{t('design')}</span>
         </button>
       </div>
 
