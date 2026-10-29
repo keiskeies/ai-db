@@ -122,6 +122,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const [chartX, setChartX] = useState('');
   const [chartY, setChartY] = useState('');
   const [extraY, setExtraY] = useState<string[]>([]);
+  const [chartStacked, setChartStacked] = useState(false);
   const [databases, setDatabases] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -523,8 +524,9 @@ ${text}
       extraSeries: extraColumns.length
         ? extraColumns.map((column, offset) => ({ name: column.name, values: points.map((point) => point.extras[offset]) }))
         : undefined,
+      stacked: chartStacked || undefined,
     };
-  }, [set, chartX, chartY, chartType, extraY]);
+  }, [set, chartX, chartY, chartType, extraY, chartStacked]);
 
   const numericColumns = useMemo(() => {
     if (!set) return [];
@@ -847,6 +849,14 @@ ${text}
                           {name}
                         </button>
                       ))}
+                    <button
+                      className={`btn small ${chartStacked ? 'active' : ''}`}
+                      onClick={() => setChartStacked((value) => !value)}
+                      title="柱状图按列堆叠"
+                      data-testid="chart-stacked"
+                    >
+                      堆叠
+                    </button>
                   </div>
                 ) : null}
                 <ChartView

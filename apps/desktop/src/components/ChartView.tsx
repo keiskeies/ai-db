@@ -13,6 +13,8 @@ export interface ChartSpec {
   series: Array<{ label: string; value: number }>;
   /** 多列对比：与 series 等长的附加数值列（柱状/折线） */
   extraSeries?: Array<{ name: string; values: number[] }>;
+  /** 柱状图多系列时按列堆叠（正负分开累计） */
+  stacked?: boolean;
   /** forecast_chart 的外推段：虚线 + 半透明区间带，接在 series 之后 */
   forecast?: Array<{ label: string; value: number; lower: number; upper: number }>;
   /** forecast_chart 的方法说明，必须原样展示给用户 */
@@ -191,6 +193,7 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
   const history = chart.series.slice(0, maxPoints);
   const extras = (chart.extraSeries ?? []).filter((extra) => extra.values.length === history.length);
   const multi = extras.length > 0;
+  const stacked = type === 'bar' && multi && chart.stacked === true;
   const seriesList = [
     { name: chart.yLabel, values: history.map((point) => point.value), color: '#45c8c3' },
     ...extras.map((extra, index) => ({ name: extra.name, values: extra.values, color: COLORS[(index + 1) % COLORS.length] })),
@@ -219,7 +222,20 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
   const band = innerW / all.length;
 
   const values = all.map((point) => point.value);
-  for (const entry of seriesList.slice(1)) values.push(...entry.values);
+  if (stacked) {
+    for (let index = 0; index < history.length; index += 1) {
+      let positive = 0;
+      let negative = 0;
+      for (const entry of seriesList) {
+        const value = entry.values[index] ?? 0;
+        if (value >= 0) positive += value;
+        else negative += value;
+      }
+      values.push(positive, negative);
+    }
+  } else {
+    for (const entry of seriesList.slice(1)) values.push(...entry.values);
+  }
   if (forecast.length) {
     values.push(0);
     for (const point of forecast) values.push(point.lower, point.upper);
@@ -260,6 +276,7 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
       role="img"
       aria-label={chart.title}
       data-testid="chart-svg"
+      data-stacked={stacked ? 'true' : undefined}
     >
       <defs>
         <linearGradient id={`area-${id}`} x1="0" y1="0" x2="0" y2="1">
@@ -302,7 +319,7 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
             );
           })
         : null}
-      {type === 'bar' && multi
+      {type === 'bar' && multi && !stacked
         ? history.map((point, index) => {
             const groupWidth = Math.min(band * 0.82, 96);
             const barWidth = groupWidth / seriesList.length;
@@ -316,6 +333,36 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
                   x={pad.left + band * index + (band - groupWidth) / 2 + entryIndex * barWidth}
                   y={top}
                   width={Math.max(1, barWidth - 2)}
+                  height={Math.max(1, bottom - top)}
+                  rx={2}
+                  fill={entry.color}
+                  fillOpacity={0.92}
+                >
+                  <title>{`${entry.name} · ${point.label}: ${value.toLocaleString()}`}</title>
+                </rect>
+              );
+            });
+          })
+        : null}
+      {type === 'bar' && multi && stacked
+        ? history.map((point, index) => {
+            let positive = 0;
+            let negative = 0;
+            const barWidth = Math.min(band * 0.6, 72);
+            return seriesList.map((entry) => {
+              const value = entry.values[index] ?? 0;
+              const start = value >= 0 ? positive : negative;
+              const finish = start + value;
+              if (value >= 0) positive = finish;
+              else negative = finish;
+              const top = y(Math.max(start, finish));
+              const bottom = y(Math.min(start, finish));
+              return (
+                <rect
+                  key={`${entry.name}-${point.label}-${index}`}
+                  x={pad.left + band * index + (band - barWidth) / 2}
+                  y={top}
+                  width={barWidth}
                   height={Math.max(1, bottom - top)}
                   rx={2}
                   fill={entry.color}

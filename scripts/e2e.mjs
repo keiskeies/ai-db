@@ -1719,6 +1719,12 @@ const legendItems = await page.locator('[data-testid="chart-series-legend"] span
 check('multi-series chart shows both series in the legend', legendItems === 2, `${legendItems} series`);
 const multiBars = await page.locator('.query-chart-panel [data-testid="chart-svg"] rect').count();
 check('multi-series chart renders grouped bars', multiBars >= queryRows * 2, `${multiBars} bars`);
+const barXs = await page.$$eval('.query-chart-panel [data-testid="chart-svg"] rect', (els) => els.slice(0, 2).map((el) => Number(el.getAttribute('x'))));
+check('grouped bars put series side by side', barXs.length === 2 && barXs[0] !== barXs[1], barXs.join(','));
+await page.click('[data-testid="chart-stacked"]');
+await page.waitForFunction(() => document.querySelector('.query-chart-panel [data-testid="chart-svg"]')?.getAttribute('data-stacked') === 'true', null, { timeout: 5000 });
+const stackedXs = await page.$$eval('.query-chart-panel [data-testid="chart-svg"] rect', (els) => els.slice(0, 2).map((el) => Number(el.getAttribute('x'))));
+check('stacked bars share the same column', stackedXs.length === 2 && stackedXs[0] === stackedXs[1], stackedXs.join(','));
 // 宽窗口下图表要收缩到 400px 以内，不能把窗口撑出滚动条
 await page.setViewportSize({ width: 1920, height: 900 });
 await page.waitForTimeout(500);
