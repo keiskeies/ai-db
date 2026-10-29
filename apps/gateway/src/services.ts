@@ -397,6 +397,7 @@ export async function importCsv(
     indexes = columns.map((_, i) => i);
   }
   if (!columns.length) throw new DbError('没有匹配到任何目标列，请提供 mapping', { code: 'NO_COLUMNS' });
+  if (new Set(columns).size !== columns.length) throw new DbError('列映射存在重复目标列', { code: 'DUPLICATE_COLUMN' });
   for (const col of columns) {
     if (!tableColumns.some((c) => c.name === col)) throw new DbError(`目标列不存在：${col}`, { code: 'UNKNOWN_COLUMN' });
   }

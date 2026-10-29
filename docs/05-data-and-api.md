@@ -203,7 +203,7 @@ export interface QueryResult {
 | POST | `/ddl/preview` | 结构化变更 → `{statements: string[]}` |
 | POST | `/ddl/execute` | 执行 DDL（审批由 Agent 层负责；手工执行由 UI 确认） |
 | POST | `/export` | `{connectionId, sql|table, format, path?}` → `{path, bytes}`；format 支持 csv/json/sql/xml/xlsx |
-| POST | `/import` | `{connectionId, table, csv, mapping, hasHeader, delimiter}` → 报告 |
+| POST | `/import` | `{connectionId, table, csv, mapping, hasHeader, delimiter}` → 报告；单次 ≤5000 行，重复目标列返回 `DUPLICATE_COLUMN` |
 | GET/POST | `/backups` | 列表 / 创建备份 |
 | GET | `/history` | 查询历史（分页/搜索，含 `favorite` 标记） |
 | POST | `/history/:id/favorite` | `{favorite: boolean}` 收藏 / 取消收藏 |

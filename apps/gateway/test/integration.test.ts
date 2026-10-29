@@ -258,6 +258,20 @@ test('row CRUD, DDL, export and import', async () => {
     body: JSON.stringify({ connectionId: demo.id, sql: 'SELECT COUNT(*) FROM it_import' }),
   });
   assert.equal(Number(importedCount.body.batch.sets[0].rows[0][0]), 2);
+  const duplicateMapping = await api('/import', {
+    method: 'POST',
+    body: JSON.stringify({
+      connectionId: demo.id,
+      table: 'it_import',
+      csv: `a,b
+1,2
+`,
+      hasHeader: false,
+      mapping: [{ column: 'name', sourceIndex: 0 }, { column: 'name', sourceIndex: 1 }],
+    }),
+  });
+  assert.equal(duplicateMapping.status, 400);
+  assert.equal((duplicateMapping.body as any).error.code, 'DUPLICATE_COLUMN');
 
   await api('/ddl/execute', {
     method: 'POST',
