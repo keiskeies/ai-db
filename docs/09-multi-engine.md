@@ -151,7 +151,21 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - Agent：`resolveRisk` 对 `run_mql` / `run_redis` 动态取风险；审批弹窗展示结构化查询。
 - SQL 专属工具在非 SQL 连接上返回 `UNSUPPORTED_ENGINE`；HTTP 的 DDL / 数据编辑 / 结构同步 / 监控 / 用户 / 备份等路由同样拒绝。例外：`manage_index` 在 MongoDB / Qdrant / ArangoDB 上走 `POST /indexes/*` 的结构化通道（与对象信息面板同一实现），`alter_table` 在 Elasticsearch/OpenSearch / Weaviate 上走 `POST /fields/create` 追加 mapping 字段 / property，`create_collection` / `delete_collection` / `upsert_document` / `delete_documents` / `import_documents` / `write_line_protocol` 也按能力位开放。
 
-## 6. 跨请求事务
+## 6. 能力位一览
+
+能力位是 UI 与 Agent 判断「这个引擎能不能做某件事」的唯一依据，不按引擎名硬编码。下表由 `scripts/verify-docs.mjs` 与 `packages/core/src/engines.ts` 逐项比对，改代码忘了改这里会直接失败：
+
+| 能力位 | 引擎 |
+|---|---|
+| objectLifecycle | arangodb, elasticsearch, mongodb, opensearch, qdrant, weaviate |
+| documentWrite | arangodb, elasticsearch, milvus, mongodb, opensearch, qdrant, weaviate |
+| indexManage | arangodb, mongodb, qdrant |
+| fieldAdd | elasticsearch, opensearch, weaviate |
+| recordEdit | arangodb, elasticsearch, mongodb, opensearch, qdrant, weaviate |
+| lineProtocolWrite | influxdb |
+| transactions | dm, mysql, oracle, postgresql, sqlite, sqlserver |
+
+## 7. 跨请求事务
 
 关系型引擎支持 Navicat 式的 begin / commit / rollback，事务跨越多次 HTTP 请求：
 
@@ -161,7 +175,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - **边界**：只读连接拒绝开启事务（403 `READONLY`）；会话结束后再提交返回 404；`sessionId` 属于别的连接时按普通查询执行，不会报错；关闭连接时该连接的事务会话一并清除；空闲超过 15 分钟的事务在下次事务操作时自动回滚并释放连接。
 - **其它引擎**仍即时提交，不做伪事务包装。
 
-## 7. Agent 工具
+## 8. Agent 工具
 
 工具总数 40：
 
@@ -183,7 +197,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 
 系统提示会注入 `model=` 与 `queryLanguage=`，并按连接语言切换规则：SQL 连接保留审计/图表/EXPLAIN 等规则；MongoDB/Redis/Neo4j 连接改为对应查询规则，并明确禁止输出 SQL。
 
-## 8. UI 行为
+## 9. UI 行为
 
 - 连接表单由 `EngineMeta` 驱动默认端口、默认用户名、默认数据库与限制；MongoDB/Redis/Neo4j 显示“数据库 / DB 索引”字段。
 - 对象树按查询语言渲染：SQL 连接（含 TDengine）显示表/视图与完整右键菜单；MongoDB 显示“集合”；Redis 显示“键空间”（安装 RediSearch 时追加“搜索索引”）；Cassandra/ScyllaDB 显示“表”；Neo4j/Memgraph/FalkorDB 显示“标签”、ArangoDB 显示“集合”；Qdrant/Milvus/Weaviate 显示“向量集合”；Elasticsearch/OpenSearch 显示“索引”。非关系型保留打开、查询、导出结果、AI 解释、刷新、复制；支持对象生命周期的引擎（Qdrant、Elasticsearch/OpenSearch、Weaviate、MongoDB、ArangoDB）在集合文件夹上多一项「新建集合…／新建索引…」，在集合节点上多一项「删除集合…／删除索引…」；Redis 的「搜索索引」节点同样提供「删除索引…」；已读到索引、支持建删索引或可追加字段的对象多一项「对象信息」，可在面板里建删索引或追加字段。
@@ -192,7 +206,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - PostgreSQL / Qdrant / Milvus 的查询工具栏提供“向量检索”面板：选择表/集合与向量字段，输入文本（走 Embedding）或向量 JSON、TopK，结果直接进入 DataGrid。
 - `openData` 对非关系型自动改为打开查询标签：MongoDB 预填 `{collection, op:'find', filter:{}, limit:100}`，Redis 预填 `SCAN 0 COUNT 100`，Cassandra/ScyllaDB 预填 `SELECT * FROM "ks"."table" LIMIT 100;`，Neo4j 预填 `MATCH (n) RETURN n LIMIT 100`，Qdrant/Milvus/Weaviate 预填 `{collection, op:'scroll', topK:20}`，搜索索引预填 `{index, query:{match_all:{}}, size:100}`。
 
-## 9. 测试
+## 10. 测试
 
 ```bash
 npm run typecheck --workspaces --if-present
@@ -231,7 +245,7 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 
 覆盖：驱动工厂协议别名路由、MongoDB、Redis（含 Redis Stack 模块与 RediSearch）、Neo4j/Memgraph/FalkorDB、ArangoDB、Cassandra/ScyllaDB、达梦、DuckDB、TDengine、InfluxDB、TimescaleDB 超表标注（均含本地 stub 或联机协议测试）、Qdrant/Milvus/Weaviate、pgvector + Embedding、Elasticsearch/OpenSearch，HTTP `/schema`、`/query`、`/vector/search` 管线、对象创建与删除（Qdrant / Elasticsearch / OpenSearch / Weaviate / MongoDB / ArangoDB）、Redis 键与 RediSearch 索引删除、索引与字段的建删（MongoDB / Qdrant / ArangoDB 索引，Elasticsearch / OpenSearch / Weaviate 追加字段）、非 SQL 连接的功能禁用。
 
-## 10. 已知限制
+## 11. 已知限制
 
 - MongoDB 结构是采样推断，不能替代模型校验；authSource / replicaSet 可通过在 Host 字段填完整 `mongodb://` URI 传入。
 - Redis 键浏览基于 SCAN 采样，超大键空间只展示当前批次；`SELECT` 被拒绝，请用数据库下拉切换 DB。
@@ -252,7 +266,7 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 - ArangoDB 走 HTTP `/_api/cursor`：AQL 无 DDL 设计器，文档集合与边集合通过 `/_api/collection` 在对象树里新建/删除（边集合靠请求体 `type: 3`，查询参数会被忽略）；`_` 前缀的系统集合既不能创建也不能删除。索引通过 `GET /_api/index?collection=` 显示在「对象信息」里，建索引必须用 `POST /_api/index?collection=<集合>` + body `{type:'inverted', fields:[...]}`（这一版拒绝路径写法与 `unique` / 数字类型，TTL 要求 `expireAfter` 属性），删除按 `collection/编号` 两段路径走；主键索引拒删。写入走 `/_api/document/{collection}?overwriteMode=replace`（带 `_key` 覆盖、不带则插入，`_id`/`_rev` 会被剔除），删除用 `REMOVE … FILTER d._key IN @ids`；批量接口按条目返回错误，遇到非法 `_key` 会抛错而不是静默跳过。文档集合与边集合都按对象树展示，带 `_from`/`_to` 或 path 的结果自动切换图视图；单批上限 1000 行，超出自动 follow-up 并截断。结果网格双击文档行可整条编辑：`_id` 是「集合/键」句柄，前端直接从中拆出集合与键（不必解析 AQL），`GET /_api/document/{集合}/{键}` 读回原文（未命中回 404），保存按 `_key` 覆盖写回。
 - 向量/搜索写入已补齐：单条写入、批量导入（CSV）、按 id 删除、结果网格整条记录编辑（MongoDB / Qdrant / Weaviate / Elasticsearch / OpenSearch / ArangoDB），Milvus 没有单点读回接口故不开放编辑。
 
-## 11. 后续路线
+## 12. 后续路线
 
 | 阶段 | 内容 |
 |---|---|
@@ -260,7 +274,7 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 | P2 | 已完成：Memgraph、Cassandra/ScyllaDB、Weaviate、Elasticsearch/OpenSearch、TDengine、FalkorDB、InfluxDB、ArangoDB、交互式图视图、Redis Stack 模块与 RediSearch 浏览、向量/搜索/文档的批量写入与按 id 删除、CSV 导入、非 SQL 结果导出、集合/索引创建与删除 |
 | P3 | 已完成：TimescaleDB（复用 PG 驱动 + 超表标注）；待接：云数仓（Snowflake / BigQuery / Redshift / Databricks）、Db2 / SAP HANA、无 Node 驱动的国产库（神通 / GBase 8s / 崖山 / 虚谷） |
 
-## 12. 关键文件
+## 13. 关键文件
 
 - 类型与注册：[`packages/core/src/types.ts`](../packages/core/src/types.ts)、[`packages/core/src/engines.ts`](../packages/core/src/engines.ts)
 - 结构化查询与安全：[`packages/core/src/query.ts`](../packages/core/src/query.ts)

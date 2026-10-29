@@ -103,6 +103,26 @@ if (existsSync(executorFile)) {
   ok('executor dispatch', 'not yet implemented (docs-only phase)');
 }
 
+// 7. Capability matrix in docs/09 must equal capabilities in packages/core/src/engines.ts.
+//    能力位是 UI/Agent 的唯一判断依据，文档与代码漂移会让按钮与行为不一致。
+{
+  const engines = await import('../packages/core/src/engines.ts');
+  const flags = ['objectLifecycle', 'documentWrite', 'indexManage', 'fieldAdd', 'recordEdit', 'lineProtocolWrite', 'transactions'];
+  const multi = read('docs/09-multi-engine.md');
+  for (const flag of flags) {
+    const row = multi.match(new RegExp(`^\\|\\s*${flag}\\s*\\|\\s*([^|]*)\\|\\s*$`, 'm'));
+    if (!row) {
+      fail(`capability ${flag} documented`, 'row missing in docs/09 capability table');
+      continue;
+    }
+    const documented = row[1].split(',').map((s) => s.trim()).filter(Boolean).sort();
+    const actual = engines.ENGINE_IDS.filter((id) => engines.engineMeta(id).capabilities[flag] === true).sort();
+    JSON.stringify(documented) === JSON.stringify(actual)
+      ? ok(`capability ${flag} matches code`)
+      : fail(`capability ${flag} matches code`, `docs=[${documented.join(',')}] code=[${actual.join(',')}]`);
+  }
+}
+
 // report
 const passed = checks.filter((c) => c.ok).length;
 console.log(`\nDocs contract: ${passed}/${checks.length} checks passed`);
