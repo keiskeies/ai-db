@@ -329,6 +329,8 @@ export const api = {
     for (const [key, value] of Object.entries(params)) if (value) q.set(key, String(value));
     return request<{ items: Array<{ id: string; sql: string; status: string; durationMs?: number; rowCount?: number; error?: string; favorite?: boolean; createdAt: string }> }>(`/history?${q.toString()}`);
   },
+  renameGroup: (from: string, to: string) => request<{ renamed: number }>(`/groups/rename`, { method: 'POST', body: JSON.stringify({ from, to }) }),
+  deleteGroup: (name: string) => request<{ moved: number }>(`/groups/delete`, { method: 'POST', body: JSON.stringify({ name }) }),
   favoriteHistory: (id: string, favorite: boolean) => request<{ id: string; favorite: boolean }>(`/history/${id}/favorite`, { method: 'POST', body: JSON.stringify({ favorite }) }),
   clearHistory: () => request<void>('/history', { method: 'DELETE' }),
   backups: (connectionId?: string) => request<{ backups: BackupInfo[] }>(`/backups${connectionId ? `?connectionId=${connectionId}` : ''}`),

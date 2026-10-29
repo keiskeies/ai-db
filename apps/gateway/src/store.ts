@@ -595,6 +595,14 @@ export class Store {
     }));
   }
 
+  renameGroup(from: string, to: string): number {
+    return this.exec('UPDATE connections SET group_name = ?, updated_at = ? WHERE group_name = ?', [to, new Date().toISOString(), from]).changes;
+  }
+
+  deleteGroup(name: string): number {
+    return this.exec("UPDATE connections SET group_name = '默认', updated_at = ? WHERE group_name = ?", [new Date().toISOString(), name]).changes;
+  }
+
   setHistoryFavorite(id: string, favorite: boolean): boolean {
     return this.exec('UPDATE query_history SET favorite = ? WHERE id = ?', [favorite ? 1 : 0, id]).changes > 0;
   }

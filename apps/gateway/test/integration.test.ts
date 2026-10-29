@@ -114,6 +114,22 @@ test('query, pagination, sorting and readonly enforcement', async () => {
   assert.equal(blocked.status, 403);
   assert.equal((blocked.body as any).error.code, 'READONLY');
   await api(`/connections/${readonly.body.connection.id}`, { method: 'DELETE' });
+
+  const grouped = await api<{ connection: { id: string } }>('/connections', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Group demo', engine: 'sqlite', database: demo.database, groupName: '组A' }),
+  });
+  assert.equal(grouped.status, 201);
+  const renamed = await api<{ renamed: number }>('/groups/rename', { method: 'POST', body: JSON.stringify({ from: '组A', to: '组B' }) });
+  assert.equal(renamed.status, 200);
+  assert.ok(renamed.body.renamed >= 1);
+  const afterRename = await api<{ connections: Array<{ name: string; groupName: string }> }>('/connections');
+  assert.equal(afterRename.body.connections.find((item) => item.name === 'Group demo')?.groupName, '组B');
+  const removed = await api<{ moved: number }>('/groups/delete', { method: 'POST', body: JSON.stringify({ name: '组B' }) });
+  assert.equal(removed.status, 200);
+  const afterRemove = await api<{ connections: Array<{ name: string; groupName: string }> }>('/connections');
+  assert.equal(afterRemove.body.connections.find((item) => item.name === 'Group demo')?.groupName, '默认');
+  await api(`/connections/${grouped.body.connection.id}`, { method: 'DELETE' });
 });
 
 test('row CRUD, DDL, export and import', async () => {

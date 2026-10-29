@@ -129,6 +129,29 @@ export function Sidebar() {
     openContextMenu(e.clientX, e.clientY, items);
   };
 
+  const renameGroup = async (group: string) => {
+    const next = window.prompt(`分组「${group}」重命名为：`, group);
+    if (!next || !next.trim() || next.trim() === group) return;
+    try {
+      await api.renameGroup(group, next.trim());
+      await useApp.getState().boot();
+      notify('success', '分组已重命名', next.trim());
+    } catch (err: any) {
+      notify('error', '重命名失败', err?.message);
+    }
+  };
+
+  const removeGroup = async (group: string) => {
+    if (!window.confirm(`删除分组「${group}」？组内连接会移动到「默认」。`)) return;
+    try {
+      await api.deleteGroup(group);
+      await useApp.getState().boot();
+      notify('success', '分组已删除', group);
+    } catch (err: any) {
+      notify('error', '删除失败', err?.message);
+    }
+  };
+
   const testConnection = async (conn: ConnectionConfig) => {
     try {
       const { result } = await api.testConnection(conn.id);
@@ -465,6 +488,13 @@ export function Sidebar() {
                 return next;
               })}
               data-testid={`group-toggle-${group}`}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                openMenu(event, [
+                  { label: '重命名分组', icon: <Pencil size={13} />, onClick: () => void renameGroup(group) },
+                  { label: '删除分组', icon: <Trash2 size={13} />, danger: true, onClick: () => void removeGroup(group) },
+                ]);
+              }}
             >
               <ChevronRight size={11} className={`conn-toggle ${collapsed ? '' : 'open'}`} />
               {group}

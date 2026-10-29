@@ -217,6 +217,27 @@ export function createApiRouter(deps: ApiDeps): Router {
     }),
   );
 
+  router.post(
+    '/groups/rename',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const from = str(body.from);
+      const to = str(body.to);
+      if (!from || !to) throw Object.assign(new Error('from 与 to 必填'), { code: 'INVALID_INPUT', status: 400 });
+      res.json({ renamed: store.renameGroup(from, to) });
+    }),
+  );
+
+  router.post(
+    '/groups/delete',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const name = str(body.name);
+      if (!name) throw Object.assign(new Error('name 必填'), { code: 'INVALID_INPUT', status: 400 });
+      res.json({ moved: store.deleteGroup(name) });
+    }),
+  );
+
   router.delete(
     '/connections/:id',
     ah(async (req, res) => {

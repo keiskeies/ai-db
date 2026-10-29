@@ -1996,6 +1996,27 @@ check('collapsed group hides its connections', true);
 await demoGroup.click();
 await page.waitForFunction(() => [...document.querySelectorAll('.conn-row')].some((el) => (el.textContent ?? '').includes('Demo · Shop DB')), null, { timeout: 5000 });
 
+// ---------------- 分组重命名与删除 ----------------
+const groupConn = await api('/connections', { method: 'POST', body: JSON.stringify({ name: 'Group E2E', engine: 'sqlite', database: demo.database, groupName: '组A' }) });
+check('group test connection created', groupConn.status === 201, String(groupConn.status));
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
+await page.waitForSelector('[data-testid="group-toggle-组A"]', { timeout: 20000 });
+await page.locator('[data-testid="group-toggle-组A"]').click({ button: 'right' });
+await page.waitForSelector('.context-menu', { timeout: 5000 });
+page.once('dialog', (dialog) => dialog.accept('组B'));
+await page.locator('.context-menu').getByText('重命名分组').click();
+await page.waitForSelector('[data-testid="group-toggle-组B"]', { timeout: 15000 });
+check('group rename from the sidebar persists', true);
+await page.locator('[data-testid="group-toggle-组B"]').click({ button: 'right' });
+await page.waitForSelector('.context-menu', { timeout: 5000 });
+page.once('dialog', (dialog) => dialog.accept());
+await page.locator('.context-menu').getByText('删除分组').click();
+await page.waitForFunction(() => !document.querySelector('[data-testid="group-toggle-组B"]'), null, { timeout: 15000 });
+const movedConn = (await api('/connections')).body.connections.find((item) => item.name === 'Group E2E');
+check('group delete moves connections to 默认', movedConn?.groupName === '默认', movedConn?.groupName ?? 'missing');
+await api(`/connections/${groupConn.body.connection.id}`, { method: 'DELETE' });
+
 // ---------------- 只读连接：UI 收口写入入口 ----------------
 await api(`/connections/${demo.id}`, { method: 'PUT', body: JSON.stringify({ readonly: true }) });
 await page.reload({ waitUntil: 'domcontentloaded' });
