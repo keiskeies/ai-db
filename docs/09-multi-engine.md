@@ -247,6 +247,8 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 
 ## 11. 已知限制
 
+- 查询超时：MySQL / PostgreSQL / ClickHouse / SQL Server / Oracle 按 `queryTimeoutMs` 生效（ClickHouse 用 AbortSignal，SQL Server 用 requestTimeout，Oracle 用 callTimeout）；SQLite/DuckDB 为同步执行无法中断，达梦取决于驱动能力。
+
 - MongoDB 结构是采样推断，不能替代模型校验；authSource / replicaSet 可通过在 Host 字段填完整 `mongodb://` URI 传入。
 - Redis 键浏览基于 SCAN 采样，超大键空间只展示当前批次；`SELECT` 被拒绝，请用数据库下拉切换 DB。
 - Neo4j 结果为 JSON 单元格，带节点/关系/路径的结果会切到交互式图视图（力导向布局、缩放平移、拖动节点、属性面板、搜索高亮，超大图退回环形布局）；属性推断基于 30 个样本，复杂图模型请用 `CALL db.labels()` / `db.schema.visualization()` 核对。

@@ -190,6 +190,7 @@ export class OracleDriver implements Driver {
     const pool = await this.pool(opts.database);
     const connection = await pool.getConnection();
     try {
+      if (opts.timeoutMs && opts.timeoutMs > 0) connection.callTimeout = opts.timeoutMs;
       const result = await connection.execute(sql, params as any[], {
         outFormat: oracledb.OUT_FORMAT_OBJECT,
         autoCommit: true,
@@ -199,6 +200,7 @@ export class OracleDriver implements Driver {
     } catch (err: any) {
       throw new DbError(err.message ?? 'Oracle 执行失败', { code: err.code ?? 'ORACLE_ERROR' });
     } finally {
+      connection.callTimeout = 0;
       await connection.close().catch(() => undefined);
     }
   }
@@ -234,11 +236,13 @@ export class OracleDriver implements Driver {
     if (!connection) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
     const started = Date.now();
     try {
+      if (opts.timeoutMs && opts.timeoutMs > 0) connection.callTimeout = opts.timeoutMs;
       const result = await connection.execute(sql, params as any[], {
         outFormat: oracledb.OUT_FORMAT_OBJECT,
         autoCommit: false,
         maxRows: opts.maxRows && opts.maxRows > 0 ? opts.maxRows + 1 : undefined,
       });
+      connection.callTimeout = 0;
       return this.toResult(result, started, sql, opts.maxRows);
     } catch (err: any) {
       throw new DbError(err.message ?? 'Oracle 事务执行失败', { code: err.code ?? 'ORACLE_ERROR' });

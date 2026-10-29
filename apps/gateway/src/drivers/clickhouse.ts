@@ -30,7 +30,7 @@ export class ClickHouseDriver implements Driver {
   engine = 'clickhouse' as const;
   constructor(private opts: ClickHouseOptions) {}
 
-  private async request(sql: string, database?: string): Promise<string> {
+  private async request(sql: string, database?: string, timeoutMs?: number): Promise<string> {
     const url = new URL(`${this.opts.ssl ? 'https' : 'http'}://${this.opts.host}:${this.opts.port}/`);
     const db = database || this.opts.database;
     if (db) url.searchParams.set('database', db);
@@ -45,8 +45,12 @@ export class ClickHouseDriver implements Driver {
           ...(this.opts.password ? { 'X-ClickHouse-Key': this.opts.password } : {}),
         },
         body: sql,
+        signal: timeoutMs && timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined,
       });
     } catch (err: any) {
+      if (err?.name === 'TimeoutError') {
+        throw new DbError(`ClickHouse 查询超时（${timeoutMs}ms）`, { code: 'CLICKHOUSE_TIMEOUT', status: 504 });
+      }
       throw new DbError(`ClickHouse 连接失败：${err.message}`, { code: 'CLICKHOUSE_NETWORK' });
     }
     const text = await res.text();
@@ -132,7 +136,7 @@ export class ClickHouseDriver implements Driver {
     const started = Date.now();
     const prepared = params.length ? interpolate(sql, params) : sql;
     try {
-      const text = await this.request(prepared, opts.database);
+      const text = await this.request(prepared, opts.database, opts.timeoutMs);
       if (!text.trim()) {
         return { columns: [], rows: [], rowCount: 0, affected: 0, durationMs: Date.now() - started, statement: prepared };
       }

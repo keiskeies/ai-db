@@ -187,6 +187,7 @@ export class SqlServerDriver implements Driver {
     try {
       const pool = await this.pool(opts.database);
       const request = pool.request();
+      if (opts.timeoutMs && opts.timeoutMs > 0) (request as unknown as { requestTimeout: number }).requestTimeout = opts.timeoutMs;
       params.forEach((value, index) => request.input(`p${index + 1}`, value as any));
       const result = await request.query(sql);
       return this.toResult(result, started, sql, opts.maxRows);
@@ -232,6 +233,7 @@ export class SqlServerDriver implements Driver {
     const started = Date.now();
     try {
       const request = new mssql.Request(transaction);
+      if (opts.timeoutMs && opts.timeoutMs > 0) (request as unknown as { requestTimeout: number }).requestTimeout = opts.timeoutMs;
       params.forEach((value, index) => request.input(`p${index + 1}`, value as any));
       const result = await request.query(sql);
       return this.toResult(result, started, sql, opts.maxRows);
