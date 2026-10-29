@@ -29,6 +29,7 @@ import { EmptyState, Modal } from './ui';
 import { formatDuration } from '../lib/format';
 import { jsonToCsv, xmlToCsv } from '../lib/importConvert';
 import { xlsxToCsv } from '../lib/xlsx';
+import { xlsToCsv } from '../lib/biff';
 
 type DataTab = Extract<Tab, { kind: 'data' }>;
 
@@ -546,6 +547,7 @@ export function DataView({ tab }: { tab: DataTab }) {
       if (name.endsWith('.json')) csv = jsonToCsv(csv);
       else if (name.endsWith('.xml')) csv = xmlToCsv(csv);
       else if (name.endsWith('.xlsx')) csv = await xlsxToCsv(await file.arrayBuffer());
+      else if (name.endsWith('.xls')) csv = xlsToCsv(await file.arrayBuffer());
       const rows = parseCsvPreview(csv, delimiter);
       if (!rows.length) {
         notify('warning', 'CSV 没有内容');
@@ -691,7 +693,7 @@ export function DataView({ tab }: { tab: DataTab }) {
         <input
           ref={fileRef}
           type="file"
-          accept=".csv,.tsv,.txt,.json,.xml,.xlsx"
+          accept=".csv,.tsv,.txt,.json,.xml,.xlsx,.xls"
           style={{ display: 'none' }}
           data-testid="data-import-file" 
           onChange={(e) => {

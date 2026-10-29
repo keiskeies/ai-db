@@ -1599,6 +1599,15 @@ await page.waitForTimeout(900);
 const spreadsheetResult = await api(`/data?connectionId=${demo.id}&table=orders&limit=5&where=${encodeURIComponent("channel='spreadsheet-e2e'")}`);
 check('Excel 2003 XML import inserts a row', spreadsheetResult.status === 200 && spreadsheetResult.body.total >= 1, `total=${spreadsheetResult.body?.total}`);
 
+await page.setInputFiles('[data-testid="data-import-file"]', join(root, 'scripts', 'fixtures', 'legacy-e2e.xls'));
+await page.waitForSelector('[data-testid="import-confirm"]', { timeout: 5000 });
+check('legacy XLS preview maps columns', (await page.locator('.modal').innerText()).includes('legacy-xls-e2e'));
+await page.click('[data-testid="import-confirm"]');
+await page.waitForFunction(() => !document.querySelector('[data-testid="import-confirm"]'), null, { timeout: 20000 });
+await page.waitForTimeout(900);
+const legacyXlsResult = await api(`/data?connectionId=${demo.id}&table=orders&limit=5&where=${encodeURIComponent("channel='legacy-xls-e2e'")}`);
+check('legacy XLS import inserts a row', legacyXlsResult.status === 200 && legacyXlsResult.body.total >= 1, `total=${legacyXlsResult.body?.total}`);
+
 await page.screenshot({ path: join(shots, 'desktop-data.png') });
 
 await page.locator('[title="TABLE orders"]').click({ button: 'right' });
