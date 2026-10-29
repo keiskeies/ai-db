@@ -1,12 +1,56 @@
 import { useEffect, useState } from 'react';
 import { Cable, Check, Loader2, PlugZap, X } from 'lucide-react';
-import type { ConnectionConfig, Engine } from '@aidb/core';
+import type { ConnectionConfig, Engine, EngineMeta } from '@aidb/core';
 import { ENGINES, engineMeta } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp } from '../store';
 import { Modal } from './ui';
 
 const COLORS = ['blue', 'green', 'orange', 'red', 'purple', 'cyan', 'gray'];
+
+/** Doris / StarRocks / GBase 8a 走 MySQL 协议，但属于分析型产品，单独成组。 */
+const OLAP_IDS = new Set<Engine>(['clickhouse', 'doris', 'starrocks', 'gbase8a']);
+const GROUP_ORDER = [
+  '文件 / 嵌入式',
+  '关系型 · MySQL 系',
+  '关系型 · PostgreSQL 系',
+  '关系型 · Oracle / 达梦',
+  '关系型 · SQL Server',
+  '分析型 / OLAP',
+  '时序',
+  '文档',
+  '键值',
+  '图',
+  '向量',
+  '搜索',
+  '宽列',
+  '其它',
+];
+
+function engineGroup(meta: EngineMeta): string {
+  if (meta.fileBased) return '文件 / 嵌入式';
+  if (OLAP_IDS.has(meta.id)) return '分析型 / OLAP';
+  if (meta.model === 'relational') {
+    if (meta.family === 'mysql') return '关系型 · MySQL 系';
+    if (meta.family === 'postgres') return '关系型 · PostgreSQL 系';
+    if (meta.family === 'oracle' || meta.family === 'dm') return '关系型 · Oracle / 达梦';
+    if (meta.family === 'mssql') return '关系型 · SQL Server';
+  }
+  const byModel: Record<string, string> = {
+    relational: '关系型 · 其他',
+    document: '文档',
+    keyvalue: '键值',
+    graph: '图',
+    vector: '向量',
+    search: '搜索',
+    widecolumn: '宽列',
+    timeseries: '时序',
+  };
+  return byModel[meta.model] ?? '其它';
+}
+
+const GROUPED_ENGINES = GROUP_ORDER.map((label) => [label, ENGINES.filter((meta) => engineGroup(meta) === label)] as const)
+  .filter(([, items]) => items.length > 0);
 
 export function ConnectionModal() {
   const editor = useApp((s) => s.connectionEditor);
@@ -162,21 +206,13 @@ export function ConnectionModal() {
           <div className="field">
             <label>{t('engine')}</label>
             <select className="select" data-testid="connection-engine" value={engine} onChange={(e) => changeEngine(e.target.value as Engine)} disabled={editor.mode === 'edit'}>
-              <optgroup label="文件 / 嵌入式">
-                {ENGINES.filter((item) => item.fileBased).map((item) => (
-                  <option key={item.id} value={item.id}>{item.label}</option>
-                ))}
-              </optgroup>
-              <optgroup label="关系型 / 分布式">
-                {ENGINES.filter((item) => !item.fileBased && item.family !== 'clickhouse').map((item) => (
-                  <option key={item.id} value={item.id}>{item.label}</option>
-                ))}
-              </optgroup>
-              <optgroup label="分析型">
-                {ENGINES.filter((item) => item.family === 'clickhouse').map((item) => (
-                  <option key={item.id} value={item.id}>{item.label}</option>
-                ))}
-              </optgroup>
+              {GROUPED_ENGINES.map(([label, items]) => (
+                <optgroup key={label} label={label}>
+                  {items.map((item) => (
+                    <option key={item.id} value={item.id}>{item.label}</option>
+                  ))}
+                </optgroup>
+              ))}
             </select>
           </div>
           <div className="field">

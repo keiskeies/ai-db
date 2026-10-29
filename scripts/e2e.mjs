@@ -429,6 +429,17 @@ await page.click('[data-testid="sidebar-new-connection"]');
 await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
 const engineOptions = await page.locator('[data-testid="connection-engine"] option').count();
 check('connection form lists 41 engines', engineOptions === 41, String(engineOptions));
+const engineGroups = await page.locator('[data-testid="connection-engine"]').evaluate((el) => [...el.querySelectorAll('optgroup')].map((group) => ({ label: group.label, ids: [...group.querySelectorAll('option')].map((option) => option.value) })));
+check(
+  'engine picker groups engines by model and family',
+  engineGroups.length >= 8
+    && engineGroups.some((group) => group.label.includes('MySQL') && group.ids.includes('mysql'))
+    && engineGroups.some((group) => group.label.includes('PostgreSQL') && group.ids.includes('postgresql'))
+    && engineGroups.some((group) => group.label.includes('文档') && group.ids.includes('mongodb'))
+    && engineGroups.some((group) => group.label.includes('向量') && group.ids.includes('qdrant'))
+    && engineGroups.some((group) => group.label.includes('图') && group.ids.includes('neo4j')),
+  engineGroups.map((group) => group.label).join(' / '),
+);
 await page.screenshot({ path: join(shots, 'desktop-connection-engines.png') });
 await page.locator('.modal-head .icon-btn').click();
 await page.waitForTimeout(200);
@@ -1597,9 +1608,9 @@ await page.waitForTimeout(900);
 const xlsxImportResult = await api(`/data?connectionId=${demo.id}&table=orders&limit=5&where=${encodeURIComponent("channel='xlsx-e2e'")}`);
 check('XLSX import inserts a row', xlsxImportResult.status === 200 && xlsxImportResult.body.total >= 1, `total=${xlsxImportResult.body?.total}`);
 
-await page.selectOption('[data-testid="data-export-format"]', 'xlsx');
 const exportResponsePromise = page.waitForResponse((res) => res.url().includes('/api/export') && (res.request().postData() ?? '').includes('"format":"xlsx"'), { timeout: 20000 }).catch(() => null);
 await page.click('[data-testid="data-export"]');
+await page.locator('[data-testid="context-menu"] .context-item', { hasText: 'XLSX' }).click();
 const exportedXlsx = await exportResponsePromise;
 check('XLSX export writes a workbook', Boolean(exportedXlsx && exportedXlsx.status() === 200), exportedXlsx ? String(exportedXlsx.status()) : 'no response');
 

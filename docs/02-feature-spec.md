@@ -6,7 +6,7 @@
 
 | 能力域 | Navicat 对应 | AiDB v0.3 | 说明 / 差异 |
 |---|---|---|---|
-| 连接管理 | Connection | ✅ | 11 种关系型（含达梦 DM8、DuckDB、TimescaleDB）+ TDengine/InfluxDB + MongoDB + Redis + Cassandra/ScyllaDB + Neo4j/Memgraph/FalkorDB/ArangoDB + Qdrant/Milvus/Weaviate + Elasticsearch/OpenSearch + 15 种国产协议别名；颜色、只读、SSH 隧道、测试连接 |
+| 连接管理 | Connection | ✅ | 11 种关系型（含达梦 DM8、DuckDB、TimescaleDB）+ TDengine/InfluxDB + MongoDB + Redis + Cassandra/ScyllaDB + Neo4j/Memgraph/FalkorDB/ArangoDB + Qdrant/Milvus/Weaviate + Elasticsearch/OpenSearch + 15 种国产协议别名；引擎按模型/协议族分组（文件、MySQL 系、PG 系、Oracle/达梦、SQL Server、OLAP、时序、文档、键值、图、向量、搜索、宽列）、颜色、只读、SSH 隧道、测试连接 |
 | 对象浏览器 | 导航窗格 | ✅ | 库→表/视图→列/索引/外键；搜索、右键、刷新、懒加载 |
 | 数据网格 | 表数据查看器 | ✅ | 分页/单列与多列排序/过滤/编辑/表单逐行编辑/增删行/复制/导出/打印预览/列显示管理/窗口化虚拟渲染（超过 200 行按可视区+overscan 渲染） |
 | SQL 编辑器 | 查询编辑器 | ✅ | 多标签、高亮、基于当前 schema 的表/列自动补全、执行选区、行数上限（100/500/1000/5000）、多结果集、历史、EXPLAIN、格式化 |
