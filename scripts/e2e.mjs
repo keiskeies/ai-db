@@ -1562,11 +1562,13 @@ await page.waitForTimeout(900);
 const xmlImportResult = await api(`/data?connectionId=${demo.id}&table=orders&limit=5&where=${encodeURIComponent("channel='xml-e2e'")}`);
 check('XML import inserts a row', xmlImportResult.status === 200 && xmlImportResult.body.total >= 1, `total=${xmlImportResult.body?.total}`);
 
+const printExpected = (await api(`/data?connectionId=${demo.id}&table=orders&limit=1`)).body.total;
 await page.click('[data-testid="data-print"]');
-await page.waitForSelector('[data-testid="print-frame"]', { timeout: 5000 });
+await page.waitForSelector('[data-testid="print-frame"]', { timeout: 30000 });
 const printFrame = page.frameLocator('[data-testid="print-frame"]');
-await printFrame.locator('table tbody tr').first().waitFor({ timeout: 5000 });
-check('print preview renders the current page', (await printFrame.locator('table tbody tr').count()) > 0);
+await printFrame.locator('table tbody tr').first().waitFor({ timeout: 10000 });
+const printRowCount = await printFrame.locator('table tbody tr').count();
+check('print preview renders the whole table', printRowCount === printExpected, `${printRowCount}/${printExpected}`);
 check('print preview shows the table title', (await printFrame.locator('h1').innerText()).includes('orders'));
 await page.locator('.modal-head .icon-btn').click();
 await page.waitForFunction(() => !document.querySelector('[data-testid="print-frame"]'), null, { timeout: 5000 });

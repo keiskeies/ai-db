@@ -133,6 +133,9 @@ export function DataView({ tab }: { tab: DataTab }) {
   const [formDraft, setFormDraft] = useState<Record<string, string> | null>(null);
   const [formSaving, setFormSaving] = useState(false);
   const [printOpen, setPrintOpen] = useState(false);
+  const [printRows, setPrintRows] = useState<unknown[][] | null>(null);
+  const [printTotal, setPrintTotal] = useState(0);
+  const [printLoading, setPrintLoading] = useState(false);
   const printFrameRef = useRef<HTMLIFrameElement>(null);
   const [sortDraft, setSortDraft] = useState<Array<{ column: string; dir: 'asc' | 'desc' }>>([{ column: '', dir: 'asc' }]);
   const [conditions, setConditions] = useState<Array<{ column: string; op: string; value: string; connector: 'AND' | 'OR' }>>([
@@ -173,12 +176,15 @@ export function DataView({ tab }: { tab: DataTab }) {
   const rows = page?.batch.sets[0]?.rows ?? [];
   const total = page?.total ?? 0;
   const printHtml = useMemo(() => {
+    const sourceRows = printRows ?? rows;
+    const sourceTotal = printTotal || total;
     const escape = (value: unknown) => String(value ?? '')
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const head = columns.map((column) => `<th>${escape(column.name)}</th>`).join('');
-    const body = rows.map((row) => `<tr>${row.map((cell) => `<td>${escape(typeof cell === 'object' && cell !== null ? JSON.stringify(cell) : cell)}</td>`).join('')}</tr>`).join('');
-    return `<!doctype html><html><head><meta charset="utf-8"><title>${escape(tab.table)}</title><style>body{font-family:system-ui,sans-serif;color:#111;margin:24px}h1{font-size:18px;margin:0 0 4px}.meta{font-size:11px;color:#555;margin-bottom:12px}table{border-collapse:collapse;width:100%;font-size:11px}th,td{border:1px solid #ccc;padding:4px 6px;text-align:left;vertical-align:top}th{background:#f1f2f3}</style></head><body><h1>${escape(tab.table)}</h1><div class="meta">${escape(tab.database ?? '')} · 当前页 ${rows.length} 条（共 ${total} 条）</div><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></body></html>`;
-  }, [columns, rows, tab.table, tab.database, total]);
+    const body = sourceRows.map((row) => `<tr>${row.map((cell) => `<td>${escape(typeof cell === 'object' && cell !== null ? JSON.stringify(cell) : cell)}</td>`).join('')}</tr>`).join('');
+    const scope = printRows ? (printRows.length < sourceTotal ? `预览前 ${printRows.length} 条（共 ${sourceTotal} 条）` : `全部 ${sourceTotal} 条`) : `当前页 ${sourceRows.length} 条（共 ${sourceTotal} 条）`;
+    return `<!doctype html><html><head><meta charset="utf-8"><title>${escape(tab.table)}</title><style>body{font-family:system-ui,sans-serif;color:#111;margin:24px}h1{font-size:18px;margin:0 0 4px}.meta{font-size:11px;color:#555;margin-bottom:12px}table{border-collapse:collapse;width:100%;font-size:11px}th,td{border:1px solid #ccc;padding:4px 6px;text-align:left;vertical-align:top}th{background:#f1f2f3}</style></head><body><h1>${escape(tab.table)}</h1><div class="meta">${escape(tab.database ?? '')} · ${scope}</div><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></body></html>`;
+  }, [columns, rows, tab.table, tab.database, total, printRows, printTotal]);
   const totalPages = Math.max(1, Math.ceil(total / limit));
   const currentPage = Math.floor(offset / limit) + 1;
 
@@ -205,8 +211,8 @@ export function DataView({ tab }: { tab: DataTab }) {
 
   useEffect(() => {
     if (printRequested && rows.length) {
-      setPrintOpen(true);
       consumePrint();
+      void openPrint();
     }
   }, [printRequested, rows, consumePrint]);
 
@@ -539,6 +545,40 @@ export function DataView({ tab }: { tab: DataTab }) {
     }
   };
 
+  const openPrint = async () => {
+    if (printLoading) return;
+    setPrintLoading(true);
+    try {
+      const pageSize = 1000;
+      const sortColumn = orderBy ?? pkColumns[0]?.name;
+      const collected: unknown[][] = [];
+      let expected = total;
+      for (let offset = 0; offset < expected && collected.length < 10000; offset += pageSize) {
+        const result = await api.data({
+          connectionId: tab.connectionId,
+          table: tab.table,
+          database: tab.database,
+          limit: pageSize,
+          offset,
+          orderBy: sortColumn,
+          orderDir: orderBy ? orderDir : 'asc',
+          where: where || undefined,
+        });
+        const set = result.batch.sets[0];
+        if (!set?.rows.length) break;
+        collected.push(...set.rows);
+        expected = result.total;
+      }
+      setPrintRows(collected);
+      setPrintTotal(expected);
+      setPrintOpen(true);
+    } catch (err: any) {
+      notify('error', '打印预览失败', err?.message);
+    } finally {
+      setPrintLoading(false);
+    }
+  };
+
   const importFile = async (file: File) => {
     try {
       const name = file.name.toLowerCase();
@@ -712,7 +752,7 @@ export function DataView({ tab }: { tab: DataTab }) {
         <button className="btn small" onClick={() => void exportData()} data-testid="data-export">
           <Download size={12} /> {t('export')}
         </button>
-        <button className="btn small" onClick={() => setPrintOpen(true)} disabled={!rows.length} data-testid="data-print">
+        <button className="btn small" onClick={() => void openPrint()} disabled={!rows.length || printLoading} data-testid="data-print">
           <Printer size={12} /> 打印
         </button>
         <button className="btn small" onClick={() => openDesign(tab.connectionId, tab.table, tab.database)}>
