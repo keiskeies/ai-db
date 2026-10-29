@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDown,
+  ArrowLeftToLine,
   ArrowUp,
   ChevronDown,
   ChevronRight,
   Code2,
-  Database,
   KeyRound,
   Plus,
   RefreshCw,
+  Save,
   Trash2,
   Wand2,
   Wrench,
@@ -225,9 +226,9 @@ function ToolButton({
   testId?: string;
 }) {
   return (
-    <button className={`designer-btn ${primary ? 'primary' : ''}`} onClick={onClick} disabled={disabled} data-testid={testId}>
+    <button className={`designer-btn ${primary ? 'primary' : ''}`} onClick={onClick} disabled={disabled} title={label} data-testid={testId}>
       {icon}
-      <span>{label}</span>
+      <span className="btn-text">{label}</span>
     </button>
   );
 }
@@ -597,7 +598,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
     [columns, indexes, foreignKeys, tableComment, originalComment, activeColumns, tab.table],
   );
 
-  const saveButton = <ToolButton icon={<Database size={14} />} label="保存" onClick={() => void apply()} disabled={busy || isView} primary testId="design-apply" />;
+  const saveButton = <ToolButton icon={<Save size={14} />} label="保存" onClick={() => void apply()} disabled={busy || isView} primary testId="design-apply" />;
 
   const toolbar = () => {
     if (designerTab === 'fields') {
@@ -606,7 +607,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
           {saveButton}
           <span className="designer-sep" />
           <ToolButton icon={<Plus size={14} />} label="添加字段" onClick={() => addColumn()} testId="design-add-column" />
-          <ToolButton icon={<Plus size={14} />} label="插入字段" onClick={() => addColumn(selColumn)} disabled={!selectedColumn} />
+          <ToolButton icon={<ArrowLeftToLine size={14} />} label="插入字段" onClick={() => addColumn(selColumn)} disabled={!selectedColumn} />
           <ToolButton icon={<Trash2 size={14} />} label="删除字段" onClick={() => removeColumn(selectedColumn!.id)} disabled={!selectedColumn} />
           <span className="designer-sep" />
           <ToolButton icon={<KeyRound size={14} />} label="主键" onClick={togglePrimaryKey} disabled={!selectedColumn} />
@@ -709,7 +710,8 @@ export function DesignView({ tab }: { tab: DesignTab }) {
               填充零
             </label>
             <span className="designer-summary">
-              完整类型 <code>{composeType(selectedColumn) || '—'}</code>
+              <span>完整类型</span>
+              <code>{composeType(selectedColumn) || '—'}</code>
             </span>
           </div>
         </div>
@@ -785,8 +787,8 @@ export function DesignView({ tab }: { tab: DesignTab }) {
             data-testid="design-table-name"
           />
         </label>
-        <button className="btn small" onClick={() => void buildPreview()}>
-          <Code2 size={12} /> {t('preview')}
+        <button className="btn small" title={t('preview')} onClick={() => void buildPreview()}>
+          <Code2 size={12} /> <span className="btn-text">{t('preview')}</span>
         </button>
       </div>
 
@@ -807,12 +809,12 @@ export function DesignView({ tab }: { tab: DesignTab }) {
               <tr>
                 <th className="col-mark" style={{ width: 26 }} />
                 <th style={{ minWidth: 150 }}>{t('name')}</th>
-                <th style={{ minWidth: 130 }}>{t('type')}</th>
-                <th style={{ width: 78 }}>长度</th>
-                <th style={{ width: 78 }}>小数点</th>
-                <th style={{ width: 84 }}>不是 null</th>
-                <th style={{ width: 62 }}>虚拟</th>
-                <th style={{ width: 62 }}>键</th>
+                <th style={{ minWidth: 190 }}>{t('type')}</th>
+                <th style={{ width: 64 }}>长度</th>
+                <th style={{ width: 64 }}>小数</th>
+                <th style={{ width: 64 }}>非空</th>
+                <th style={{ width: 56 }}>虚拟</th>
+                <th style={{ width: 52 }}>键</th>
                 <th style={{ minWidth: 160 }}>注释</th>
               </tr>
             </thead>
@@ -825,7 +827,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
                   </td>
                   <td>
                     <div className="type-cell">
-                      <input value={col.base} onChange={(e) => patchColumn(col.id, { base: e.target.value })} />
+                      <input value={col.base} title={composeType(col)} onChange={(e) => patchColumn(col.id, { base: e.target.value })} />
                       <button className="icon-btn type-pick" title="选择类型" onClick={(event) => openTypeMenu(event, col)}>
                         <ChevronDown size={11} />
                       </button>

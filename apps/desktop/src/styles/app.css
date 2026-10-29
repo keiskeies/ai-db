@@ -78,7 +78,11 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .search-box svg { position: absolute; left: 8px; color: var(--text-muted); }
 .search-box input { width: 100%; height: 28px; padding: 0 8px 0 28px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); background: var(--bg-elevated); outline: none; font-size: 12px; }
 .search-box input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
-.sidebar-body { flex: 1; overflow: auto; padding: 6px 0 14px; }
+.sidebar-body {
+  flex: 1; overflow: auto; padding: 6px 0 14px;
+}
+/* 所有行统一撑到「最宽一行」的宽度，行尾浮层才能稳定吸附在同一列 */
+.sidebar-tree { width: max-content; min-width: 100%; }
 .group-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .7px; padding: 10px 8px 4px; }
 .group-label { display: flex; align-items: center; gap: 3px; width: 100%; background: none; border: 0; cursor: pointer; text-align: left; font-family: inherit; }
 .group-label .group-count { margin-left: auto; letter-spacing: 0; text-transform: none; }
@@ -96,9 +100,6 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .tree-node:hover { background: var(--bg-hover); color: var(--text-primary); }
 .tree-node.active { background: var(--bg-active); color: var(--text-primary); }
 .tree-node .node-label { flex: 1; overflow: visible; white-space: nowrap; font-size: 12px; }
-/* 连接树不截断文字：整行按内容撑宽，由 sidebar-body 横向滚动查看完整名称 */
-.sidebar-body .conn-row,
-.sidebar-body .tree-node { width: max-content; min-width: 100%; }
 /* 行尾数字与操作按钮吸附在可视区右侧，长表名从它们下面滚过 */
 .node-tail {
   position: sticky; right: 0; z-index: 1;
@@ -107,6 +108,8 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 }
 .tree-node:hover > .node-tail { background: var(--bg-hover); }
 .tree-node.active > .node-tail { background: var(--bg-active); }
+.tree-count, .group-count { position: sticky; right: 0; z-index: 1; background: var(--bg-rail); }
+.tree-node:hover .tree-count { background: var(--bg-hover); }
 .tree-node .node-actions { display: none; gap: 2px; }
 .tree-node:hover .node-actions { display: flex; }
 .node-actions .icon-btn { width: 20px; height: 20px; }
@@ -288,7 +291,16 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .designer { display: flex; flex-direction: column; min-height: 0; }
 .designer-toolbar {
   display: flex; align-items: center; gap: 2px; flex-wrap: wrap;
-  min-height: 40px; padding: 5px 8px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-panel);
+  min-height: 40px; padding: 5px 8px; border-bottom: 1px solid var(--border-panel); background: var(--bg-panel);
+  container: designer-bar / inline-size;
+}
+/* 宽度不够时表设计操作只留图标，文字靠 title 提示，避免整条工具栏折成两行 */
+@container designer-bar (max-width: 840px) {
+  .designer-toolbar .btn-text { display: none; }
+}
+@container designer-bar (max-width: 560px) {
+  .designer-toolbar .designer-tabname > span { display: none; }
+  .designer-toolbar .designer-tabname .input { width: 110px !important; }
 }
 .designer-btn {
   display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 9px;
@@ -302,16 +314,15 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .designer-sep { width: 1px; height: 20px; background: var(--border-subtle); margin: 0 6px; }
 .designer-tabname { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); }
 .designer-hint { font-size: 11px; color: var(--warning); }
-.designer-tabs { display: flex; gap: 1px; padding: 0 8px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-app); }
+.designer-tabs { display: flex; gap: 2px; padding: 0 8px; border-bottom: 1px solid var(--border-panel); background: var(--bg-app); }
 .designer-tabs button {
-  position: relative; top: 1px; padding: 6px 15px; border: 1px solid transparent; border-bottom: none;
-  border-radius: var(--radius-md) var(--radius-md) 0 0; background: transparent;
-  color: var(--text-muted); font-size: 11.5px;
+  padding: 7px 14px; border: none; border-bottom: 2px solid transparent; border-radius: 0;
+  background: transparent; color: var(--text-muted); font-size: 11.5px;
 }
-.designer-tabs button:hover { color: var(--text-primary); }
+.designer-tabs button:hover { color: var(--text-primary); background: var(--bg-hover); }
 .designer-tabs button.active {
-  background: var(--bg-panel); border-color: var(--border-subtle);
-  color: var(--text-primary); font-weight: 600; box-shadow: 0 1px 0 var(--bg-panel);
+  background: transparent; border-bottom-color: var(--accent);
+  color: var(--text-primary); font-weight: 600;
 }
 .designer-error { margin: 8px 10px 0; }
 .designer-grid-wrap { flex: 1; min-height: 0; overflow: auto; background: var(--bg-panel); }
@@ -320,6 +331,7 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
   position: sticky; top: 0; z-index: 1; text-align: left;
   background: var(--bg-elevated); color: var(--text-muted); font-weight: 600; font-size: 10.5px;
   padding: 6px 8px; border-bottom: 1px solid var(--border-subtle); border-right: 1px solid var(--border-subtle);
+  white-space: nowrap;
 }
 .designer-grid th:last-child { border-right: none; }
 .designer-grid td { padding: 2px 4px; border-bottom: 1px solid var(--border-subtle); border-right: 1px solid var(--border-subtle); }
@@ -331,17 +343,20 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 }
 .designer-grid td input:hover:not(:disabled), .designer-grid td select:hover { border-color: var(--border-subtle); }
 .designer-grid td input:focus, .designer-grid td select:focus { border-color: var(--accent); background: var(--bg-app); }
-/* 选中行上的输入框自带底色，文字不能再沿用行内的 on-solid，否则黑字黑底 / 白字白底 */
-.designer-grid tr.selected td input:focus,
-.designer-grid tr.selected td select:focus { background: var(--bg-elevated); color: var(--text-primary); border-color: var(--on-solid); }
-.designer-grid .type-cell { display: flex; align-items: center; }
-.designer-grid .type-cell input { flex: 1; width: auto; min-width: 0; }
-.designer-grid .type-cell .type-pick { flex: 0 0 16px; width: 16px; height: 18px; color: var(--text-muted); }
-.designer-grid tr.selected .type-cell .type-pick { color: var(--on-solid); }
-.designer-grid tr.selected .type-cell .type-pick:hover { background: color-mix(in srgb, var(--on-solid) 16%, transparent); color: var(--on-solid); }
-.designer-grid tr.selected td { background: var(--accent); color: var(--on-solid); }
-.designer-grid tr.selected td input, .designer-grid tr.selected td select { color: var(--on-solid); }
-.designer-grid tr.selected .col-mark { color: var(--on-solid); }
+.designer-grid tbody tr:hover td { background: var(--bg-hover); }
+/* 选中行用淡色底 + 左侧色条，避免整行高饱和色压过表格内容 */
+.designer-grid tr.selected td,
+.designer-grid tr.selected:hover td { background: color-mix(in srgb, var(--accent) 14%, var(--bg-panel)); color: var(--text-primary); }
+.designer-grid tr.selected td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+.designer-grid tr.selected .col-mark { color: var(--accent); }
+.designer-grid .type-cell { position: relative; }
+.designer-grid .type-cell input { flex: 1; width: auto; min-width: 0; padding-right: 20px; text-overflow: ellipsis; }
+.designer-grid .type-cell .type-pick {
+  position: absolute; right: 1px; top: 50%; transform: translateY(-50%);
+  width: 18px; height: 20px; color: var(--text-muted);
+}
+.designer-grid tr.selected .type-cell .type-pick { color: var(--text-muted); }
+.designer-grid tr.selected .type-cell .type-pick:hover { background: var(--bg-hover); color: var(--text-primary); }
 .designer-grid tr.removed { opacity: .45; text-decoration: line-through; }
 .designer-grid .cell-center { text-align: center; }
 .designer-grid .cell-center input[type='checkbox'] { width: auto; accent-color: var(--accent); }
@@ -353,20 +368,27 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 .options-grid td.option-label { width: 200px; padding: 4px 12px 4px 8px; text-align: right; color: var(--text-muted); }
 .options-grid td input { max-width: 460px; }
 .designer-detail {
-  display: flex; gap: 16px; align-items: flex-start; flex: 0 0 auto;
-  border-top: 1px solid var(--border-subtle); background: var(--bg-panel); padding: 10px 12px 12px;
+  display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 10px 16px; align-items: center; flex: 0 0 auto;
+  border-top: 1px solid var(--border-panel); background: var(--bg-rail); padding: 10px 12px 12px;
 }
-.designer-detail-title { width: 150px; flex: 0 0 150px; font-size: 11.5px; font-weight: 600; color: var(--text-primary); }
-.designer-detail-body { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; flex: 1; min-width: 0; }
+.designer-detail-title {
+  width: auto; flex: none; font-size: 11.5px; font-weight: 600; color: var(--text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.designer-detail-body { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; min-width: 0; }
 .designer-form-row { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-muted); }
-.designer-form-row span { min-width: 44px; text-align: right; }
+.designer-form-row span { min-width: 56px; text-align: right; }
 .designer-form-row .input { width: 220px; }
 .designer-form-row.wide { display: flex; align-items: flex-start; }
 .designer-form-row.wide span { padding-top: 5px; }
 .designer-form-row.wide .input { width: min(620px, 100%); }
 .designer-check { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-secondary); }
-.designer-summary { font-size: 11px; color: var(--text-muted); }
-.designer-summary code { font-family: var(--font-mono); color: var(--accent); }
+.designer-summary {
+  flex: 1 0 100%; min-width: 0; display: flex; align-items: baseline; gap: 8px;
+  font-size: 11px; color: var(--text-muted);
+}
+.designer-summary > span:first-child { min-width: 56px; text-align: right; }
+.designer-summary code { font-family: var(--font-mono); color: var(--accent); white-space: normal; word-break: break-all; }
 .designer-comments { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; }
 .designer-sql { padding: 10px 12px; }
 .designer-sql .ddl-box { max-height: none; }

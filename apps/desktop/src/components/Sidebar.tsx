@@ -513,6 +513,7 @@ export function Sidebar() {
         </div>
       </div>
       <div className="sidebar-body">
+        <div className="sidebar-tree">
         {!connections.length ? (
           <div className="empty-state" style={{ padding: 24 }}>
             <div>
@@ -906,6 +907,7 @@ export function Sidebar() {
           );
         })}
         {connections.length && !filtered.length ? <div className="muted" style={{ padding: 14, fontSize: 11.5 }}>没有匹配的连接或表</div> : null}
+        </div>
       </div>
       <div className="sidebar-foot">
         <button className="btn" data-testid="sidebar-new-connection" style={{ flex: 1 }} onClick={() => openConnectionEditor('new')}>
