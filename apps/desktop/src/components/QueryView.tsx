@@ -94,6 +94,8 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const canLineProtocol = conn ? writesLineProtocol(conn.engine) : false;
   const canTransaction = conn ? supportsTransactions(conn.engine) : false;
   const [txSession, setTxSession] = useState<string | null>(null);
+  const [queryLimit, setQueryLimit] = useState(settings.defaultLimit || 100);
+  const limitOptions = [...new Set([settings.defaultLimit || 100, 100, 500, 1000, 5000])].sort((a, b) => a - b);
   const [vectorOpen, setVectorOpen] = useState(false);
   const [writeOpen, setWriteOpen] = useState(false);
   const [keyDialog, setKeyDialog] = useState<string | null>(null);
@@ -256,7 +258,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
         connectionId: tab.connectionId,
         database: tab.database,
         sql: text,
-        limit: settings.defaultLimit,
+        limit: queryLimit,
         sessionId: txSession ?? undefined,
       });
       setBatch(result);
@@ -546,6 +548,16 @@ ${text}
           {databases.map((database) => <option key={database} value={database}>{database}</option>)}
         </select>
         <div className="spacer" />
+        <select
+          className="select"
+          style={{ width: 96 }}
+          value={String(queryLimit)}
+          onChange={(event) => setQueryLimit(Number(event.target.value))}
+          title="本次查询的行数上限"
+          data-testid="query-limit"
+        >
+          {limitOptions.map((value) => <option key={value} value={value}>{value} 行</option>)}
+        </select>
         <button className="btn primary small" onClick={() => void run()} disabled={running} data-testid="query-run">
           {running ? <Spinner /> : <Play size={12} />} {t('run')}
         </button>

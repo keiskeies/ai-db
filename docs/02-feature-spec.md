@@ -9,7 +9,7 @@
 | 连接管理 | Connection | ✅ | 11 种关系型（含达梦 DM8、DuckDB、TimescaleDB）+ TDengine/InfluxDB + MongoDB + Redis + Cassandra/ScyllaDB + Neo4j/Memgraph/FalkorDB/ArangoDB + Qdrant/Milvus/Weaviate + Elasticsearch/OpenSearch + 15 种国产协议别名；颜色、只读、SSH 隧道、测试连接 |
 | 对象浏览器 | 导航窗格 | ✅ | 库→表/视图→列/索引/外键；搜索、右键、刷新、懒加载 |
 | 数据网格 | 表数据查看器 | ✅ | 分页/单列与多列排序/过滤/编辑/表单逐行编辑/增删行/复制/导出/打印预览/列显示管理；虚拟滚动 |
-| SQL 编辑器 | 查询编辑器 | ✅ | 多标签、高亮、执行选区、多结果集、历史、EXPLAIN、格式化 |
+| SQL 编辑器 | 查询编辑器 | ✅ | 多标签、高亮、执行选区、行数上限（100/500/1000/5000）、多结果集、历史、EXPLAIN、格式化 |
 | 表设计器 | 设计表 | ✅ | 可视化列/索引编辑，DDL 预览后执行；外键查看 |
 | 导入导出 | 导入/导出向导 | ✅（导入 CSV/JSON/XML/XLSX；导出 CSV/JSON/SQL/XML） | 映射预览；移动端仅导出分享 |
 | 备份/还原 | 备份 | ✅ | 逻辑 dump、列表、恢复、定时备份；MySQL/PG 基础 dump |

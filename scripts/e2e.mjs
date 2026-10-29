@@ -1364,6 +1364,16 @@ if (MYSQL_TX_PORT) {
   const statementHeader = await page.locator('[data-testid="query-result-grid"] thead').innerText();
   check('Ctrl+Shift+Enter runs the statement under the cursor', statementHeader.includes('b') && !statementHeader.includes('a'), statementHeader.replace(/\s+/g, ' ').slice(0, 40));
 
+  await page.selectOption('[data-testid="query-limit"]', '100');
+  await page.fill('.cm-content', 'WITH RECURSIVE seq AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM seq WHERE n < 150) SELECT n FROM seq');
+  await page.locator('[data-testid="query-run"]').last().click();
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 100, null, { timeout: 15000 });
+  check('query row limit caps at 100', true);
+  await page.selectOption('[data-testid="query-limit"]', '500');
+  await page.locator('[data-testid="query-run"]').last().click();
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 150, null, { timeout: 15000 });
+  check('query row limit can be raised to 500', true);
+
   const downloadPromise = page.waitForEvent('download', { timeout: 10000 }).catch(() => null);
   await page.keyboard.press('Control+S');
   const sqlDownload = await downloadPromise;
