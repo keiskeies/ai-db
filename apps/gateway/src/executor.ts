@@ -894,7 +894,7 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
       case 'export_result': {
         const conn = this.requireConnection(call, ctx);
         const database = this.databaseOf(call, conn);
-        const format = (['csv', 'json', 'sql', 'xml'].includes(String(a.format)) ? String(a.format) : 'csv') as 'csv' | 'json' | 'sql' | 'xml';
+        const format = (['csv', 'json', 'sql', 'xml', 'xlsx'].includes(String(a.format)) ? String(a.format) : 'csv') as 'csv' | 'json' | 'sql' | 'xml' | 'xlsx';
         assertExportable(conn.engine, format);
         const limit = Math.min(200000, Math.max(1, Number(a.limit) || 10000));
         let sql: string;

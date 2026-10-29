@@ -182,6 +182,9 @@ test('row CRUD, DDL, export and import', async () => {
   assert.ok(existsSync(exported.body.file.path));
   assert.equal(exported.body.file.rows, 1);
 
+  const toolList = await api<{ tools: Array<{ name: string; inputSchema: { properties?: { format?: { enum?: string[] } } } }> }>('/agent/tools');
+  assert.ok(toolList.body.tools.find((tool) => tool.name === 'export_result')?.inputSchema.properties?.format?.enum?.includes('xlsx'));
+
   const xlsxExport = await api<{ file: { path: string; bytes: number } }>('/export', {
     method: 'POST',
     body: JSON.stringify({ connectionId: demo.id, table: 'it_items', format: 'xlsx' }),

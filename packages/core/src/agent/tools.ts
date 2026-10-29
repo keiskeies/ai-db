@@ -492,7 +492,7 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: 'export_result',
     description:
-      'Export a query result to a CSV, JSON, XML or SQL INSERT file in the exports directory. SQL connections may pass table; non-SQL connections (MongoDB, Redis, graph, vector, search) must pass the same statement text used in the query window, and SQL INSERT output is refused there.',
+      'Export a query result to a CSV, JSON, XML, XLSX or SQL INSERT file in the exports directory. SQL connections may pass table; non-SQL connections (MongoDB, Redis, graph, vector, search) must pass the same statement text used in the query window, and SQL INSERT output is refused there.',
     risk: 'write',
     inputSchema: {
       type: 'object',
@@ -503,7 +503,7 @@ export const TOOLS: ToolDefinition[] = [
         ...databaseProp,
         sql: { type: 'string' },
         table: { type: 'string' },
-        format: { type: 'string', enum: ['csv', 'json', 'sql', 'xml'] },
+        format: { type: 'string', enum: ['csv', 'json', 'sql', 'xml', 'xlsx'] },
         limit: { type: 'integer', minimum: 1, maximum: 200000 },
       },
     },
