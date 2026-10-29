@@ -49,6 +49,7 @@ function pointsToResult(
   withScore: boolean,
   started: number,
   statement: string,
+  truncated = false,
 ): QueryResult {
   const payloads = payloadColumns(points);
   const columns: { name: string; type?: string; kind?: 'scalar' | 'json' }[] = [
@@ -66,6 +67,7 @@ function pointsToResult(
     rows,
     rowCount: rows.length,
     durationMs: Date.now() - started,
+    truncated,
     statement,
     resultKind: 'vectors',
   };
@@ -192,7 +194,10 @@ export class QdrantDriver implements VectorQueryDriver, DocumentWriteDriver, Obj
   async vectorSearch(query: VectorQuery, opts: RunOptions = {}): Promise<QueryResult> {
     if (!query.collection) throw new DbError('collection 不能为空', { code: 'VECTOR_COLLECTION' });
     const started = Date.now();
-    const topK = Math.max(1, Math.min(opts.maxRows && opts.maxRows > 0 ? opts.maxRows : query.topK, 1000));
+    // 查询自带的 topK 优先，maxRows 只是服务端上限；否则 /query 的默认 maxRows 会把 topK=1 放大成 1000。
+    const requested = Number(query.topK) > 0 ? Number(query.topK) : 10;
+    const cap = opts.maxRows && opts.maxRows > 0 ? Math.min(opts.maxRows, 1000) : 1000;
+    const topK = Math.max(1, Math.min(requested, cap));
     const scroll = query.op === 'scroll' || (!query.vector?.length && !query.text);
     const path = `/collections/${encodeURIComponent(query.collection)}/points/${scroll ? 'scroll' : 'search'}`;
     const body: Record<string, unknown> = { limit: topK, with_payload: true, with_vector: false };
@@ -205,7 +210,9 @@ export class QdrantDriver implements VectorQueryDriver, DocumentWriteDriver, Obj
     }
     const response = await this.request<any>(path, { method: 'POST', body: JSON.stringify(body) }, opts.timeoutMs ?? 30000);
     const points = (scroll ? response.result?.points : response.result) ?? [];
-    return pointsToResult(points, !scroll, started, JSON.stringify(query));
+    // scroll 的 next_page_offset 非空说明还有未返回的点；search 接口不提供剩余量，只能如实置 false。
+    const truncated = scroll && response.result?.next_page_offset != null;
+    return pointsToResult(points, !scroll, started, JSON.stringify(query), truncated);
   }
 
   async run(sql: string, opts: RunOptions = {}): Promise<QueryResult> {

@@ -105,7 +105,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 ### Qdrant / Milvus / Weaviate
 
 - 对象树：collection/class（Qdrant 采样 payload 字段；Milvus 读取 field schema；Weaviate 读取 properties）。
-- 查询：JSON，`op = scroll` 浏览；提供 `vector` 或 `text` 时执行相似度检索；Qdrant 支持命名向量 `field`。
+- 查询：JSON，`op = scroll` 浏览；提供 `vector` 或 `text` 时执行相似度检索；Qdrant 支持命名向量 `field`。查询里的 `topK` 是实际取回条数（缺省 10），服务端的 `maxRows` 只作上限，不会被默认值放大；Qdrant scroll 返回的 `next_page_offset` 非空时结果标记为截断，查询结果标签显示「结果已截断」。
 - 结果：id、score 与 payload/entity/properties 字段，`resultKind = 'vectors'`。
 - 文本检索：`text` 由网关调用 Embedding Provider 转成向量；未配置时可直接传 `vector`。
 - 写入：`upsert_document` 单条/批量、`import_documents` CSV 批量导入（id/vector 列可指定）、`delete_documents` 按 id 列表删除。

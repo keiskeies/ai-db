@@ -39,6 +39,7 @@ test('Qdrant driver contract', { skip: !QDRANT_PORT }, async () => {
 
   const scroll = await driver.executeQuery({ language: 'vector', collection: 'aidb_test', op: 'scroll', topK: 10 });
   assert.equal(scroll.rowCount, 2);
+  assert.equal(scroll.truncated, false);
   assert.equal(scroll.resultKind, 'vectors');
   assert.deepEqual(scroll.columns.map((column) => column.name).slice(0, 2), ['id', 'name']);
 
@@ -48,6 +49,11 @@ test('Qdrant driver contract', { skip: !QDRANT_PORT }, async () => {
 
   const parsed = await driver.run(JSON.stringify({ collection: 'aidb_test', op: 'scroll', topK: 1 }));
   assert.equal(parsed.rowCount, 1);
+  assert.equal(parsed.truncated, true);
+  // /query 会带 maxRows；查询自带的 topK 不应被 maxRows 覆盖
+  const capped = await driver.run(JSON.stringify({ collection: 'aidb_test', op: 'scroll', topK: 1 }), { maxRows: 1000 });
+  assert.equal(capped.rowCount, 1);
+  assert.equal(capped.truncated, true);
 
   const empty = await driver.executeQuery({ language: 'vector', collection: 'aidb_test', topK: 2 });
   assert.equal(empty.rowCount, 2);

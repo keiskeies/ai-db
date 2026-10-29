@@ -778,6 +778,21 @@ if (QDRANT_PORT) {
   const qdrantRows = await page.locator('[data-testid="query-result-grid"] tbody tr').count();
   check('Qdrant scroll returns points', qdrantRows === 2, `${qdrantRows} rows`);
 
+  // 截断提示：topK 小于实际条数时结果标签旁应出现「结果已截断」
+  await page.fill('.cm-content', '{"collection":"aidb_e2e","op":"scroll","topK":1}');
+  await page.locator('[data-testid="query-run"]').last().click();
+  await page.waitForSelector('[data-testid="query-truncated"]', { timeout: 20000 });
+  const qdrantLimited = await page.locator('[data-testid="query-result-grid"] tbody tr').count();
+  check('Qdrant honours query topK and flags truncation', qdrantLimited === 1, `${qdrantLimited} rows`);
+  await page.fill('.cm-content', '{"collection":"aidb_e2e","op":"scroll","topK":20}');
+  await page.locator('[data-testid="query-run"]').last().click();
+  await page.waitForFunction(
+    () => !document.querySelector('[data-testid="query-truncated"]')
+      && document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 2,
+    null,
+    { timeout: 20000 },
+  );
+
   await page.click('[data-testid="open-vector-search"]');
   await page.waitForSelector('[data-testid="vector-search-run"]', { timeout: 10000 });
   await page.fill('[data-testid="vector-search-vector"]', '[1, 0, 0]');

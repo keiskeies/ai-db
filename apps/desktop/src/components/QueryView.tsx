@@ -669,6 +669,7 @@ ${text}
               <Bookmark size={11} /> 片段
             </button>
             <div className="spacer" />
+            {set?.truncated ? <span className="badge write" data-testid="query-truncated">结果已截断</span> : null}
             {batch ? <span className="muted">{formatDuration(batch.durationMs)}</span> : null}
           </div>
 
