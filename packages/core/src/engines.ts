@@ -306,7 +306,7 @@ export const ENGINES: EngineMeta[] = [
     supportsSsh: true,
     supportsSsl: true,
     description: '原生图数据库，使用 Cypher 查询',
-    notes: '对象树展示节点标签与关系类型；图结果当前以表格/JSON 展示',
+    notes: '对象树展示节点标签与关系类型；节点/关系/路径结果自动切换到交互式图视图',
     color: '#22C55E',
   },
   {
@@ -576,7 +576,7 @@ export const ENGINES: EngineMeta[] = [
     supportsSsh: true,
     supportsSsl: true,
     description: '时序数据库（InfluxDB 3 SQL / HTTP）',
-    notes: 'InfluxDB 3 通过 /api/v3/query_sql 走 DataFusion SQL：只读查询与 EXPLAIN，写入走行协议 API',
+    notes: 'InfluxDB 3 通过 /api/v3/query_sql 走 DataFusion SQL：只读查询与 EXPLAIN；写入走工具栏「写入行协议」或 Agent 的 write_line_protocol',
     color: '#22D3EE',
   },
   {
