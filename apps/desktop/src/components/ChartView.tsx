@@ -15,6 +15,8 @@ export interface ChartSpec {
   extraSeries?: Array<{ name: string; values: number[] }>;
   /** 柱状图多系列时按列堆叠（正负分开累计） */
   stacked?: boolean;
+  /** 双轴：仅一个附加列时，它使用右侧独立刻度并以折线绘制 */
+  dualAxis?: boolean;
   /** forecast_chart 的外推段：虚线 + 半透明区间带，接在 series 之后 */
   forecast?: Array<{ label: string; value: number; lower: number; upper: number }>;
   /** forecast_chart 的方法说明，必须原样展示给用户 */
@@ -194,6 +196,7 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
   const extras = (chart.extraSeries ?? []).filter((extra) => extra.values.length === history.length);
   const multi = extras.length > 0;
   const stacked = type === 'bar' && multi && chart.stacked === true;
+  const dual = multi && chart.dualAxis === true && extras.length === 1 && !stacked;
   const seriesList = [
     { name: chart.yLabel, values: history.map((point) => point.value), color: '#45c8c3' },
     ...extras.map((extra, index) => ({ name: extra.name, values: extra.values, color: COLORS[(index + 1) % COLORS.length] })),
@@ -216,13 +219,15 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
     : maxHeight !== undefined
       ? Math.max(140, Math.min(350, maxHeight))
       : Math.max(140, Math.min(chartHeightCap(), naturalHeight));
-  const pad = { left: 42, right: 12, top: 12, bottom: 28 };
+  const pad = { left: 42, right: dual ? 44 : 12, top: 12, bottom: 28 };
   const innerW = width - pad.left - pad.right;
   const innerH = height - pad.top - pad.bottom;
   const band = innerW / all.length;
 
   const values = all.map((point) => point.value);
-  if (stacked) {
+  if (dual) {
+    // 主列独立缩放，附加列走右轴
+  } else if (stacked) {
     for (let index = 0; index < history.length; index += 1) {
       let positive = 0;
       let negative = 0;
@@ -233,7 +238,7 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
       }
       values.push(positive, negative);
     }
-  } else {
+  } else if (!dual) {
     for (const entry of seriesList.slice(1)) values.push(...entry.values);
   }
   if (forecast.length) {
@@ -244,6 +249,11 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
   const lo = Math.min(...values, 0);
   const span = hi - lo || 1;
   const y = (value: number) => pad.top + innerH - ((value - lo) / span) * innerH;
+  const secondary = dual ? seriesList[1].values : [];
+  const hi2 = Math.max(...secondary, 1);
+  const lo2 = Math.min(...secondary, 0);
+  const span2 = hi2 - lo2 || 1;
+  const y2 = (value: number) => pad.top + innerH - ((value - lo2) / span2) * innerH;
   const cx = (index: number) => pad.left + band * (index + 0.5);
 
   const linePath = history.map((point, index) => `${index === 0 ? 'M' : 'L'} ${cx(index)} ${y(point.value)}`).join(' ');
@@ -277,6 +287,7 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
       aria-label={chart.title}
       data-testid="chart-svg"
       data-stacked={stacked ? 'true' : undefined}
+      data-dual={dual ? 'true' : undefined}
     >
       <defs>
         <linearGradient id={`area-${id}`} x1="0" y1="0" x2="0" y2="1">
@@ -296,7 +307,7 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
         );
       })}
       {lo < 0 ? <line x1={pad.left} x2={width - pad.right} y1={y(0)} y2={y(0)} className="chart-zero" /> : null}
-      {type === 'bar' && !multi
+      {type === 'bar' && (!multi || dual)
         ? history.map((point, index) => {
             const top = y(Math.max(point.value, 0));
             const bottom = y(Math.min(point.value, 0));
@@ -319,7 +330,7 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
             );
           })
         : null}
-      {type === 'bar' && multi && !stacked
+      {type === 'bar' && multi && !stacked && !dual
         ? history.map((point, index) => {
             const groupWidth = Math.min(band * 0.82, 96);
             const barWidth = groupWidth / seriesList.length;
@@ -403,6 +414,27 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
             </circle>
           ))}
         </>
+      ) : null}
+      {dual ? (
+        <g data-testid="chart-axis-right">
+          {[0, 0.5, 1].map((ratio) => {
+            const gy = pad.top + innerH * ratio;
+            return (
+              <text key={`r-${ratio}`} x={width - pad.right + 6} y={gy + 3} textAnchor="start" className="chart-axis" fill={COLORS[1]}>
+                {formatTick(lo2 + span2 * (1 - ratio))}
+              </text>
+            );
+          })}
+        </g>
+      ) : null}
+      {dual ? (
+        <path
+          d={secondary.map((value, index) => `${index === 0 ? 'M' : 'L'} ${cx(index)} ${y2(value)}`).join(' ')}
+          fill="none"
+          stroke={COLORS[1]}
+          strokeWidth="2"
+          data-testid="chart-dual-line"
+        />
       ) : null}
       {all.map((point, index) =>
         index % labelStep === 0 ? (

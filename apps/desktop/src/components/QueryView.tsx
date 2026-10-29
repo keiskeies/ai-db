@@ -123,6 +123,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const [chartY, setChartY] = useState('');
   const [extraY, setExtraY] = useState<string[]>([]);
   const [chartStacked, setChartStacked] = useState(false);
+  const [chartDual, setChartDual] = useState(false);
   const [databases, setDatabases] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -525,8 +526,9 @@ ${text}
         ? extraColumns.map((column, offset) => ({ name: column.name, values: points.map((point) => point.extras[offset]) }))
         : undefined,
       stacked: chartStacked || undefined,
+      dualAxis: chartDual || undefined,
     };
-  }, [set, chartX, chartY, chartType, extraY, chartStacked]);
+  }, [set, chartX, chartY, chartType, extraY, chartStacked, chartDual]);
 
   const numericColumns = useMemo(() => {
     if (!set) return [];
@@ -851,12 +853,22 @@ ${text}
                       ))}
                     <button
                       className={`btn small ${chartStacked ? 'active' : ''}`}
-                      onClick={() => setChartStacked((value) => !value)}
+                      onClick={() => { setChartStacked((value) => !value); setChartDual(false); }}
                       title="柱状图按列堆叠"
                       data-testid="chart-stacked"
                     >
                       堆叠
                     </button>
+                    {extraY.filter((name) => name !== chartSpec.yLabel).length === 1 ? (
+                      <button
+                        className={`btn small ${chartDual ? 'active' : ''}`}
+                        onClick={() => { setChartDual((value) => !value); setChartStacked(false); }}
+                        title="附加列使用右侧独立刻度"
+                        data-testid="chart-dual"
+                      >
+                        双轴
+                      </button>
+                    ) : null}
                   </div>
                 ) : null}
                 <ChartView
