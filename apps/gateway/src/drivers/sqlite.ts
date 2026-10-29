@@ -7,6 +7,8 @@ import { DbError, toRowArray } from './types';
 export class SqliteDriver implements Driver {
   engine = 'sqlite' as const;
   private db: DatabaseSync;
+  /** 进行中的事务会话（SQLite 单连接，同一时刻只允许一个）。 */
+  private txSessions = new Set<string>();
 
   constructor(private filePath: string, readonly: boolean) {
     if (!existsSync(filePath)) throw new DbError(`SQLite 文件不存在：${filePath}`, { code: 'SQLITE_NOT_FOUND' });
@@ -148,7 +150,55 @@ export class SqliteDriver implements Driver {
     return this.filePath;
   }
 
+  /**
+   * SQLite 整个驱动只有一条连接，所以事务天然跨请求生效，不需要固定连接。
+   * 记录会话 id 只是为了校验顺序与避免嵌套事务。
+   */
+  async beginTransaction(sessionId: string, _database?: string): Promise<void> {
+    if (this.txSessions.has(sessionId)) throw new DbError('该会话已有进行中的事务', { code: 'TX_ACTIVE' });
+    if (this.txSessions.size) throw new DbError('已有进行中的事务，SQLite 同一时刻只允许一个', { code: 'TX_ACTIVE' });
+    try {
+      this.db.exec('BEGIN');
+    } catch (err: any) {
+      throw new DbError(err?.message ?? '开启事务失败', { code: 'TX_BEGIN' });
+    }
+    this.txSessions.add(sessionId);
+  }
+
+  async runInTransaction(sessionId: string, sql: string, params: unknown[], opts: RunOptions = {}): Promise<QueryResult> {
+    if (!this.txSessions.has(sessionId)) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
+    return this.runParams(sql, params, opts);
+  }
+
+  async commitTransaction(sessionId: string): Promise<void> {
+    this.finishTransaction(sessionId, 'COMMIT');
+  }
+
+  async rollbackTransaction(sessionId: string): Promise<void> {
+    this.finishTransaction(sessionId, 'ROLLBACK');
+  }
+
+  private finishTransaction(sessionId: string, command: 'COMMIT' | 'ROLLBACK'): void {
+    if (!this.txSessions.has(sessionId)) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
+    this.txSessions.delete(sessionId);
+    try {
+      this.db.exec(command);
+    } catch (err: any) {
+      throw new DbError(err?.message ?? `${command === 'COMMIT' ? '提交' : '回滚'}事务失败`, {
+        code: command === 'COMMIT' ? 'TX_COMMIT' : 'TX_ROLLBACK',
+      });
+    }
+  }
+
   async close(): Promise<void> {
+    // 连接关闭前先回滚，避免留下未提交的写事务。
+    for (const sessionId of [...this.txSessions]) {
+      try {
+        this.finishTransaction(sessionId, 'ROLLBACK');
+      } catch {
+        /* 关闭阶段忽略 */
+      }
+    }
     this.db.close();
   }
 }

@@ -216,7 +216,7 @@
 | 数据库内查找 | 打开全局数据库搜索 |
 | 命令列 / 运行 SQL 文件 | 打开查询窗口 |
 
-> 事务：MySQL、PostgreSQL、Oracle 与 SQL Server 连接支持 Navicat 式的跨请求事务（`POST /tx/begin` / `/tx/commit` / `/tx/rollback`，事务内的 `/query` 带上 `sessionId` 即走被固定的那条连接）；查询工具栏在绑定这四种引擎时显示「开始事务 / 提交 / 回滚」，界面流程由 E2E 覆盖（开始 → 写入 → 回滚 → 独立客户端确认只剩种子行）。其它引擎的单元格编辑仍即时提交。
+> 事务：MySQL、PostgreSQL、Oracle、SQL Server 与 SQLite 连接支持 Navicat 式的跨请求事务（`POST /tx/begin` / `/tx/commit` / `/tx/rollback`，事务内的 `/query` 带上 `sessionId` 即走被固定的那条连接）；查询工具栏在绑定这五种引擎时显示「开始事务 / 提交 / 回滚」，界面流程由 E2E 覆盖（开始 → 写入 → 回滚 → 独立客户端确认只剩种子行）。其它引擎的单元格编辑仍即时提交。
 
 ## 8.8 非关系型引擎（v0.4-dev）
 
