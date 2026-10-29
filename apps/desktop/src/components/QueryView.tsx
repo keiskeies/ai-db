@@ -242,8 +242,8 @@ export function QueryView({ tab }: { tab: QueryTab }) {
     }
   };
 
-  const run = async () => {
-    const text = currentSql().trim();
+  const run = async (override?: string) => {
+    const text = (override ?? currentSql()).trim();
     if (!text) {
       notify('warning', '请输入查询');
       return;
@@ -307,6 +307,45 @@ export function QueryView({ tab }: { tab: QueryTab }) {
     sqlRef.current = formatted;
     setSql(formatted);
   };
+
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      const mod = event.metaKey || event.ctrlKey;
+      if (!mod) return;
+      const key = event.key.toLowerCase();
+      if (key === 's') {
+        event.preventDefault();
+        saveSqlFile();
+      } else if (key === 'f' && event.shiftKey) {
+        event.preventDefault();
+        format();
+      } else if (key === 'enter' && event.shiftKey) {
+        event.preventDefault();
+        const view = viewRef.current;
+        if (!view) return;
+        const selection = view.state.selection.main;
+        if (selection.from !== selection.to) {
+          void run(view.state.sliceDoc(selection.from, selection.to));
+          return;
+        }
+        const doc = view.state.doc.toString();
+        const head = selection.head;
+        const start = doc.lastIndexOf(';', Math.max(0, head - 1)) + 1;
+        const semicolon = doc.indexOf(';', head);
+        const end = semicolon === -1 ? doc.length : semicolon;
+        let statement = doc.slice(start, end);
+        if (!statement.trim()) {
+          // 光标停在末尾分号之后时，向前找最后一条非空语句
+          let tail = Math.max(0, head - 1);
+          while (tail > 0 && /[\s;]/.test(doc[tail])) tail -= 1;
+          statement = doc.slice(doc.lastIndexOf(';', tail) + 1, tail + 1);
+        }
+        void run(statement);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  });
 
   const runScript = async () => {
     const text = currentSql().trim();

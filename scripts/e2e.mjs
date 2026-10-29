@@ -1315,6 +1315,23 @@ if (MYSQL_TX_PORT) {
   await page.click('[data-testid="history-favorite-only"]');
   await page.locator('.history-item').first().locator('[data-testid^="history-favorite-"]').click();
 
+  await page.fill('.cm-content', 'select 1 as n from aidb_tx.tx_ui');
+  await page.locator('.cm-content').click();
+  await page.keyboard.press('Control+Shift+F');
+  await page.waitForFunction(() => (document.querySelector('.cm-content')?.textContent ?? '').includes('SELECT 1 AS n'), null, { timeout: 5000 });
+  check('Ctrl+Shift+F formats SQL in the editor', true);
+
+  await page.fill('.cm-content', 'SELECT 1 AS a; SELECT 2 AS b;');
+  await page.keyboard.press('Control+Shift+Enter');
+  await page.waitForFunction(() => document.querySelector('[data-testid="query-result-grid"] thead')?.innerText.includes('b'), null, { timeout: 15000 });
+  const statementHeader = await page.locator('[data-testid="query-result-grid"] thead').innerText();
+  check('Ctrl+Shift+Enter runs the statement under the cursor', statementHeader.includes('b') && !statementHeader.includes('a'), statementHeader.replace(/\s+/g, ' ').slice(0, 40));
+
+  const downloadPromise = page.waitForEvent('download', { timeout: 10000 }).catch(() => null);
+  await page.keyboard.press('Control+S');
+  const sqlDownload = await downloadPromise;
+  check('Ctrl+S downloads the current SQL', Boolean(sqlDownload && sqlDownload.suggestedFilename().endsWith('.sql')), sqlDownload?.suggestedFilename() ?? 'no download');
+
   const verify = await mysqlTx.createConnection({
     host: '127.0.0.1',
     port: MYSQL_TX_PORT,

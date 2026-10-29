@@ -189,6 +189,10 @@ export default function App() {
       } else if (key === 't') {
         event.preventDefault();
         openQuery();
+      } else if (key === 'w') {
+        event.preventDefault();
+        const id = useApp.getState().activeTabId;
+        if (id !== 'welcome') useApp.getState().closeTab(id);
       } else if (key === ',') {
         event.preventDefault();
         setSettingsOpen(true);
