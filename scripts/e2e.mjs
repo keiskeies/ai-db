@@ -1293,6 +1293,16 @@ if (MYSQL_TX_PORT) {
   // 网格文本只用于展示证据；回滚是否真的生效以独立客户端查询为准（见下一条断言）。
   check('MySQL rollback query still returns the seeded rows', /1/.test(rollbackGrid), rollbackGrid.replace(/\s+/g, ' ').slice(0, 80));
 
+  await page.click('[data-testid="query-history"]');
+  await page.waitForSelector('[data-testid="history-search"]', { timeout: 5000 });
+  await page.fill('[data-testid="history-search"]', 'SELECT');
+  await page.waitForFunction(() => document.querySelectorAll('.history-item').length >= 1, null, { timeout: 8000 });
+  check('query history search filters matches', true);
+  await page.fill('[data-testid="history-search"]', 'zzz-no-hit');
+  await page.waitForFunction(() => document.querySelectorAll('.history-item').length === 0, null, { timeout: 8000 });
+  check('query history search can end empty', true);
+  await page.fill('[data-testid="history-search"]', '');
+
   const verify = await mysqlTx.createConnection({
     host: '127.0.0.1',
     port: MYSQL_TX_PORT,

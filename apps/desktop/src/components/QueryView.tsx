@@ -110,6 +110,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const [running, setRunning] = useState(false);
   const [editorPct, setEditorPct] = useState(38);
   const [history, setHistory] = useState<Array<{ id: string; sql: string; status: string; durationMs?: number; rowCount?: number; error?: string; createdAt: string }>>([]);
+  const [historyQuery, setHistoryQuery] = useState('');
   const [historyLoading, setHistoryLoading] = useState(false);
   const [chartType, setChartType] = useState<'bar' | 'line' | 'pie'>('bar');
   const [snippets, setSnippets] = useState<Array<{ id: string; name: string; sql: string; createdAt: string }>>([]);
@@ -437,6 +438,10 @@ ${text}
   };
 
   const set = batch?.sets[activeSet];
+  const historyMatched = history.filter((item) => {
+    const needle = historyQuery.trim().toLowerCase();
+    return !needle || item.sql.toLowerCase().includes(needle) || (item.error ?? '').toLowerCase().includes(needle);
+  });
   const messages = batch?.messages ?? [];
 
   const chartSpec: ChartSpec | null = useMemo(() => {
@@ -782,12 +787,21 @@ ${text}
 
           {resultTab === 'history' ? (
             <div className="history-panel">
+              <div style={{ padding: 8 }}>
+                <input
+                  className="input"
+                  placeholder="搜索历史（SQL / 错误）"
+                  value={historyQuery}
+                  onChange={(event) => setHistoryQuery(event.target.value)}
+                  data-testid="history-search"
+                />
+              </div>
               {historyLoading ? (
                 <div className="loading-inline" style={{ padding: 14 }}>
                   <Spinner /> {t('loading')}
                 </div>
-              ) : history.length ? (
-                history.map((item) => (
+              ) : historyMatched.length ? (
+                historyMatched.map((item) => (
                   <div key={item.id} className="history-item" onClick={() => applyHistory(item.sql)} title="点击插入编辑器">
                     <span className={`badge ${item.status === 'ok' ? 'read' : 'destructive'}`}>{item.status}</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -800,7 +814,7 @@ ${text}
                   </div>
                 ))
               ) : (
-                <div className="muted" style={{ padding: 14 }}>暂无历史</div>
+                <div className="muted" style={{ padding: 14 }}>{history.length ? '没有匹配的历史' : '暂无历史'}</div>
               )}
             </div>
           ) : null}
