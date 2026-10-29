@@ -295,6 +295,7 @@ export class Store {
     }
     // 连接不再要求填库名之后，会话必须自己记住选中的库，否则重开会话会悄悄跑回默认库
     this.ensureColumn('agent_sessions', 'database', 'TEXT');
+    this.ensureColumn('query_history', 'favorite', 'INTEGER DEFAULT 0');
     this.db.exec('PRAGMA user_version = 4');
   }
 
@@ -589,8 +590,13 @@ export class Store {
       durationMs: r.duration_ms ?? undefined,
       rowCount: r.row_count ?? undefined,
       error: r.error ?? undefined,
+      favorite: Number(r.favorite ?? 0) === 1,
       createdAt: r.created_at,
     }));
+  }
+
+  setHistoryFavorite(id: string, favorite: boolean): boolean {
+    return this.exec('UPDATE query_history SET favorite = ? WHERE id = ?', [favorite ? 1 : 0, id]).changes > 0;
   }
 
   clearHistory(): void {

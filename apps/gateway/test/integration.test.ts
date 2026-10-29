@@ -398,8 +398,17 @@ test('agent inspects schema, DDL approval, memory and audit', async () => {
 
   const audit = await api<{ entries: Array<{ actor: string; tool?: string }> }>('/audit?limit=50');
   assert.ok(audit.body.entries.some((e) => e.actor === 'agent' && e.tool === 'run_sql'));
-  const history = await api<{ items: unknown[] }>('/history');
+  const history = await api<{ items: Array<{ id: string; favorite?: boolean }> }>('/history');
   assert.ok(history.body.items.length > 0);
+  const historyId = history.body.items[0].id;
+  const favorited = await api<{ favorite: boolean }>(`/history/${historyId}/favorite`, { method: 'POST', body: JSON.stringify({ favorite: true }) });
+  assert.equal(favorited.status, 200);
+  assert.equal(favorited.body.favorite, true);
+  const afterFavorite = await api<{ items: Array<{ id: string; favorite?: boolean }> }>('/history');
+  assert.equal(afterFavorite.body.items.find((item) => item.id === historyId)?.favorite, true);
+  const missing = await api(`/history/not-a-real-id/favorite`, { method: 'POST', body: JSON.stringify({ favorite: true }) });
+  assert.equal(missing.status, 404);
+  await api(`/history/${historyId}/favorite`, { method: 'POST', body: JSON.stringify({ favorite: false }) });
 });
 
 test('agent runs concrete audit, chart and quality tools', async () => {

@@ -205,7 +205,8 @@ export interface QueryResult {
 | POST | `/export` | `{connectionId, sql|table, format, path?}` → `{path, bytes}` |
 | POST | `/import` | `{connectionId, table, csv, mapping, hasHeader, delimiter}` → 报告 |
 | GET/POST | `/backups` | 列表 / 创建备份 |
-| GET | `/history` | 查询历史（分页/搜索） |
+| GET | `/history` | 查询历史（分页/搜索，含 `favorite` 标记） |
+| POST | `/history/:id/favorite` | `{favorite: boolean}` 收藏 / 取消收藏 |
 | GET | `/audit` | 审计日志；`?format=csv` 导出 |
 | GET | `/snippets` · POST/PUT/DELETE | SQL 片段 |
 | GET | `/agent/tools` | 工具清单 + JSON Schema（UI 展示） |

@@ -1302,6 +1302,18 @@ if (MYSQL_TX_PORT) {
   await page.waitForFunction(() => document.querySelectorAll('.history-item').length === 0, null, { timeout: 8000 });
   check('query history search can end empty', true);
   await page.fill('[data-testid="history-search"]', '');
+  await page.locator('.history-item').first().locator('[data-testid^="history-favorite-"]').click();
+  await page.waitForFunction(() => document.querySelector('.history-item [data-testid^="history-favorite-"]')?.classList.contains('favorited'), null, { timeout: 8000 });
+  check('history entry can be favorited', true);
+  await page.click('[data-testid="history-favorite-only"]');
+  await page.waitForFunction(() => document.querySelectorAll('.history-item').length >= 1, null, { timeout: 8000 });
+  const favoriteFilterOk = await page.evaluate(() => {
+    const items = [...document.querySelectorAll('.history-item')];
+    return items.length > 0 && items.every((item) => item.querySelector('[data-testid^="history-favorite-"]')?.classList.contains('favorited'));
+  });
+  check('history favorite filter shows only starred entries', favoriteFilterOk);
+  await page.click('[data-testid="history-favorite-only"]');
+  await page.locator('.history-item').first().locator('[data-testid^="history-favorite-"]').click();
 
   const verify = await mysqlTx.createConnection({
     host: '127.0.0.1',

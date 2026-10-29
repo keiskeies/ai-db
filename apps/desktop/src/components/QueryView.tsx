@@ -5,7 +5,7 @@ import { EditorState, Prec } from '@codemirror/state';
 import { tags as t } from '@lezer/highlight';
 import { keymap } from '@codemirror/view';
 import { MSSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql as sqlLang } from '@codemirror/lang-sql';
-import { AlignLeft, BarChart3, Bookmark, Database, Download, FileDown, FilePlus, FileUp, History, ListChecks, Network, Play, Plus, Sparkles, Table2, TerminalSquare, Trash2, WandSparkles, Wrench } from 'lucide-react';
+import { AlignLeft, BarChart3, Bookmark, Database, Download, FileDown, FilePlus, FileUp, History, ListChecks, Network, Play, Plus, Sparkles, Star, Table2, TerminalSquare, Trash2, WandSparkles, Wrench } from 'lucide-react';
 import type { ConnectionConfig, QueryBatchResult } from '@aidb/core';
 import { engineMeta, editsRecords, supportsTransactions, writesDocuments, writesLineProtocol } from '@aidb/core';
 import { api } from '../lib/api';
@@ -109,8 +109,9 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [editorPct, setEditorPct] = useState(38);
-  const [history, setHistory] = useState<Array<{ id: string; sql: string; status: string; durationMs?: number; rowCount?: number; error?: string; createdAt: string }>>([]);
+  const [history, setHistory] = useState<Array<{ id: string; sql: string; status: string; durationMs?: number; rowCount?: number; error?: string; favorite?: boolean; createdAt: string }>>([]);
   const [historyQuery, setHistoryQuery] = useState('');
+  const [favoriteOnly, setFavoriteOnly] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [chartType, setChartType] = useState<'bar' | 'line' | 'pie'>('bar');
   const [snippets, setSnippets] = useState<Array<{ id: string; name: string; sql: string; createdAt: string }>>([]);
@@ -439,6 +440,7 @@ ${text}
 
   const set = batch?.sets[activeSet];
   const historyMatched = history.filter((item) => {
+    if (favoriteOnly && !item.favorite) return false;
     const needle = historyQuery.trim().toLowerCase();
     return !needle || item.sql.toLowerCase().includes(needle) || (item.error ?? '').toLowerCase().includes(needle);
   });
@@ -787,7 +789,7 @@ ${text}
 
           {resultTab === 'history' ? (
             <div className="history-panel">
-              <div style={{ padding: 8 }}>
+              <div style={{ padding: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
                 <input
                   className="input"
                   placeholder="搜索历史（SQL / 错误）"
@@ -795,6 +797,14 @@ ${text}
                   onChange={(event) => setHistoryQuery(event.target.value)}
                   data-testid="history-search"
                 />
+                <button
+                  className={`btn small ${favoriteOnly ? 'active' : ''}`}
+                  title="只看收藏"
+                  onClick={() => setFavoriteOnly((value) => !value)}
+                  data-testid="history-favorite-only"
+                >
+                  <Star size={12} fill={favoriteOnly ? 'currentColor' : 'none'} /> 收藏
+                </button>
               </div>
               {historyLoading ? (
                 <div className="loading-inline" style={{ padding: 14 }}>
@@ -811,6 +821,19 @@ ${text}
                     <span className="meta">
                       {item.rowCount ?? 0} 行 · {formatDuration(item.durationMs)}
                     </span>
+                    <button
+                      className={`icon-btn ${item.favorite ? 'favorited' : ''}`}
+                      title={item.favorite ? '取消收藏' : '收藏'}
+                      onClick={async (event) => {
+                        event.stopPropagation();
+                        const next = !item.favorite;
+                        await api.favoriteHistory(item.id, next);
+                        setHistory((prev) => prev.map((entry) => (entry.id === item.id ? { ...entry, favorite: next } : entry)));
+                      }}
+                      data-testid={`history-favorite-${item.id}`}
+                    >
+                      <Star size={12} fill={item.favorite ? 'currentColor' : 'none'} />
+                    </button>
                   </div>
                 ))
               ) : (

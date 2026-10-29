@@ -327,8 +327,9 @@ export const api = {
   history: (params: { connectionId?: string; search?: string; limit?: number } = {}) => {
     const q = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) if (value) q.set(key, String(value));
-    return request<{ items: Array<{ id: string; sql: string; status: string; durationMs?: number; rowCount?: number; error?: string; createdAt: string }> }>(`/history?${q.toString()}`);
+    return request<{ items: Array<{ id: string; sql: string; status: string; durationMs?: number; rowCount?: number; error?: string; favorite?: boolean; createdAt: string }> }>(`/history?${q.toString()}`);
   },
+  favoriteHistory: (id: string, favorite: boolean) => request<{ id: string; favorite: boolean }>(`/history/${id}/favorite`, { method: 'POST', body: JSON.stringify({ favorite }) }),
   clearHistory: () => request<void>('/history', { method: 'DELETE' }),
   backups: (connectionId?: string) => request<{ backups: BackupInfo[] }>(`/backups${connectionId ? `?connectionId=${connectionId}` : ''}`),
   createBackup: (body: { connectionId: string; database?: string; label?: string }) => request<{ backup: BackupInfo }>('/backups', { method: 'POST', body: JSON.stringify(body) }),

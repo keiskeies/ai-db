@@ -1674,6 +1674,18 @@ export function createApiRouter(deps: ApiDeps): Router {
     });
   });
 
+  router.post(
+    '/history/:id/favorite',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const favorite = Boolean(body.favorite);
+      if (!store.setHistoryFavorite(req.params.id, favorite)) {
+        throw Object.assign(new Error('历史记录不存在'), { code: 'HISTORY_NOT_FOUND', status: 404 });
+      }
+      res.json({ id: req.params.id, favorite });
+    }),
+  );
+
   router.delete('/history', (_req, res) => {
     store.clearHistory();
     res.status(204).end();

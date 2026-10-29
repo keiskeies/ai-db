@@ -261,6 +261,7 @@ export interface QueryHistoryItem {
   durationMs?: number;
   rowCount?: number;
   error?: string;
+  favorite?: boolean;
   createdAt: string;
 }
 
