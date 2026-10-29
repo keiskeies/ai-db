@@ -46,6 +46,23 @@ function columnIndex(ref: string): number {
   return index - 1;
 }
 
+function firstSheetPath(files: Map<string, Uint8Array>, textOf: (name: string) => string): string | undefined {
+  const parser = new DOMParser();
+  const workbook = parser.parseFromString(textOf('xl/workbook.xml') || '<workbook/>', 'application/xml');
+  const sheet = workbook.getElementsByTagName('sheet')[0];
+  const relId = sheet?.getAttribute('r:id') ?? sheet?.getAttribute('id');
+  if (relId) {
+    const rels = parser.parseFromString(textOf('xl/_rels/workbook.xml.rels') || '<Relationships/>', 'application/xml');
+    const rel = [...rels.getElementsByTagName('Relationship')].find((item) => item.getAttribute('Id') === relId);
+    const target = rel?.getAttribute('Target') ?? '';
+    const path = target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\.\//, '')}`;
+    if (files.has(path)) return path;
+  }
+  return [...files.keys()]
+    .filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(name))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))[0];
+}
+
 /** 读取第一个工作表的单元格，输出与 CSV 导入向导兼容的表头和行。 */
 export async function xlsxToCsv(buffer: ArrayBuffer): Promise<string> {
   const files = await unzip(buffer);
@@ -53,9 +70,7 @@ export async function xlsxToCsv(buffer: ArrayBuffer): Promise<string> {
     const data = files.get(name);
     return data ? new TextDecoder().decode(data) : '';
   };
-  const sheetName = [...files.keys()]
-    .filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(name))
-    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))[0];
+  const sheetName = firstSheetPath(files, textOf);
   if (!sheetName) throw new Error('xlsx 里没有工作表');
   const parser = new DOMParser();
   const sheet = parser.parseFromString(textOf(sheetName), 'application/xml');

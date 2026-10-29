@@ -19,7 +19,10 @@ const shots = join(root, 'docs', 'screenshots');
 function writeXlsx(path) {
   const files = {
     'xl/sharedStrings.xml': `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${['user_id', 'status', 'channel', 'total_cents', 'created_at', 'xlsx-e2e', 'paid', '2026-01-04T00:00:00.000Z'].map((t) => `<si><t>${t}</t></si>`).join('')}</sst>`,
-    'xl/worksheets/sheet1.xml': `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1">${['A', 'B', 'C', 'D', 'E'].map((c, i) => `<c r="${c}1" t="s"><v>${i}</v></c>`).join('')}</row><row r="2"><c r="A2"><v>5</v></c><c r="B2" t="s"><v>6</v></c><c r="C2" t="s"><v>5</v></c><c r="D2"><v>4500</v></c><c r="E2" t="s"><v>7</v></c></row></sheetData></worksheet>`,
+    'xl/workbook.xml': '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="2" r:id="rId2"/></sheets></workbook>',
+    'xl/_rels/workbook.xml.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>',
+    'xl/worksheets/sheet1.xml': '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>',
+    'xl/worksheets/sheet2.xml': `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1">${['A', 'B', 'C', 'D', 'E'].map((c, i) => `<c r="${c}1" t="s"><v>${i}</v></c>`).join('')}</row><row r="2"><c r="A2"><v>5</v></c><c r="B2" t="s"><v>6</v></c><c r="C2" t="s"><v>5</v></c><c r="D2"><v>4500</v></c><c r="E2" t="s"><v>7</v></c></row></sheetData></worksheet>`,
   };
   const parts = [];
   const central = [];
