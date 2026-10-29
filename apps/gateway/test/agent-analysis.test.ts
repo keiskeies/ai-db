@@ -157,3 +157,19 @@ test('both tools are read-only and land in the audit log', async () => {
   assert.equal(after[0].risk, 'read');
   assert.equal(after[0].actor, 'agent');
 });
+
+test('render_chart supports multi-series comparison', async () => {
+  const result = await run('render_chart', {
+    sql: 'SELECT status, COUNT(*) AS cnt, SUM(total_cents) AS gmv FROM orders GROUP BY status',
+    type: 'bar',
+    ys: ['gmv'],
+    stacked: true,
+  });
+  assert.equal(result.ok, true, result.error?.message);
+  const chart = (result.data as any).chart;
+  assert.equal(chart.series.length > 0, true);
+  assert.equal(chart.extraSeries?.length, 1, '附加列应进入 extraSeries');
+  assert.equal(chart.extraSeries[0].name, 'gmv');
+  assert.equal(chart.extraSeries[0].values.length, chart.series.length, '附加列必须与主序列等长');
+  assert.equal(chart.stacked, true);
+});

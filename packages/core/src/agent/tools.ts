@@ -725,6 +725,8 @@ export const TOOLS: ToolDefinition[] = [
         title: { type: 'string' },
         x: { type: 'string', description: 'Category / x-axis column name' },
         y: { type: 'string', description: 'Numeric / y-axis column name' },
+        ys: { type: 'array', items: { type: 'string' }, description: 'Additional numeric columns to compare alongside y' },
+        stacked: { type: 'boolean', description: 'Stack the series instead of grouping them (bar charts)' },
       },
     },
     summarize: (a) => `${a.title ?? '生成图表'}（${a.type}）`,

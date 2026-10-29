@@ -1036,6 +1036,8 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
           typeof a.title === 'string' ? a.title : undefined,
           typeof a.x === 'string' ? a.x : undefined,
           typeof a.y === 'string' ? a.y : undefined,
+          Array.isArray(a.ys) ? a.ys.filter((value: unknown): value is string => typeof value === 'string').slice(0, 4) : undefined,
+          a.stacked === true,
           started,
         );
       }
@@ -1284,7 +1286,7 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
     if (!x || !y || x === y) throw new DbError('无法确定 x/y 列，请显式传入');
     if (!names.includes(x)) throw new DbError(`结果集中没有列 ${x}（可用列：${names.join(', ')}）`);
     if (!names.includes(y)) throw new DbError(`结果集中没有列 ${y}（可用列：${names.join(', ')}）`);
-    return { sql, names, columns: set.columns, rows: set.rows, x, y, points: toSeries(objects, x, y) };
+    return { sql, names, columns: set.columns, rows: set.rows, x, y, objects, points: toSeries(objects, x, y) };
   }
 
   private async renderChart(
@@ -1295,10 +1297,26 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
     title: string | undefined,
     xName: string | undefined,
     yName: string | undefined,
+    extraNames: string[] | undefined,
+    stacked: boolean,
     started: number,
   ): Promise<ToolResult> {
-    const { sql, columns, rows, x, y, points } = await this.chartSeries(conn, database, sqlText, xName, yName);
-    const series = points.slice(0, 24).map((point) => ({ label: point.label || '—', value: point.value }));
+    const { sql, columns, rows, x, y, objects } = await this.chartSeries(conn, database, sqlText, xName, yName);
+    const usable = objects.filter((row) => {
+      const value = row[y];
+      if (value === null || value === undefined || value === '') return false;
+      return Number.isFinite(typeof value === 'number' ? value : Number(String(value).trim()));
+    }).slice(0, 24);
+    const series = toSeries(usable, x, y).map((point) => ({ label: point.label || '—', value: point.value }));
+    const extraSeries = (extraNames ?? [])
+      .filter((name) => name !== y && name !== x && columns.some((column) => column.name === name))
+      .map((name) => ({
+        name,
+        values: usable.map((row) => {
+          const value = Number(String(row[name] ?? '').trim());
+          return Number.isFinite(value) ? value : 0;
+        }),
+      }));
     const chart = {
       type,
       title: title ?? `${y} by ${x}`,
@@ -1306,6 +1324,8 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
       yLabel: y,
       sql,
       series,
+      ...(extraSeries.length ? { extraSeries } : {}),
+      ...(stacked && extraSeries.length ? { stacked: true } : {}),
     };
     return ok(started, `已生成${type === 'line' ? '折线' : type === 'pie' ? '饼' : '柱状'}图（${series.length} 个数据点）`, {
       chart,

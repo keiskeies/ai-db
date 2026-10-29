@@ -89,7 +89,7 @@ for (step = 0; step < maxSteps; step++) {
 | 18 | `memory_search` | read | 检索记忆 | `{ query, limit?, scope? }` |
 | 19 | `audit_database` | read | 数据库体检：缺主键、外键缺索引、重复索引、空表，返回可执行修复 SQL | `{ connectionId, database? }` |
 | 20 | `check_data_quality` | read | 表级数据质量：空值率、空串、区分度、重复主键 | `{ connectionId, table, columns? }` |
-| 21 | `render_chart` | read | 执行聚合 SQL 并在对话中渲染柱状/折线/饼图 | `{ connectionId, sql, type, title?, x?, y? }` |
+| 21 | `render_chart` | read | 执行聚合 SQL 并渲染柱状/折线/饼图；`ys` 可附加最多 4 个数值列做分组/堆叠对比 | `{ connectionId, sql, type, title?, x?, y?, ys?, stacked? }` |
 | 22 | `analyze_chart` | read | 执行聚合 SQL，在 Bridge 侧算好统计量（合计/均值/极值/TopN 占比/环比），模型只负责解读，不得自行重算 | `{ connectionId, sql, x?, y?, topN? }` |
 | 23 | `forecast_chart` | read | 时间序列外推：最小二乘或移动平均（按 \|r\| 自动选择），返回方法、斜率/窗口、拟合度、±1.28σ 粗略区间与原始序列；样本 <4 直接拒绝 | `{ connectionId, sql, x?, y?, periods?, method? }` |
 | 24 | `generate_data` | write | 按列语义/类型 + 外键生成并插入测试数据 | `{ connectionId, table, rows?, dryRun? }` |
