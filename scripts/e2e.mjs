@@ -1376,14 +1376,21 @@ if (MYSQL_TX_PORT) {
 
   await page.fill('.cm-content', 'WITH RECURSIVE seq AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM seq WHERE n < 500) SELECT n FROM seq');
   await page.locator('[data-testid="query-run"]').last().click();
-  await page.waitForSelector('[data-testid="grid-load-more"]', { timeout: 20000 });
-  const firstBatch = await page.locator('[data-testid^="grid-row-"]').count();
-  check('large results render in batches', firstBatch === 200, `${firstBatch} rows`);
-  await page.click('[data-testid="grid-load-more"]');
-  await page.waitForFunction(() => document.querySelectorAll('[data-testid^="grid-row-"]').length === 400, null, { timeout: 10000 });
-  await page.click('[data-testid="grid-load-more"]');
-  await page.waitForFunction(() => !document.querySelector('[data-testid="grid-load-more"]') && document.querySelectorAll('[data-testid^="grid-row-"]').length === 500, null, { timeout: 15000 });
-  check('load more grows the rendered window to all rows', true);
+  await page.waitForFunction(() => {
+    const count = document.querySelectorAll('[data-testid^="grid-row-"]').length;
+    return count > 0 && count < 100;
+  }, null, { timeout: 20000 });
+  const renderedWindow = await page.locator('[data-testid^="grid-row-"]').count();
+  check('large results render a window instead of all rows', renderedWindow < 100, `${renderedWindow} rows`);
+  await page.evaluate(() => {
+    let el = document.querySelector('[data-testid="query-result-grid"]');
+    while (el && el !== document.body) {
+      if (el.scrollHeight > el.clientHeight + 10) el.scrollTop = el.scrollHeight;
+      el = el.parentElement;
+    }
+  });
+  await page.waitForFunction(() => document.querySelector('[data-testid="grid-row-499"]') !== null, null, { timeout: 8000 });
+  check('scrolling to the end renders the last row', true);
 
   await page.selectOption('[data-testid="query-export-format"]', 'xlsx');
   const queryExportPromise = page.waitForResponse((res) => res.url().includes('/api/export') && (res.request().postData() ?? '').includes('"format":"xlsx"'), { timeout: 20000 }).catch(() => null);

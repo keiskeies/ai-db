@@ -55,15 +55,55 @@ export function DataGrid({
   testId = 'data-grid',
 }: DataGridProps) {
   const [edit, setEdit] = useState<EditState | null>(null);
-  const [renderLimit, setRenderLimit] = useState(200);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewHeight, setViewHeight] = useState(600);
+  const [rowHeight, setRowHeight] = useState(30);
+  const [headerHeight, setHeaderHeight] = useState(32);
   const inputRef = useRef<HTMLInputElement>(null);
   const visibleColumns = columns
     .map((col, index) => ({ col, index }))
     .filter(({ col }) => !hiddenColumns?.includes(col.name));
+  const rowCount = rows.length;
   useEffect(() => {
-    setRenderLimit(200);
+    const wrap = wrapRef.current;
+    if (wrap) wrap.scrollTop = 0;
+  }, [rowCount]);
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const sync = () => {
+      setScrollTop(wrap.scrollTop);
+      setViewHeight(wrap.clientHeight);
+      const first = wrap.querySelector('tbody tr[data-testid^="grid-row-"]') as HTMLElement | null;
+      const measuredRow = first?.offsetHeight ?? 0;
+      if (measuredRow >= 20) setRowHeight((prev) => (Math.abs(prev - measuredRow) > 0.5 ? measuredRow : prev));
+      const head = wrap.querySelector('thead') as HTMLElement | null;
+      const measuredHead = head?.offsetHeight ?? 0;
+      if (measuredHead > 0) setHeaderHeight((prev) => (Math.abs(prev - measuredHead) > 0.5 ? measuredHead : prev));
+    };
+    sync();
+    wrap.addEventListener('scroll', sync, { passive: true });
+    const observer = new ResizeObserver(sync);
+    observer.observe(wrap);
+    return () => {
+      wrap.removeEventListener('scroll', sync);
+      observer.disconnect();
+    };
   }, [rows]);
-  const renderedRows = rows.length > renderLimit ? rows.slice(0, renderLimit) : rows;
+  const windowed = rows.length > 200;
+  const overscan = 8;
+  const safeRowHeight = rowHeight >= 20 ? rowHeight : 27;
+  const visibleStart = windowed ? Math.min(rows.length, Math.max(0, Math.floor(Math.max(0, scrollTop - headerHeight) / safeRowHeight) - overscan)) : 0;
+  const visibleCount = windowed ? Math.ceil(viewHeight / safeRowHeight) + overscan * 2 : rows.length;
+  const visibleEnd = windowed ? Math.min(rows.length, visibleStart + visibleCount) : rows.length;
+  const renderedRows = rows.slice(visibleStart, visibleEnd);
+  const columnSpan = visibleColumns.length + 1 + (onToggleRow ? 1 : 0) + (onRowDelete ? 1 : 0);
+  const spacer = (height: number) => (
+    <tr className="grid-spacer">
+      <td colSpan={columnSpan} style={{ height, padding: 0, border: 0 }} />
+    </tr>
+  );
 
   const beginEdit = (row: number, col: number) => {
     if (!editable || !onCellEdit) return;
@@ -82,7 +122,7 @@ export function DataGrid({
   };
 
   return (
-    <div className={`grid-wrap ${textMode ? 'text-mode' : ''}`}>
+    <div className={`grid-wrap ${textMode ? 'text-mode' : ''}`} ref={wrapRef}>
       <table className="data-grid" data-testid={testId}>
         <thead>
           <tr>
@@ -129,7 +169,10 @@ export function DataGrid({
               {onRowDelete ? <td className="row-actions new-row" /> : null}
             </tr>
           ) : null}
-          {renderedRows.map((row, rowIndex) => (
+          {visibleStart > 0 ? spacer(visibleStart * safeRowHeight) : null}
+          {renderedRows.map((row, offset) => {
+            const rowIndex = visibleStart + offset;
+            return (
             <tr
               key={rowIndex}
               data-testid={`grid-row-${rowIndex}`}
@@ -197,16 +240,9 @@ export function DataGrid({
                 </td>
               ) : null}
             </tr>
-          ))}
-          {rows.length > renderedRows.length ? (
-            <tr className="grid-more">
-              <td colSpan={visibleColumns.length + 1 + (onToggleRow ? 1 : 0) + (onRowDelete ? 1 : 0)}>
-                <button className="btn small" onClick={() => setRenderLimit((value) => value + 200)} data-testid="grid-load-more">
-                  加载更多（剩余 {rows.length - renderedRows.length} 行）
-                </button>
-              </td>
-            </tr>
-          ) : null}
+            );
+          })}
+          {visibleEnd < rows.length ? spacer((rows.length - visibleEnd) * safeRowHeight) : null}
         </tbody>
       </table>
       {!rows.length ? <div className="empty-state" style={{ padding: 30 }}>没有数据</div> : null}
