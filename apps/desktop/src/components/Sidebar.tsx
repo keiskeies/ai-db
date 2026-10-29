@@ -70,6 +70,8 @@ export function Sidebar() {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const groupOrder = useApp((s) => s.groupOrder);
   const setGroupOrder = useApp((s) => s.setGroupOrder);
+  const connectionOrder = useApp((s) => s.connectionOrder);
+  const setConnectionOrder = useApp((s) => s.setConnectionOrder);
   const activeConnectionId = useApp((s) => s.activeConnectionId);
   const t = useApp((s) => s.t);
   const toggleConnection = useApp((s) => s.toggleConnection);
@@ -118,8 +120,14 @@ export function Sidebar() {
   }, [connections, query, schemas]);
 
   const grouped = useMemo(() => {
+    const orderIndex = new Map(connectionOrder.map((id, index) => [id, index]));
+    const ordered = [...filtered].sort((a, b) => {
+      const left = orderIndex.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+      const right = orderIndex.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+      return left === right ? 0 : left - right;
+    });
     const map = new Map<string, ConnectionConfig[]>();
-    for (const conn of filtered) {
+    for (const conn of ordered) {
       const key = conn.groupName || '默认';
       map.set(key, [...(map.get(key) ?? []), conn]);
     }
@@ -129,7 +137,7 @@ export function Sidebar() {
       const right = indexOf.get(b[0]) ?? Number.MAX_SAFE_INTEGER;
       return left === right ? 0 : left - right;
     });
-  }, [filtered, groupOrder]);
+  }, [filtered, groupOrder, connectionOrder]);
 
   const openMenu = (e: React.MouseEvent, items: ContextMenuItem[]) => {
     e.preventDefault();
@@ -570,6 +578,33 @@ export function Sidebar() {
                     onDragStart={(event) => {
                       event.dataTransfer.setData('text/aidb-connection', conn.id);
                       event.dataTransfer.effectAllowed = 'move';
+                    }}
+                    onDragOver={(event) => {
+                      if (!event.dataTransfer.types.includes('text/aidb-connection')) return;
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = 'move';
+                    }}
+                    onDrop={(event) => {
+                      const draggedId = event.dataTransfer.getData('text/aidb-connection');
+                      if (!draggedId || draggedId === conn.id) return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      const source = connections.find((item) => item.id === draggedId);
+                      if (!source) return;
+                      if ((source.groupName || '默认') !== (conn.groupName || '默认')) {
+                        void moveConnectionToGroup(draggedId, conn.groupName || '默认');
+                        return;
+                      }
+                      const ids = [...connections]
+                        .sort((a, b) => {
+                          const orderIndex = new Map(connectionOrder.map((id, index) => [id, index]));
+                          return (orderIndex.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (orderIndex.get(b.id) ?? Number.MAX_SAFE_INTEGER);
+                        })
+                        .map((item) => item.id);
+                      const target = ids.indexOf(conn.id);
+                      const next = ids.filter((id) => id !== draggedId);
+                      next.splice(Math.min(target, next.length), 0, draggedId);
+                      setConnectionOrder(next);
                     }}
                     onClick={() => {
                       selectConnection(conn.id);

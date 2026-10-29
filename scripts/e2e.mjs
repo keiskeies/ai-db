@@ -2122,6 +2122,19 @@ await page.waitForSelector('.group-label', { timeout: 15000 });
 const groupsReloaded = await listGroups();
 check('group order persists across reload', groupsReloaded[0] === groupsAfter[0] && groupsReloaded[1] === groupsAfter[1], groupsReloaded.join('|'));
 
+const firstConnIds = () => page.$$eval('.conn-row', (els) => els.slice(0, 2).map((el) => el.getAttribute('data-testid')));
+const connsBefore = await firstConnIds();
+check('connections render in a stable order', connsBefore.length === 2, connsBefore.join('|'));
+await page.locator('.conn-row').first().dragTo(page.locator('.conn-row').nth(1));
+await page.waitForTimeout(500);
+const connsAfter = await firstConnIds();
+check('dragging a connection reorders it within the group', connsAfter[0] === connsBefore[1] && connsAfter[1] === connsBefore[0], `${connsBefore.join('|')} -> ${connsAfter.join('|')}`);
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
+await page.waitForSelector('.conn-row', { timeout: 15000 });
+const connsReloaded = await firstConnIds();
+check('connection order persists across reload', connsReloaded[0] === connsAfter[0], connsReloaded.join('|'));
+
 // ---------------- 分组重命名与删除 ----------------
 const groupConn = await api('/connections', { method: 'POST', body: JSON.stringify({ name: 'Group E2E', engine: 'sqlite', database: demo.database, groupName: '组A' }) });
 check('group test connection created', groupConn.status === 201, String(groupConn.status));
