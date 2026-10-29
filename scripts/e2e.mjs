@@ -1389,6 +1389,22 @@ await page.waitForSelector('[data-testid="data-grid"] tbody tr', { timeout: 1500
 const gridRows = await page.locator('[data-testid="data-grid"] tbody tr').count();
 check('data grid opens demo table', gridRows === 100, `${gridRows} rows`);
 check('data grid shows row numbers', (await page.locator('[data-testid="grid-row-0"] td').first().innerText()) === '1');
+
+await page.click('[data-testid="data-columns"]');
+await page.waitForSelector('[data-testid="columns-panel"]', { timeout: 5000 });
+await page.uncheck('[data-testid="column-toggle-status"]');
+await page.locator('.modal-head .icon-btn').click();
+await page.waitForFunction(() => !document.querySelector('[data-testid="columns-panel"]'), null, { timeout: 5000 });
+const headersHidden = await page.locator('[data-testid="data-grid"] thead').innerText();
+check('column visibility hides a column', !headersHidden.includes('status'), headersHidden.replace(/\s+/g, ' ').slice(0, 80));
+await page.click('[data-testid="data-columns"]');
+await page.waitForSelector('[data-testid="columns-panel"]', { timeout: 5000 });
+await page.check('[data-testid="column-toggle-status"]');
+await page.locator('.modal-head .icon-btn').click();
+await page.waitForFunction(() => !document.querySelector('[data-testid="columns-panel"]'), null, { timeout: 5000 });
+const headersShown = await page.locator('[data-testid="data-grid"] thead').innerText();
+check('column visibility restores a column', headersShown.includes('status'), headersShown.replace(/\s+/g, ' ').slice(0, 80));
+
 await page.screenshot({ path: join(shots, 'desktop-data.png') });
 
 await page.locator('[title="TABLE orders"]').click({ button: 'right' });

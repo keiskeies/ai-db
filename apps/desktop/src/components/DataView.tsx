@@ -3,6 +3,7 @@ import {
   ArrowUpDown,
   ClipboardCopy,
   ClipboardPaste,
+  Columns3,
   CopyPlus,
   Download,
   Filter,
@@ -118,6 +119,8 @@ export function DataView({ tab }: { tab: DataTab }) {
   const [filterOpen, setFilterOpen] = useState(false);
   const [textMode, setTextMode] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
+  const [columnsOpen, setColumnsOpen] = useState(false);
+  const [hiddenColumns, setHiddenColumns] = useState<string[]>([]);
   const [sortDraft, setSortDraft] = useState<{ column: string; dir: 'asc' | 'desc' }>({ column: orderBy ?? '', dir: orderDir });
   const [conditions, setConditions] = useState<Array<{ column: string; op: string; value: string; connector: 'AND' | 'OR' }>>([
     { column: '', op: '=', value: '', connector: 'AND' },
@@ -160,6 +163,10 @@ export function DataView({ tab }: { tab: DataTab }) {
   useEffect(() => {
     setSelected(new Set());
   }, [tab.connectionId, tab.table, tab.database, limit, offset, orderBy, orderDir, where, refreshKey]);
+
+  useEffect(() => {
+    setHiddenColumns([]);
+  }, [tab.connectionId, tab.table, tab.database]);
 
   useEffect(() => {
     if (!replaceDraft.column && columns.length) {
@@ -554,6 +561,9 @@ export function DataView({ tab }: { tab: DataTab }) {
         <button className={`btn small ${textMode ? 'active' : ''}`} title="文本视图" onClick={() => setTextMode((value) => !value)} data-testid="data-text-mode">
           <Type size={12} /> 文本
         </button>
+        <button className={`btn small ${hiddenColumns.length ? 'active' : ''}`} title="列显示管理" onClick={() => setColumnsOpen(true)} data-testid="data-columns">
+          <Columns3 size={12} /> 列{hiddenColumns.length ? ` ${hiddenColumns.length}` : ''}
+        </button>
         <button className="btn small" title="查找替换" onClick={() => setReplaceOpen(true)} data-testid="data-find-replace">
           <Search size={12} /> 查找
         </button>
@@ -637,6 +647,7 @@ export function DataView({ tab }: { tab: DataTab }) {
           onToggleAll={toggleAll}
           rowNumberStart={offset}
           textMode={textMode}
+          hiddenColumns={hiddenColumns}
         />
       ) : loading ? (
         <div className="empty-state">
@@ -762,6 +773,44 @@ export function DataView({ tab }: { tab: DataTab }) {
           </div>
         </Modal>
       ) : null}
+      {columnsOpen ? (
+        <Modal
+          title={`列显示 · ${tab.table}`}
+          onClose={() => setColumnsOpen(false)}
+          footer={
+            <>
+              <button className="btn" onClick={() => setHiddenColumns([])} data-testid="columns-reset">全部显示</button>
+              <button className="btn primary" onClick={() => setColumnsOpen(false)}>完成</button>
+            </>
+          }
+        >
+          <div className="column-picker" data-testid="columns-panel">
+            {columns.map((column) => {
+              const visible = !hiddenColumns.includes(column.name);
+              return (
+                <label key={column.name} className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={visible}
+                    onChange={() => setHiddenColumns((prev) => {
+                      if (visible) {
+                        // 至少保留一列，否则表格只剩行号
+                        if (columns.length - prev.length <= 1) return prev;
+                        return [...prev, column.name];
+                      }
+                      return prev.filter((name) => name !== column.name);
+                    })}
+                    data-testid={`column-toggle-${column.name}`}
+                  />
+                  {column.name}
+                  {column.type ? <span className="muted" style={{ fontSize: 11 }}>{column.type}</span> : null}
+                </label>
+              );
+            })}
+          </div>
+        </Modal>
+      ) : null}
+
       {sortOpen ? (
         <Modal
           title={`排序 · ${tab.table}`}

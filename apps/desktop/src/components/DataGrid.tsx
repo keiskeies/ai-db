@@ -23,6 +23,8 @@ export interface DataGridProps {
   testId?: string;
   /** 双击一行时回调（如 Redis 键详情）。 */
   onRowActivate?: (rowIndex: number) => void;
+  /** 不渲染的列名；回调仍用原始列下标。 */
+  hiddenColumns?: string[];
 }
 
 interface EditState {
@@ -49,10 +51,14 @@ export function DataGrid({
   rowNumberStart = 0,
   textMode,
   onRowActivate,
+  hiddenColumns,
   testId = 'data-grid',
 }: DataGridProps) {
   const [edit, setEdit] = useState<EditState | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const visibleColumns = columns
+    .map((col, index) => ({ col, index }))
+    .filter(({ col }) => !hiddenColumns?.includes(col.name));
 
   const beginEdit = (row: number, col: number) => {
     if (!editable || !onCellEdit) return;
@@ -81,7 +87,7 @@ export function DataGrid({
                 <input type="checkbox" checked={rows.length > 0 && (selectedRows?.size ?? 0) === rows.length} onChange={() => onToggleAll?.()} />
               </th>
             ) : null}
-            {columns.map((col, index) => {
+            {visibleColumns.map(({ col, index }) => {
               const active = orderBy === col.name;
               return (
                 <th
@@ -104,7 +110,7 @@ export function DataGrid({
             <tr>
               <td className="grid-rowno" />
               {onToggleRow ? <td className="grid-select" /> : null}
-              {columns.map((col, index) => (
+              {visibleColumns.map(({ col, index }) => (
                 <td key={`new_${col.name}`} className="new-row">
                   <input
                     className="mono"
@@ -132,7 +138,7 @@ export function DataGrid({
                   <input type="checkbox" checked={selectedRows?.has(rowIndex) ?? false} onChange={() => onToggleRow(rowIndex)} />
                 </td>
               ) : null}
-              {columns.map((col, colIndex) => {
+              {visibleColumns.map(({ col, index: colIndex }) => {
                 const value = row[colIndex];
                 const formatted = formatCell(value);
                 const display = textMode && formatted.kind === 'null' ? '(Null)' : formatted.text;
