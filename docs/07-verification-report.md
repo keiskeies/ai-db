@@ -47,7 +47,7 @@
 |---|---|---|
 | 文档契约 | `node scripts/verify-docs.mjs` | **211/211** |
 | 类型检查 | `npm run typecheck`（4 workspaces + 测试） | **通过** |
-| Core 单测 | `npm test` | **136/136** |
+| Core 单测 | `npm test` | **137/137** |
 | Bridge 集成 | HTTP / SSE 审批 / 记忆 / 审计 / 配对 / WebSocket / 工具箱 / 表与数据操作 | **115 个用例 · 107 通过 · 8 跳过**（跳过项为需要 `AIDB_TEST_*_PORT` 的联机引擎） |
 | 构建 | core tsc / gateway esbuild / desktop Vite / mobile Metro | **成功** |
 | E2E | 桌面 Web + 移动 Web + Electron Shell + 联机引擎 | **146/146** |

@@ -20,6 +20,7 @@ import {
   readonlyViolation,
   searchQueryFromArgs,
   splitStatements,
+  supportsTransactions,
   vectorQueryFromArgs,
   writesLineProtocol,
   type AppSettings,
@@ -918,7 +919,7 @@ export class ConnectionManager {
       throw new DbError('只读连接不允许开启事务', { code: 'READONLY', status: 403, hint: '在连接设置中关闭只读后才可开启事务' });
     }
     const driver = await this.driverFor(connectionId);
-    if (!supportsTransaction(driver)) {
+    if (!supportsTransactions(conn.engine) || !supportsTransaction(driver)) {
       throw new DbError(`${engineMeta(conn.engine).label} 暂不支持跨请求事务`, {
         code: 'UNSUPPORTED_ENGINE',
         hint: '目前 MySQL、PostgreSQL、Oracle、SQL Server、SQLite 与达梦 DM8 支持 begin/commit/rollback',

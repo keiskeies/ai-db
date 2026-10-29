@@ -7,7 +7,7 @@ import { keymap } from '@codemirror/view';
 import { MSSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql as sqlLang } from '@codemirror/lang-sql';
 import { AlignLeft, BarChart3, Bookmark, Database, Download, FileDown, FilePlus, FileUp, History, ListChecks, Network, Play, Plus, Sparkles, Table2, TerminalSquare, Trash2, WandSparkles, Wrench } from 'lucide-react';
 import type { ConnectionConfig, QueryBatchResult } from '@aidb/core';
-import { engineMeta, editsRecords, writesDocuments, writesLineProtocol } from '@aidb/core';
+import { engineMeta, editsRecords, supportsTransactions, writesDocuments, writesLineProtocol } from '@aidb/core';
 import { api } from '../lib/api';
 import { formatDuration } from '../lib/format';
 import { formatSql } from '../lib/sqlFormat';
@@ -92,7 +92,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const canWriteDocuments = conn ? writesDocuments(conn.engine) : false;
   const canEditRecords = conn ? editsRecords(conn.engine) : false;
   const canLineProtocol = conn ? writesLineProtocol(conn.engine) : false;
-  const canTransaction = conn ? ['mysql', 'postgresql', 'oracle', 'sqlserver', 'sqlite', 'dm'].includes(conn.engine) : false;
+  const canTransaction = conn ? supportsTransactions(conn.engine) : false;
   const [txSession, setTxSession] = useState<string | null>(null);
   const [vectorOpen, setVectorOpen] = useState(false);
   const [writeOpen, setWriteOpen] = useState(false);

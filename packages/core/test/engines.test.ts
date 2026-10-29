@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildCreateTable, buildInsert, buildSelectTable } from '../src/sql/ddl';
+import { ENGINE_IDS, supportsTransactions } from '../src/engines';
 import { ENGINES, dialectOf, engineDefaultPort, engineMeta, engineUsesSchema, isEngine, isSqlEngine } from '../src/engines';
 
 const cols = [
@@ -109,4 +110,13 @@ test('Neo4j is a graph engine with Cypher language', () => {
   assert.equal(meta.capabilities.gridEdit, false);
   assert.equal(isSqlEngine('neo4j'), false);
   assert.throws(() => dialectOf('neo4j'), /不使用 SQL 方言/);
+});
+
+test('跨请求事务只开给实现了 TransactionDriver 的六个引擎', () => {
+  const withTx = ENGINE_IDS.filter((id) => supportsTransactions(id)).sort();
+  assert.deepEqual(withTx, ['dm', 'mysql', 'oracle', 'postgresql', 'sqlite', 'sqlserver']);
+  // 同家族但未实现事务的引擎必须保持关闭，避免 UI 出现点了会报错的按钮。
+  for (const id of ['mariadb', 'tidb', 'cockroachdb', 'timescale', 'duckdb', 'clickhouse'] as const) {
+    assert.equal(supportsTransactions(id), false, id);
+  }
 });
