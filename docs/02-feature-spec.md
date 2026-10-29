@@ -107,7 +107,7 @@
 - 多标签：草稿自动保存（本地存储 + 元数据库），关闭提示未执行修改。
 - 执行：`Cmd/Ctrl+Enter` 执行全部或选区；`Cmd/Ctrl+Shift+Enter` 执行当前语句；危险语句红色执行按钮。
 - 结果：多结果集 Tab；消息面板（影响行数、耗时、警告）；错误定位行号。
-- 查询历史：最近 200 条，按连接过滤，可搜索、收藏、插入编辑器。
+- 查询历史：最近 200 条，按连接过滤，可搜索、收藏（收藏置顶）、插入编辑器。
 - EXPLAIN：MySQL `EXPLAIN FORMAT=JSON`、PG `EXPLAIN (FORMAT JSON)`、SQLite `EXPLAIN QUERY PLAN`，结构化展示 + AI 解读按钮。
 - 格式化：基础 SQL formatter（关键字换行/缩进）。
 - 只读连接禁写；生产连接执行写操作弹确认。

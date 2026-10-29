@@ -581,7 +581,7 @@ export class Store {
     }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const limit = Math.min(500, Math.max(1, opts.limit ?? 200));
-    return this.all<Record<string, any>>(`SELECT * FROM query_history ${where} ORDER BY created_at DESC LIMIT ${limit}`, params).map((r) => ({
+    return this.all<Record<string, any>>(`SELECT * FROM query_history ${where} ORDER BY COALESCE(favorite, 0) DESC, created_at DESC LIMIT ${limit}`, params).map((r) => ({
       id: r.id,
       connectionId: r.connection_id ?? undefined,
       database: r.database_name ?? undefined,

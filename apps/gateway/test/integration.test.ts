@@ -409,6 +409,13 @@ test('agent inspects schema, DDL approval, memory and audit', async () => {
   const missing = await api(`/history/not-a-real-id/favorite`, { method: 'POST', body: JSON.stringify({ favorite: true }) });
   assert.equal(missing.status, 404);
   await api(`/history/${historyId}/favorite`, { method: 'POST', body: JSON.stringify({ favorite: false }) });
+  if (afterFavorite.body.items.length > 1) {
+    const pinned = afterFavorite.body.items[1].id;
+    await api(`/history/${pinned}/favorite`, { method: 'POST', body: JSON.stringify({ favorite: true }) });
+    const pinnedList = await api<{ items: Array<{ id: string }> }>('/history');
+    assert.equal(pinnedList.body.items[0].id, pinned);
+    await api(`/history/${pinned}/favorite`, { method: 'POST', body: JSON.stringify({ favorite: false }) });
+  }
 });
 
 test('agent runs concrete audit, chart and quality tools', async () => {
