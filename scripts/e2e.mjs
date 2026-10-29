@@ -1423,6 +1423,20 @@ await page.waitForSelector('[data-testid="sort-row-0"]', { timeout: 5000 });
 await page.click('[data-testid="sort-clear"]');
 await page.waitForTimeout(700);
 
+await page.click('[data-testid="data-form-mode"]');
+await page.waitForSelector('[data-testid="data-form-view"]', { timeout: 5000 });
+await page.waitForFunction(() => (document.querySelector('[data-testid="form-field-id"]')?.value ?? '') !== '', null, { timeout: 5000 });
+const formId = await page.inputValue('[data-testid="form-field-id"]');
+check('form view shows the selected row', formId !== '', `id=${formId}`);
+const formTotal = await page.inputValue('[data-testid="form-field-total_cents"]');
+await page.fill('[data-testid="form-field-channel"]', 'form-e2e');
+await page.click('[data-testid="form-save"]');
+await page.waitForFunction(() => document.querySelector('[data-testid="form-field-channel"]')?.value === 'form-e2e', null, { timeout: 15000 });
+await page.click('[data-testid="data-form-mode"]');
+await page.waitForSelector('[data-testid="data-grid"] tbody tr', { timeout: 10000 });
+await page.waitForFunction(() => document.querySelector('[data-testid="data-grid"]')?.innerText.includes('form-e2e'), null, { timeout: 15000 });
+check('form view saves the edited row', true, `id=${formId} total=${formTotal}`);
+
 await page.screenshot({ path: join(shots, 'desktop-data.png') });
 
 await page.locator('[title="TABLE orders"]').click({ button: 'right' });

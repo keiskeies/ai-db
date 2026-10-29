@@ -10,6 +10,7 @@ import {
   ListFilter,
   Plus,
   RefreshCw,
+  Rows3,
   Search,
   Table2,
   Trash2,
@@ -120,6 +121,10 @@ export function DataView({ tab }: { tab: DataTab }) {
   const [sortOpen, setSortOpen] = useState(false);
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [hiddenColumns, setHiddenColumns] = useState<string[]>([]);
+  const [formMode, setFormMode] = useState(false);
+  const [formRow, setFormRow] = useState(0);
+  const [formDraft, setFormDraft] = useState<Record<string, string> | null>(null);
+  const [formSaving, setFormSaving] = useState(false);
   const [sortDraft, setSortDraft] = useState<Array<{ column: string; dir: 'asc' | 'desc' }>>([{ column: '', dir: 'asc' }]);
   const [conditions, setConditions] = useState<Array<{ column: string; op: string; value: string; connector: 'AND' | 'OR' }>>([
     { column: '', op: '=', value: '', connector: 'AND' },
@@ -167,7 +172,32 @@ export function DataView({ tab }: { tab: DataTab }) {
 
   useEffect(() => {
     setHiddenColumns([]);
+    setFormMode(false);
+    setFormRow(0);
+    setFormDraft(null);
   }, [tab.connectionId, tab.table, tab.database]);
+
+  const draftOfRow = (index: number): Record<string, string> => {
+    const row = rows[index] ?? [];
+    const draft: Record<string, string> = {};
+    columns.forEach((column, i) => {
+      const value = row[i];
+      draft[column.name] = value === null || value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+    });
+    return draft;
+  };
+
+  useEffect(() => {
+    if (!formMode || !rows.length) {
+      setFormDraft(null);
+      return;
+    }
+    if (formRow > rows.length - 1) {
+      setFormRow(rows.length - 1);
+      return;
+    }
+    setFormDraft(draftOfRow(formRow));
+  }, [formMode, formRow, rows, columns]);
 
   useEffect(() => {
     if (!replaceDraft.column && columns.length) {
@@ -400,6 +430,43 @@ export function DataView({ tab }: { tab: DataTab }) {
     }
   };
 
+  const saveForm = async () => {
+    if (!formDraft) return;
+    const key = rowKey(formRow);
+    if (!key) {
+      notify('warning', '该表没有主键，无法安全更新');
+      return;
+    }
+    const original = draftOfRow(formRow);
+    const changes: Record<string, unknown> = {};
+    columns.forEach((column) => {
+      if (pkColumns.some((pk) => pk.name === column.name)) return;
+      const next = formDraft[column.name] ?? '';
+      if (next !== (original[column.name] ?? '')) changes[column.name] = next === '' ? null : next;
+    });
+    if (!Object.keys(changes).length) {
+      notify('info', '没有改动');
+      return;
+    }
+    setFormSaving(true);
+    try {
+      await api.rows({
+        connectionId: tab.connectionId,
+        database: tab.database,
+        table: tab.table,
+        op: 'update',
+        values: changes,
+        key,
+      });
+      notify('success', '已更新 1 行', Object.keys(changes).join(', '));
+      setRefreshKey((value) => value + 1);
+    } catch (err: any) {
+      notify('error', '更新失败', err?.message);
+    } finally {
+      setFormSaving(false);
+    }
+  };
+
   const deleteRow = async (rowIndex: number) => {
     const key = rowKey(rowIndex);
     if (!key) {
@@ -558,6 +625,9 @@ export function DataView({ tab }: { tab: DataTab }) {
         <button className={`btn small ${textMode ? 'active' : ''}`} title="文本视图" onClick={() => setTextMode((value) => !value)} data-testid="data-text-mode">
           <Type size={12} /> 文本
         </button>
+        <button className={`btn small ${formMode ? 'active' : ''}`} title="表单视图（逐行编辑）" onClick={() => { setFormMode((value) => !value); setFormRow(0); }} data-testid="data-form-mode">
+          <Rows3 size={12} /> 表单
+        </button>
         <button className={`btn small ${hiddenColumns.length ? 'active' : ''}`} title="列显示管理" onClick={() => setColumnsOpen(true)} data-testid="data-columns">
           <Columns3 size={12} /> 列{hiddenColumns.length ? ` ${hiddenColumns.length}` : ''}
         </button>
@@ -628,6 +698,38 @@ export function DataView({ tab }: { tab: DataTab }) {
           </div>
         </div>
       ) : page && rows.length ? (
+        formMode ? (
+          <div style={{ padding: 12, overflow: 'auto' }} data-testid="data-form-view">
+            <div className="row gap-8" style={{ marginBottom: 10, alignItems: 'center' }}>
+              <button className="btn small" disabled={formRow <= 0} onClick={() => setFormRow((value) => Math.max(0, value - 1))} data-testid="form-prev">‹</button>
+              <span className="muted">第 {Math.min(formRow, rows.length - 1) + 1} / {rows.length} 行（当前页）</span>
+              <button className="btn small" disabled={formRow >= rows.length - 1} onClick={() => setFormRow((value) => Math.min(rows.length - 1, value + 1))} data-testid="form-next">›</button>
+              <div className="spacer" />
+              <button className="btn small" onClick={() => setFormDraft(draftOfRow(formRow))} data-testid="form-reset">重置</button>
+              <button className="btn primary small" onClick={() => void saveForm()} disabled={!canEdit || formSaving} data-testid="form-save">
+                {formSaving ? '保存中…' : '保存'}
+              </button>
+            </div>
+            <div className="form-grid">
+              {columns.map((column) => {
+                const isPk = pkColumns.some((pk) => pk.name === column.name);
+                return (
+                  <label className="field" key={column.name}>
+                    <span>{column.name}{isPk ? ' · 主键' : ''}{column.type ? <span className="muted" style={{ fontSize: 11 }}> · {column.type}</span> : null}</span>
+                    <input
+                      className="input mono"
+                      value={formDraft?.[column.name] ?? ''}
+                      disabled={!canEdit || isPk}
+                      onChange={(event) => setFormDraft((prev) => ({ ...(prev ?? {}), [column.name]: event.target.value }))}
+                      data-testid={`form-field-${column.name}`}
+                    />
+                  </label>
+                );
+              })}
+            </div>
+            {!canEdit ? <div className="muted" style={{ marginTop: 8, fontSize: 11 }}>该表没有主键，表单只读。</div> : null}
+          </div>
+        ) : (
         <DataGrid
           columns={columns}
           rows={rows}
@@ -646,6 +748,7 @@ export function DataView({ tab }: { tab: DataTab }) {
           textMode={textMode}
           hiddenColumns={hiddenColumns}
         />
+        )
       ) : loading ? (
         <div className="empty-state">
           <div className="loading-inline">
