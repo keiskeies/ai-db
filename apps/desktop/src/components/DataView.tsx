@@ -86,6 +86,8 @@ export function DataView({ tab }: { tab: DataTab }) {
   const loadSchema = useApp((s) => s.loadSchema);
   const printRequested = useApp((s) => s.printRequested);
   const consumePrint = useApp((s) => s.consumePrint);
+  const persistHiddenColumns = useApp((s) => s.setHiddenColumns);
+  const columnKey = `${tab.connectionId}:${tab.database ?? ''}:${tab.table}`;
 
   const conn = connections.find((c) => c.id === tab.connectionId);
   const tableInfo: TableInfo | undefined = useMemo(() => {
@@ -193,11 +195,16 @@ export function DataView({ tab }: { tab: DataTab }) {
   }, [tab.connectionId, tab.table, tab.database, limit, offset, sorts, where, refreshKey]);
 
   useEffect(() => {
-    setHiddenColumns([]);
+    setHiddenColumns(useApp.getState().hiddenColumns[columnKey] ?? []);
     setFormMode(false);
     setFormRow(0);
     setFormDraft(null);
-  }, [tab.connectionId, tab.table, tab.database]);
+  }, [columnKey]);
+
+  const applyHiddenColumns = (next: string[]) => {
+    setHiddenColumns(next);
+    persistHiddenColumns(columnKey, next);
+  };
 
   const draftOfRow = (index: number): Record<string, string> => {
     const row = rows[index] ?? [];
@@ -973,7 +980,7 @@ export function DataView({ tab }: { tab: DataTab }) {
           onClose={() => setColumnsOpen(false)}
           footer={
             <>
-              <button className="btn" onClick={() => setHiddenColumns([])} data-testid="columns-reset">全部显示</button>
+              <button className="btn" onClick={() => applyHiddenColumns([])} data-testid="columns-reset">全部显示</button>
               <button className="btn primary" onClick={() => setColumnsOpen(false)}>完成</button>
             </>
           }
@@ -986,14 +993,15 @@ export function DataView({ tab }: { tab: DataTab }) {
                   <input
                     type="checkbox"
                     checked={visible}
-                    onChange={() => setHiddenColumns((prev) => {
+                    onChange={() => {
                       if (visible) {
                         // 至少保留一列，否则表格只剩行号
-                        if (columns.length - prev.length <= 1) return prev;
-                        return [...prev, column.name];
+                        if (columns.length - hiddenColumns.length <= 1) return;
+                        applyHiddenColumns([...hiddenColumns, column.name]);
+                        return;
                       }
-                      return prev.filter((name) => name !== column.name);
-                    })}
+                      applyHiddenColumns(hiddenColumns.filter((name) => name !== column.name));
+                    }}
                     data-testid={`column-toggle-${column.name}`}
                   />
                   {column.name}

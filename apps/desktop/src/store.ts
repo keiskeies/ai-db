@@ -84,7 +84,7 @@ export interface ContextMenuState {
 
 const UI_KEY = 'aidb.ui';
 
-function readUiPrefs(): { sidebarOpen?: boolean; sidebarWidth?: number; agentWidth?: number; groupOrder?: string[]; connectionOrder?: string[] } {
+function readUiPrefs(): { sidebarOpen?: boolean; sidebarWidth?: number; agentWidth?: number; groupOrder?: string[]; connectionOrder?: string[]; hiddenColumns?: Record<string, string[]> } {
   try {
     return JSON.parse(localStorage.getItem(UI_KEY) ?? '{}');
   } catch {
@@ -92,7 +92,7 @@ function readUiPrefs(): { sidebarOpen?: boolean; sidebarWidth?: number; agentWid
   }
 }
 
-function saveUiPrefs(patch: { sidebarOpen?: boolean; sidebarWidth?: number; agentWidth?: number; groupOrder?: string[]; connectionOrder?: string[] }): void {
+function saveUiPrefs(patch: { sidebarOpen?: boolean; sidebarWidth?: number; agentWidth?: number; groupOrder?: string[]; connectionOrder?: string[]; hiddenColumns?: Record<string, string[]> }): void {
   try {
     localStorage.setItem(UI_KEY, JSON.stringify({ ...readUiPrefs(), ...patch }));
   } catch {
@@ -124,6 +124,8 @@ interface AppStore {
   setGroupOrder: (order: string[]) => void;
   connectionOrder: string[];
   setConnectionOrder: (order: string[]) => void;
+  hiddenColumns: Record<string, string[]>;
+  setHiddenColumns: (key: string, columns: string[]) => void;
   contextMenu?: ContextMenuState;
   agentSessionId?: string;
   agentSessionMeta?: AgentSessionMeta;
@@ -262,6 +264,7 @@ export const useApp = create<AppStore>((set, get) => ({
   sidebarWidth: readUiPrefs().sidebarWidth ?? 244,
   groupOrder: readUiPrefs().groupOrder ?? [],
   connectionOrder: readUiPrefs().connectionOrder ?? [],
+  hiddenColumns: readUiPrefs().hiddenColumns ?? {},
   agentWidth: readUiPrefs().agentWidth ?? 384,
   agentMessages: [],
   agentFollowUps: [],
@@ -591,6 +594,11 @@ export const useApp = create<AppStore>((set, get) => ({
   setConnectionOrder: (order) => {
     set({ connectionOrder: order });
     saveUiPrefs({ connectionOrder: order });
+  },
+  setHiddenColumns: (key, columns) => {
+    const next = { ...get().hiddenColumns, [key]: columns };
+    set({ hiddenColumns: next });
+    saveUiPrefs({ hiddenColumns: next });
   },
 
   openContextMenu: (x, y, items) => set({ contextMenu: { x, y, items } }),
