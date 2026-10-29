@@ -299,25 +299,25 @@ export function ConnectionModal() {
         {engine !== 'sqlite' ? (
           <div className="setting-card">
             <label className="checkbox" style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-              <input type="checkbox" checked={sshEnabled} onChange={(e) => setSshEnabled(e.target.checked)} /> {t('ssh')}
+              <input type="checkbox" checked={sshEnabled} onChange={(e) => setSshEnabled(e.target.checked)} data-testid="ssh-enabled" /> {t('ssh')}
             </label>
             {sshEnabled ? (
               <div className="form-grid" style={{ marginTop: 10 }}>
                 <div className="field">
                   <label>{t('host')}</label>
-                  <input className="input" value={sshHost} onChange={(e) => setSshHost(e.target.value)} placeholder="bastion.example.com" />
+                  <input className="input" value={sshHost} onChange={(e) => setSshHost(e.target.value)} placeholder="bastion.example.com" data-testid="ssh-host" />
                 </div>
                 <div className="field">
                   <label>{t('port')}</label>
-                  <input className="input" type="number" value={sshPort} onChange={(e) => setSshPort(e.target.value)} />
+                  <input className="input" type="number" value={sshPort} onChange={(e) => setSshPort(e.target.value)} data-testid="ssh-port" />
                 </div>
                 <div className="field">
                   <label>{t('username')}</label>
-                  <input className="input" value={sshUser} onChange={(e) => setSshUser(e.target.value)} />
+                  <input className="input" value={sshUser} onChange={(e) => setSshUser(e.target.value)} data-testid="ssh-user" />
                 </div>
                 <div className="field">
                   <label>认证方式</label>
-                  <select className="select" value={sshAuth} onChange={(e) => setSshAuth(e.target.value as 'password' | 'key')}>
+                  <select className="select" value={sshAuth} onChange={(e) => setSshAuth(e.target.value as 'password' | 'key')} data-testid="ssh-auth">
                     <option value="password">{t('authByPassword')}</option>
                     <option value="key">{t('authByKey')}</option>
                   </select>
@@ -325,12 +325,12 @@ export function ConnectionModal() {
                 {sshAuth === 'password' ? (
                   <div className="field full">
                     <label>SSH {t('password')}</label>
-                    <input className="input" type="password" value={sshPassword} onChange={(e) => setSshPassword(e.target.value)} />
+                    <input className="input" type="password" value={sshPassword} onChange={(e) => setSshPassword(e.target.value)} data-testid="ssh-password" />
                   </div>
                 ) : (
                   <div className="field full">
                     <label>{t('keyFile')}</label>
-                    <input className="input mono" value={sshKeyPath} onChange={(e) => setSshKeyPath(e.target.value)} placeholder="C:/Users/me/.ssh/id_ed25519" />
+                    <input className="input mono" value={sshKeyPath} onChange={(e) => setSshKeyPath(e.target.value)} placeholder="C:/Users/me/.ssh/id_ed25519" data-testid="ssh-key-path" />
                   </div>
                 )}
               </div>

@@ -92,6 +92,11 @@ const DM_PORT = process.env.AIDB_TEST_DM_PORT ? Number(process.env.AIDB_TEST_DM_
 const DM_PASSWORD = process.env.AIDB_TEST_DM_PASSWORD ?? 'SYSDBA';
 const QDRANT_PORT = process.env.AIDB_TEST_QDRANT_PORT ? Number(process.env.AIDB_TEST_QDRANT_PORT) : undefined;
 const MYSQL_TX_PORT = process.env.AIDB_TEST_MYSQL_PORT ? Number(process.env.AIDB_TEST_MYSQL_PORT) : undefined;
+const SSH_PORT = process.env.AIDB_TEST_SSH_PORT ? Number(process.env.AIDB_TEST_SSH_PORT) : undefined;
+const SSH_TARGET_HOST = process.env.AIDB_TEST_SSH_TARGET_HOST;
+const SSH_TARGET_PORT = process.env.AIDB_TEST_SSH_TARGET_PORT ? Number(process.env.AIDB_TEST_SSH_TARGET_PORT) : 3306;
+const SSH_USER = process.env.AIDB_TEST_SSH_USER ?? 'root';
+const SSH_PASSWORD = process.env.AIDB_TEST_SSH_PASSWORD ?? 'testpass';
 const MILVUS_PORT = process.env.AIDB_TEST_MILVUS_PORT ? Number(process.env.AIDB_TEST_MILVUS_PORT) : undefined;
 const ES_PORT = process.env.AIDB_TEST_ELASTICSEARCH_PORT ? Number(process.env.AIDB_TEST_ELASTICSEARCH_PORT) : undefined;
 const WEAVIATE_PORT = process.env.AIDB_TEST_WEAVIATE_PORT ? Number(process.env.AIDB_TEST_WEAVIATE_PORT) : undefined;
@@ -1298,6 +1303,46 @@ if (MYSQL_TX_PORT) {
   const [rows] = await verify.query('SELECT COUNT(*) AS n FROM tx_ui');
   await verify.end();
   check('MySQL rollback left exactly the seeded row', Number(rows[0].n) === 1, `n=${rows[0].n}`);
+}
+
+if (SSH_PORT && SSH_TARGET_HOST) {
+  await page.click('[data-testid="sidebar-new-connection"]');
+  await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
+  await page.fill('[data-testid="connection-name"]', 'MySQL over SSH');
+  await page.selectOption('[data-testid="connection-engine"]', 'mysql');
+  await page.fill('[data-testid="connection-host"]', SSH_TARGET_HOST);
+  await page.fill('[data-testid="connection-port"]', String(SSH_TARGET_PORT));
+  await page.fill('[data-testid="connection-username"]', 'root');
+  await page.check('[data-testid="ssh-enabled"]');
+  await page.fill('[data-testid="ssh-host"]', '127.0.0.1');
+  await page.fill('[data-testid="ssh-port"]', String(SSH_PORT));
+  await page.fill('[data-testid="ssh-user"]', SSH_USER);
+  await page.fill('[data-testid="ssh-password"]', SSH_PASSWORD);
+  // 密码最后填：复选框重渲染会覆盖此前由自动化写入、但 React 状态未同步的密码值
+  await page.fill('[data-testid="connection-password"]', process.env.AIDB_TEST_MYSQL_PASSWORD ?? 'testpass');
+  check('SSH form keeps the database password', (await page.inputValue('[data-testid="connection-password"]')) === (process.env.AIDB_TEST_MYSQL_PASSWORD ?? 'testpass'));
+  await page.click('[data-testid="connection-save"]');
+  const sshRow = page.locator('.conn-row', { hasText: 'MySQL over SSH' });
+  await sshRow.waitFor({ timeout: 30000 });
+  check('MySQL connection created through the SSH tunnel', true);
+
+  await sshRow.click();
+  await page.click('.tab-add');
+  await page.waitForSelector('[data-testid="query-run"]', { timeout: 20000 });
+  // 多标签场景下显式绑定到隧道连接，避免标签页复用上一个连接的上下文
+  await page.selectOption('[data-testid="query-connection"]', { label: 'MySQL over SSH' });
+  const sshBound = await page.locator('[data-testid="query-connection"]').last().evaluate((el) => el.selectedOptions[0]?.textContent ?? '');
+  check('SSH query tab is bound to the tunnel connection', sshBound.includes('MySQL over SSH'), sshBound);
+  await page.fill('.cm-content', 'SELECT 1 AS n');
+  await page.locator('[data-testid="query-run"]').last().click();
+  await page.waitForFunction(
+    () => Boolean(document.querySelector('[data-testid="query-result-grid"] tbody tr') || document.querySelector('.messages-panel .err')),
+    null,
+    { timeout: 30000 },
+  );
+  const sshError = await page.locator('.messages-panel .err').count();
+  const sshGrid = sshError ? await page.locator('.messages-panel .err').first().innerText() : await page.locator('[data-testid="query-result-grid"] tbody tr').first().innerText();
+  check('Query over the SSH tunnel returns a row', !sshError && /1/.test(sshGrid), sshGrid.replace(/\s+/g, ' ').slice(0, 60));
 }
 
 

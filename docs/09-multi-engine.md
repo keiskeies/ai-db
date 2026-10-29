@@ -239,11 +239,11 @@ docker run -d --rm --name aidb-test-timescale -p 5445:5432 -e POSTGRES_PASSWORD=
 # 达梦 DM8：官方未提供轻量镜像，可用社区镜像初始化后运行（示例）
 # docker run ... sizx/dm8，dminit + dmserver，映射 5237:5236
 
-AIDB_TEST_MONGO_PORT=27018 AIDB_TEST_REDIS_PORT=6380 AIDB_TEST_NEO4J_PORT=7688 AIDB_TEST_NEO4J_PASSWORD=testpass AIDB_TEST_MEMGRAPH_PORT=7689 AIDB_TEST_CASSANDRA_PORT=9043 AIDB_TEST_PGVECTOR_PORT=5434 AIDB_TEST_QDRANT_PORT=6335 AIDB_TEST_WEAVIATE_PORT=8081 AIDB_TEST_ELASTICSEARCH_PORT=9203 AIDB_TEST_MILVUS_PORT=19531 AIDB_TEST_TDENGINE_PORT=6042 AIDB_TEST_FALKORDB_PORT=6382 AIDB_TEST_INFLUXDB_PORT=8184 AIDB_TEST_ARANGO_PORT=8530 AIDB_TEST_REDIS_STACK_PORT=6380 AIDB_TEST_TIMESCALE_PORT=5445 npm --workspace @aidb/gateway run test
+AIDB_TEST_SSH_PORT=10222 AIDB_TEST_SSH_TARGET_HOST=172.17.0.17 AIDB_TEST_SSH_TARGET_PORT=3306 AIDB_TEST_MONGO_PORT=27018 AIDB_TEST_REDIS_PORT=6380 AIDB_TEST_NEO4J_PORT=7688 AIDB_TEST_NEO4J_PASSWORD=testpass AIDB_TEST_MEMGRAPH_PORT=7689 AIDB_TEST_CASSANDRA_PORT=9043 AIDB_TEST_PGVECTOR_PORT=5434 AIDB_TEST_QDRANT_PORT=6335 AIDB_TEST_WEAVIATE_PORT=8081 AIDB_TEST_ELASTICSEARCH_PORT=9203 AIDB_TEST_MILVUS_PORT=19531 AIDB_TEST_TDENGINE_PORT=6042 AIDB_TEST_FALKORDB_PORT=6382 AIDB_TEST_INFLUXDB_PORT=8184 AIDB_TEST_ARANGO_PORT=8530 AIDB_TEST_REDIS_STACK_PORT=6380 AIDB_TEST_TIMESCALE_PORT=5445 npm --workspace @aidb/gateway run test
 NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSWORD=SYSDBA npm --workspace @aidb/gateway run test
 ```
 
-覆盖：驱动工厂协议别名路由、MongoDB、Redis（含 Redis Stack 模块与 RediSearch）、Neo4j/Memgraph/FalkorDB、ArangoDB、Cassandra/ScyllaDB、达梦、DuckDB、TDengine、InfluxDB、TimescaleDB 超表标注（均含本地 stub 或联机协议测试）、Qdrant/Milvus/Weaviate、pgvector + Embedding、Elasticsearch/OpenSearch，HTTP `/schema`、`/query`、`/vector/search` 管线、对象创建与删除（Qdrant / Elasticsearch / OpenSearch / Weaviate / MongoDB / ArangoDB）、Redis 键与 RediSearch 索引删除、索引与字段的建删（MongoDB / Qdrant / ArangoDB 索引，Elasticsearch / OpenSearch / Weaviate 追加字段）、非 SQL 连接的功能禁用。
+覆盖：驱动工厂协议别名路由、MongoDB、Redis（含 Redis Stack 模块与 RediSearch）、Neo4j/Memgraph/FalkorDB、ArangoDB、Cassandra/ScyllaDB、达梦、DuckDB、TDengine、InfluxDB、TimescaleDB 超表标注（均含本地 stub 或联机协议测试）、Qdrant/Milvus/Weaviate、pgvector + Embedding、Elasticsearch/OpenSearch，HTTP `/schema`、`/query`、`/vector/search` 管线、对象创建与删除（Qdrant / Elasticsearch / OpenSearch / Weaviate / MongoDB / ArangoDB）、Redis 键与 RediSearch 索引删除、索引与字段的建删（MongoDB / Qdrant / ArangoDB 索引，Elasticsearch / OpenSearch / Weaviate 追加字段）、非 SQL 连接的功能禁用、SSH 隧道（转发 MySQL、关闭释放端口、错误密码）。
 
 ## 11. 已知限制
 
