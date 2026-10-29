@@ -2105,6 +2105,23 @@ check('collapsed group hides its connections', true);
 await demoGroup.click();
 await page.waitForFunction(() => [...document.querySelectorAll('.conn-row')].some((el) => (el.textContent ?? '').includes('Demo · Shop DB')), null, { timeout: 5000 });
 
+const listGroups = () => page.$$eval('.group-label', (els) => els.map((el) => {
+  const clone = el.cloneNode(true);
+  clone.querySelector('.group-count')?.remove();
+  return (clone.textContent ?? '').trim();
+}));
+const groupsBefore = await listGroups();
+check('groups render in the saved order', groupsBefore.length >= 2, groupsBefore.join('|'));
+await page.locator('.group-label').first().dragTo(page.locator('.group-label').nth(1));
+await page.waitForTimeout(500);
+const groupsAfter = await listGroups();
+check('dragging a group header reorders groups', groupsAfter[0] === groupsBefore[1] && groupsAfter[1] === groupsBefore[0], `${groupsBefore.join('|')} -> ${groupsAfter.join('|')}`);
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
+await page.waitForSelector('.group-label', { timeout: 15000 });
+const groupsReloaded = await listGroups();
+check('group order persists across reload', groupsReloaded[0] === groupsAfter[0] && groupsReloaded[1] === groupsAfter[1], groupsReloaded.join('|'));
+
 // ---------------- 分组重命名与删除 ----------------
 const groupConn = await api('/connections', { method: 'POST', body: JSON.stringify({ name: 'Group E2E', engine: 'sqlite', database: demo.database, groupName: '组A' }) });
 check('group test connection created', groupConn.status === 201, String(groupConn.status));

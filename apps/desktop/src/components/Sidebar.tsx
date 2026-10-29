@@ -68,6 +68,8 @@ export function Sidebar() {
   const expanded = useApp((s) => s.expandedConnections);
   const expandedSchemas = useApp((s) => s.expandedSchemas);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const groupOrder = useApp((s) => s.groupOrder);
+  const setGroupOrder = useApp((s) => s.setGroupOrder);
   const activeConnectionId = useApp((s) => s.activeConnectionId);
   const t = useApp((s) => s.t);
   const toggleConnection = useApp((s) => s.toggleConnection);
@@ -121,8 +123,13 @@ export function Sidebar() {
       const key = conn.groupName || '默认';
       map.set(key, [...(map.get(key) ?? []), conn]);
     }
-    return [...map.entries()];
-  }, [filtered]);
+    const indexOf = new Map(groupOrder.map((name, index) => [name, index]));
+    return [...map.entries()].sort((a, b) => {
+      const left = indexOf.get(a[0]) ?? Number.MAX_SAFE_INTEGER;
+      const right = indexOf.get(b[0]) ?? Number.MAX_SAFE_INTEGER;
+      return left === right ? 0 : left - right;
+    });
+  }, [filtered, groupOrder]);
 
   const openMenu = (e: React.MouseEvent, items: ContextMenuItem[]) => {
     e.preventDefault();
@@ -494,7 +501,9 @@ export function Sidebar() {
           const collapsed = collapsedGroups.has(group) && !query.trim();
           return (
           <div key={group}>
-            <button
+            <div
+              role="button"
+              tabIndex={0}
               className="group-label"
               onClick={() => setCollapsedGroups((prev) => {
                 const next = new Set(prev);
@@ -502,6 +511,16 @@ export function Sidebar() {
                 else next.add(group);
                 return next;
               })}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                setCollapsedGroups((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(group)) next.delete(group);
+                  else next.add(group);
+                  return next;
+                });
+              }}
               data-testid={`group-toggle-${group}`}
               onContextMenu={(event) => {
                 event.preventDefault();
@@ -510,6 +529,11 @@ export function Sidebar() {
                   { label: '删除分组', icon: <Trash2 size={13} />, danger: true, onClick: () => void removeGroup(group) },
                 ]);
               }}
+              draggable
+              onDragStart={(event) => {
+                event.dataTransfer.setData('text/aidb-group', group);
+                event.dataTransfer.effectAllowed = 'move';
+              }}
               onDragOver={(event) => {
                 event.preventDefault();
                 event.dataTransfer.dropEffect = 'move';
@@ -517,13 +541,23 @@ export function Sidebar() {
               onDrop={(event) => {
                 event.preventDefault();
                 const connectionId = event.dataTransfer.getData('text/aidb-connection');
-                if (connectionId) void moveConnectionToGroup(connectionId, group);
+                if (connectionId) {
+                  void moveConnectionToGroup(connectionId, group);
+                  return;
+                }
+                const dragged = event.dataTransfer.getData('text/aidb-group');
+                if (!dragged || dragged === group) return;
+                const names = grouped.map(([name]) => name);
+                const target = names.indexOf(group);
+                const next = names.filter((name) => name !== dragged);
+                next.splice(Math.min(target, next.length), 0, dragged);
+                setGroupOrder(next);
               }}
             >
               <ChevronRight size={11} className={`conn-toggle ${collapsed ? '' : 'open'}`} />
               {group}
               <span className="group-count">{list.length}</span>
-            </button>
+            </div>
             {list.map((conn) => {
               if (collapsed) return null;
               const isOpen = expanded[conn.id] || Boolean(query.trim());

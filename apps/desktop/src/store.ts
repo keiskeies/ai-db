@@ -84,7 +84,7 @@ export interface ContextMenuState {
 
 const UI_KEY = 'aidb.ui';
 
-function readUiPrefs(): { sidebarOpen?: boolean; sidebarWidth?: number; agentWidth?: number } {
+function readUiPrefs(): { sidebarOpen?: boolean; sidebarWidth?: number; agentWidth?: number; groupOrder?: string[] } {
   try {
     return JSON.parse(localStorage.getItem(UI_KEY) ?? '{}');
   } catch {
@@ -92,7 +92,7 @@ function readUiPrefs(): { sidebarOpen?: boolean; sidebarWidth?: number; agentWid
   }
 }
 
-function saveUiPrefs(patch: { sidebarOpen?: boolean; sidebarWidth?: number; agentWidth?: number }): void {
+function saveUiPrefs(patch: { sidebarOpen?: boolean; sidebarWidth?: number; agentWidth?: number; groupOrder?: string[] }): void {
   try {
     localStorage.setItem(UI_KEY, JSON.stringify({ ...readUiPrefs(), ...patch }));
   } catch {
@@ -120,6 +120,8 @@ interface AppStore {
   sidebarOpen: boolean;
   sidebarWidth: number;
   agentWidth: number;
+  groupOrder: string[];
+  setGroupOrder: (order: string[]) => void;
   contextMenu?: ContextMenuState;
   agentSessionId?: string;
   agentSessionMeta?: AgentSessionMeta;
@@ -256,6 +258,7 @@ export const useApp = create<AppStore>((set, get) => ({
   agentExpanded: false,
   sidebarOpen: readUiPrefs().sidebarOpen ?? true,
   sidebarWidth: readUiPrefs().sidebarWidth ?? 244,
+  groupOrder: readUiPrefs().groupOrder ?? [],
   agentWidth: readUiPrefs().agentWidth ?? 384,
   agentMessages: [],
   agentFollowUps: [],
@@ -577,6 +580,10 @@ export const useApp = create<AppStore>((set, get) => ({
   setAgentWidth: (width, persist) => {
     set({ agentWidth: width });
     if (persist) saveUiPrefs({ agentWidth: width });
+  },
+  setGroupOrder: (order) => {
+    set({ groupOrder: order });
+    saveUiPrefs({ groupOrder: order });
   },
 
   openContextMenu: (x, y, items) => set({ contextMenu: { x, y, items } }),
