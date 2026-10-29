@@ -21,6 +21,8 @@ export interface GatewayConfig {
   attachmentDir: string;
   staticDir: string;
   production: boolean;
+  /** 跨请求事务空闲回收阈值，默认 15 分钟；测试可调小。 */
+  txIdleMs?: number;
 }
 
 function ensureDir(dir: string): string {
@@ -58,5 +60,6 @@ export function loadConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfi
   attachmentDir: overrides.attachmentDir ?? ensureDir(join(home, 'attachments')),
     staticDir: overrides.staticDir ?? process.env.AIDB_STATIC_DIR ?? defaultStatic,
     production,
+    txIdleMs: overrides.txIdleMs ?? (process.env.AIDB_TX_IDLE_MS ? Number(process.env.AIDB_TX_IDLE_MS) : undefined),
   };
 }

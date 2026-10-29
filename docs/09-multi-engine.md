@@ -172,7 +172,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - **支持范围**：MySQL、PostgreSQL、Oracle、SQL Server、SQLite、达梦 DM8（`capabilities.transactions`，UI 与 manager 都按这个能力位判断，不再硬编码引擎名单）。
 - **工作方式**：`POST /tx/begin` 用 `sessionId` 开启事务，驱动从连接池签出并**固定一条连接**（SQLite 是单连接，不需要固定但同一时刻只允许一个事务）；之后带同一 `sessionId` 的 `/query` 都走这条连接，`/tx/commit`、`/tx/rollback` 才不会作用到别的连接上。
 - **Agent**：`begin_transaction` / `commit_transaction` / `rollback_transaction` 三个工具，事务键是 `agent:<sessionId>`，与 UI 的会话命名空间隔离；事务开启后 `run_sql` 自动带上该键。
-- **边界**：只读连接拒绝开启事务（403 `READONLY`）；会话结束后再提交返回 404；`sessionId` 属于别的连接时按普通查询执行，不会报错；关闭连接时该连接的事务会话一并清除；空闲超过 15 分钟的事务在下次事务操作时自动回滚并释放连接。
+- **边界**：只读连接拒绝开启事务（403 `READONLY`）；会话结束后再提交返回 404；`sessionId` 属于别的连接时按普通查询执行，不会报错；关闭连接时该连接的事务会话一并清除；空闲超过 15 分钟（`AIDB_TX_IDLE_MS` 可调）的事务由后台定时器回滚，后续事务操作也会补一次回收，避免长期占用池内连接。
 - **其它引擎**仍即时提交，不做伪事务包装。
 
 ## 8. Agent 工具

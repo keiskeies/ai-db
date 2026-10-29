@@ -68,12 +68,20 @@ export class ConnectionManager {
   private clients = new Map<string, CachedDriver>();
   /** 跨请求事务会话：会话 id → 连接与开始时间（用于超时回收）。 */
   private txSessions = new Map<string, { connectionId: string; database?: string; startedAt: number; lastUsedAt: number }>();
+  private readonly txIdleMs: number;
+  private txTimer?: NodeJS.Timeout;
 
   constructor(
     private store: Store,
     private config: GatewayConfig,
     private settings: () => AppSettings,
-  ) {}
+  ) {
+    this.txIdleMs = config.txIdleMs && config.txIdleMs > 0 ? config.txIdleMs : ConnectionManager.TX_IDLE_MS;
+    this.txTimer = setInterval(() => {
+      void this.reapIdleTransactions().catch(() => undefined);
+    }, Math.max(200, Math.floor(this.txIdleMs / 2)));
+    this.txTimer.unref?.();
+  }
 
   private async driverFor(connectionId: string): Promise<Driver> {
     const cached = this.clients.get(connectionId);
@@ -973,13 +981,13 @@ export class ConnectionManager {
     return { conn, driver };
   }
 
-/** 事务会话最长空闲时间；超过就在下次事务操作时回滚，避免永久占住池内连接。 */
+  /** 事务会话最长空闲时间；超过就回滚，避免永久占住池内连接。 */
   private static readonly TX_IDLE_MS = 15 * 60 * 1000;
 
   /** 回滚并释放超时的事务会话，返回被回收的 id 列表。 */
   async reapIdleTransactions(): Promise<string[]> {
     const now = Date.now();
-    const expired = [...this.txSessions.entries()].filter(([, s]) => now - s.lastUsedAt > ConnectionManager.TX_IDLE_MS);
+    const expired = [...this.txSessions.entries()].filter(([, s]) => now - s.lastUsedAt > this.txIdleMs);
     const reaped: string[] = [];
     for (const [sessionId, session] of expired) {
       this.txSessions.delete(sessionId);
@@ -1159,6 +1167,7 @@ export class ConnectionManager {
   }
 
   async closeAll(): Promise<void> {
+    if (this.txTimer) clearInterval(this.txTimer);
     await Promise.all([...this.clients.entries()].map(async ([id]) => this.close(id)));
   }
 
