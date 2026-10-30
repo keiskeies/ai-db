@@ -7,11 +7,14 @@ import {
   createProvider,
   extractHeuristicMemories,
   getModelProfile,
+  getTool,
   historyTokenBudget,
+  providerTools,
   maxOutputTokensOf,
   suggestFollowUps,
   supportsInput,
   tablesFromSql,
+  disabledTableInSql,
   type AgentContextBundle,
   type AgentEvent,
   type AgentMessageBlock,
@@ -34,7 +37,9 @@ import { DbError } from './drivers';
 import type { ToolExecutor } from './executor';
 import type { ConnectionManager } from './manager';
 import type { Store } from './store';
+import type { SkillStore } from './skills';
 import { readAttachment } from './attachments';
+import { allTableScanNeedsScope, disabledTableTarget, disabledToolError, filterDisabledObjects, metadataBlockedError, scopeRequiredError, systemCatalogQuery } from './agentContextGuard';
 
 export interface TurnInput {
   text: string;
@@ -52,6 +57,7 @@ export interface AgentHostOptions {
   manager: ConnectionManager;
   executor: ToolExecutor;
   config: GatewayConfig;
+  skills?: SkillStore;
 }
 
 interface PendingApproval {
@@ -96,6 +102,8 @@ export class AgentHost {
     const controller = this.active.get(sessionId);
     if (!controller) return false;
     controller.abort();
+    // 立即落状态：provider 卡住时 runtime 可能迟迟不返回，UI 不能一直显示“运行中”
+    this.opts.store.updateSession(sessionId, { status: 'aborted' });
     for (const [id, pending] of this.approvals) {
       if (pending.sessionId !== sessionId) continue;
       clearTimeout(pending.timer);
@@ -173,6 +181,13 @@ export class AgentHost {
     const provider = createProvider(settings.agent);
     const controller = new AbortController();
     this.active.set(sessionId, controller);
+    // 硬上限：模型端整条流卡死时也要结束回合，避免会话永远 running
+    const turnTimer = setTimeout(() => {
+      if (controller.signal.aborted) return;
+      controller.abort();
+      this.opts.store.updateSession(sessionId, { status: 'aborted' });
+    }, Math.max(30_000, Number(process.env.AIDB_AGENT_TURN_MS ?? 480_000)));
+    turnTimer.unref();
 
     const store = this.opts.store;
     const historyMessages = store.listMessages(sessionId);
@@ -267,6 +282,9 @@ export class AgentHost {
     };
 
     const memoryContext: Memory[] = memories;
+    const allowedTools = providerTools().filter(
+      (tool) => (settings.features.skills || !tool.name.startsWith('skill_')) && (settings.features.mcp || !tool.name.startsWith('mcp_')),
+    );
     const runtime = new AgentRuntime({
       provider,
       maxSteps: settings.agent.maxSteps,
@@ -284,6 +302,8 @@ export class AgentHost {
           context: businessContext,
           mode: run.mode,
           attachmentTables,
+          question: run.userText,
+          focusMode: settings.agent.schemaFocus ?? 'auto',
         });
         const extra: string[] = [];
         if (sessionForAudit.summary) extra.push(`## Earlier session summary\n${sessionForAudit.summary}`);
@@ -293,7 +313,39 @@ export class AgentHost {
         }
         return `${base}\n${extra.join('\n\n')}`;
       },
-      executeTool: (call, signal) => this.opts.executor.execute(call, { sessionId, connectionId: conn?.id, database: conn?.database, signal }),
+      tools: allowedTools,
+      getTool: (name) => allowedTools.some((tool) => tool.name === name) ? getTool(name) : undefined,
+      executeTool: (call, signal) => {
+        const contextDb = businessContext?.database?.toLowerCase() ?? '';
+        const targetDb = String(call.args.database ?? conn?.database ?? '').toLowerCase();
+        const scoped = !contextDb || !targetDb || targetDb === contextDb;
+        const disabled = scoped ? businessContext?.disabledTables ?? [] : [];
+        if (disabled.length) {
+          if (allTableScanNeedsScope(call, disabled)) return Promise.resolve(scopeRequiredError(call.name));
+          const target = disabledTableTarget(call, disabled);
+          if (target) return Promise.resolve(disabledToolError(target));
+          if (typeof call.args.sql === 'string') {
+            const sql = call.args.sql;
+            if (systemCatalogQuery(sql)) return Promise.resolve(metadataBlockedError());
+            const blocked = disabledTableInSql(sql, disabled);
+            if (blocked) {
+              return Promise.resolve({
+                ok: false,
+                summary: '表已被业务上下文禁用',
+                error: {
+                  code: 'TABLE_DISABLED',
+                  message: `表 ${blocked} 已在业务上下文中禁用，不能执行包含它的 SQL。`,
+                  hint: '改用未禁用的表；若确需该表，请让用户在 Agent 上下文里启用它。',
+                },
+                meta: { durationMs: 0 },
+              });
+            }
+          }
+        }
+        return this.opts.executor
+          .execute(call, { sessionId, connectionId: conn?.id, database: conn?.database, disabledTables: disabled, signal })
+          .then((result) => filterDisabledObjects(call, result, disabled));
+      },
       requestApproval: (payload) => this.waitApproval(payload, sessionId),
       emit: wrappedEmit,
     });
@@ -338,6 +390,7 @@ export class AgentHost {
       store.updateSession(sessionId, { status: 'error' });
       emit({ type: 'error', code: err?.code ?? 'AGENT_ERROR', message: err?.message ?? 'Agent 运行失败', retryable: false });
     } finally {
+      clearTimeout(turnTimer);
       this.active.delete(sessionId);
       for (const [id, pending] of this.approvals) {
         if (pending.sessionId !== sessionId) continue;

@@ -54,6 +54,13 @@ import { DbError } from './drivers';
 import type { ConnectionManager } from './manager';
 import { assertExportable, dumpDatabase, exportNeedsStatement, importCsv, importDocuments, writeExportFile } from './services';
 import { generateData } from './features/generate';
+import { callMcpTool, listMcpTools } from './mcp';
+import { SkillStore } from './skills';
+import { SkillRunner } from './skillRunner';
+import type { SkillWorker } from './skillWorker';
+import { reconcileData, type ReconMapping } from './features/reconcile';
+import { compareSchemas } from './features/schemaCompare';
+import { transferData } from './features/transfer';
 import type { Store } from './store';
 
 export interface ToolContext {
@@ -61,6 +68,8 @@ export interface ToolContext {
   connectionId?: string;
   /** 会话选中的库：工具自己没传 database 时以它为准（优先于连接上的默认库）。 */
   database?: string;
+  /** 业务上下文禁用的表：全库扫描类工具必须在源头跳过。 */
+  disabledTables?: string[];
   signal?: AbortSignal;
 }
 
@@ -99,6 +108,11 @@ const DB_TOOLS = new Set([
   'analyze_chart',
   'forecast_chart',
   'generate_data',
+  'schema_diff',
+  'recon_data',
+  'transfer_data',
+  'mcp_list_tools',
+  'mcp_call',
 ]);
 
 const SQL_ONLY_TOOLS = new Set([
@@ -131,15 +145,58 @@ function ok(started: number, summary: string, data?: unknown, meta: Partial<Tool
 }
 
 export class ToolExecutor {
+  private skills: SkillStore;
+  private skillRunner: SkillRunner;
+  private skillWorker?: SkillWorker;
+  private skillRuns = new Map<string, string>();
+
   constructor(
     private store: Store,
     private manager: ConnectionManager,
     private config: GatewayConfig,
     private getSettings: () => AppSettings,
-  ) {}
+    skills?: SkillStore,
+    skillRunner?: SkillRunner,
+  ) {
+    this.skills = skills ?? new SkillStore(config.home);
+    this.skillRunner = skillRunner ?? new SkillRunner(this.skills, config.home);
+  }
+
+  setSkillWorker(worker: SkillWorker): void {
+    this.skillWorker = worker;
+  }
+
+  /** 同一会话对同一 skill 复用运行目录，避免每次写文件都新建沙箱。 */
+  private skillRunId(ctx: ToolContext, skill: string, provided?: unknown): string {
+    if (typeof provided === 'string' && provided) {
+      const run = this.skillRunner.getRun(provided);
+      if (skill && run.skill !== skill) throw new Error('runId 与 skill 不匹配');
+      return provided;
+    }
+    const key = `${ctx.sessionId}:${skill}`;
+    const existing = this.skillRuns.get(key);
+    if (existing) {
+      try {
+        this.skillRunner.getRun(existing);
+        return existing;
+      } catch {
+        this.skillRuns.delete(key);
+      }
+    }
+    const created = this.skillRunner.createRun(skill).id;
+    this.skillRuns.set(key, created);
+    return created;
+  }
 
   async execute(call: ToolCall, ctx: ToolContext): Promise<ToolResult> {
     const started = Date.now();
+    const features = this.getSettings().features;
+    if (!features.skills && (call.name.startsWith('skill_') || call.name === 'skill_worker_run')) {
+      return { ok: false, summary: 'Skill 功能已关闭', error: { code: 'FEATURE_DISABLED', message: 'Skill Host 已在设置中关闭' }, meta: { durationMs: 0 } };
+    }
+    if (!features.mcp && (call.name === 'mcp_list_tools' || call.name === 'mcp_call')) {
+      return { ok: false, summary: 'MCP 功能已关闭', error: { code: 'FEATURE_DISABLED', message: 'MCP 已在设置中关闭' }, meta: { durationMs: 0 } };
+    }
     const tool = getTool(call.name);
     let result: ToolResult;
     try {
@@ -168,6 +225,27 @@ export class ToolExecutor {
         status: result.ok ? 'ok' : 'error',
         durationMs: result.meta.durationMs,
         meta: { sessionId: ctx.sessionId, callId: call.id, error: result.error?.code, summary: result.summary },
+      });
+    }
+    if (call.name === 'skill_run' || call.name === 'skill_worker_run') {
+      const data = result.data as { runId?: string; id?: string; skill?: string; entrypoint?: string; exitCode?: number; status?: string } | undefined;
+      this.store.addAudit({
+        actor: 'agent',
+        tool: call.name,
+        risk: 'write',
+        approval: 'policy',
+        status: result.ok ? 'ok' : 'error',
+        durationMs: result.meta.durationMs,
+        meta: {
+          sessionId: ctx.sessionId,
+          callId: call.id,
+          runId: data?.runId ?? data?.id,
+          skill: data?.skill,
+          entrypoint: data?.entrypoint,
+          exitCode: data?.exitCode,
+          status: data?.status,
+          summary: result.summary,
+        },
       });
     }
     return result;
@@ -1000,7 +1078,7 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
 
       case 'audit_database': {
         const conn = this.requireConnection(call, ctx);
-        return this.auditDatabase(conn, this.databaseOf(call, conn), started);
+        return this.auditDatabase(conn, this.databaseOf(call, conn), started, ctx.disabledTables);
       }
 
       case 'check_data_quality': {
@@ -1061,14 +1139,166 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
         );
       }
 
+      case 'schema_diff': {
+        const sourceId = String(a.sourceConnectionId ?? '');
+        const targetId = String(a.targetConnectionId ?? '');
+        const diff = await compareSchemas(
+          this.store,
+          this.manager,
+          sourceId,
+          typeof a.sourceDatabase === 'string' ? a.sourceDatabase : undefined,
+          targetId,
+          typeof a.targetDatabase === 'string' ? a.targetDatabase : undefined,
+          {
+            includeDrops: a.includeDrops !== false,
+            tables: Array.isArray(a.tables) ? a.tables.filter((value): value is string => typeof value === 'string') : undefined,
+          },
+        );
+        const destructive = diff.tables.some((table) => table.changes.some((change) => change.destructive));
+        return ok(
+          started,
+          `${diff.tables.length} 张表 · ${diff.summary.statements} 条语句${destructive ? ' · 含破坏性变更' : ''}`,
+          diff,
+        );
+      }
+
+      case 'recon_data': {
+        const level = a.level === 'counts' || a.level === 'fields' ? a.level : 'keys';
+        const mapping = {
+          mode:
+            (a.left as any)?.kind === 'table' && (a.right as any)?.kind === 'table'
+              ? 'table-table'
+              : (a.left as any)?.kind === 'keyspace' && (a.right as any)?.kind === 'keyspace'
+                ? 'keyspace-keyspace'
+                : 'table-keyspace',
+          left: a.left,
+          right: a.right,
+          fieldMap: a.fieldMap,
+          baseSide: a.baseSide,
+          maxKeys: typeof a.maxKeys === 'number' ? a.maxKeys : undefined,
+        } as ReconMapping;
+        const result = await reconcileData(this.store, this.manager, mapping, level);
+        return ok(
+          started,
+          `${result.summary.comparedKeys} 键 · ${result.summary.missingInRight} 缺失 · ${result.summary.extraInRight} 多余 · ${result.summary.valueChanged} 改值`,
+          result,
+        );
+      }
+
+      case 'skill_list_files': {
+        const runId = this.skillRunId(ctx, String(a.skill ?? ''), a.runId);
+        return ok(started, `${runId} 文件清单`, { runId, files: this.skillRunner.listFiles(runId) });
+      }
+
+      case 'skill_worker_run': {
+        if (!this.skillWorker) throw new Error('Skill Worker 未启用');
+        const worker = this.skillWorker;
+        const prompt = String(a.prompt ?? '');
+        const timeoutMs = Math.min(900_000, Math.max(30_000, Number(a.timeoutSeconds ?? 600) * 1000 || 600_000));
+        const startedRun = worker.start(String(a.skill ?? ''), prompt);
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+          if (ctx.signal?.aborted) {
+            worker.cancel(startedRun.runId);
+            return { ok: false, summary: 'Skill Worker 已取消', error: { code: 'CANCELED', message: '运行已取消' }, meta: { durationMs: Date.now() - started } };
+          }
+          const state = worker.get(startedRun.runId);
+          if (!state || state.status !== 'running') {
+            const outputs = state?.outputs ?? [];
+            let project: string | undefined;
+            try {
+              project = this.skillRunner.getRun(startedRun.runId).project;
+            } catch {
+              project = undefined;
+            }
+            const succeeded = state?.status === 'succeeded';
+            return {
+              ok: succeeded,
+              summary: succeeded ? `Skill Worker 完成 · ${outputs.filter((file) => file.type === 'file').length} 个文件` : state?.error ?? 'Skill Worker 失败',
+              data: { runId: startedRun.runId, skill: String(a.skill ?? ''), status: state?.status, text: state?.text ?? '', outputs, project },
+              ...(succeeded ? {} : { error: { code: 'SKILL_WORKER_FAILED', message: state?.error ?? 'Skill Worker 失败' } }),
+              meta: { durationMs: Date.now() - started },
+            };
+          }
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+        worker.cancel(startedRun.runId);
+        return {
+          ok: false,
+          summary: 'Skill Worker 超时',
+          error: { code: 'SKILL_TIMEOUT', message: `Skill Worker 超过 ${Math.round(timeoutMs / 1000)} 秒未完成` },
+          data: { runId: startedRun.runId, status: 'timed_out' },
+          meta: { durationMs: Date.now() - started },
+        };
+      }
+
+      case 'skill_write': {
+        const runId = this.skillRunId(ctx, String(a.skill ?? ''), a.runId);
+        const area = a.area === 'output' ? 'output' : 'workspace';
+        const file = this.skillRunner.writeFile(runId, area, String(a.path ?? ''), String(a.content ?? ''));
+        return ok(started, `已写入 ${area}/${String(a.path)}`, { runId, path: file });
+      }
+
+      case 'skill_run': {
+        const runId = this.skillRunId(ctx, String(a.skill ?? ''), a.runId);
+        const result = await this.skillRunner.run(runId, String(a.entrypoint ?? ''), Array.isArray(a.args) ? a.args.map(String) : [], ctx.signal);
+        return {
+          ok: result.status === 'succeeded',
+          summary: result.status === 'succeeded' ? `Skill ${result.skill} 运行完成` : result.error ?? `Skill 状态 ${result.status}`,
+          data: result,
+          ...(result.status === 'succeeded' ? {} : { error: { code: result.status === 'timed_out' ? 'SKILL_TIMEOUT' : 'SKILL_RUN_FAILED', message: result.error ?? 'Skill 运行失败' } }),
+          meta: { durationMs: result.durationMs ?? 0 },
+        };
+      }
+
+      case 'skill_list': {
+        const skills = this.skills.listSkills(a.includeDisabled === true);
+        return ok(started, `${skills.length} 个 Skill`, { skills });
+      }
+
+      case 'skill_read': {
+        const skill = String(a.skill ?? '');
+        const result = this.skills.readFile(skill, typeof a.path === 'string' ? a.path : 'SKILL.md', typeof a.maxChars === 'number' ? a.maxChars : undefined, typeof a.offset === 'number' ? a.offset : undefined);
+        return ok(started, `${skill}/${result.path}${result.truncated ? '（已截断）' : ''}`, result);
+      }
+
+      case 'mcp_list_tools': {
+        const { server, tools } = await listMcpTools(this.store, String(a.server ?? ''));
+        return ok(started, `${server.name} 提供 ${tools.length} 个 MCP 工具`, {
+          server,
+          tools: tools.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })),
+        });
+      }
+
+      case 'mcp_call': {
+        const { server, result } = await callMcpTool(this.store, String(a.server ?? ''), String(a.tool ?? ''), (a.arguments as Record<string, unknown>) ?? {});
+        if (!result.ok) return result;
+        return ok(started, `${server.name}.${String(a.tool)} · ${result.summary.slice(0, 200)}`, result.data);
+      }
+
+      case 'transfer_data': {
+        const result = await transferData(this.store, this.manager, {
+          sourceId: String(a.sourceConnectionId ?? ''),
+          sourceDatabase: typeof a.sourceDatabase === 'string' ? a.sourceDatabase : undefined,
+          targetId: String(a.targetConnectionId ?? ''),
+          targetDatabase: typeof a.targetDatabase === 'string' ? a.targetDatabase : undefined,
+          tables: Array.isArray(a.tables) ? a.tables.filter((value): value is string => typeof value === 'string') : undefined,
+          mode: a.mode === 'replace' ? 'replace' : 'append',
+          createMissing: a.createMissing !== false,
+        });
+        this.manager.invalidate(String(a.targetConnectionId ?? ''));
+        return ok(started, `传输 ${result.results.length} 张表 · ${result.totalRows} 行`, result);
+      }
+
       default:
         throw new DbError(`未实现的工具：${call.name}`, { code: 'UNKNOWN_TOOL' });
     }
   }
 
-  private async auditDatabase(conn: ConnectionConfig, database: string | undefined, started: number): Promise<ToolResult> {
+  private async auditDatabase(conn: ConnectionConfig, database: string | undefined, started: number, disabledTables: string[] = []): Promise<ToolResult> {
     const schemas = await this.manager.schema(conn.id, database);
-    const tables = schemas.flatMap((schema) => schema.tables);
+    const disabled = new Set(disabledTables.map((name) => name.toLowerCase()));
+    const tables = schemas.flatMap((schema) => schema.tables).filter((table) => !disabled.has(table.name.toLowerCase()));
     const findings: Array<{ severity: 'high' | 'medium' | 'low' | 'info'; code: string; title: string; table?: string; detail: string; suggestedSql?: string }> = [];
     let counted = 0;
     for (const table of tables) {

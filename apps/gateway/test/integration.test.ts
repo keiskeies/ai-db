@@ -91,7 +91,7 @@ test('health, bootstrap and demo seed', async () => {
 
   const boot = await api<{ connections: ConnectionConfig[]; tools: unknown[]; settings: { agent: { provider: string } } }>('/bootstrap');
   assert.equal(boot.status, 200);
-  assert.equal(boot.body.tools.length, 40);
+  assert.equal(boot.body.tools.length, 51);
   demo = boot.body.connections.find((c) => c.engine === 'sqlite')!;
   assert.ok(demo, 'demo connection exists');
   assert.equal(boot.body.settings.agent.provider, 'local');
@@ -143,6 +143,20 @@ test('query, pagination, sorting and readonly enforcement', async () => {
       assert.ok(Number(multiRows[i - 1][multiTotalIndex]) >= Number(multiRows[i][multiTotalIndex]));
     }
   }
+
+  const filtered = await api<{ total: number; sql: string; batch: { sets: Array<{ rows: unknown[][]; columns: Array<{ name: string }> }> } }>(
+    `/data?connectionId=${demo.id}&table=orders&limit=5&offset=0&where=${encodeURIComponent('total_cents > 50000')}`,
+  );
+  assert.equal(filtered.status, 200);
+  assert.match(filtered.body.sql, /WHERE total_cents > 50000/i);
+  const filteredCount = await api<{ batch: { sets: Array<{ rows: unknown[][] }> } }>('/query', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: demo.id, sql: 'SELECT COUNT(*) AS c FROM orders WHERE total_cents > 50000' }),
+  });
+  assert.equal(filtered.body.total, Number(filteredCount.body.batch.sets[0].rows[0][0]), '筛选后的 total 必须是筛选后的行数');
+  assert.ok(filtered.body.total < 900 && filtered.body.total > 0);
+  const filteredTotalIndex = filtered.body.batch.sets[0].columns.findIndex((column) => column.name === 'total_cents');
+  for (const row of filtered.body.batch.sets[0].rows) assert.ok(Number(row[filteredTotalIndex]) > 50000);
 
   const readonly = await api<{ connection: ConnectionConfig }>('/connections', {
     method: 'POST',

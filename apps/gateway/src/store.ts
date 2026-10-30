@@ -14,6 +14,11 @@ import {
   type AgentMessageBlock,
   type AgentSessionMeta,
   type AppSettings,
+  type ArtifactInfo,
+  type ArtifactRunInfo,
+  type ArtifactScheduleInfo,
+  type ArtifactSpec,
+  type ArtifactType,
   type AuditEntry,
   type BackupInfo,
   type ConnectionColor,
@@ -23,8 +28,11 @@ import {
   type Engine,
   type Environment,
   type JobInfo,
+  type McpServerInfo,
   type Memory,
   type MemoryCandidate,
+  type NotificationChannelInfo,
+  type NotificationChannelType,
   type MemoryKind,
   type PermissionMode,
   type QueryHistoryItem,
@@ -120,6 +128,73 @@ CREATE TABLE IF NOT EXISTS agent_context (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_agent_ctx ON agent_context(connection_id, database_name, kind);
+CREATE TABLE IF NOT EXISTS artifacts (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL CHECK (type IN ('report','compare','diff','recon','fix')),
+  title TEXT NOT NULL,
+  spec_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('draft','ready','running','error')),
+  schedule_id TEXT,
+  origin_session_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_artifacts_type ON artifacts(type, updated_at DESC);
+CREATE TABLE IF NOT EXISTS artifact_runs (
+  id TEXT PRIMARY KEY,
+  artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK (status IN ('queued','running','waiting_approval','succeeded','failed','canceled')),
+  input_json TEXT,
+  steps_json TEXT,
+  result_json TEXT,
+  error TEXT,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  duration_ms INTEGER,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_artifact_runs ON artifact_runs(artifact_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS artifact_schedules (
+  id TEXT PRIMARY KEY,
+  artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+  interval_seconds INTEGER NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  refresh_narrative INTEGER NOT NULL DEFAULT 0,
+  notify_channels TEXT,
+  last_run_at TEXT,
+  last_status TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_artifact_schedules ON artifact_schedules(enabled, last_run_at);
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  command TEXT NOT NULL,
+  args_json TEXT,
+  env_secret TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS notification_channels (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  config_secret TEXT NOT NULL,
+  summary TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS skill_secrets (
+  skill_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (skill_id, name)
+);
 `;
 
 interface ConnectionRow {
@@ -258,6 +333,73 @@ function filterKinds(memories: Memory[], kinds?: MemoryKind[], excludeKinds?: Me
   return memories;
 }
 
+const round = (value: unknown, min: number, max: number, fallback: number): number => {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.floor(n))) : fallback;
+};
+
+interface ArtifactRow {
+  id: string;
+  type: ArtifactType;
+  title: string;
+  spec_json: string;
+  status: 'draft' | 'ready' | 'running' | 'error';
+  schedule_id: string | null;
+  origin_session_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ArtifactRunRow {
+  id: string;
+  artifact_id: string;
+  status: 'queued' | 'running' | 'waiting_approval' | 'succeeded' | 'failed' | 'canceled';
+  input_json: string | null;
+  steps_json: string | null;
+  result_json: string | null;
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+  created_at: string;
+}
+
+interface ArtifactScheduleRow {
+  id: string;
+  artifact_id: string;
+  interval_seconds: number;
+  enabled: number;
+  refresh_narrative: number;
+  notify_channels: string | null;
+  last_run_at: string | null;
+  last_status: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface McpServerRow {
+  id: string;
+  name: string;
+  command: string;
+  args_json: string | null;
+  env_secret: string | null;
+  enabled: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface NotificationChannelRow {
+  id: string;
+  name: string;
+  type: NotificationChannelType;
+  config_secret: string;
+  summary: string | null;
+  enabled: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export class Store {
   readonly db: DatabaseSync;
   private box: SecretBox;
@@ -296,7 +438,33 @@ export class Store {
     // 连接不再要求填库名之后，会话必须自己记住选中的库，否则重开会话会悄悄跑回默认库
     this.ensureColumn('agent_sessions', 'database', 'TEXT');
     this.ensureColumn('query_history', 'favorite', 'INTEGER DEFAULT 0');
-    this.db.exec('PRAGMA user_version = 4');
+    this.ensureColumn('artifact_schedules', 'notify_channels', 'TEXT');
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_history_recent ON query_history(favorite, created_at DESC)');
+    const channelsSql = this.one<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type='table' AND name='notification_channels'")?.sql ?? '';
+    if (channelsSql.includes('CHECK (type IN')) {
+      this.db.exec('BEGIN');
+      try {
+        this.db.exec('ALTER TABLE notification_channels RENAME TO notification_channels_v6');
+        this.db.exec(`CREATE TABLE notification_channels (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          type TEXT NOT NULL,
+          config_secret TEXT NOT NULL,
+          summary TEXT,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )`);
+        this.db.exec(`INSERT INTO notification_channels (id,name,type,config_secret,summary,enabled,created_at,updated_at)
+          SELECT id,name,type,config_secret,summary,enabled,created_at,updated_at FROM notification_channels_v6`);
+        this.db.exec('DROP TABLE notification_channels_v6');
+        this.db.exec('COMMIT');
+      } catch (err) {
+        this.db.exec('ROLLBACK');
+        throw err;
+      }
+    }
+    this.db.exec('PRAGMA user_version = 7');
   }
 
   private ensureColumn(table: string, column: string, type: string): void {
@@ -498,7 +666,10 @@ export class Store {
       ...stored,
       agent: { ...DEFAULT_SETTINGS.agent, ...(stored.agent ?? {}) },
       embedding: { ...DEFAULT_SETTINGS.embedding, ...(stored.embedding ?? {}) },
+      features: { ...DEFAULT_SETTINGS.features, ...(stored.features ?? {}) },
     };
+    merged.historyLimit = round(merged.historyLimit, 10, 100_000, DEFAULT_SETTINGS.historyLimit);
+    merged.historyRetentionDays = round(merged.historyRetentionDays, 0, 3650, DEFAULT_SETTINGS.historyRetentionDays);
     const enc = this.getSetting('agentApiKey');
     const decrypted = this.box.decrypt<{ apiKey: string }>(enc);
     if (decrypted?.apiKey) merged.agent.apiKey = decrypted.apiKey;
@@ -545,6 +716,8 @@ export class Store {
     }
     const sanitized: AppSettings = {
       ...next,
+      historyLimit: round(next.historyLimit, 10, 100_000, DEFAULT_SETTINGS.historyLimit),
+      historyRetentionDays: round(next.historyRetentionDays, 0, 3650, DEFAULT_SETTINGS.historyRetentionDays),
       agent: { ...next.agent, apiKey: undefined, hasApiKey: Boolean(apiKey ?? process.env.AIDB_API_KEY) },
       embedding: {
         ...next.embedding,
@@ -565,7 +738,24 @@ export class Store {
       'INSERT INTO query_history (id,connection_id,database_name,sql,status,duration_ms,row_count,error,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
       [entry.id, entry.connectionId ?? null, entry.database ?? null, entry.sql, entry.status, entry.durationMs ?? null, entry.rowCount ?? null, entry.error ?? null, entry.createdAt],
     );
+    this.pruneHistory();
     return entry;
+  }
+
+  /** 收藏永久保留；其余按条数与天数双阈值裁剪，避免历史表无限增长。 */
+  private pruneHistory(): void {
+    const { historyLimit, historyRetentionDays } = this.getSettings();
+    const keep = Math.min(100_000, Math.max(10, Math.floor(historyLimit)));
+    if (historyRetentionDays > 0) {
+      const cutoff = new Date(Date.now() - historyRetentionDays * 86_400_000).toISOString();
+      this.exec('DELETE FROM query_history WHERE COALESCE(favorite, 0) = 0 AND created_at < ?', [cutoff]);
+    }
+    this.exec(
+      `DELETE FROM query_history WHERE COALESCE(favorite, 0) = 0 AND id NOT IN (
+         SELECT id FROM query_history WHERE COALESCE(favorite, 0) = 0 ORDER BY created_at DESC LIMIT ?
+       )`,
+      [keep],
+    );
   }
 
   listHistory(opts: { connectionId?: string; search?: string; limit?: number } = {}): QueryHistoryItem[] {
@@ -1138,6 +1328,431 @@ export class Store {
 
   private invalidateAgentContextCache(): void {
     this.contextCache.clear();
+  }
+
+  // ---------- artifacts ----------
+  private rowToArtifact(row: ArtifactRow): ArtifactInfo {
+    let spec: ArtifactSpec;
+    try {
+      spec = JSON.parse(row.spec_json) as ArtifactSpec;
+    } catch {
+      spec = { version: 1, type: row.type, title: row.title };
+    }
+    return {
+      id: row.id,
+      type: row.type,
+      title: row.title,
+      spec,
+      status: row.status,
+      scheduleId: row.schedule_id ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  listArtifacts(opts: { type?: ArtifactType; limit?: number; offset?: number } = {}): ArtifactInfo[] {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (opts.type) {
+      clauses.push('type = ?');
+      params.push(opts.type);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const limit = Math.min(500, Math.max(1, opts.limit ?? 100));
+    const offset = Math.max(0, opts.offset ?? 0);
+    return this.all<ArtifactRow>(`SELECT * FROM artifacts ${where} ORDER BY updated_at DESC LIMIT ${limit} OFFSET ${offset}`, params).map((row) =>
+      this.rowToArtifact(row),
+    );
+  }
+
+  getArtifact(id: string): ArtifactInfo | undefined {
+    const row = this.one<ArtifactRow>('SELECT * FROM artifacts WHERE id = ?', [id]);
+    return row ? this.rowToArtifact(row) : undefined;
+  }
+
+  createArtifact(input: {
+    type: ArtifactType;
+    title: string;
+    spec: ArtifactSpec;
+    status?: 'draft' | 'ready' | 'running' | 'error';
+    originSessionId?: string;
+    scheduleId?: string;
+  }): ArtifactInfo {
+    const id = randomUUID();
+    const now = iso();
+    this.exec(
+      `INSERT INTO artifacts (id,type,title,spec_json,status,schedule_id,origin_session_id,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+      [
+        id,
+        input.type,
+        input.title,
+        JSON.stringify(input.spec),
+        input.status ?? 'ready',
+        input.scheduleId ?? null,
+        input.originSessionId ?? null,
+        now,
+        now,
+      ],
+    );
+    return this.getArtifact(id)!;
+  }
+
+  updateArtifact(id: string, patch: { title?: string; spec?: ArtifactSpec; status?: 'draft' | 'ready' | 'running' | 'error'; scheduleId?: string | null }): ArtifactInfo {
+    const row = this.one<ArtifactRow>('SELECT * FROM artifacts WHERE id = ?', [id]);
+    if (!row) throw new Error('产物不存在');
+    this.exec(
+      `UPDATE artifacts SET title = ?, spec_json = ?, status = ?, schedule_id = ?, updated_at = ? WHERE id = ?`,
+      [
+        patch.title ?? row.title,
+        patch.spec ? JSON.stringify(patch.spec) : row.spec_json,
+        patch.status ?? row.status,
+        patch.scheduleId === undefined ? row.schedule_id : patch.scheduleId,
+        iso(),
+        id,
+      ],
+    );
+    return this.getArtifact(id)!;
+  }
+
+  deleteArtifact(id: string): void {
+    this.exec('DELETE FROM artifacts WHERE id = ?', [id]);
+  }
+
+  addArtifactRun(input: {
+    artifactId: string;
+    status: ArtifactRunRow['status'];
+    input?: unknown;
+    steps?: unknown;
+    result?: unknown;
+    error?: string;
+    startedAt?: string;
+    finishedAt?: string;
+    durationMs?: number;
+  }): ArtifactRunInfo {
+    const id = randomUUID();
+    const startedAt = input.startedAt ?? iso();
+    this.exec(
+      `INSERT INTO artifact_runs (id,artifact_id,status,input_json,steps_json,result_json,error,started_at,finished_at,duration_ms,created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [
+        id,
+        input.artifactId,
+        input.status,
+        input.input === undefined ? null : JSON.stringify(input.input),
+        input.steps === undefined ? null : JSON.stringify(input.steps),
+        input.result === undefined ? null : JSON.stringify(input.result),
+        input.error ?? null,
+        startedAt,
+        input.finishedAt ?? null,
+        input.durationMs ?? null,
+        iso(),
+      ],
+    );
+    return this.getArtifactRun(id)!;
+  }
+
+  updateArtifactRun(
+    id: string,
+    patch: Partial<Pick<ArtifactRunInfo, 'status' | 'steps' | 'result' | 'error' | 'finishedAt' | 'durationMs'>>,
+  ): ArtifactRunInfo {
+    const row = this.one<ArtifactRunRow>('SELECT * FROM artifact_runs WHERE id = ?', [id]);
+    if (!row) throw new Error('运行记录不存在');
+    this.exec(
+      `UPDATE artifact_runs SET status = ?, steps_json = ?, result_json = ?, error = ?, finished_at = ?, duration_ms = ? WHERE id = ?`,
+      [
+        patch.status ?? row.status,
+        patch.steps === undefined ? row.steps_json : JSON.stringify(patch.steps),
+        patch.result === undefined ? row.result_json : JSON.stringify(patch.result),
+        patch.error === undefined ? row.error : patch.error,
+        patch.finishedAt === undefined ? row.finished_at : patch.finishedAt,
+        patch.durationMs === undefined ? row.duration_ms : patch.durationMs,
+        id,
+      ],
+    );
+    return this.getArtifactRun(id)!;
+  }
+
+  getArtifactRun(id: string): ArtifactRunInfo | undefined {
+    const row = this.one<ArtifactRunRow>('SELECT * FROM artifact_runs WHERE id = ?', [id]);
+    if (!row) return undefined;
+    return {
+      id: row.id,
+      artifactId: row.artifact_id,
+      status: row.status,
+      steps: row.steps_json ? JSON.parse(row.steps_json) : undefined,
+      result: row.result_json ? JSON.parse(row.result_json) : undefined,
+      error: row.error ?? undefined,
+      startedAt: row.started_at,
+      finishedAt: row.finished_at ?? undefined,
+      durationMs: row.duration_ms ?? undefined,
+    };
+  }
+
+  listArtifactRuns(artifactId: string, limit = 20): ArtifactRunInfo[] {
+    return this.all<ArtifactRunRow>(
+      'SELECT * FROM artifact_runs WHERE artifact_id = ? ORDER BY created_at DESC LIMIT ?',
+      [artifactId, Math.min(100, Math.max(1, limit))],
+    ).map((row) => ({
+      id: row.id,
+      artifactId: row.artifact_id,
+      status: row.status,
+      steps: row.steps_json ? JSON.parse(row.steps_json) : undefined,
+      result: row.result_json ? JSON.parse(row.result_json) : undefined,
+      error: row.error ?? undefined,
+      startedAt: row.started_at,
+      finishedAt: row.finished_at ?? undefined,
+      durationMs: row.duration_ms ?? undefined,
+    }));
+  }
+
+  private rowToArtifactSchedule(row: ArtifactScheduleRow): ArtifactScheduleInfo {
+    return {
+      id: row.id,
+      artifactId: row.artifact_id,
+      intervalSeconds: row.interval_seconds,
+      enabled: Boolean(row.enabled),
+      refreshNarrative: Boolean(row.refresh_narrative),
+      notifyChannels: row.notify_channels ? (JSON.parse(row.notify_channels) as string[]) : [],
+      lastRunAt: row.last_run_at ?? undefined,
+      lastStatus: row.last_status ?? undefined,
+      lastError: row.last_error ?? undefined,
+    };
+  }
+
+  getArtifactSchedule(artifactId: string): ArtifactScheduleInfo | undefined {
+    const row = this.one<ArtifactScheduleRow>('SELECT * FROM artifact_schedules WHERE artifact_id = ?', [artifactId]);
+    return row ? this.rowToArtifactSchedule(row) : undefined;
+  }
+
+  listArtifactSchedules(): ArtifactScheduleInfo[] {
+    return this.all<ArtifactScheduleRow>('SELECT * FROM artifact_schedules ORDER BY created_at ASC').map((row) =>
+      this.rowToArtifactSchedule(row),
+    );
+  }
+
+  upsertArtifactSchedule(artifactId: string, input: { intervalSeconds: number; enabled?: boolean; refreshNarrative?: boolean }): ArtifactScheduleInfo {
+    const now = iso();
+    const existing = this.one<ArtifactScheduleRow>('SELECT * FROM artifact_schedules WHERE artifact_id = ?', [artifactId]);
+    if (existing) {
+      this.exec(
+        'UPDATE artifact_schedules SET interval_seconds = ?, enabled = ?, refresh_narrative = ?, updated_at = ? WHERE id = ?',
+        [input.intervalSeconds, input.enabled === false ? 0 : 1, input.refreshNarrative ? 1 : 0, now, existing.id],
+      );
+      this.updateArtifact(artifactId, { scheduleId: existing.id });
+      return this.getArtifactSchedule(artifactId)!;
+    }
+    const id = randomUUID();
+    this.exec(
+      `INSERT INTO artifact_schedules (id,artifact_id,interval_seconds,enabled,refresh_narrative,last_run_at,last_status,last_error,created_at,updated_at)
+       VALUES (?,?,?,?,?,NULL,NULL,NULL,?,?)`,
+      [id, artifactId, input.intervalSeconds, input.enabled === false ? 0 : 1, input.refreshNarrative ? 1 : 0, now, now],
+    );
+    this.updateArtifact(artifactId, { scheduleId: id });
+    return this.getArtifactSchedule(artifactId)!;
+  }
+
+  deleteArtifactSchedule(artifactId: string): void {
+    this.exec('DELETE FROM artifact_schedules WHERE artifact_id = ?', [artifactId]);
+    this.updateArtifact(artifactId, { scheduleId: null });
+  }
+
+  setArtifactScheduleNotifyChannels(artifactId: string, channelIds: string[]): ArtifactScheduleInfo {
+    const row = this.one<ArtifactScheduleRow>('SELECT * FROM artifact_schedules WHERE artifact_id = ?', [artifactId]);
+    if (!row) throw new Error('定时配置不存在');
+    this.exec('UPDATE artifact_schedules SET notify_channels = ?, updated_at = ? WHERE id = ?', [
+      JSON.stringify([...new Set(channelIds.filter(Boolean))]),
+      iso(),
+      row.id,
+    ]);
+    return this.getArtifactSchedule(artifactId)!;
+  }
+
+  markArtifactScheduleRun(artifactId: string, status: 'ok' | 'error', error?: string): void {
+    this.exec(
+      'UPDATE artifact_schedules SET last_run_at = ?, last_status = ?, last_error = ?, updated_at = ? WHERE artifact_id = ?',
+      [iso(), status, error ?? null, iso(), artifactId],
+    );
+  }
+
+  // ---------- MCP servers ----------
+  private rowToMcpServer(row: McpServerRow): McpServerInfo {
+    let args: string[] = [];
+    try {
+      args = row.args_json ? (JSON.parse(row.args_json) as string[]) : [];
+    } catch {
+      args = [];
+    }
+    return {
+      id: row.id,
+      name: row.name,
+      command: row.command,
+      args,
+      enabled: Boolean(row.enabled),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  listMcpServers(): McpServerInfo[] {
+    return this.all<McpServerRow>('SELECT * FROM mcp_servers ORDER BY created_at ASC').map((row) => this.rowToMcpServer(row));
+  }
+
+  getMcpServer(id: string): McpServerInfo | undefined {
+    const row = this.one<McpServerRow>('SELECT * FROM mcp_servers WHERE id = ?', [id]);
+    return row ? this.rowToMcpServer(row) : undefined;
+  }
+
+  getMcpServerEnv(id: string): Record<string, string> {
+    const row = this.one<McpServerRow>('SELECT * FROM mcp_servers WHERE id = ?', [id]);
+    return row?.env_secret ? (this.box.decrypt<Record<string, string>>(row.env_secret) ?? {}) : {};
+  }
+
+  createMcpServer(input: { name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }): McpServerInfo {
+    const id = randomUUID();
+    const now = iso();
+    this.exec(
+      `INSERT INTO mcp_servers (id,name,command,args_json,env_secret,enabled,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [
+        id,
+        input.name.trim(),
+        input.command.trim(),
+        JSON.stringify(input.args ?? []),
+        input.env && Object.keys(input.env).length ? this.box.encrypt(input.env) : null,
+        input.enabled === false ? 0 : 1,
+        now,
+        now,
+      ],
+    );
+    return this.getMcpServer(id)!;
+  }
+
+  updateMcpServer(
+    id: string,
+    patch: { name?: string; command?: string; args?: string[]; env?: Record<string, string>; enabled?: boolean },
+  ): McpServerInfo {
+    const row = this.one<McpServerRow>('SELECT * FROM mcp_servers WHERE id = ?', [id]);
+    if (!row) throw new Error('MCP Server 不存在');
+    this.exec(
+      'UPDATE mcp_servers SET name = ?, command = ?, args_json = ?, env_secret = ?, enabled = ?, updated_at = ? WHERE id = ?',
+      [
+        patch.name?.trim() ?? row.name,
+        patch.command?.trim() ?? row.command,
+        patch.args ? JSON.stringify(patch.args) : row.args_json,
+        patch.env ? (Object.keys(patch.env).length ? this.box.encrypt(patch.env) : null) : row.env_secret,
+        patch.enabled === undefined ? row.enabled : patch.enabled ? 1 : 0,
+        iso(),
+        id,
+      ],
+    );
+    return this.getMcpServer(id)!;
+  }
+
+  deleteMcpServer(id: string): void {
+    this.exec('DELETE FROM mcp_servers WHERE id = ?', [id]);
+  }
+
+  // ---------- skill secrets ----------
+  listSkillSecretNames(skillId: string): string[] {
+    return this.all<{ name: string }>('SELECT name FROM skill_secrets WHERE skill_id = ? ORDER BY name', [skillId]).map((row) => row.name);
+  }
+
+  getSkillSecrets(skillId: string, names: string[]): Record<string, string> {
+    if (!names.length) return {};
+    const rows = this.all<{ name: string; value: string }>(
+      `SELECT name, value FROM skill_secrets WHERE skill_id = ? AND name IN (${names.map(() => '?').join(',')})`,
+      [skillId, ...names],
+    );
+    const out: Record<string, string> = {};
+    for (const row of rows) {
+      const value = this.box.decrypt<string>(row.value);
+      if (typeof value === 'string') out[row.name] = value;
+    }
+    return out;
+  }
+
+  setSkillSecret(skillId: string, name: string, value: string): void {
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,80}$/.test(name)) throw new Error('非法密钥名');
+    this.exec(
+      `INSERT INTO skill_secrets (skill_id,name,value,updated_at) VALUES (?,?,?,?)
+       ON CONFLICT(skill_id,name) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      [skillId, name, this.box.encrypt(value), iso()],
+    );
+  }
+
+  deleteSkillSecret(skillId: string, name: string): void {
+    this.exec('DELETE FROM skill_secrets WHERE skill_id = ? AND name = ?', [skillId, name]);
+  }
+
+  // ---------- notification channels ----------
+  private rowToNotificationChannel(row: NotificationChannelRow): NotificationChannelInfo {
+    return {
+      id: row.id,
+      name: row.name,
+      type: row.type,
+      enabled: Boolean(row.enabled),
+      summary: row.summary ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  listNotificationChannels(): NotificationChannelInfo[] {
+    return this.all<NotificationChannelRow>('SELECT * FROM notification_channels ORDER BY created_at ASC').map((row) =>
+      this.rowToNotificationChannel(row),
+    );
+  }
+
+  getNotificationChannel(id: string): NotificationChannelInfo | undefined {
+    const row = this.one<NotificationChannelRow>('SELECT * FROM notification_channels WHERE id = ?', [id]);
+    return row ? this.rowToNotificationChannel(row) : undefined;
+  }
+
+  getNotificationChannelConfig<T = Record<string, unknown>>(id: string): T | null {
+    const row = this.one<NotificationChannelRow>('SELECT * FROM notification_channels WHERE id = ?', [id]);
+    return row ? this.box.decrypt<T>(row.config_secret) : null;
+  }
+
+  createNotificationChannel(input: {
+    name: string;
+    type: NotificationChannelType;
+    config: Record<string, unknown>;
+    summary?: string;
+    enabled?: boolean;
+  }): NotificationChannelInfo {
+    const id = randomUUID();
+    const now = iso();
+    this.exec(
+      `INSERT INTO notification_channels (id,name,type,config_secret,summary,enabled,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [id, input.name.trim(), input.type, this.box.encrypt(input.config), input.summary ?? null, input.enabled === false ? 0 : 1, now, now],
+    );
+    return this.getNotificationChannel(id)!;
+  }
+
+  updateNotificationChannel(
+    id: string,
+    patch: { name?: string; config?: Record<string, unknown>; summary?: string; enabled?: boolean },
+  ): NotificationChannelInfo {
+    const row = this.one<NotificationChannelRow>('SELECT * FROM notification_channels WHERE id = ?', [id]);
+    if (!row) throw new Error('通知渠道不存在');
+    this.exec(
+      'UPDATE notification_channels SET name = ?, config_secret = ?, summary = ?, enabled = ?, updated_at = ? WHERE id = ?',
+      [
+        patch.name?.trim() ?? row.name,
+        patch.config ? this.box.encrypt(patch.config) : row.config_secret,
+        patch.summary === undefined ? row.summary : patch.summary,
+        patch.enabled === undefined ? row.enabled : patch.enabled ? 1 : 0,
+        iso(),
+        id,
+      ],
+    );
+    return this.getNotificationChannel(id)!;
+  }
+
+  deleteNotificationChannel(id: string): void {
+    this.exec('DELETE FROM notification_channels WHERE id = ?', [id]);
   }
 
   // ---------- audit ----------

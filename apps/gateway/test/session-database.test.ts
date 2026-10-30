@@ -60,7 +60,7 @@ test('v3 老库升级后补出 database 列，旧会话不受影响', () => {
     store.close();
 
     const check = new DatabaseSync(dbPath, { readOnly: true });
-    assert.equal(check.prepare('PRAGMA user_version').get()!.user_version, 4);
+    assert.equal(check.prepare('PRAGMA user_version').get()!.user_version, 7);
     assert.ok(check.prepare('PRAGMA table_info(agent_sessions)').all().some((c) => (c as { name: string }).name === 'database'));
     check.close();
   } finally {

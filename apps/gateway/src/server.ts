@@ -6,6 +6,11 @@ import cors from 'cors';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { AgentEvent, PermissionMode } from '@aidb/core';
 import { AgentHost } from './agentHost';
+import { CommandRunner } from './commands/runner';
+import { shutdownMcpClients } from './mcp';
+import { SkillStore } from './skills';
+import { SkillRunner } from './skillRunner';
+import { SkillWorker } from './skillWorker';
 import { hashToken, safeEqual } from './crypto';
 import { loadConfig, type GatewayConfig } from './config';
 import { ConnectionManager } from './manager';
@@ -23,6 +28,9 @@ export interface GatewayInstance {
   store: Store;
   manager: ConnectionManager;
   host: AgentHost;
+  skills: SkillStore;
+  skillWorker: SkillWorker;
+  commands: CommandRunner;
   scheduler: JobScheduler;
   close: () => Promise<void>;
 }
@@ -32,9 +40,24 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
   const store = new Store(config.dbPath, config.secret);
   ensureDemoDatabase(config, store);
   const manager = new ConnectionManager(store, config, () => store.getSettings());
-  const executor = new ToolExecutor(store, manager, config, () => store.getSettings());
-  const host = new AgentHost({ store, manager, executor, config });
+  const skills = new SkillStore(config.home);
+  skills.seedBuiltins();
+  const skillRunner = new SkillRunner(skills, config.home, (skillId, names) => store.getSkillSecrets(skillId, names));
+  const executor = new ToolExecutor(store, manager, config, () => store.getSettings(), skills, skillRunner);
+  const host = new AgentHost({ store, manager, executor, config, skills });
+  const commands = new CommandRunner(store, manager, executor);
+  const skillWorker = new SkillWorker(store, skills, skillRunner, executor);
+  executor.setSkillWorker(skillWorker);
   const scheduler = new JobScheduler(store, manager, config);
+  scheduler.setArtifactRunner(async (artifactId) => {
+    try {
+      const run = commands.startArtifact(artifactId);
+      const finished = await commands.waitForRun(run.id);
+      return { ok: finished?.status === 'succeeded', message: finished?.error?.message ?? finished?.status ?? '未完成' };
+    } catch (err: any) {
+      return { ok: false, message: err?.message ?? '定时运行失败' };
+    }
+  });
   scheduler.start();
 
   const app = express();
@@ -56,6 +79,11 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
       store,
       manager,
       host,
+      commands,
+      executor,
+      skills,
+      skillWorker,
+      skillRunner,
       pairCodes,
       scheduler,
       startedAt: Date.now(),
@@ -82,6 +110,7 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
         code: err?.code ?? 'INTERNAL_ERROR',
         message: err?.message ?? '服务器内部错误',
         hint: err?.hint,
+        field: err?.field,
       },
     });
   });
@@ -155,6 +184,7 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
 
   const close = async (): Promise<void> => {
     scheduler.stop();
+    shutdownMcpClients();
     await new Promise<void>((resolve) => {
       wss.close(() => resolve());
       for (const client of wss.clients) client.terminate();
@@ -167,5 +197,5 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
     store.close();
   };
 
-  return { app, server, wss, config, store, manager, host, scheduler, close };
+  return { app, server, wss, config, store, manager, host, skills, skillWorker, commands, scheduler, close };
 }

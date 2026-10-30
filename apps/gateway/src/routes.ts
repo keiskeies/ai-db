@@ -1,5 +1,7 @@
+import { existsSync } from 'node:fs';
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import {
+  COMMANDS,
   TOOLS,
   engineDefaultPort,
   engineMeta,
@@ -17,20 +19,25 @@ import {
   buildUpdate,
   classifySql,
   encodeSse,
+  getTool,
   isAgentContextActive,
   listProviderModels,
   quoteIdent,
+  resolveRisk,
   sseHeaders,
   suggestQuestions,
   tablesFromSql,
   type AppSettings,
+  type ArtifactType,
   type ColumnDef,
   type ConnectionConfig,
   type ForeignKeyInfo,
   type IndexDef,
   type MemoryCandidate,
+  type NotificationChannelType,
   type PermissionMode,
   type ProviderKind,
+  type ReportSpec,
 } from '@aidb/core';
 import { pairingCode, hashToken, randomToken, safeEqual } from './crypto';
 import { readAttachment, saveAttachment } from './attachments';
@@ -39,6 +46,18 @@ import type { ConnectionManager } from './manager';
 import { assertExportable, auditCsv, coerceValue, dumpDatabase, exportNeedsStatement, importCsv, importDocuments, writeExportFile } from './services';
 import type { Store } from './store';
 import type { AgentHost } from './agentHost';
+import type { ToolExecutor } from './executor';
+import { exportArtifact } from './commands/export';
+import { handleBotEvent } from './bots';
+import type { SkillStore } from './skills';
+import type { SkillWorker } from './skillWorker';
+import type { SkillRunner } from './skillRunner';
+import { runReportDeck } from './features/reportDeckRun';
+import { listMcpTools } from './mcp';
+import { channelSummary, sendNotification, validateNotificationChannel } from './notifications';
+import { executeFixPlan } from './commands/fixExecute';
+import { executeReconRepair } from './commands/reconExecute';
+import type { CommandRunner } from './commands/runner';
 import type { JobScheduler } from './scheduler';
 import { createFeatureRouter } from './features/routes';
 
@@ -47,8 +66,13 @@ export interface ApiDeps {
   store: Store;
   manager: ConnectionManager;
   host: AgentHost;
+  executor: ToolExecutor;
+  skills: SkillStore;
+  skillWorker: SkillWorker;
+  skillRunner: SkillRunner;
   pairCodes: Map<string, { expiresAt: number }>;
   scheduler: JobScheduler;
+  commands: CommandRunner;
   startedAt: number;
 }
 
@@ -115,12 +139,28 @@ function classifyForAudit(sql: string) {
   }
 }
 
+function reportDeckOutline(result: any): string {
+  const lines: string[] = [];
+  for (const section of result?.sections ?? []) {
+    lines.push(`## ${String(section.title ?? '')}`);
+    for (const block of section.blocks ?? []) {
+      if (block.kind === 'narrative' && block.text) lines.push(String(block.text));
+      else if (block.kind === 'metric') for (const metric of block.metrics ?? []) lines.push(`- ${metric.label}: ${metric.value}${metric.unit ?? ''}`);
+      else if (block.kind === 'comparison') lines.push(`- ${block.left?.label}: ${block.left?.value} / ${block.right?.label}: ${block.right?.value} / 差值 ${block.delta?.absolute ?? ''}`);
+      else if (block.kind === 'callout' && block.text) lines.push(`> ${block.text}`);
+      else if (block.kind === 'table') for (const row of (block.rows ?? []).slice(0, 30)) lines.push(`| ${row.join(' | ')} |`);
+      else if (block.kind === 'chart') for (const point of (block.series ?? []).slice(0, 30)) lines.push(`- ${point.label}: ${point.value}`);
+    }
+  }
+  return lines.join('\n').slice(0, 30_000);
+}
+
 export function createApiRouter(deps: ApiDeps): Router {
-  const { store, manager, host, config, scheduler } = deps;
+  const { store, manager, host, config, scheduler, commands, executor, skills, skillWorker, skillRunner } = deps;
   const router = Router();
 
   router.use((req, res, next) => {
-    const open = req.path === '/health' || req.path === '/pair/claim';
+    const open = req.path === '/health' || req.path === '/pair/claim' || req.path.startsWith('/bots/');
     if (open) return next();
     const token = bearer(req);
     if (!token) {
@@ -1465,7 +1505,7 @@ export function createApiRouter(deps: ApiDeps): Router {
         actor: 'user',
         timeoutMs: store.getSettings().queryTimeoutMs,
       });
-      const countSql = buildCount(conn.engine, table.name, engineUsesSchema(conn.engine) ? table.schema : undefined);
+      const countSql = buildCount(conn.engine, table.name, engineUsesSchema(conn.engine) ? table.schema : undefined, str(req.query.where));
       const countBatch = await manager.query(connectionId, countSql, { database, maxRows: 1, allowMulti: false, autoLimit: false, actor: 'user' });
       res.json({
         batch,
@@ -1795,7 +1835,43 @@ export function createApiRouter(deps: ApiDeps): Router {
   );
 
   // ---------- agent ----------
-  router.get('/agent/tools', (_req, res) => res.json({ tools: TOOLS }));
+  router.get('/agent/tools', (req, res) => {
+    if (str(req.query.for) === 'mcp' && !store.getSettings().features.mcp) {
+      res.status(403).json({ error: { code: 'FEATURE_DISABLED', message: 'MCP 已在设置中关闭' } });
+      return;
+    }
+    res.json({ tools: TOOLS });
+  });
+
+  router.post(
+    '/agent/tools/:name',
+    ah(async (req, res) => {
+      if (!store.getSettings().features.mcp) {
+        res.status(403).json({ error: { code: 'FEATURE_DISABLED', message: 'MCP 已在设置中关闭' } });
+        return;
+      }
+      const name = req.params.name;
+      const tool = getTool(name);
+      if (!tool) {
+        res.status(404).json({ error: { code: 'TOOL_NOT_FOUND', message: `工具不存在：${name}` } });
+        return;
+      }
+      const body = obj(req.body, 'body');
+      const args = body.args && typeof body.args === 'object' && !Array.isArray(body.args) ? (body.args as Record<string, unknown>) : {};
+      const call = { id: `http-${Date.now()}`, name, args };
+      const risk = resolveRisk(call, tool);
+      if (risk !== 'read') {
+        res.status(403).json({ error: { code: 'TOOL_READ_ONLY', message: `MCP 只读桥不允许执行 ${name}（风险 ${risk}）` } });
+        return;
+      }
+      const result = await executor.execute(call, {
+        sessionId: typeof body.sessionId === 'string' && body.sessionId ? body.sessionId : 'mcp',
+        connectionId: typeof body.connectionId === 'string' ? body.connectionId : undefined,
+        database: typeof body.database === 'string' ? body.database : undefined,
+      });
+      res.status(result.ok ? 200 : 400).json({ result });
+    }),
+  );
 
   router.post(
     '/agent/models',
@@ -2145,6 +2221,550 @@ export function createApiRouter(deps: ApiDeps): Router {
   router.get('/devices', (_req, res) => res.json({ devices: store.listDevices() }));
   router.delete('/devices/:id', (req, res) => {
     store.revokeDevice(req.params.id);
+    res.status(204).end();
+  });
+
+  // ---------- commands / artifacts ----------
+  router.get('/commands', (_req, res) => res.json({ commands: COMMANDS }));
+
+  router.post(
+    '/commands/:id/runs',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const input = obj(body.input, 'input');
+      const saveAs = body.saveAs && typeof body.saveAs === 'object' ? (body.saveAs as Record<string, unknown>) : {};
+      const run = commands.start(req.params.id, input, { title: str(saveAs.title) });
+      res.status(202).json({ run });
+    }),
+  );
+
+  router.get('/commands/runs/:id', (req, res) => {
+    const run = commands.get(req.params.id);
+    if (!run) {
+      res.status(404).json({ error: { code: 'RUN_NOT_FOUND', message: '运行不存在' } });
+      return;
+    }
+    res.json({ run });
+  });
+
+  router.get('/commands/runs/:id/events', (req, res) => {
+    const runId = req.params.id;
+    if (!commands.get(runId)) {
+      res.status(404).json({ error: { code: 'RUN_NOT_FOUND', message: '运行不存在' } });
+      return;
+    }
+    res.writeHead(200, sseHeaders());
+    res.flushHeaders?.();
+    const after = Number(req.query.after) || 0;
+    let closed = false;
+    let unsubscribe: () => void = () => undefined;
+    const heartbeat = setInterval(() => {
+      if (!closed && !res.writableEnded) res.write(': ping\n\n');
+    }, 15000);
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      clearInterval(heartbeat);
+      unsubscribe();
+    };
+    const send = (event: unknown) => {
+      if (!closed && !res.writableEnded) res.write(encodeSse(event as Parameters<typeof encodeSse>[0]));
+      const type = (event as { type?: string })?.type;
+      if (type === 'run_finished') {
+        cleanup();
+        if (!res.writableEnded) res.end();
+      }
+    };
+    res.on('close', cleanup);
+    for (const event of commands.events(runId, after)) {
+      send(event);
+      if (closed) return;
+    }
+    if (commands.isFinished(runId)) {
+      cleanup();
+      if (!res.writableEnded) res.end();
+      return;
+    }
+    unsubscribe = commands.subscribe(runId, send);
+  });
+
+  router.post('/commands/runs/:id/cancel', (req, res) => {
+    res.json({ ok: commands.cancel(req.params.id) });
+  });
+
+  router.get('/artifacts', (req, res) => {
+    res.json({
+      artifacts: store.listArtifacts({
+        type: str(req.query.type) as ArtifactType | undefined,
+        limit: num(req.query.limit, 100, 1, 500),
+      }),
+    });
+  });
+
+  router.get('/artifacts/:id', (req, res) => {
+    const artifact = store.getArtifact(req.params.id);
+    if (!artifact) {
+      res.status(404).json({ error: { code: 'ARTIFACT_NOT_FOUND', message: '产物不存在' } });
+      return;
+    }
+    res.json({ artifact });
+  });
+
+  router.get('/artifacts/:id/runs', (req, res) => {
+    if (!store.getArtifact(req.params.id)) {
+      res.status(404).json({ error: { code: 'ARTIFACT_NOT_FOUND', message: '产物不存在' } });
+      return;
+    }
+    res.json({ runs: store.listArtifactRuns(req.params.id, num(req.query.limit, 20, 1, 100)) });
+  });
+
+  router.get(
+    '/artifacts/:id/export',
+    ah(async (req, res) => {
+      const format = str(req.query.format) === 'pptx' ? 'pptx' : 'xlsx';
+      res.json(await exportArtifact(store, config, req.params.id, format));
+    }),
+  );
+
+  router.post('/artifacts/:id/deck', (req, res) => {
+    if (!store.getSettings().features.reportDeck) {
+      res.status(403).json({ error: { code: 'FEATURE_DISABLED', message: 'AI PPT 已在设置中关闭' } });
+      return;
+    }
+    const artifact = store.getArtifact(req.params.id);
+    if (!artifact) {
+      res.status(404).json({ error: { code: 'ARTIFACT_NOT_FOUND', message: '产物不存在' } });
+      return;
+    }
+    const run = store.listArtifactRuns(artifact.id, 1)[0];
+    if (!run) {
+      res.status(400).json({ error: { code: 'ARTIFACT_RUN_REQUIRED', message: '产物还没有运行结果' } });
+      return;
+    }
+    const body = obj(req.body, 'body');
+    const skill = typeof body.skill === 'string' && body.skill.trim() ? body.skill.trim() : 'ppt-master';
+    const template = typeof body.template === 'string' ? body.template.trim() : '';
+    const deterministic = body.mode === 'deterministic' || store.getSettings().agent.provider === 'local';
+    if (deterministic) {
+      const spec = run.result as ReportSpec;
+      if (!spec || !Array.isArray(spec.sections) || !spec.sections.length) {
+        res.status(400).json({ error: { code: 'REPORT_REQUIRED', message: '确定性排版需要报告结果（report/compare）' } });
+        return;
+      }
+      runReportDeck(skills, skillRunner, spec, template)
+        .then((info) => {
+          if (!res.writableEnded) res.status(201).json({ run: { runId: info.id, skill: info.skill, status: info.status }, mode: 'deterministic' });
+        })
+        .catch((err: any) => {
+          if (!res.writableEnded) res.status(500).json({ error: { code: 'DECK_FAILED', message: err?.message ?? '报告 PPTX 生成失败' } });
+        });
+      return;
+    }
+    const outline = reportDeckOutline(run.result);
+    const prompt = [
+      `把下面的 AiDB 报告做成 3 页左右的中文演示文稿，直接产出原生 PPTX。`,
+      `报告标题：${artifact.title}`,
+      `所有数字必须逐字来自报告，不得改写、四舍五入或补充报告之外的事实。`,
+      template ? `使用模板：${template}` : '',
+      `报告内容：\n${outline || JSON.stringify(run.result).slice(0, 30_000)}`,
+    ].filter(Boolean).join('\n\n');
+    res.status(202).json({ run: skillWorker.start(skill, prompt), mode: 'agent' });
+  });
+
+  router.post(
+    '/artifacts/:id/recon/execute',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      res.json(
+        await executeReconRepair(store, manager, config, req.params.id, {
+          confirm: String(body.confirm ?? ''),
+          steps: Array.isArray(body.steps) ? body.steps.map(Number).filter((value) => Number.isInteger(value) && value >= 0) : undefined,
+        }),
+      );
+    }),
+  );
+
+  router.post(
+    '/artifacts/:id/fix/execute',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      res.json(
+        await executeFixPlan(
+          store,
+          manager,
+          config,
+          req.params.id,
+          {
+            confirm: String(body.confirm ?? ''),
+            backup: body.backup === true,
+            dryRun: body.dryRun === true,
+            steps: Array.isArray(body.steps) ? body.steps.map(Number).filter((value) => Number.isInteger(value) && value >= 0) : undefined,
+          },
+          executor,
+        ),
+      );
+    }),
+  );
+
+  router.post(
+    '/bots/:id/events',
+    ah(async (req, res) => {
+      const result = await handleBotEvent(store, host, req.params.id, req.body, req.headers);
+      res.status(result.status).json(result.body);
+    }),
+  );
+
+  router.get('/skills', (req, res) => {
+    res.json({ skills: skills.listSkills(str(req.query.includeDisabled) === '1') });
+  });
+
+  router.post('/skills/:id/runs', (req, res) => {
+    const body = obj(req.body, 'body');
+    res.status(202).json({ run: skillWorker.start(req.params.id, typeof body.prompt === 'string' ? body.prompt : undefined) });
+  });
+
+  router.get('/skills/runs/:id', (req, res) => {
+    const state = skillWorker.get(req.params.id);
+    if (!state) {
+      const stored = skillWorker.runInfo(req.params.id);
+      if (!stored) {
+        res.status(404).json({ error: { code: 'SKILL_RUN_NOT_FOUND', message: 'Skill 运行不存在' } });
+        return;
+      }
+      res.json({
+        run: {
+          runId: stored.id,
+          skill: stored.skill,
+          status: stored.status,
+          text: stored.stdout ?? '',
+          error: stored.error,
+          outputs: skillWorker.runFiles(stored.id),
+          workspace: stored.workspace,
+          project: stored.project,
+          startedAt: stored.startedAt,
+          finishedAt: stored.finishedAt,
+        },
+      });
+      return;
+    }
+    const run = skillWorker.runInfo(state.runId);
+    res.json({
+      run: {
+        runId: state.runId,
+        skill: state.skill,
+        status: state.status,
+        text: state.text,
+        error: state.error,
+        outputs: state.outputs,
+        workspace: run?.workspace,
+        project: run?.project,
+        startedAt: state.startedAt,
+        finishedAt: state.finishedAt,
+      },
+    });
+  });
+
+  router.post('/skills/runs/:id/answers', (req, res) => {
+    const body = obj(req.body, 'body');
+    const questionId = typeof body.questionId === 'string' ? body.questionId : '';
+    const answer = typeof body.answer === 'string' ? body.answer.trim() : '';
+    if (!questionId || !answer) {
+      res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'questionId 与 answer 不能为空' } });
+      return;
+    }
+    res.json({ ok: skillWorker.answer(req.params.id, questionId, answer) });
+  });
+
+  router.get('/skills/runs/:id/files', (req, res) => {
+    const area = str(req.query.area) === 'output' ? 'output' : str(req.query.area) === 'input' ? 'input' : 'workspace';
+    try {
+      const file = skillWorker.runFile(req.params.id, area, str(req.query.path) ?? '');
+      if (!existsSync(file)) {
+        res.status(404).json({ error: { code: 'SKILL_FILE_NOT_FOUND', message: '文件不存在' } });
+        return;
+      }
+      res.sendFile(file);
+    } catch (err: any) {
+      res.status(400).json({ error: { code: 'INVALID_INPUT', message: err?.message ?? '非法文件路径' } });
+    }
+  });
+
+  router.get('/skills/runs/:id/events', (req, res) => {
+    const runId = req.params.id;
+    if (!skillWorker.get(runId)) {
+      res.status(404).json({ error: { code: 'SKILL_RUN_NOT_FOUND', message: 'Skill 运行不存在' } });
+      return;
+    }
+    res.writeHead(200, sseHeaders());
+    res.flushHeaders?.();
+    const after = Number(req.query.after) || 0;
+    let closed = false;
+    let unsubscribe: () => void = () => undefined;
+    const heartbeat = setInterval(() => {
+      if (!closed && !res.writableEnded) res.write(': ping\n\n');
+    }, 15000);
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      clearInterval(heartbeat);
+      unsubscribe();
+    };
+    const send = (event: unknown) => {
+      if (!closed && !res.writableEnded) res.write(encodeSse(event as Parameters<typeof encodeSse>[0]));
+      if ((event as { type?: string })?.type === 'done') {
+        cleanup();
+        if (!res.writableEnded) res.end();
+      }
+    };
+    res.on('close', cleanup);
+    for (const event of skillWorker.events(runId, after)) send(event);
+    if (skillWorker.isFinished(runId)) {
+      cleanup();
+      if (!res.writableEnded) res.end();
+      return;
+    }
+    unsubscribe = skillWorker.subscribe(runId, send);
+  });
+
+  router.post('/skills/runs/:id/cancel', (req, res) => {
+    res.json({ ok: skillWorker.cancel(req.params.id) });
+  });
+
+  router.get('/skills/:id/secrets', (req, res) => {
+    const skill = skills.getSkill(req.params.id);
+    if (!skill) {
+      res.status(404).json({ error: { code: 'SKILL_NOT_FOUND', message: 'Skill 不存在' } });
+      return;
+    }
+    const manifest = skills.getManifest(req.params.id);
+    res.json({ declared: manifest?.secrets ?? [], set: store.listSkillSecretNames(req.params.id) });
+  });
+
+  router.put('/skills/:id/secrets', (req, res) => {
+    const manifest = skills.getManifest(req.params.id);
+    const declared = manifest?.secrets ?? [];
+    const body = obj(req.body, 'body');
+    const secrets = body.secrets && typeof body.secrets === 'object' && !Array.isArray(body.secrets) ? (body.secrets as Record<string, unknown>) : {};
+    for (const [name, value] of Object.entries(secrets)) {
+      if (!declared.includes(name)) {
+        res.status(400).json({ error: { code: 'SECRET_NOT_DECLARED', message: `Skill 未声明密钥 ${name}` } });
+        return;
+      }
+      if (typeof value === 'string' && value) store.setSkillSecret(req.params.id, name, value);
+      else store.deleteSkillSecret(req.params.id, name);
+    }
+    res.json({ declared, set: store.listSkillSecretNames(req.params.id) });
+  });
+
+  router.delete('/skills/:id/secrets/:name', (req, res) => {
+    store.deleteSkillSecret(req.params.id, req.params.name);
+    res.json({ declared: skills.getManifest(req.params.id)?.secrets ?? [], set: store.listSkillSecretNames(req.params.id) });
+  });
+
+  router.get('/skills/:id', (req, res) => {
+    const skill = skills.getSkill(req.params.id);
+    if (!skill) {
+      res.status(404).json({ error: { code: 'SKILL_NOT_FOUND', message: 'Skill 不存在' } });
+      return;
+    }
+    res.json({ skill });
+  });
+
+  router.get('/skills/:id/file', (req, res) => {
+    try {
+      res.json(skills.readFile(req.params.id, str(req.query.path) ?? 'SKILL.md'));
+    } catch (err: any) {
+      res.status(400).json({ error: { code: 'SKILL_READ_FAILED', message: err?.message ?? '读取失败' } });
+    }
+  });
+
+  router.post(
+    '/skills/import',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const requestedId = str(body.id);
+      if (typeof body.zipBase64 === 'string' && body.zipBase64.trim()) {
+        if (body.zipBase64.length > 280_000_000) throw Object.assign(new Error('压缩包超过限制'), { code: 'SKILL_TOO_LARGE', status: 400 });
+        res.status(201).json({ skill: skills.importZip(Buffer.from(body.zipBase64, 'base64'), requestedId) });
+        return;
+      }
+      if (typeof body.git === 'string' && body.git.trim()) {
+        res.status(201).json({
+          skill: await skills.importGit(body.git.trim(), requestedId, { ref: str(body.ref), subdir: str(body.subdir) }),
+        });
+        return;
+      }
+      if (typeof body.npm === 'string' && body.npm.trim()) {
+        res.status(201).json({ skill: await skills.importNpm(body.npm.trim(), requestedId, str(body.subdir)) });
+        return;
+      }
+      const path = str(body.path);
+      if (!path) throw Object.assign(new Error('需要 path、zipBase64、git 或 npm'), { code: 'INVALID_INPUT', status: 400 });
+      res.status(201).json({ skill: skills.importDirectory(path, requestedId) });
+    }),
+  );
+
+  router.post('/skills/:id/enable', (req, res) => {
+    const body = obj(req.body, 'body');
+    res.json({ skill: skills.setEnabled(req.params.id, body.enabled !== false) });
+  });
+
+  router.delete('/skills/:id', (req, res) => {
+    skills.deleteSkill(req.params.id);
+    res.status(204).end();
+  });
+
+  router.get('/mcp/servers', (_req, res) => {
+    res.json({ servers: store.listMcpServers() });
+  });
+
+  router.post(
+    '/mcp/servers',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const name = String(body.name ?? '').trim();
+      const command = String(body.command ?? '').trim();
+      if (!name || !command) throw Object.assign(new Error('name 与 command 必填'), { code: 'INVALID_INPUT', status: 400 });
+      if (store.listMcpServers().some((server) => server.name === name)) {
+        throw Object.assign(new Error('MCP Server 名称已存在'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      const args = Array.isArray(body.args) ? body.args.map(String) : [];
+      const env = body.env && typeof body.env === 'object' ? Object.fromEntries(Object.entries(body.env as Record<string, unknown>).map(([key, value]) => [key, String(value)])) : undefined;
+      res.status(201).json({ server: store.createMcpServer({ name, command, args, env, enabled: body.enabled !== false }) });
+    }),
+  );
+
+  router.put(
+    '/mcp/servers/:id',
+    ah(async (req, res) => {
+      if (!store.getMcpServer(req.params.id)) throw Object.assign(new Error('MCP Server 不存在'), { code: 'MCP_SERVER_NOT_FOUND', status: 404 });
+      const body = obj(req.body, 'body');
+      res.json({
+        server: store.updateMcpServer(req.params.id, {
+          name: typeof body.name === 'string' ? body.name : undefined,
+          command: typeof body.command === 'string' ? body.command : undefined,
+          args: Array.isArray(body.args) ? body.args.map(String) : undefined,
+          env: body.env && typeof body.env === 'object' ? Object.fromEntries(Object.entries(body.env as Record<string, unknown>).map(([key, value]) => [key, String(value)])) : undefined,
+          enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
+        }),
+      });
+    }),
+  );
+
+  router.delete('/mcp/servers/:id', (req, res) => {
+    store.deleteMcpServer(req.params.id);
+    res.status(204).end();
+  });
+
+  router.get(
+    '/mcp/servers/:id/tools',
+    ah(async (req, res) => {
+      res.json(await listMcpTools(store, req.params.id));
+    }),
+  );
+
+  router.get('/notifications/channels', (_req, res) => {
+    res.json({ channels: store.listNotificationChannels() });
+  });
+
+  router.post(
+    '/notifications/channels',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const type = String(body.type ?? '') as NotificationChannelType;
+      const allowedTypes: NotificationChannelType[] = ['feishu', 'wecom', 'qq-onebot', 'dingtalk', 'slack', 'discord', 'telegram'];
+      if (!allowedTypes.includes(type)) {
+        throw Object.assign(new Error('type 必须是 feishu / wecom / qq-onebot / dingtalk / slack / discord / telegram'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      const name = String(body.name ?? '').trim();
+      if (!name) throw Object.assign(new Error('name 必填'), { code: 'INVALID_INPUT', status: 400 });
+      const config = body.config && typeof body.config === 'object' ? (body.config as Record<string, unknown>) : {};
+      validateNotificationChannel(type, config);
+      res.status(201).json({
+        channel: store.createNotificationChannel({ name, type, config, summary: channelSummary(type, config), enabled: body.enabled !== false }),
+      });
+    }),
+  );
+
+  router.put(
+    '/notifications/channels/:id',
+    ah(async (req, res) => {
+      const existing = store.getNotificationChannel(req.params.id);
+      if (!existing) throw Object.assign(new Error('通知渠道不存在'), { code: 'CHANNEL_NOT_FOUND', status: 404 });
+      const body = obj(req.body, 'body');
+      const config = body.config && typeof body.config === 'object' ? (body.config as Record<string, unknown>) : undefined;
+      if (config) validateNotificationChannel(existing.type, config);
+      res.json({
+        channel: store.updateNotificationChannel(req.params.id, {
+          name: typeof body.name === 'string' ? body.name : undefined,
+          config,
+          summary: config ? channelSummary(existing.type, config) : undefined,
+          enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
+        }),
+      });
+    }),
+  );
+
+  router.delete('/notifications/channels/:id', (req, res) => {
+    store.deleteNotificationChannel(req.params.id);
+    res.status(204).end();
+  });
+
+  router.post(
+    '/notifications/channels/:id/test',
+    ah(async (req, res) => {
+      res.json({ result: await sendNotification(store, req.params.id, '【AiDB Studio】通知渠道测试消息') });
+    }),
+  );
+
+  router.get('/artifacts/:id/schedule', (req, res) => {    if (!store.getArtifact(req.params.id)) {
+      res.status(404).json({ error: { code: 'ARTIFACT_NOT_FOUND', message: '产物不存在' } });
+      return;
+    }
+    res.json({ schedule: store.getArtifactSchedule(req.params.id) ?? null });
+  });
+
+  router.post('/artifacts/:id/schedule', (req, res) => {
+    if (!store.getArtifact(req.params.id)) {
+      res.status(404).json({ error: { code: 'ARTIFACT_NOT_FOUND', message: '产物不存在' } });
+      return;
+    }
+    const body = obj(req.body, 'body');
+    const intervalSeconds = num(body.intervalSeconds, 3600, 60, 30 * 86400);
+    const schedule = store.upsertArtifactSchedule(req.params.id, {
+      intervalSeconds,
+      enabled: body.enabled !== false,
+      refreshNarrative: body.refreshNarrative === true,
+    });
+    if (Array.isArray(body.notifyChannels)) {
+      store.setArtifactScheduleNotifyChannels(
+        req.params.id,
+        body.notifyChannels.filter((value): value is string => typeof value === 'string'),
+      );
+    }
+    res.json({ schedule: store.getArtifactSchedule(req.params.id) ?? schedule });
+  });
+
+  router.delete('/artifacts/:id/schedule', (req, res) => {
+    store.deleteArtifactSchedule(req.params.id);
+    res.status(204).end();
+  });
+
+  router.post(
+    '/artifacts/:id/runs',
+    ah(async (req, res) => {
+      const artifact = store.getArtifact(req.params.id);
+      if (!artifact) throw Object.assign(new Error('产物不存在'), { code: 'ARTIFACT_NOT_FOUND', status: 404 });
+      const spec = artifact.spec as Record<string, unknown>;
+      const command = str(spec.command) ?? artifact.type;
+      const input = (spec.input && typeof spec.input === 'object' ? spec.input : { sources: spec.sources }) as Record<string, unknown>;
+      const run = commands.start(command, input, { title: artifact.title, artifactId: artifact.id });
+      res.status(202).json({ run });
+    }),
+  );
+
+  router.delete('/artifacts/:id', (req, res) => {
+    store.deleteArtifact(req.params.id);
     res.status(204).end();
   });
 
