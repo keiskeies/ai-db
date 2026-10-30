@@ -1,0 +1,76 @@
+[
+  {
+    "q": "上个月各支付渠道的 GMV 是多少",
+    "expectTables": [
+      "t_order"
+    ],
+    "notes": "草稿：GMV 指已完成订单实付金额合计（t_order.money），渠道按 pay_channel 分组；不是 t_business_condition 的 transaction_amount"
+  },
+  {
+    "q": "上个月完成支付的订单有多少笔",
+    "expectTables": [
+      "t_order"
+    ],
+    "notes": "草稿：枚举释义题，库里状态值是 COMPLETE，不存在 PAID"
+  },
+  {
+    "q": "上个月的客单价是多少",
+    "expectTables": [
+      "t_order"
+    ],
+    "notes": "草稿：术语题，客单价 = 已完成订单 GMV / 已完成订单数"
+  },
+  {
+    "q": "卖得最好的 10 个商品是什么",
+    "expectTables": [
+      "t_order_item"
+    ],
+    "notes": "已确认：销量看 t_order_item.num；商品名取 title；允许 JOIN t_order 只统计已完成订单",
+    "allowExtraTables": true
+  },
+  {
+    "q": "最近 30 天的退款率是多少",
+    "expectTables": [
+      "t_order_refund",
+      "t_order"
+    ],
+    "allowExtraTables": true,
+    "notes": "已确认：退款率 = 退款单数 / 已完成订单数，分母是 t_order.status='COMPLETE'"
+  },
+  {
+    "q": "按订单实付金额统计每个商户的累计成交额排名",
+    "expectTables": [
+      "t_order"
+    ],
+    "notes": "已确认：按 t_order.money（已完成订单）聚合，可按 shop_id 关联 t_shop 取商户名",
+    "allowExtraTables": true
+  },
+  {
+    "q": "推广员带来的订单金额排名",
+    "expectTables": [
+      "t_extension_statistics"
+    ],
+    "notes": "草稿：同义列歧义——shop_order_amount、shop_order_complete_amount、user_order_amount、user_order_complete_amount 取哪个需业务确认"
+  },
+  {
+    "q": "已取消订单占比是多少",
+    "expectTables": [
+      "t_order"
+    ],
+    "notes": "草稿：库里 CANCEL 才是取消，CLOSED 是关闭；容易混"
+  },
+  {
+    "q": "每月活跃买家数的变化趋势",
+    "expectTables": [
+      "t_order"
+    ],
+    "notes": "草稿：活跃买家 = 当月下过单的去重 buyer_id"
+  },
+  {
+    "q": "平台的配送相关配置有哪些",
+    "expectTables": [
+      "t_mall_config"
+    ],
+    "notes": "草稿：dict_type='delivery'，dict_value 是 longtext"
+  }
+]

@@ -423,6 +423,8 @@ export interface AgentSettings {
   modelProfiles?: Record<string, ModelProfile>;
   /** 当前模型选用的推理档位（对应 modelProfiles[model].reasoningTiers 的 level）。 */
   reasoningTier?: string;
+  /** 大 schema 候选表检索：auto 仅在超大 schema 启用；on/off 强制。 */
+  schemaFocus?: 'auto' | 'on' | 'off';
   hasApiKey?: boolean;
 }
 
@@ -434,16 +436,28 @@ export interface EmbeddingSettings {
   hasApiKey?: boolean;
 }
 
+export interface FeatureSettings {
+  /** 允许 Agent/Worker 使用 Skill 工具；关闭后已安装 Skill 仍可管理。 */
+  skills: boolean;
+  /** 报告产物是否显示 AI PPT / 允许 deck 生成接口。 */
+  reportDeck: boolean;
+  /** 允许 Agent 调用 MCP 工具；MCP Server 配置仍可管理。 */
+  mcp: boolean;
+}
+
 export interface AppSettings {
   theme: 'dark' | 'light' | 'system';
   density: 'compact' | 'comfortable';
   locale: 'zh' | 'en';
   defaultLimit: number;
   queryTimeoutMs: number;
+  historyLimit: number;
+  historyRetentionDays: number;
   allowMultiStatement: boolean;
   autoLimit: boolean;
   agent: AgentSettings;
   embedding: EmbeddingSettings;
+  features: FeatureSettings;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -452,6 +466,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   locale: 'zh',
   defaultLimit: 100,
   queryTimeoutMs: 30000,
+  historyLimit: 1000,
+  historyRetentionDays: 90,
   allowMultiStatement: false,
   autoLimit: true,
   agent: {
@@ -465,12 +481,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
     followUpSuggestions: true,
     snapshotBeforeWrite: true,
     compactionThreshold: 24000,
+    schemaFocus: 'auto',
   },
   embedding: {
     provider: 'none',
     baseUrl: 'https://api.openai.com/v1',
     model: 'text-embedding-3-small',
   },
+  features: { skills: true, reportDeck: true, mcp: true },
 };
 
 export interface AgentPlanItem {

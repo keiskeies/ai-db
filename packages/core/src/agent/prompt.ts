@@ -17,6 +17,10 @@ export interface SystemPromptOptions {
   mode: PermissionMode;
   attachmentTables?: string[];
   maxTablesWithColumns?: number;
+  /** 当前用户问题：用于把列明细优先分配给相关表。 */
+  question?: string;
+  /** auto（默认）只在超大 schema 启用；on/off 用于测试或强制切换。 */
+  focusMode?: 'auto' | 'on' | 'off';
 }
 
 const MODE_TEXT: Record<PermissionMode, string> = {
@@ -34,6 +38,151 @@ const GLOSSARY_CHARS = 120;
 
 const lower = (value: string): string => value.trim().toLowerCase();
 
+const CJK_RUN = /[\u4e00-\u9fff]+/g;
+const LATIN_WORD = /[a-z][a-z0-9_]{1,}/gi;
+const STOP_WORDS = new Set(['the', 'and', 'for', 'from', 'with', 'this', 'that', 'how', 'what', 'select', 'where', 'group', 'order', 'limit', 'table', 'database', 'sql']);
+/** 通用中英字段提示：只在没有业务上下文时兜底，不替代用户维护的别名。 */
+const TERM_HINTS: Array<[string, string[]]> = [
+  ['订单明细', ['order_item']],
+  ['订单', ['order']],
+  ['支付', ['pay']],
+  ['退款', ['refund']],
+  ['商品', ['product', 'item']],
+  ['商户', ['shop']],
+  ['商家', ['shop']],
+  ['店铺', ['shop']],
+  ['买家', ['buyer']],
+  ['用户', ['user']],
+  ['渠道', ['channel']],
+  ['客单价', ['order', 'amount']],
+  ['成交额', ['order', 'amount']],
+  ['金额', ['amount', 'money', 'price']],
+  ['成交', ['order', 'amount', 'money']],
+  ['销量', ['num', 'qty']],
+  ['配置', ['config']],
+  ['配送', ['delivery', 'freight']],
+  ['推广', ['extension']],
+  ['分类', ['category', 'classify']],
+  ['评价', ['evaluation', 'comment']],
+  ['文件', ['file']],
+  ['新闻', ['news']],
+  ['邮件', ['mail']],
+  ['日程', ['calendar']],
+  ['评论', ['comment']],
+  ['分享', ['share']],
+  ['应用', ['app']],
+  ['日志', ['log']],
+  ['收藏', ['favorite', 'star']],
+  ['标签', ['tag']],
+];
+
+function questionTerms(question: string): { latin: string[]; cjk: string[] } {
+  const q = question.toLowerCase();
+  const latin = [...new Set((q.match(LATIN_WORD) ?? []).filter((w) => !STOP_WORDS.has(w)))];
+  const cjk = new Set<string>();
+  for (const run of q.match(CJK_RUN) ?? []) {
+    if (run.length <= 6) cjk.add(run);
+    for (let i = 0; i + 2 <= run.length; i++) cjk.add(run.slice(i, i + 2));
+  }
+  return { latin, cjk: [...cjk] };
+}
+
+function nameTokens(name: string): string[] {
+  return name.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+}
+
+/**
+ * 按当前问题挑选候选表，并补一跳关联表。
+ * 只影响 prompt 的“列明细”分配，未命中的表仍以表名出现在 Schema 中。
+ */
+export function focusTablesForQuestion(input: {
+  question?: string;
+  databases?: DatabaseSchema[];
+  context?: AgentContextBundle;
+  memories?: Memory[];
+  glossary?: Memory[];
+  sqlExamples?: Memory[];
+  attachments?: string[];
+  max?: number;
+}): string[] {
+  const question = input.question?.trim() ?? '';
+  if (!question || !input.databases?.length) return [...(input.attachments ?? [])];
+  const context = input.context;
+  const { latin, cjk } = questionTerms(question);
+  const all = input.databases.flatMap((db) => db.tables ?? []);
+  if (!all.length) return [...(input.attachments ?? [])];
+  const scores = new Map<string, number>();
+  const add = (name: string, score: number) => scores.set(name.toLowerCase(), (scores.get(name.toLowerCase()) ?? 0) + score);
+  const byName = new Map(all.map((table) => [table.name.toLowerCase(), table]));
+  for (const name of input.attachments ?? []) if (byName.has(name.toLowerCase())) add(name, 50);
+
+  const hints = TERM_HINTS.filter(([zh]) => question.includes(zh)).flatMap(([, en]) => en);
+  for (const table of all) {
+    const key = table.name.toLowerCase();
+    const tokens = nameTokens(table.name);
+    const meta = context?.tableMeta?.[key];
+    const columns = table.columns ?? [];
+    const columnMeta = context?.columnMeta?.[key] ?? {};
+    const metaText = [meta?.alias, meta?.description, ...Object.values(columnMeta).flatMap((c) => [c.alias, c.description])].filter(Boolean).join(' ').toLowerCase();
+    for (const term of latin) {
+      if (tokens.includes(term)) add(key, 6 / Math.max(1, tokens.length - 1));
+      else if (lower(table.name).includes(term)) add(key, 1.5);
+      if (columns.some((column) => lower(column.name) === term)) add(key, 2);
+      else if (columns.some((column) => lower(column.name).includes(term))) add(key, 1);
+      if (metaText.includes(term)) add(key, 1.5);
+    }
+    for (const term of cjk) {
+      if (meta?.alias && (meta.alias.includes(term) || term.includes(meta.alias))) add(key, 4);
+      if (meta?.description?.includes(term)) add(key, 2);
+      if (table.comment?.includes(term)) add(key, 1);
+      for (const column of columns) {
+        const cm = columnMeta[column.name];
+        if (cm?.alias && (cm.alias.includes(term) || term.includes(cm.alias))) add(key, 2);
+        else if (cm?.description?.includes(term)) add(key, 1);
+        if (column.comment?.includes(term)) add(key, 0.5);
+      }
+    }
+    for (const hint of hints) {
+      if (tokens.includes(hint)) add(key, 6 / Math.max(1, tokens.length - 1));
+      else if (tokens.some((token) => token.startsWith(hint))) add(key, 2);
+      if (columns.some((column) => lower(column.name) === hint)) add(key, 2);
+      else if (columns.some((column) => lower(column.name).includes(hint))) add(key, 1);
+    }
+  }
+
+  // 召回的记忆/术语/SQL 示例本身已按问题过滤，正文里出现的表名作为强信号。
+  const recalled = [...(input.glossary ?? []), ...(input.sqlExamples ?? []), ...(input.memories ?? [])];
+  for (const memory of recalled) {
+    const text = `${memory.title} ${memory.content}`;
+    if (![...latin, ...cjk].some((term) => text.toLowerCase().includes(term))) continue;
+    for (const table of all) {
+      if (new RegExp(`\\b${table.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text)) add(table.name, 4);
+    }
+  }
+
+  let picked = [...scores.entries()].filter(([, score]) => score > 0).sort((a, b) => b[1] - a[1]).slice(0, input.max ?? 12).map(([name]) => name);
+  const selected = new Set(picked);
+  const neighbors = new Set<string>();
+  for (const name of picked) {
+    const table = byName.get(name);
+    for (const fk of table?.foreignKeys ?? []) if (byName.has(fk.refTable.toLowerCase())) neighbors.add(fk.refTable.toLowerCase());
+    for (const rel of context?.relations ?? []) {
+      if (rel.leftTable.toLowerCase() === name) neighbors.add(rel.rightTable.toLowerCase());
+      if (rel.rightTable.toLowerCase() === name) neighbors.add(rel.leftTable.toLowerCase());
+    }
+  }
+  for (const table of all) {
+    if (neighbors.has(table.name.toLowerCase())) continue;
+    if ((table.foreignKeys ?? []).some((fk) => selected.has(fk.refTable.toLowerCase()))) neighbors.add(table.name.toLowerCase());
+  }
+  const result = [...picked];
+  for (const name of neighbors) {
+    if (result.length >= (input.max ?? 12) + 6) break;
+    if (!selected.has(name) && byName.has(name)) { result.push(name); selected.add(name); }
+  }
+  return result.map((name) => byName.get(name)?.name ?? name);
+}
+
 export function compressSchema(
   databases: DatabaseSchema[] | undefined,
   focusTables: string[] = [],
@@ -45,8 +194,9 @@ export function compressSchema(
   }
   const active = isAgentContextActive(context);
   const focus = new Set(focusTables.map((t) => t.toLowerCase()));
+  const focusOrder = new Map(focusTables.map((name, index) => [lower(name), index]));
   const lines: string[] = [];
-  let detailBudget = maxTablesWithColumns;
+  let detailBudget = focus.size ? Math.min(maxTablesWithColumns, 8) : maxTablesWithColumns;
   let disabledCount = 0;
 
   const bundleDb = context?.database?.trim().toLowerCase() ?? '';
@@ -58,23 +208,43 @@ export function compressSchema(
     disabledCount += db.tables.length - visible.length;
     // 未配置上下文时保持原有的纯字母序，确保输出与改动前逐字节一致；
     // 已配置时把用户显式标注过的表提到前面，优先占用明细预算。
-    const tables = active
-      ? [...visible].sort((a, b) => {
-          const curated = (t: TableInfo) => (context?.tableMeta[lower(t.name)] || context?.columnMeta[lower(t.name)] ? 0 : 1);
-          return curated(a) - curated(b) || a.name.localeCompare(b.name);
-        })
-      : [...visible].sort((a, b) => a.name.localeCompare(b.name));
+    const focusRank = (table: TableInfo) => (focus.has(table.name.toLowerCase()) ? 0 : 1);
+    const tables = [...visible].sort((a, b) => {
+      const byFocus = focusRank(a) - focusRank(b);
+      if (byFocus) return byFocus;
+      const oa = focusOrder.get(lower(a.name));
+      const ob = focusOrder.get(lower(b.name));
+      if (oa !== undefined || ob !== undefined) return (oa ?? 999) - (ob ?? 999);
+      if (active) {
+        const curated = (t: TableInfo) => (context?.tableMeta[lower(t.name)] || context?.columnMeta[lower(t.name)] ? 0 : 1);
+        const byCurated = curated(a) - curated(b);
+        if (byCurated) return byCurated;
+      }
+      return a.name.localeCompare(b.name);
+    });
     let shown = 0;
+    const otherNames: string[] = [];
+    let otherCount = 0;
+    const compactOthers = focus.size > 0;
     for (const table of tables) {
+      const isFocus = focus.has(table.name.toLowerCase()) || focus.has(db.name.toLowerCase());
+      if (compactOthers && !isFocus) {
+        otherCount++;
+        if (otherNames.length < 120) otherNames.push(table.name);
+        continue;
+      }
       if (shown >= 120) {
         lines.push(`- … ${tables.length - shown} more tables (use search_objects)`);
         break;
       }
       shown++;
-      const isFocus = focus.has(table.name.toLowerCase()) || focus.has(db.name.toLowerCase());
-      const withColumns = (isFocus || detailBudget > 0) && table.type === 'table';
+      const withColumns = detailBudget > 0 && table.type === 'table';
       if (withColumns) detailBudget--;
       lines.push(formatTable(table, withColumns, scoped));
+    }
+    if (compactOthers && otherNames.length) {
+      const more = otherCount > otherNames.length ? `, … ${otherCount - otherNames.length} more` : '';
+      lines.push(`- other tables (name only; call inspect_schema for columns): ${otherNames.join(', ')}${more}`);
     }
   }
   if (disabledCount > 0) {
@@ -120,10 +290,25 @@ export function formatMemoriesForPrompt(memories: Memory[] | undefined): string 
     .join('\n');
 }
 
+const ANTI_PATTERN_TITLE = /^(反例|不要|避免|禁止|avoid\b|do not\b)/i;
+
 export function formatGlossary(memories: Memory[] | undefined): string {
-  const terms = (memories ?? []).filter((m) => m.kind === 'glossary').slice(0, GLOSSARY_LIMIT);
+  const terms = (memories ?? [])
+    .filter((m) => m.kind === 'glossary' && !ANTI_PATTERN_TITLE.test(m.title.trim()))
+    .slice(0, GLOSSARY_LIMIT);
   if (!terms.length) return '';
   return terms.map((m) => `- ${m.title.replace(/\s+/g, ' ').slice(0, 60)} → ${m.content.replace(/\s+/g, ' ').slice(0, GLOSSARY_CHARS)}`).join('\n');
+}
+
+/** 术语中以“反例/不要/避免”开头的条目作为硬性负例，单独成段，避免被当成普通术语忽略。 */
+export function formatAntiPatterns(memories: Memory[] | undefined): string {
+  const items = (memories ?? [])
+    .filter((m) => m.kind === 'glossary' && ANTI_PATTERN_TITLE.test(m.title.trim()))
+    .slice(0, 8);
+  if (!items.length) return '';
+  return items
+    .map((m) => `- ${m.title.replace(/\s+/g, ' ').slice(0, 80)} → ${m.content.replace(/\s+/g, ' ').slice(0, 240)}`)
+    .join('\n');
 }
 
 export function formatSqlExamples(memories: Memory[] | undefined): string {
@@ -144,24 +329,33 @@ export function formatRelations(context: AgentContextBundle | undefined): string
 /** 业务上下文段落：只在用户真的配置了内容时输出，未配置则整段省略（保持旧行为）。 */
 export function formatBusinessContext(opts: { context?: AgentContextBundle; glossary?: Memory[]; sqlExamples?: Memory[] }): string {
   const terms = formatGlossary(opts.glossary);
+  const antiPatterns = formatAntiPatterns(opts.glossary);
   const relations = formatRelations(opts.context);
   const examples = formatSqlExamples(opts.sqlExamples);
-  if (!terms && !relations && !examples) return '';
+  if (!terms && !antiPatterns && !relations && !examples) return '';
 
   const sections: string[] = ['## Business context (authoritative — overrides your own guesses)'];
   if (terms) sections.push(`### Terms\n${terms}`);
+  if (antiPatterns) sections.push(`### Anti-patterns (hard constraints — do not repeat)\n${antiPatterns}`);
   if (relations) sections.push(`### Join relations\n${relations}`);
   if (examples) sections.push(`### Example questions and their canonical SQL (match this caliber)\n${examples}`);
   sections.push(`Rules for business context:
 - Only query tables listed under ## Schema. If answering needs a table that is absent or hidden, say so instead of guessing.
 - Map natural-language wording to columns via the aliases and descriptions in ## Schema; bracketed enum glosses are the only valid value interpretations.
 - Use the join relations exactly as given; never invent join keys.
-- When a question matches an example above, reuse its statistical caliber (filters, grouping, time range).`);
+- When a question matches an example above, reuse its statistical caliber (filters, grouping, time range).
+- Anti-patterns are hard constraints: do not use the forbidden table/column/interpretation even if it looks plausible.`);
   return sections.join('\n\n');
 }
 
 export function buildSystemPrompt(opts: SystemPromptOptions): string {
-  const { connection, databases, memories, glossary, sqlExamples, context, mode, attachmentTables = [] } = opts;
+  const { connection, databases, memories, glossary, sqlExamples, context, mode, attachmentTables = [], question, focusMode = 'auto' } = opts;
+  const totalTables = (databases ?? []).reduce((sum, db) => sum + (db.tables?.length ?? 0), 0);
+  const totalColumns = (databases ?? []).reduce((sum, db) => sum + (db.tables ?? []).reduce((n, table) => n + (table.columns?.length ?? 0), 0), 0);
+  const focusEnabled = focusMode === 'on' || (focusMode === 'auto' && (totalTables > 150 || totalColumns > 2500));
+  const focusTables = focusEnabled
+    ? focusTablesForQuestion({ question, databases, context, memories, glossary, sqlExamples, attachments: attachmentTables })
+    : [...attachmentTables];
   const meta = connection ? engineMeta(connection.engine) : undefined;
   const language = meta?.languages[0] ?? 'sql';
   const isSql = language === 'sql';
@@ -213,7 +407,7 @@ Permission mode: ${MODE_TEXT[mode]}
 ${attachmentTables.length ? `Tables explicitly attached by the user: ${attachmentTables.join(', ')}` : ''}
 
 ## Schema
-${compressSchema(databases, attachmentTables, 15, context)}
+${focusTables.length ? '(Column detail is prioritized for tables relevant to this question; other tables are listed by name — call inspect_schema when you need their columns.)\n' : ''}${compressSchema(databases, focusTables, 15, context)}
 ${business ? `\n${business}\n` : ''}
 ## Memories recalled for this turn
 ${formatMemoriesForPrompt(memories)}

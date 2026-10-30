@@ -22,13 +22,23 @@ export interface AgentRunResult {
 }
 
 const MAX_MODEL_RESULT_CHARS = 16000;
+const MAX_SQL_REPAIRS = 2;
+const NON_REPAIRABLE = new Set([
+  'PERMISSION_DENIED',
+  'APPROVAL_DENIED',
+  'READONLY',
+  'UNKNOWN_TOOL',
+  'TABLE_DISABLED',
+  'TABLE_SCOPE_REQUIRED',
+  'METADATA_BLOCKED',
+]);
 
-function serializeForModel(result: ToolResult): string {
-  const compact: ToolResult = { ...result };
+function serializeForModel(result: ToolResult, extra?: Record<string, unknown>): string {
+  const compact: Record<string, unknown> = { ...result, ...(extra ?? {}) };
   const data = result.data as { rows?: unknown[] } | undefined;
   if (data && Array.isArray(data.rows) && data.rows.length > 50) {
     compact.data = { ...(data as object), rows: data.rows.slice(0, 50), truncated: true };
-    compact.meta = { ...compact.meta, truncated: true };
+    compact.meta = { ...(compact.meta as object), truncated: true };
   }
   const json = JSON.stringify(compact);
   if (json.length <= MAX_MODEL_RESULT_CHARS) return json;
@@ -36,10 +46,151 @@ function serializeForModel(result: ToolResult): string {
     ok: result.ok,
     summary: result.summary,
     error: result.error,
+    ...(extra ?? {}),
     meta: compact.meta,
     data: '(result too large and was omitted; narrow the query or request fewer rows)',
   });
 }
+
+/** 提取 FROM / JOIN 后的表名；支持 `db.table` 与反引号包裹。 */
+function referencedTables(sql: string): string[] {
+  const out = new Set<string>();
+  const re = /\b(?:from|join|update|into|table)\s+(?:`?([A-Za-z_][A-Za-z0-9_$]*)`?\.)?`?([A-Za-z_][A-Za-z0-9_$]*)`?/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(sql)) !== null) out.add(match[2].toLowerCase());
+  return [...out];
+}
+
+const UNKNOWN_COLUMN_PATTERNS = [
+  /Unknown column '([^']+)'/i,
+  /Invalid column name '([^']+)'/i,
+  /column "([^"]+)" does not exist/i,
+  /no such column:?\s*([A-Za-z0-9_.]+)/i,
+  /ORA-00904:\s*"([^"]+)"/i,
+];
+const UNKNOWN_TABLE_PATTERNS = [
+  /Table '([^']+)' doesn't exist/i,
+  /Invalid object name '([^']+)'/i,
+  /relation "([^"]+)" does not exist/i,
+  /no such table:?\s*([A-Za-z0-9_.]+)/i,
+];
+
+function parseMissingIdentifier(message: string): { kind: 'column' | 'table'; name: string } | undefined {
+  for (const pattern of UNKNOWN_COLUMN_PATTERNS) {
+    const match = message.match(pattern);
+    if (match?.[1]) return { kind: 'column', name: match[1].split('.').pop() ?? match[1] };
+  }
+  for (const pattern of UNKNOWN_TABLE_PATTERNS) {
+    const match = message.match(pattern);
+    if (match?.[1]) return { kind: 'table', name: match[1].split('.').pop() ?? match[1] };
+  }
+  return undefined;
+}
+
+/** 只用于修复提示的轻量编辑距离，候选量很小。 */
+function editDistance(a: string, b: string): number {
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  let prev = Array.from({ length: cols }, (_, i) => i);
+  for (let i = 1; i < rows; i++) {
+    const next = [i];
+    for (let j = 1; j < cols; j++) {
+      next[j] = Math.min(prev[j] + 1, next[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = next;
+  }
+  return prev[b.length];
+}
+
+function commonPrefix(a: string, b: string): number {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i;
+}
+
+function suggestIdentifiers(
+  missing: { kind: 'column' | 'table'; name: string },
+  candidates: Array<{ name: string; table?: string }>,
+): string[] {
+  const target = missing.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!target) return [];
+  const scored: Array<{ label: string; score: number }> = [];
+  for (const candidate of candidates) {
+    const value = candidate.name.toLowerCase();
+    const normalized = value.replace(/[^a-z0-9]/g, '');
+    if (!normalized || normalized === target) continue;
+    const distance = editDistance(target, normalized);
+    const prefix = commonPrefix(target, normalized);
+    const threshold = Math.max(2, Math.floor(target.length * 0.34));
+    if (distance > threshold && prefix < Math.max(4, Math.floor(Math.min(target.length, normalized.length) * 0.5))) continue;
+    scored.push({
+      label: `${candidate.name}${candidate.table ? ` (${candidate.table})` : ''}`,
+      score: distance - prefix * 0.2,
+    });
+  }
+  return [...new Set(scored.sort((a, b) => a.score - b.score).slice(0, 5).map((item) => item.label))];
+}
+
+/**
+ * SQL 报错后把「错误 + 涉及表的真实列」回灌给模型。
+ * 只给相关表，避免整库 schema 再次淹没上下文；列数有上限，防止提示本身过大。
+ */
+function buildRepairHint(
+  sql: string,
+  result: ToolResult,
+  databases: AgentRunInput['context']['databases'],
+  attempt: number,
+): Record<string, unknown> {
+  const error = result.error;
+  if (attempt > MAX_SQL_REPAIRS) {
+    return {
+      attempt,
+      exhausted: true,
+      instruction: `自动修复已尝试 ${MAX_SQL_REPAIRS} 次仍未成功。不要再重复同一 SQL；向用户说明错误原因和下一步建议。`,
+      ...(error ? { error: `${error.code}: ${error.message}` } : {}),
+    };
+  }
+  const wanted = referencedTables(sql);
+  const all = (databases ?? []).flatMap((schema) => (schema.tables ?? []).map((table) => ({ schema: schema.name, table })));
+  let picked = all.filter((item) => wanted.includes(item.table.name.toLowerCase())).slice(0, 4);
+  if (!picked.length && wanted.length) {
+    picked = all
+      .filter((item) => wanted.some((name) => item.table.name.toLowerCase().includes(name) || name.includes(item.table.name.toLowerCase())))
+      .slice(0, 6);
+  }
+  const tables = picked.map(({ schema, table }) => {
+    const columns = (table.columns ?? [])
+      .slice(0, 40)
+      .map((column) => `${column.name}:${column.type}${column.primaryKey ? ' PK' : ''}${column.comment ? ` // ${column.comment}` : ''}`)
+      .join(', ');
+    return `- ${schema ? `${schema}.` : ''}${table.name}${table.comment ? ` // ${table.comment}` : ''}: ${columns}`;
+  });
+  if (!tables.length && wanted.length) {
+    const names = all.map((item) => item.table.name).filter((name) => wanted.some((w) => name.toLowerCase().includes(w))).slice(0, 8);
+    if (names.length) tables.push(`可能想用的表：${names.join(', ')}`);
+  }
+  const missing = error ? parseMissingIdentifier(error.message) : undefined;
+  let suggestions: string[] = [];
+  if (missing?.kind === 'table') {
+    suggestions = suggestIdentifiers(missing, all.map(({ table }) => ({ name: table.name })));
+  } else if (missing?.kind === 'column') {
+    const scope = picked.length ? picked : all.slice(0, 60);
+    suggestions = suggestIdentifiers(
+      missing,
+      scope.flatMap(({ table }) => (table.columns ?? []).slice(0, 48).map((column) => ({ name: column.name, table: table.name }))),
+    );
+  }
+  return {
+    attempt,
+    instruction:
+      (suggestions.length ? '优先使用 suggestions 中的真实标识符；' : '') +
+      '上一条 SQL 执行失败。请根据错误与下面的真实列定义修正 SQL，然后重新调用 run_sql；不要重复原 SQL。仍不确定列名时先调用 inspect_schema。',
+    ...(error ? { error: `${error.code}: ${error.message}` } : {}),
+    ...(suggestions.length ? { suggestions } : {}),
+    ...(tables.length ? { referenced: tables } : {}),
+  };
+}
+
 
 function permissionDenied(mode: string, readonly: boolean): ToolResult {
   return {
@@ -84,6 +235,7 @@ export class AgentRuntime {
     let tokensIn = 0;
     let tokensOut = 0;
     let toolCount = 0;
+    let sqlRepairs = 0;
     let plan: AgentPlanItem[] = [];
 
     deps.emit({ type: 'start', turnId, sessionId: input.sessionId, model: deps.provider.label });
@@ -111,7 +263,7 @@ export class AgentRuntime {
       const request = {
         system: deps.buildSystem(input),
         messages,
-        tools: providerTools(),
+        tools: deps.tools ?? providerTools(),
         temperature: deps.temperature,
         ...(deps.maxTokens ? { maxTokens: deps.maxTokens } : {}),
         ...(deps.reasoning ? { reasoning: deps.reasoning } : {}),
@@ -149,7 +301,7 @@ export class AgentRuntime {
 
       if (!calls.length && stepText) {
         // 兜底：模型没走结构化 tool_calls，而是把 XML 调用写进了正文
-        const rescued = rescueXmlToolCalls(stepText, (name) => Boolean(getTool(name)));
+        const rescued = rescueXmlToolCalls(stepText, (name) => Boolean((deps.getTool ?? getTool)(name)));
         if (rescued.calls.length) {
           calls.push(...rescued.calls);
           stepText = rescued.text;
@@ -164,7 +316,7 @@ export class AgentRuntime {
       for (const call of calls) {
         if (input.signal?.aborted) return aborted();
         toolCount++;
-        const tool = getTool(call.name);
+        const tool = (deps.getTool ?? getTool)(call.name);
         if (!tool) {
           const res = toolFailed(`未知工具：${call.name}`, 'UNKNOWN_TOOL');
           deps.emit({ type: 'tool_result', callId: call.id, tool: call.name, result: res });
@@ -253,7 +405,15 @@ export class AgentRuntime {
         }
         if (input.signal?.aborted) return aborted();
         deps.emit({ type: 'tool_result', callId: call.id, tool: call.name, result: res });
-        messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: serializeForModel(res) });
+        let modelContent = serializeForModel(res, { resultRef: call.id });
+        if (call.name === 'run_sql' && !res.ok && typeof call.args.sql === 'string' && !NON_REPAIRABLE.has(res.error?.code ?? '')) {
+          sqlRepairs += 1;
+          modelContent = serializeForModel(res, {
+            resultRef: call.id,
+            repair: buildRepairHint(String(call.args.sql), res, input.context.databases, sqlRepairs),
+          });
+        }
+        messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: modelContent });
       }
     }
 

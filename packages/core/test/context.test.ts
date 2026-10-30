@@ -4,6 +4,7 @@ import { bundleAgentContext, emptyBundle, isColumnDisabled, isTableDisabled } fr
 import {
   buildSystemPrompt,
   compressSchema,
+  focusTablesForQuestion,
   formatBusinessContext,
   formatGlossary,
   formatMemoriesForPrompt,
@@ -321,4 +322,76 @@ test('extractHeuristicMemories recognises term definitions as glossary entries',
   assert.deepEqual(extractHeuristicMemories('这个方案就是我想要的那种', {}), [], '弱标记缺少触发词时不收录，避免污染长期记忆');
   assert.deepEqual(extractHeuristicMemories('GMV means 成交总额', {}), [], '英文弱标记同理');
   assert.equal(extractHeuristicMemories('记住 GMV means 成交总额', {})[0]?.kind, 'glossary', '带上触发词则收录');
+});
+
+// ---------- question-driven focus tables ----------
+
+test('focusTablesForQuestion uses business aliases and adds one-hop relations', () => {
+  const bundle = bundleAgentContext(
+    [
+      entry({ kind: 'table', table: 'orders', alias: '订单表', description: '所有订单' }),
+      entry({ kind: 'relation', table: 'orders', column: 'user_id', refTable: 'users', refColumn: 'id' }),
+    ],
+    { connectionId: 'c1', database: 'shop' },
+  );
+  const focus = focusTablesForQuestion({ question: '查一下订单', databases: schema, context: bundle });
+  assert.equal(focus[0], 'orders');
+  assert.ok(focus.includes('users'), '一跳关系表应被带入');
+  assert.ok(!focus.includes('audit_log'), '无关表不应进入候选');
+});
+
+test('focusTablesForQuestion falls back to generic Chinese hints without business context', () => {
+  const focus = focusTablesForQuestion({ question: '一共有多少用户', databases: schema });
+  assert.equal(focus[0], 'users');
+  assert.ok(focus.includes('orders'), '反向 FK（orders.user_id→users）可作为一跳关联表带入');
+});
+
+test('focusTablesForQuestion returns attachments and ignores unrelated questions', () => {
+  assert.deepEqual(focusTablesForQuestion({ question: '今天天气怎么样', databases: schema }), []);
+  assert.deepEqual(focusTablesForQuestion({ question: '随便', databases: schema, attachments: ['audit_log'] }), ['audit_log']);
+});
+
+test('buildSystemPrompt limits column detail to question-relevant tables', () => {
+  const bundle = bundleAgentContext([entry({ kind: 'table', table: 'orders', alias: '订单表' })], { connectionId: 'c1', database: 'shop' });
+  const out = buildSystemPrompt({ databases: schema, context: bundle, mode: 'ask', memories: [], question: '查一下订单', focusMode: 'on' });
+  assert.match(out, /Column detail is prioritized for tables relevant to this question/);
+  assert.match(out, /- table orders \(订单表\)[\s\S]*columns:/);
+
+  // 小 schema 会填满默认 15 表预算，这里用 1 表预算单独验证“候选表优先”
+  const compressed = compressSchema(schema, ['orders'], 1, bundle);
+  const lines = compressed.split('\n');
+  assert.match(lines[1], /- table orders/, '候选表应排到最前');
+  assert.match(lines[2], /^\s+columns:/, '候选表占用唯一明细预算');
+  assert.ok(!/- table users[\s\S]*\n\s+columns:/.test(compressed), '非候选表不占明细');
+});
+
+test('schema focus auto-enables only for very large schemas', () => {
+  const small = buildSystemPrompt({ databases: schema, mode: 'ask', memories: [], question: '查一下订单' });
+  assert.ok(!small.includes('Column detail is prioritized'), '116 表以下保持整库明细');
+
+  const big: DatabaseSchema = {
+    name: 'big',
+    tables: Array.from({ length: 151 }, (_, i) => ({
+      name: i === 0 ? 't_order' : `t_${i}`,
+      type: 'table' as const,
+      columns: [{ name: 'id', type: 'INT', nullable: false, primaryKey: true }],
+    })),
+  };
+  const large = buildSystemPrompt({ databases: [big], mode: 'ask', memories: [], question: '查一下订单' });
+  assert.match(large, /Column detail is prioritized/);
+  assert.match(large, /- table t_order/);
+  assert.match(large, /other tables \(name only/);
+});
+
+test('anti-pattern glossary entries become a separate hard-constraint section', () => {
+  const glossary = [
+    mem({ id: 'g1', kind: 'glossary', title: '反例：订单数不要用支付流水', content: '统计订单笔数用 t_order；t_trade_pay_flow 一行不是一笔订单' }),
+    mem({ id: 'g2', kind: 'glossary', title: 'GMV', content: '已完成订单实付金额合计' }),
+  ];
+  const out = formatBusinessContext({ glossary });
+  assert.match(out, /### Anti-patterns \(hard constraints — do not repeat\)/);
+  assert.match(out, /反例：订单数不要用支付流水/);
+  assert.match(out, /Anti-patterns are hard constraints/);
+  const terms = out.split('### Anti-patterns')[0];
+  assert.ok(!terms.includes('反例：订单数'), '反例不应混进普通术语段');
 });

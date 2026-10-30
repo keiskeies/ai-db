@@ -183,6 +183,19 @@ export function tablesFromSql(sql: string): string[] {
   return [...out];
 }
 
+/** 执行层硬约束：SQL 引用了上下文里被禁用的表时返回该表名。 */
+export function disabledTableInSql(sql: string, disabledTables: string[] | undefined): string | undefined {
+  if (!sql || !disabledTables?.length) return undefined;
+  const names = [...new Set(disabledTables.map((name) => name.trim()).filter(Boolean))];
+  for (const name of names) {
+    // 词边界匹配覆盖 `FROM a, b`、`db.table` 等 tablesFromSql 抓不全的写法；
+    // 禁用是用户显式做的硬约束，宁可误伤也不要放过。
+    const pattern = new RegExp(`(^|[^A-Za-z0-9_$])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Za-z0-9_$]|$)`, 'i');
+    if (pattern.test(sql)) return name.toLowerCase();
+  }
+  return undefined;
+}
+
 const KIND_LABEL: Record<SuggestionKind, string> = {
   trend: '趋势',
   group: '分组统计',

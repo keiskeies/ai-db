@@ -69,9 +69,20 @@ export type ProviderMessage =
   | { role: 'assistant'; content: string; toolCalls?: ToolCall[] }
   | { role: 'tool'; toolCallId: string; name: string; content: string };
 
+export interface AgentSourceContext {
+  connection: ConnectionConfig;
+  databases: DatabaseSchema[];
+  agentContext?: AgentContextBundle;
+  glossary?: Memory[];
+  sqlExamples?: Memory[];
+  label?: string;
+}
+
 export interface AgentContextData {
   connection?: ConnectionConfig;
   databases?: DatabaseSchema[];
+  /** 命令选中的多个源；存在时优先于 connection / databases。 */
+  sources?: AgentSourceContext[];
   memories?: Memory[];
   /** 用户维护的表/列启用状态与业务语义；离线推理器同样据此收敛可用表。 */
   agentContext?: AgentContextBundle;
@@ -165,4 +176,8 @@ export interface AgentRuntimeDeps {
   /** 当前模型档案里的最大输出 tokens；未配置时由 provider 兜底。 */
   maxTokens?: number;
   reasoning?: ProviderReasoning;
+  /** 本轮下发给模型的工具；缺省使用全局 40+ 工具目录。 */
+  tools?: ProviderTool[];
+  /** 命令私有工具的定义解析；缺省只认全局工具目录。 */
+  getTool?: (name: string) => ToolDefinition | undefined;
 }

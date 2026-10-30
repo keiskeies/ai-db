@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildAlterTable, buildCreateTable, buildDeleteMany, buildExplain, buildInsert, buildMonthlySeriesExpr, buildRenameTable, buildSelectTable, buildTableMaintenance } from '../src/sql/ddl';
+import { buildAlterTable, buildCount, buildCreateTable, buildDeleteMany, buildExplain, buildInsert, buildMonthlySeriesExpr, buildRenameTable, buildSelectTable, buildTableMaintenance } from '../src/sql/ddl';
 import { ENGINES } from '../src/engines';
 import type { DialectId } from '../src/types';
 
@@ -149,6 +149,14 @@ test('maintenance plans respect engine capabilities', () => {
 test('batch delete builds one OR group per key', () => {
   const sql = buildDeleteMany('postgresql', 't', ['id'], 2);
   assert.match(sql, /DELETE FROM "t" WHERE \("id" = \$1\) OR \("id" = \$2\)/);
+});
+
+test('count reuses the grid filter so totals and paging agree', () => {
+  assert.equal(buildCount('mysql', 'orders'), 'SELECT COUNT(*) AS `count` FROM `orders`');
+  assert.equal(
+    buildCount('mysql', 'orders', 'shop', "status = 'PAID'"),
+    "SELECT COUNT(*) AS `count` FROM `shop`.`orders` WHERE status = 'PAID'",
+  );
 });
 
 test('DM8 dialect uses Oracle-compatible types, LIMIT pagination and EXPLAIN', () => {

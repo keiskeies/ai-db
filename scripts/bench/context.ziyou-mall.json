@@ -1,0 +1,138 @@
+{
+  "tables": {
+    "t_order": {
+      "alias": "订单",
+      "description": "商城订单主表。一笔订单一行，money 是实付金额（元），created_timestamp 是下单时间"
+    },
+    "t_order_item": {
+      "alias": "订单明细",
+      "description": "订单行项目。销量看 num，商品名看 title"
+    },
+    "t_order_refund": {
+      "alias": "退款单",
+      "description": "退款申请与结果。退款率 = 退款单数 / 已完成订单数"
+    },
+    "t_business_condition": {
+      "alias": "商户日经营数据",
+      "description": "按商户、日期汇总的下单与交易指标，transaction_amount 是当日交易额"
+    },
+    "t_extension_statistics": {
+      "alias": "推广统计",
+      "description": "推广员维度的订单数与金额统计，含 shop_* 与 user_* 两套口径"
+    },
+    "t_mall_config": {
+      "alias": "平台配置",
+      "description": "商城配置项，dict_type 区分配送、服务费、运营时间"
+    }
+  },
+  "columns": {
+    "t_order.status": {
+      "description": "订单状态：COMPLETE=已完成/已支付，CLOSED=已关闭，CANCEL=已取消，WAIT_PAYMENT=待支付，REFUNDING_SUCCESS=退款成功；库里没有 PAID"
+    },
+    "t_order.money": {
+      "alias": "实付金额",
+      "description": "订单实付金额，单位元"
+    },
+    "t_order.pay_channel": {
+      "alias": "支付渠道",
+      "description": "实际取值：AliPay、BaoFu"
+    },
+    "t_order.app_source": {
+      "alias": "下单端",
+      "description": "mini_app、android_ziyou_app、ios_ziyou_app 等"
+    },
+    "t_order.created_timestamp": {
+      "alias": "下单时间"
+    },
+    "t_order.buyer_id": {
+      "alias": "买家"
+    },
+    "t_order.shop_id": {
+      "alias": "商户"
+    },
+    "t_order.refund_flag": {
+      "alias": "是否退款"
+    },
+    "t_order_item.num": {
+      "alias": "销量",
+      "description": "该行商品购买件数"
+    },
+    "t_order_item.money": {
+      "alias": "行金额",
+      "description": "该行成交金额，单位元"
+    },
+    "t_order_item.title": {
+      "alias": "商品名"
+    },
+    "t_extension_statistics.shop_order_amount": {
+      "alias": "推广订单金额"
+    },
+    "t_mall_config.dict_type": {
+      "description": "delivery=配送，service=服务费，workTime=运营时间"
+    }
+  },
+  "relations": [
+    {
+      "table": "t_order_item",
+      "column": "order_id",
+      "refTable": "t_order",
+      "refColumn": "id",
+      "description": "明细所属订单"
+    },
+    {
+      "table": "t_order_refund",
+      "column": "sn",
+      "refTable": "t_order",
+      "refColumn": "order_sn",
+      "description": "退款单对应订单号"
+    }
+  ],
+  "glossary": [
+    {
+      "title": "GMV",
+      "content": "已完成订单（t_order.status = 'COMPLETE'）的 t_order.money 合计，单位元"
+    },
+    {
+      "title": "客单价",
+      "content": "GMV / 已完成订单数"
+    },
+    {
+      "title": "退款率",
+      "content": "退款单数 / 已完成订单（t_order.status = 'COMPLETE'）数"
+    },
+    {
+      "title": "已取消",
+      "content": "t_order.status = 'CANCEL'；CLOSED 表示已关闭，两者不能混用"
+    },
+    {
+      "title": "活跃买家",
+      "content": "统计周期内下过单的去重 t_order.buyer_id"
+    },
+    {
+      "title": "反例：订单数不要用支付流水",
+      "content": "统计订单笔数/订单金额必须用 t_order；t_trade_pay_flow 是支付流水，一行不等于一笔订单。"
+    },
+    {
+      "title": "反例：退款率不要只按 refund_flag",
+      "content": "退款率 = t_order_refund 退款单数 / t_order 已完成订单数；不要只用 t_order.refund_flag 估算。"
+    },
+    {
+      "title": "反例：推广金额先确认 shop_/user_ 口径",
+      "content": "t_extension_statistics 同时有 shop_order_amount 与 user_order_amount；问订单金额时优先 shop_order_amount / shop_order_complete_amount，并在回答里说明口径。"
+    },
+    {
+      "title": "反例：配送配置不要用 t_product 猜",
+      "content": "平台配送配置在 t_mall_config(dict_type='delivery') 及 t_mall_delivery_* / t_freight_fee_*；不要用 t_product 的列猜配送方式。"
+    }
+  ],
+  "sqlExamples": [
+    {
+      "title": "上月各支付渠道 GMV",
+      "content": "SELECT pay_channel, ROUND(SUM(money), 2) AS gmv FROM t_order WHERE status = 'COMPLETE' AND created_timestamp >= DATE_FORMAT(CURRENT_DATE - INTERVAL 1 MONTH, '%Y-%m-01') AND created_timestamp < DATE_FORMAT(CURRENT_DATE, '%Y-%m-01') GROUP BY pay_channel ORDER BY gmv DESC"
+    },
+    {
+      "title": "每月活跃买家数",
+      "content": "SELECT DATE_FORMAT(created_timestamp, '%Y-%m') AS month, COUNT(DISTINCT buyer_id) AS buyers FROM t_order GROUP BY month ORDER BY month"
+    }
+  ]
+}

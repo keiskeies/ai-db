@@ -339,8 +339,9 @@ export function buildSelectTable(
   return sql;
 }
 
-export function buildCount(engine: Engine, table: string, schema?: string): string {
-  return `SELECT COUNT(*) AS ${quoteIdent('count', engine)} FROM ${quoteQualified([schema, table], engine)}`;
+export function buildCount(engine: Engine, table: string, schema?: string, where?: string): string {
+  const filter = where ? ` WHERE ${where}` : '';
+  return `SELECT COUNT(*) AS ${quoteIdent('count', engine)} FROM ${quoteQualified([schema, table], engine)}${filter}`;
 }
 
 export function buildInsert(engine: Engine, table: string, columns: string[], rows: number, schema?: string): string {

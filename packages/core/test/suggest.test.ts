@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { bundleAgentContext } from '../src/agent/context';
-import { isDimensionColumn, isMeasureColumn, isTimeColumn, suggestFollowUps, suggestQuestions, tablesFromSql, type QuestionSuggestion } from '../src/agent/suggest';
+import { disabledTableInSql, isDimensionColumn, isMeasureColumn, isTimeColumn, suggestFollowUps, suggestQuestions, tablesFromSql, type QuestionSuggestion } from '../src/agent/suggest';
 import type { AgentContextEntry, ColumnInfo, DatabaseSchema, TableInfo } from '../src/types';
 
 const iso = new Date('2026-10-27T00:00:00.000Z').toISOString();
@@ -73,6 +73,19 @@ test('tablesFromSql pulls table names out of real statements', () => {
   assert.deepEqual(tablesFromSql('INSERT INTO audit_log (a) VALUES (1)'), ['audit_log']);
   assert.deepEqual(tablesFromSql('select * from `Orders`'), ['orders']);
   assert.deepEqual(tablesFromSql(''), []);
+});
+
+test('disabledTableInSql hard-blocks SQL referencing a disabled table', () => {
+  assert.equal(disabledTableInSql('SELECT COUNT(*) FROM t_order', ['t_trade_pay_flow']), undefined);
+  assert.equal(
+    disabledTableInSql('SELECT * FROM t_order o JOIN t_trade_pay_flow p ON p.order_no = o.order_sn', ['t_trade_pay_flow']),
+    't_trade_pay_flow',
+  );
+  assert.equal(disabledTableInSql('UPDATE T_TRADE_PAY_FLOW SET flag = 0', ['t_trade_pay_flow']), 't_trade_pay_flow');
+  assert.equal(disabledTableInSql('SELECT * FROM t_order o, t_trade_pay_flow p', ['t_trade_pay_flow']), 't_trade_pay_flow');
+  assert.equal(disabledTableInSql('SELECT * FROM other_db.t_trade_pay_flow', ['t_trade_pay_flow']), 't_trade_pay_flow');
+  assert.equal(disabledTableInSql('SELECT 1', ['t_trade_pay_flow']), undefined);
+  assert.equal(disabledTableInSql('SELECT * FROM t_order', []), undefined);
 });
 
 // ---------- suggestion generation ----------

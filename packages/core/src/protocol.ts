@@ -1,7 +1,7 @@
 import type { AgentEvent } from './agent/types';
 
-/** Encode an agent event as an SSE frame (used by the Bridge and tests). */
-export function encodeSse(event: AgentEvent | { type: 'ping' }): string {
+/** Encode an agent or skill-worker event as an SSE frame (used by the Bridge and tests). */
+export function encodeSse(event: AgentEvent | { type: string }): string {
   return `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
 }
 

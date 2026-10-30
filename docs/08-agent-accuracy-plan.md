@@ -7,7 +7,7 @@
 
 ## 0. 摘要
 
-SQLBot 与我们不是同一类产品：它只能问数，我们有 40 个工具、能写能改能备份。**能力广度上我们领先，差距全部集中在"模型是否理解用户的业务"这一条轴上。**
+SQLBot 与我们不是同一类产品：它只能问数，我们有 51 个工具、能写能改能备份。**能力广度上我们领先，差距全部集中在"模型是否理解用户的业务"这一条轴上。**
 
 SQLBot 的《最佳实践》把问数失败归为四类——答非所问、结果不准、无法生成、术语混淆——并指出根因同一个：**模型掌握 SQL 语法，但缺少特定业务与库结构的上下文**。它的解法是「做减法 + 加注解」：只保留业务表、给字段起中文别名、给枚举值写释义、手工定义 JOIN 关系、录入标准问答 SQL 做 few-shot、建术语词典。
 
@@ -529,7 +529,7 @@ npm run bench -- --connection demo \
 - **安全**：每个回合固定 `permissionMode=readonly`，写与 DDL 会被 Agent 策略直接拒绝；脚本只读目标库，跑完自动 `DELETE /agent/context` 并删除实验期间写入的术语/示例记忆，不残留（需要保留加 `--keep`）。
 - **题目文件**：`[{ "q": "上个月的成交额是多少", "expectTables": ["orders"], "allowExtraTables": true }]`。`expectTables` 缺省则该题不判表选择；`allowExtraTables` 用于「多 JOIN 一张表也算对」的题。
 - **上下文文件**：`{ tables: {表: {alias, description, enabled}}, columns: {"表.列": {alias, description}}, relations: [{table, column, refTable, refColumn, description}], glossary: [{title, content}], sqlExamples: [{title, content}] }`，与 P1 面板里能填的东西一一对应。
-- **指标口径**：`SQL 可执行率` 的分母是**全部题目**，「一条 SQL 都没跑出来」按不可执行计——这是最差结果，不能像早期版本那样从分母里剔除，否则两组都会显示 100% 而掩盖真实差距。`需人工纠正` = 不可执行或选错表的题数。
+- **指标口径**：`SQL 可执行率` 分「首次」与「最终」：首次要求本轮所有 SQL 一次通过；最终只看最后一条 SQL 是否成功，用于衡量自动修复。`答上率（严格）` 要求无任何工具失败；`答上率（含修复）` 允许 SQL 失败后被修复。`表选择（严格）` 对多余表计错，`表命中` 只要求期望表都出现。
 - `--fail-on-regression` 让 B 组劣于 A 组时退出码为 1（默认只报告不判定，因为单次运行受模型随机性影响）。
 
 demo 库上的一次实测（6 题、每题独立会话）：A 组 2 题「一条 SQL 都没产出」（`成交额`、`客单价` 这类**术语题**，schema 里没有任何列名对得上），B 组降到 1 题；表选择正确率 67% → 83%。同时观察到 B 组有一题反而没产出 SQL——**单次运行有模型随机性**，所以这个脚本是取证工具，不是 CI 闸门；正式验收要多跑几轮取多数，并且必须换成 `media` 库上的真实业务措辞。
@@ -553,6 +553,205 @@ demo 库上的一次实测（6 题、每题独立会话）：A 组 2 题「一�
 2. `m_sex 这张表是存什么的`：表名与列（`height`/`size`/`sort`/`type`/`path`/`pinyin_name`）完全对不上。Agent 没有照名字瞎猜，而是查了数据后判断「表名有误导性，实际是媒体素材表」，并**推测**是成人内容素材库。inspect-first 的行为是对的，但那句推测正是缺少权威描述时的补白——配一条 `m_sex` 的表描述就能把猜测换成事实。
 
 因此正式验收的 10 题必须包含：业务术语（库名/列名里没有的说法）、同义表歧义（收藏 = shelf 还是 mark）、枚举释义（`type` / `source_type` / `role_enum` 各取值含义）、以及跨库口径（30 个库里哪几个才是「媒体库」）。**这些只能由业务方给出，无法从 schema 反推**——这也是本节至今无法自行完成的原因。
+
+### 9.3 真实业务库的 10 题草稿（2026-10-29）
+
+已在 `ziyou_mall_center`（116 表、13 万订单）上确认了一份 10 题题集，覆盖术语、枚举与同义列：
+
+- `scripts/bench/questions.ziyou-mall.json` — 10 题，含 `t_order` / `t_order_item` /
+  `t_order_refund` / `t_business_condition` / `t_extension_statistics` / `t_mall_config`
+- `scripts/bench/context.ziyou-mall.json` — B 组用的表/列别名、关系、术语与 SQL 示例
+
+```bash
+# A 组基线（只读；--database 指向真实业务库）
+npm run bench -- --connection local3306 --database ziyou_mall_center \
+  --questions scripts/bench/questions.ziyou-mall.json
+
+# A/B 对照
+npm run bench -- --connection local3306 --database ziyou_mall_center \
+  --questions scripts/bench/questions.ziyou-mall.json \
+  --context  scripts/bench/context.ziyou-mall.json
+
+# 不调用模型，只核对题集/上下文里的表、列、关系是否存在于真实 schema
+npm run bench -- --connection local3306 --database ziyou_mall_center \
+  --questions scripts/bench/questions.ziyou-mall.json \
+  --context  scripts/bench/context.ziyou-mall.json --validate-only
+```
+
+2026-10-29 校验结果：`schema=116 表；题集引用=5 表；上下文=6 表 / 13 列 / 2 关系`，
+`VALIDATE OK`。
+
+业务口径已确认：GMV = `t_order.money` 且 `status='COMPLETE'`；退款率 = 退款单数 /
+已完成订单数；商户累计成交额按订单实付金额聚合（允许 JOIN `t_shop` 取商户名，也允许
+只在明细里 JOIN `t_order` 过滤已完成订单）。`notes` 里保留了每道题的设计意图（术语、
+枚举、同义列），便于以后替换措辞时保持区分度。
+
+> 2026-10-29 试跑记录：`--database` 已能正确绑定到会话（此前会话固定落在连接默认库
+> `media`，已修复）。题集确认后连续三次重试仍收到
+> `PROVIDER_HTTP 502 · The request queue is full`，无法得到可信的 A/B 数字；bench 已加入
+> 对 `PROVIDER_HTTP/5xx` 的自动重试与错误记录。单题手工验证已确认只读工具链正常
+> （`run_sql` / `inspect_schema` 均落在 `ziyou_mall_center`）。
+
+### 9.4 A/B 实测结果（2026-10-29，qwen3.8-flash-next-iq3_s）
+
+原配置 `agnes` 持续 502/504，切换到本地代理上的 `qwen3.8-flash-next-iq3_s` 后完整跑完
+10 题 × 2 组，**全程 0 个 provider 错误**，每题独立会话、`permissionMode=readonly`。
+
+| 指标 | A 无上下文 | B 有上下文 | 变化 |
+|---|---:|---:|---|
+| 题目数 | 10 | 10 | — |
+| 答上率 | 50% | **70%** | +20pp |
+| SQL 可执行率 | 50% | **70%** | +20pp |
+| 表选择正确率（严格：多选表记错） | 70% | **80%** | +10pp |
+| 需人工纠正 | 6 | **4** | −2 |
+| tokens 合计 | 1,671,059 | **1,257,491** | −25% |
+
+逐题变化：
+
+- 修复：Q1「各支付渠道 GMV」从 `t_trade_pay_flow` 改到 `t_order` 且 SQL 全通过；
+  Q3 客单价、Q4 畅销商品、Q10 配送配置从「未答上」变为「答上」。
+- 稳定正确：Q7 推广金额、Q8 已取消占比、Q9 活跃买家。
+- **回退 1 题**：Q2「完成支付订单数」B 组仍选 `t_trade_pay_flow`，且 SQL 报错，
+  上下文没有消除「支付流水 vs 订单」的混淆。
+- 仍失败：Q5 退款率两组都因 SQL 报错未答上（B 组是真实 MySQL
+  `ER_CANT_AGGREGATE_2COLLATIONS`，来自模型拼出的跨字符集比较）。
+- Q10 按严格口径两组都因引用多张配送表记「表✗」，但 B 组 SQL 全通过且给出了分层答案；
+  若放宽 `allowExtraTables`，B 的表选择正确率会更高。
+
+**结论与边界**：在这套真实业务问法上，配置业务上下文后答上率、SQL 可执行率、表选择
+正确率均有提升，且 token 消耗更低；Q2 是明确的回退项，Q5 暴露了模型生成跨字符集 SQL
+的真实问题。单次运行仍有模型随机性，且本次模型是 `qwen3.8-flash-next-iq3_s`，不能直接
+外推到 `agnes` 或其他模型；正式验收应固定模型后跑 3 轮取多数。
+
+原始输出：`.tools/probes/bench-ab.log`（本地取证文件，不纳入仓库）。
+
+### 9.5 SQL 自动修复的效果（2026-10-29）
+
+按第 1 项优化实现了 SQL 失败自动修复（见 [Agent 设计 §3.1](./04-ai-agent-design.md)）：
+`run_sql` 报错后，把错误码 + 失败 SQL 涉及表的真实列定义回灌给模型，最多自动修复 2 次。
+错误文本里能解析出缺失列/表时，还会附加编辑距离 + 公共前缀匹配出的 `suggestions`
+（如 `created_timestamp (t_order)`）。
+同一模型、同一题集，对照 §9.4（无修复）与本次（有修复）：
+
+| 指标 | A 无上下文（无修复 → 修复） | B 有上下文（无修复 → 修复） |
+|---|---|---|
+| SQL 首次可执行率 | 50% → 40%（单轮波动） | 70% → **100%** |
+| SQL 最终可执行率 | 50% → **90%** | 70% → **100%** |
+| 答上率（含修复） | 50% → **90%** | 70% → **100%** |
+| 自动修复成功题数 | — → **5** | — → **0** |
+| 表命中（忽略多余表） | 80% → **100%** | 90% → **100%** |
+| 表选择（严格） | 70% → 60% | 80% → 80% |
+| tokens | 1.67M → 1.96M | 1.26M → 1.42M |
+
+结论：
+
+- 修复对“猜列名/猜表”的场景收益最大：A 组 5 道题靠第二次 SQL 救回，最终可执行率
+  40% → 90%；B 组上下文足够，首次 SQL 就 100%，修复只作为兜底（0 次触发）。
+- 代价是 tokens 增加约 13%–17%（失败重试），但“需人工纠正”显著下降。
+- 严格选表率仍会被“多 JOIN 一张表”扣分（A 的 q1/q2 多带 `t_trade_pay_flow`、q10 多带
+  配送相关表），因此应同时看“表命中（忽略多余表）”；本次两组均为 100%。
+- 单轮运行仍有随机性，严格答上率 A 从 50% 降到 40% 属于波动；稳定指标是“最终可执行率/
+  含修复答上率”。建议后续固定模型跑 3 轮取多数。
+
+原始输出：`.tools/probes/bench-ab-repair3.log`（本地取证文件，不纳入仓库）。
+
+### 9.6 按问题检索候选表（2026-10-29）
+
+实现见 [Agent 设计 §3.2](./04-ai-agent-design.md)：按问题 + 业务别名/术语/SQL 示例选出
+候选表，补一跳关系/外键，只给候选表列明细，其余表压缩为表名。为避免回归，**默认只在
+schema > 150 表或 > 2,500 列时启用**；`ziyou_mall_center`（116 表 / 1,725 列）仍走整库
+明细，`nextcloud`（235 表）启用。
+
+Schema 部分 prompt 体积（`estimateTokens`）：
+
+| 库 / 问题 | 整库 | 候选表 | 变化 |
+|---|---:|---:|---:|
+| ziyou（强制开启，10 题平均） | 6,036 | 4,707 | −22% |
+| nextcloud · 文件缓存 | 2,605 | 1,944 | −25% |
+| nextcloud · 新闻未读 | 2,605 | 1,875 | −28% |
+| nextcloud · 邮件账户 | 2,605 | 2,624 | −1% |
+
+235 表库上的人工只读验证（2 题）：每題首条 SQL 即成功，分别命中 `oc_filecache` /
+`oc_news_items`，0 错误。
+
+为什么用阈值而不是全量开启：在 116 表题库上强制开启时，A 组「含修复答上率」从 90% 提升到
+100%，但 B 组单次从 100% 降到 80%（Q7/Q10 出现额外 SQL 错误，修复后仍有 1 题失败）。
+单次样本不足以判定回归，因此先只在真正的大 schema 启用；后续固定模型跑 3 轮再决定是否
+下放到 100 表级。
+
+强制开关：设置 → Agent → 「大 schema 候选表检索」（`agent.schemaFocus = auto/on/off`）。
+评测脚本支持 `--focus on|off`（自动恢复原设置）、`--arms b`（只跑 B 组）、
+`--out result.json`（保存逐题结果，便于 3 轮聚合）。
+
+原始输出：`.tools/probes/bench-focus.log`、`.tools/probes/focus-size-nextcloud.mjs`（本地取证，不纳入仓库）。
+
+### 9.7 反例上下文（2026-10-29）
+
+在 `context.ziyou-mall.json` 增加 4 条反例（订单数不要用支付流水、退款率不要只看
+`refund_flag`、推广金额先确认 `shop_*`/`user_*` 口径、配送配置不要用 `t_product` 猜）。
+Prompt 会把它们渲染为独立的 `Anti-patterns (hard constraints)` 段。
+
+两题定向验证（q2 完成支付订单数 / q10 配送配置）：
+
+| 指标 | A 无上下文 | B 有反例 |
+|---|---:|---:|
+| 答上率（严格） | 50% | **100%** |
+| SQL 首次/最终可执行率 | 50% / 100% | **100% / 100%** |
+| 表命中（忽略多余） | 100% | 100% |
+
+- q10 修复明显：B 不再用 `t_product` 猜配送方式，改为 `t_mall_config` +
+  `t_mall_delivery_*` / `t_freight_fee_*`。
+- q2 仍额外 JOIN 了 `t_trade_pay_flow`（答案仍以 `t_order` 为准），说明反例是
+  **prompt 级约束、不是强制执行**；要硬隔离应在上下文里禁用 `t_trade_pay_flow`。
+
+禁用表的执行层硬隔离已验证：禁用 `t_trade_pay_flow` 后再问订单数，第一条引用它的 SQL
+返回 `TABLE_DISABLED`（未到达数据库），Agent 明确回复“该表已被业务上下文禁用，我改用
+`t_order` 单表口径”并完成回答，0 provider error。实现见
+`disabledTableInSql`（词边界匹配，覆盖逗号 JOIN 与 `db.table`）与 AgentHost 执行前拦截。
+
+对象级工具同样生效：禁用后 `inspect_schema {tables:[t_trade_pay_flow]}` 返回
+`TABLE_DISABLED`；`search_objects` 的结果会过滤掉禁用表（实测搜索 `trade pay` 返回 0 条，
+而搜索 `pay` / `trade` 仍返回其它可用表）；`sample_rows` 等按 `table` 参数在单测中覆盖。
+
+旁路测试（2026-10-29，实库）：
+
+| 路径 | 结果 |
+|---|---|
+| `SELECT ... FROM information_schema.TABLES` | `METADATA_BLOCKED`，未执行 |
+| `SHOW TABLES` / `SHOW DATABASES` | `METADATA_BLOCKED` |
+| `explain_sql` / `render_chart` 等带 sql 参数的工具 | 与 `run_sql` 同一套禁用表检查 |
+| `schema_diff` / `transfer_data` 不传 `tables` | `TABLE_SCOPE_REQUIRED`，禁止整库扫描 |
+| `recon_data` 嵌套 `left.table` | `TABLE_DISABLED` |
+| `audit_database` | 入口跳过禁用表：116 表库禁用 1 张后 `tablesChecked=115`，payload 无禁用表名 |
+| 聚合结果 | 递归脱敏，findings 中带禁用表标识的对象被移除 |
+
+原始输出：`.tools/probes/bench-anti.log`、`disabled-tools.test.ts`（本地取证/单测）。
+
+### 9.8 3 轮固定模型对照：候选表检索是否下放到 100 表级
+
+固定模型 `qwen3.8-flash-next-iq3_s`，B 组（已配置业务上下文）各跑 3 轮、每轮 10 题，
+只切换 `schemaFocus`，其余不变；按轮均值比较：
+
+| 指标 | focus=off（整库） | focus=on（候选表） |
+|---|---:|---:|
+| 答上率（含修复） | **100.0%** | 93.3% |
+| SQL 首次可执行率 | 75.9% | **86.7%** |
+| SQL 最终可执行率 | 100.0% | 100.0% |
+| 表选择（严格） | 70.0% | **80.0%** |
+| 表命中（忽略多余） | 96.7% | **100.0%** |
+| 自动修复成功（均值） | 2.3 | **1.3** |
+| tokens（均值） | 1,598,419 | **1,377,126（−14%）** |
+
+逐题多数（3 轮）：focus=on 在 Q2（订单数）严格选表 2/3 vs 1/3、Q3 客单价命中 3/3 vs 2/3
+更好；Q7 推广员金额只有 1/3 resolved（off 为 3/3），两次因复杂 CTE 末次 SQL 仍报错。
+其余 8 题两组一致。
+
+**决策：保持 >150 表阈值，暂不下放到 100 表级。** 预定义判据是“resolved / final SQL /
+表命中均不劣于 off 5pp”，focus=on 的 resolved 低 6.7pp，未通过；尽管其首次 SQL、严格选表、
+表命中与 tokens 都更好。下一步应先把 Q7 的推广口径做成 SQL 示例/反例，再重跑 3 轮；通过后
+再把阈值改为 >100。
+
+原始数据：`.tools/probes/decision.json`、`round-{off,on}-{1..3}.json`（本地取证，不纳入仓库）。
 
 ---
 
@@ -583,7 +782,7 @@ demo 库上的一次实测（6 题、每题独立会话）：A 组 2 题「一�
 | 6 | `<followups>` 标签能被 Anthropic / OpenAI / 本地三种 provider 稳定产出 | ✅ **问题已消除**（§12.6-1）：P2 改为 Bridge 侧确定性生成（`agentHost.ts:349`），不再依赖模型守格式，容错解析分支一并删除 |
 | 7 | PNG 导出栅格化路径 | ✅ **两种形态均已实测**（浏览器：§12.4 探针 3；Electron：§12.6-2，1572×728 / 76,419 字节 / `state=completed`）。Electron 侧测出真实缺陷——主进程没挂 `will-download`，5 条导出路径全都弹无类型过滤器的原生另存为，已修复并纳入 `npm run e2e`。两个必踩陷阱（`btoa` 需 utf8 安全包装、需先铺底色）已写入 §5.2 |
 | 8 | 各方言下 `buildMonthlySeriesExpr` 全覆盖 | ✅ **已实测**（§12.6-3）：v0.4 扩到 41 个引擎（含 MongoDB/Redis/Cassandra/ScyllaDB、Neo4j/Memgraph/FalkorDB/ArangoDB、达梦 DM8、DuckDB、TDengine/InfluxDB、Qdrant/Milvus/Weaviate、Elasticsearch/OpenSearch 与 15 个协议别名），`ddl.test` 改为按 7 个 SQL 方言断言；别名自动复用方言，非 SQL 引擎不参与月度聚合 |
-| 9 | 准确率对照实验的 10 个问题集 | ❌ 未准备。P1 开工前需与用户确认题目（应来自其真实业务问法）；跑法与只读基线见 §9.1 / §9.2 |
+| 9 | 准确率对照实验的 10 个问题集 | ✅ 已确认 10 题（`scripts/bench/questions.ziyou-mall.json` + 上下文），2026-10-29 在 `ziyou_mall_center` 完成 A/B：答上率 50%→70%、SQL 可执行率 50%→70%、表选择 70%→80%，详见 §9.3/§9.4 |
 | 10 | 表管理面板在 30+ 库 / 单库 100+ 表时的渲染性能 | ✅ **已在用户真实 MySQL 上实测**（§12.6-4，只读）：最大库 235 表 / 705 控件，库加载+渲染 33ms、6 次筛选按键 88ms、整表滚动往返 33ms → 虚拟滚动与分页都不做 |
 | 11 | 预测算法数值正确性 | ✅ **已实测通过**（§12.4 探针 2：17/17 断言）。过程中发现并修掉一个真实缺陷——`Number(null) === 0` 会把 SQL NULL 变成 0 数据点污染拟合，已固化为 §5.4 规则 1 与单测项 |
 | 12 | `agent_context` 新表对既有库的升级安全性 | ✅ **已实测通过**（§12.4 探针 1：v3 库走 else 分支，13 → 14 张表，旧 snippets 行完好，CHECK 约束生效） |
