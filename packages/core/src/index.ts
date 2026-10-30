@@ -2,6 +2,8 @@ export * from './types';
 export * from './engines';
 export * from './query';
 export * from './protocol';
+export * from './commands';
+export * from './skills';
 export * from './sql/classify';
 export * from './sql/ident';
 export * from './sql/ddl';
