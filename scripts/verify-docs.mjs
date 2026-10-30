@@ -20,6 +20,9 @@ const required = [
   'docs/05-data-and-api.md',
   'docs/06-delivery-and-verification.md',
   'docs/08-agent-accuracy-plan.md',
+  'docs/11-command-workflows.md',
+  'docs/12-bots-and-mcp.md',
+  'docs/13-skill-host-plan.md',
 ];
 for (const f of required) existsSync(join(root, f)) ? ok(`exists ${f}`) : fail(`exists ${f}`, 'missing');
 
@@ -52,9 +55,9 @@ for (const [f, sections] of Object.entries(requiredSections)) {
 // 4. Agent tool inventory (30) defined in 04
 const agentDoc = read('docs/04-ai-agent-design.md');
 const toolRows = [...agentDoc.matchAll(/^\|\s*\d+\s*\|\s*`([a-z_]+)`\s*\|\s*(read|write|ddl|destructive|动态\*|ddl\/destructive)\s*\|/gm)].map((m) => ({ name: m[1], risk: m[2] }));
-const expectedTools = ['list_connections','inspect_schema','search_objects','run_sql','run_mql','run_redis','run_cypher','run_cql','run_aql','vector_search','upsert_document','write_line_protocol','begin_transaction','commit_transaction','rollback_transaction','delete_documents','import_documents','create_collection','delete_collection','search_index','explain_sql','sample_rows','profile_column','create_table','alter_table','drop_object','manage_index','export_result','import_csv','backup_database','get_query_history','update_plan','memory_write','memory_search','audit_database','check_data_quality','render_chart','analyze_chart','forecast_chart','generate_data'];
+const expectedTools = ['list_connections','inspect_schema','search_objects','run_sql','run_mql','run_redis','run_cypher','run_cql','run_aql','vector_search','upsert_document','write_line_protocol','begin_transaction','commit_transaction','rollback_transaction','delete_documents','import_documents','create_collection','delete_collection','search_index','explain_sql','sample_rows','profile_column','create_table','alter_table','drop_object','manage_index','export_result','import_csv','backup_database','get_query_history','update_plan','memory_write','memory_search','audit_database','check_data_quality','render_chart','analyze_chart','forecast_chart','generate_data','schema_diff','recon_data','transfer_data','mcp_list_tools','mcp_call','skill_list','skill_read','skill_write','skill_run','skill_list_files','skill_worker_run'];
 const names = toolRows.map((t) => t.name);
-if (names.length === 40) ok('40 agent tools documented'); else fail('40 agent tools documented', `found ${names.length}`);
+if (names.length === 51) ok('51 agent tools documented'); else fail('51 agent tools documented', `found ${names.length}`);
 for (const t of expectedTools) names.includes(t) ? ok(`tool ${t}`) : fail(`tool ${t}`, 'not in tool table');
 for (const t of new Set(names)) if (!expectedTools.includes(t)) fail('tool inventory', `unexpected tool ${t}`);
 

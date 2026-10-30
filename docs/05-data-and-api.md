@@ -125,6 +125,45 @@ CREATE TABLE IF NOT EXISTS agent_context (
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE INDEX idx_agent_ctx ON agent_context(connection_id, database_name, kind);
+CREATE TABLE IF NOT EXISTS notification_channels (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('feishu','wecom','qq-onebot')),
+  config_secret TEXT NOT NULL, summary TEXT, enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, command TEXT NOT NULL,
+  args_json TEXT, env_secret TEXT, enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS artifacts (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL CHECK (type IN ('report','compare','diff','recon','fix')),
+  title TEXT NOT NULL,
+  spec_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ready',
+  schedule_id TEXT,
+  origin_session_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS artifact_runs (
+  id TEXT PRIMARY KEY,
+  artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  input_json TEXT, steps_json TEXT, result_json TEXT, error TEXT,
+  started_at TEXT NOT NULL, finished_at TEXT, duration_ms INTEGER, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS artifact_schedules (
+  id TEXT PRIMARY KEY,
+  artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+  interval_seconds INTEGER NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  refresh_narrative INTEGER NOT NULL DEFAULT 0,
+  last_run_at TEXT, last_status TEXT, last_error TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+
 ```
 
 ## 2. 领域 DTO（`@aidb/core`）
@@ -210,6 +249,28 @@ export interface QueryResult {
 | GET | `/audit` | 审计日志；`?format=csv` 导出 |
 | GET | `/snippets` · POST/PUT/DELETE | SQL 片段 |
 | GET | `/agent/tools` | 工具清单 + JSON Schema（UI 展示） |
+| GET | `/commands` | 命令注册表（`title / slots / sources / execution / artifact`） |
+| POST | `/commands/:id/runs` | 启动一次命令运行，返回 `{run}`；运行进度走 SSE |
+| GET | `/commands/runs/:id` | 运行快照（状态 / 步骤 / 产物 id） |
+| GET | `/commands/runs/:id/events` | **SSE** 运行进度、步骤、审批与 `run_finished`；支持 `?after=seq` 重连 |
+| POST | `/commands/runs/:id/cancel` | 取消运行 |
+| GET | `/artifacts` | 产物列表（`?type=report|compare|diff|recon|fix`） |
+| GET | `/artifacts/:id` | 产物规格 `{artifact}` |
+| GET | `/artifacts/:id/runs` | 运行历史（最近 20 次） |
+| POST | `/artifacts/:id/runs` | 在当前产物上追加一次运行 |
+| GET | `/artifacts/:id/export` | `?format=xlsx|pptx`，返回 `{path, rows, bytes}` |
+| POST | `/artifacts/:id/deck` | 用已安装 Skill（默认 PPT Master）把报告生成原生 PPTX，返回 `{runId}`；可传 `template` 与 `mode=agent|deterministic` |
+| POST | `/artifacts/:id/recon/execute` | 快照后执行 Redis 修复命令（`{confirm:'EXECUTE', steps?}`）；执行后复检 |
+| POST | `/artifacts/:id/fix/execute` | 备份后执行修复计划（`{confirm:'EXECUTE', backup:true, steps?}`） |
+| GET/POST/DELETE | `/artifacts/:id/schedule` | 读取 / 设置 / 删除产物定时刷新；POST 支持 `notifyChannels` |
+| GET/POST | `/notifications/channels` | 通知渠道列表 / 新增（飞书、企微、QQ OneBot；配置加密存储） |
+| PUT/DELETE | `/notifications/channels/:id` | 更新 / 删除通知渠道 |
+| POST | `/notifications/channels/:id/test` | 发送测试消息 |
+| POST | `/bots/:id/events` | 平台回调入口（公开但校验渠道配置）：飞书 URL 验证 / 消息事件、OneBot 消息事件；只读 Agent 回复 |
+| GET/POST | `/mcp/servers` | MCP Server 列表 / 新增（stdio 命令、参数、加密环境变量） |
+| PUT/DELETE | `/mcp/servers/:id` | 更新 / 删除 MCP Server |
+| GET | `/mcp/servers/:id/tools` | 启动 MCP Server 并列出工具 |
+| DELETE | `/artifacts/:id` | 删除产物（级联运行记录与定时） |
 | GET/POST | `/agent/sessions` | 会话列表 / 新建（`{connectionId?, database?, title?, permissionMode?}`） |
 | GET/DELETE | `/agent/sessions/:id` | 会话详情（messages + tool_runs）/ 删除 |
 | PATCH | `/agent/sessions/:id` | 更新会话（title / connectionId / database / permissionMode / archived） |

@@ -69,13 +69,16 @@ const check = (name, condition, detail = '') => {
   console.log(`${condition ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`);
 };
 
+// Chromium 拒绝连接 WHATWG 禁用端口（6000、6665-6669、10080…），随机端口撞上会让 page.goto 直接 ERR_UNSAFE_PORT。
+const FETCH_BLOCKED_PORTS = new Set([0, 1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080]);
+
 function freePort() {
   return new Promise((res, rej) => {
     const server = createNetServer();
     server.once('error', rej);
     server.listen(0, '127.0.0.1', () => {
       const port = server.address().port;
-      server.close(() => res(port));
+      server.close(() => (FETCH_BLOCKED_PORTS.has(port) ? res(freePort()) : res(port)));
     });
   });
 }
@@ -119,7 +122,7 @@ const api = async (path, init = {}) => {
 const boot = (await api('/bootstrap')).body;
 const demo = boot.connections.find((c) => c.engine === 'sqlite');
 check('bridge bootstrap', Boolean(demo), demo?.name);
-check('40 agent tools', boot.tools.length === 40, String(boot.tools.length));
+check('51 agent tools', boot.tools.length === 51, String(boot.tools.length));
 
 const MONGO_PORT = process.env.AIDB_TEST_MONGO_PORT ? Number(process.env.AIDB_TEST_MONGO_PORT) : undefined;
 const REDIS_PORT = process.env.AIDB_TEST_REDIS_PORT ? Number(process.env.AIDB_TEST_REDIS_PORT) : undefined;
@@ -385,6 +388,12 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
 // ---------------- Desktop (browser, production build) ----------------
 const desktopContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 const page = await desktopContext.newPage();
+{
+  const rawShot = page.screenshot.bind(page);
+  page.screenshot = async (options) => {
+    try { return await rawShot(options); } catch (err) { console.log(`WARN screenshot ${options?.path ?? ''}: ${err.message}`); return Buffer.alloc(0); }
+  };
+}
 page.on('console', (msg) => msg.type() === 'error' && consoleErrors.push(`desktop: ${msg.text()}`));
 page.on('pageerror', (err) => consoleErrors.push(`desktop: ${err.message}`));
 page.on('response', (res) => {
@@ -1502,7 +1511,25 @@ await page.locator('.tools-content .search-box input').fill('orders');
 await page.keyboard.press('Enter');
 await page.waitForTimeout(1600);
 check('database-wide search works', (await page.locator('.tools-content .result-row').count()) > 0);
+const toolboxLabels = await page.locator('.tools-nav button').allInnerTexts();
+check('database toolbox does not list agent features', !toolboxLabels.some((text) => /Skills|MCP|通知渠道|命令工作流/.test(text)), toolboxLabels.join(' | '));
 await page.locator('.tools-modal .modal-head .icon-btn').click();
+await page.waitForTimeout(200);
+await page.click('[data-testid="open-settings"]');
+await page.locator('.settings-nav button').filter({ hasText: '通知' }).click();
+await page.waitForFunction(() => document.querySelector('.settings-content')?.textContent?.includes('飞书群机器人'), null, { timeout: 10000 });
+const platformButtons = await page.locator('.settings-content .btn').allInnerTexts();
+check('notification presets cover seven platforms', ['飞书群机器人','企业微信群机器人','钉钉群机器人','Slack','Discord','Telegram','QQ（OneBot HTTP）'].every((label) => platformButtons.includes(label)), platformButtons.join('|'));
+check('settings notification channels panel renders', true);
+await page.locator('.settings-nav button').filter({ hasText: 'MCP' }).click();
+await page.waitForFunction(() => document.querySelector('.settings-content')?.textContent?.includes('新增 MCP Server'), null, { timeout: 10000 });
+check('settings MCP panel renders', true);
+await page.locator('.settings-nav button').filter({ hasText: 'Skills' }).click();
+await page.waitForFunction(() => document.querySelector('.settings-content')?.textContent?.includes('推荐技能'), null, { timeout: 10000 });
+const settingsSkillsText = await page.locator('.settings-content').innerText();
+check('built-in skills are preinstalled', settingsSkillsText.includes('内置') && settingsSkillsText.includes('已安装'), settingsSkillsText.slice(0, 120));
+check('settings Skills panel renders', true);
+await page.locator('.settings-modal .modal-head .icon-btn').click();
 await page.waitForTimeout(200);
 
 await page.click('[data-testid="welcome-open-demo"]');
@@ -1796,6 +1823,17 @@ await page.click('[data-testid="agent-send"]');
 await page.waitForFunction(() => document.querySelector('.agent-transcript')?.textContent?.includes('张表'), { timeout: 25000 });
 check('agent inspects schema', (await page.locator('[data-testid="tool-card"]').count()) > 0);
 await page.screenshot({ path: join(shots, 'desktop-agent.png') });
+await page.fill('[data-testid="agent-input"]', '/report');
+await page.locator('.popover-item', { hasText: '/report' }).click();
+await page.waitForSelector('.modal-head h2:has-text("生成报告")', { timeout: 10000 });
+await page.getByPlaceholder('例如：本周订单与履约情况').fill('数据概览');
+await page.locator('.modal button:has-text("运行")').click();
+await page.waitForFunction(() => document.querySelector('.modal')?.textContent?.includes('概览'), { timeout: 25000 });
+check('slash command report renders an artifact', (await page.locator('.modal').textContent())?.includes('概览'));
+await page.locator('.modal button:has-text("AI PPT")').click();
+await page.waitForFunction(() => document.querySelector('.modal')?.textContent?.includes('PPT Master 生成'), null, { timeout: 10000 });
+check('report offers deterministic PPT Master deck', (await page.locator('.modal').textContent())?.includes('确定性排版'));
+await page.locator('.modal-head button[title="关闭"]').click();
 
 await page.fill('[data-testid="agent-input"]', '创建表 e2e_tasks，包含 id 自增主键, title 文本');
 await page.click('[data-testid="agent-send"]');
@@ -2028,6 +2066,12 @@ await page.locator('.tab.active .tab-close').click();
 // ---------------- Mobile (Expo web build) ----------------
 const mobileContext = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
 const mobile = await mobileContext.newPage();
+{
+  const rawShot = mobile.screenshot.bind(mobile);
+  mobile.screenshot = async (options) => {
+    try { return await rawShot(options); } catch (err) { console.log(`WARN screenshot ${options?.path ?? ''}: ${err.message}`); return Buffer.alloc(0); }
+  };
+}
 mobile.on('console', (msg) => msg.type() === 'error' && consoleErrors.push(`mobile: ${msg.text()}`));
 mobile.on('pageerror', (err) => consoleErrors.push(`mobile: ${err.message}`));
 await mobile.goto(mobileBase, { waitUntil: 'networkidle' });
@@ -2050,6 +2094,14 @@ await mobile.getByTestId('m-send').click();
 await mobile.waitForFunction(() => document.body.innerText.includes('张表'), { timeout: 30000 });
 check('mobile agent answers', true);
 await mobile.screenshot({ path: join(shots, 'mobile-agent.png') });
+await mobile.getByTestId('m-commands').click();
+await mobile.getByTestId('m-command-report').click();
+await mobile.getByPlaceholder('例如：本周订单与履约情况').fill('数据概览');
+await mobile.getByTestId('m-command-run').click();
+await mobile.waitForFunction(() => document.body.innerText.includes('概览'), { timeout: 40000 });
+check('mobile command report renders', true);
+await mobile.screenshot({ path: join(shots, 'mobile-command-report.png') });
+await mobile.getByTestId('m-command-close').click();
 
 await mobile.getByTestId('m-tab-data').click();
 await mobile.waitForSelector('[data-testid="m-table-orders"]', { timeout: 15000 });
@@ -2220,6 +2272,21 @@ check('collapsed group stays collapsed after reload', stillCollapsed);
 await page.locator('[data-testid="group-toggle-示例"]').click();
 await page.waitForFunction(() => [...document.querySelectorAll('.conn-row')].some((el) => (el.textContent ?? '').includes('Demo · Shop DB')), null, { timeout: 5000 });
 
+const orderPeer = await api('/connections', {
+  method: 'POST',
+  body: JSON.stringify({ name: 'E2E 排序同组', engine: 'sqlite', database: demo.database, groupName: '示例' }),
+});
+const orderGroup = await api('/connections', {
+  method: 'POST',
+  body: JSON.stringify({ name: 'E2E 排序分组', engine: 'sqlite', database: demo.database, groupName: '组E2E' }),
+});
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
+await page.waitForFunction(
+  () => document.querySelectorAll('.group-label').length >= 2 && document.querySelectorAll('.conn-row').length >= 2,
+  null,
+  { timeout: 15000 },
+);
 const listGroups = () => page.$$eval('.group-label', (els) => els.map((el) => {
   const clone = el.cloneNode(true);
   clone.querySelector('.group-count')?.remove();
@@ -2249,6 +2316,10 @@ await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
 await page.waitForSelector('.conn-row', { timeout: 15000 });
 const connsReloaded = await firstConnIds();
 check('connection order persists across reload', connsReloaded[0] === connsAfter[0], connsReloaded.join('|'));
+await api(`/connections/${orderPeer.body.connection.id}`, { method: 'DELETE' });
+await api(`/connections/${orderGroup.body.connection.id}`, { method: 'DELETE' });
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
 
 // ---------------- 分组重命名与删除 ----------------
 const groupConn = await api('/connections', { method: 'POST', body: JSON.stringify({ name: 'Group E2E', engine: 'sqlite', database: demo.database, groupName: '组A' }) });

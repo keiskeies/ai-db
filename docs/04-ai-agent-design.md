@@ -63,7 +63,67 @@ for (step = 0; step < maxSteps; step++) {
 
 **约束**：`maxSteps` 默认 12；同一工具相同参数连续失败 2 次 → 中止并解释；单工具超时 60s（查询 30s）；取消信号贯穿 Provider 与 Driver。
 
-## 4. 工具目录（40 个）
+### 3.1 SQL 失败自动修复
+
+`run_sql` 返回数据库错误时（权限拒绝、审批拒绝、只读拒绝除外），Runtime 会把修复提示
+附加到该次 tool 结果里，再进入下一轮模型调用：
+
+- 提示包含原始错误码/错误信息、失败 SQL 所引用表的**真实列名与类型**（最多 4 张表 × 40 列），
+  以及"修正后重新调用 `run_sql`，不要重复原 SQL；不确定列名先 `inspect_schema`"。
+- 从错误文本里解析缺失的列/表（MySQL / SQL Server / PostgreSQL / Oracle / SQLite 方言），
+  在相关表内做编辑距离 + 公共前缀匹配，给出最多 5 个 `suggestions`（如
+  `created_timestamp (t_order)`），并提示优先使用这些真实标识符。
+- 每轮最多自动修复 2 次；第 3 次失败只回灌"停止重试并向用户解释"，避免死循环。
+- 修复后的 SQL 仍走完整权限判定与审批，不会绕过只读/审批边界。
+- 单测覆盖：错误后出现列级提示、两次后进入 exhausted 状态（`packages/core/test/runtime.test.ts`）。
+
+### 3.2 按问题检索候选表
+
+大库不再把整库列明细塞进 prompt。当 schema 超过 **150 张表或 2,500 列** 时自动启用候选表
+检索（可用 `focusMode: on/off` 强制），先按当前问题挑选候选表，再补一跳关联表
+（`packages/core/src/agent/prompt.ts` `focusTablesForQuestion`）：
+
+- 信号：用户维护的表/列别名与描述、当前召回的术语与 SQL 示例、表/列名直接命中；无业务
+  上下文时用一组通用中英字段提示兜底（订单→order、退款→refund、配送→delivery/freight…）。
+- 关联：`AgentContextBundle.relations` 与数据库外键双向补一跳，便于 JOIN。
+- 渲染：候选表按相关度排序并给列明细；其余表压缩成一行表名，提示“需要列时调用
+  inspect_schema”。用户显式附加的表优先级最高。
+- 无匹配时不启用压缩，保持与旧版一致的整库 schema 行为；未配置上下文且无候选时输出与
+  改动前逐字节一致。
+- 实测：`ziyou_mall_center` 强制开启时 Schema 部分从 6,036 tokens 降到约 4,500–5,100
+  （10 题平均 −22%）；`nextcloud`（235 表）文件/新闻类问题 −25%～−28%。116 表默认仍走
+  整库明细，避免在已验证的题库上引入回归。
+
+### 3.3 反例（负向业务约束）
+
+业务术语中标题以 `反例 / 不要 / 避免 / 禁止 / avoid / do not` 开头的条目（Memory kind =
+`glossary`）会从普通 Terms 中剥离，单独渲染为：
+
+```md
+### Anti-patterns (hard constraints — do not repeat)
+- 反例：订单数不要用支付流水 → 统计订单笔数用 t_order；t_trade_pay_flow 一行不是一笔订单
+```
+
+并在 Rules 里声明这是硬约束。它复用现有“术语”编辑入口，不需要新增表结构或迁移。
+注意：反例本身是 **prompt 级约束**。需要真正隔离时，在上下文面板禁用对应表：Bridge 会在
+执行层拦截——`run_sql` 只要出现被禁用表名（含 `FROM a, b`、`db.table` 等写法）就直接返回
+`TABLE_DISABLED`，不会到达数据库；`sample_rows` / `inspect_schema` / `profile_column` /
+`manage_index` 等对象级工具同样按 `table` / `tables` / `collection` / `index` 参数拦截
+（包括 `recon_data` 的嵌套参数）；`search_objects` 与 `inspect_schema` 的列表结果会过滤掉
+禁用对象。该错误不参与自动修复，Agent 会改用可用表或请用户启用。
+
+为避免绕过，禁用上下文生效时还会：
+
+- 拒绝 `information_schema` / `performance_schema` / `mysql.` / `sys.` 与 `SHOW TABLES /
+  SHOW DATABASES`（`METADATA_BLOCKED`），阻止枚举出禁用表；`explain_sql` / `render_chart` /
+  `analyze_chart` / `forecast_chart` 等带 `sql` 参数的工具同样受表名检查。
+- `schema_diff` / `transfer_data` 未显式传 `tables` 时返回 `TABLE_SCOPE_REQUIRED`，不能整库扫描。
+- `audit_database` 在入口过滤禁用表（实测 116 表库禁用 1 张后 `tablesChecked=115`），
+  聚合结果再做一次递归脱敏，防止 findings/结果对象带出禁用表名。
+
+## 4. 工具目录（51 个）
+
+> 命令化的任务入口（`/report`、`/compare`、`/diff`、`/recon`、`/fix`）见 [命令化 Agent 工作流设计与开发计划](./11-command-workflows.md)。命令私有工具（如 `compose_report`）只在该命令的 Agent 步骤内可用，不计入下表的 51 个全局工具。
 
 风险等级：`read < write < ddl < destructive`。所有工具入参使用 JSON Schema（`additionalProperties: false`）。
 
@@ -109,6 +169,17 @@ for (step = 0; step < maxSteps; step++) {
 | 38 | `import_documents` | write | CSV 批量导入 MongoDB 文档 / ArangoDB 文档 / 向量点 / 搜索文档（≤5000 行，列名即字段，id/vector 列单独指定） | `{ connectionId, database?, collection, csv?/path?, hasHeader?, delimiter?, idColumn?, vectorColumn? }` |
 | 39 | `create_collection` | ddl | 创建向量集合（Qdrant 需维度/距离）、搜索索引 / Weaviate class（字段列表）、MongoDB 集合或 ArangoDB 文档/边集合（`edge=true`）；Milvus 明确拒绝 | `{ connectionId, database?, name, dimension?, distance?, fields?[], edge? }` |
 | 40 | `delete_collection` | destructive | 删除 Qdrant 集合 / ES·OpenSearch 索引 / Weaviate class / MongoDB 集合 / ArangoDB 集合；`confirm` 必须与 `name` 完全一致 | `{ connectionId, database?, name, confirm }` |
+| 41 | `schema_diff` | read | 两个连接的结构差异、破坏性标记与目标方言 DDL | `{ sourceConnectionId, targetConnectionId, sourceDatabase?, targetDatabase?, tables?, includeDrops? }` |
+| 42 | `recon_data` | read | 两个源的键级 / 字段级对账（SQL 表、Redis 键空间、MongoDB/Elasticsearch 文档） | `{ left, right, fieldMap?, level?, baseSide?, maxKeys? }` |
+| 43 | `transfer_data` | write | 跨连接复制表结构与数据，目标缺失表自动创建 | `{ sourceConnectionId, targetConnectionId, tables?, mode?, createMissing? }` |
+| 44 | `mcp_list_tools` | read | 列出已配置 MCP Server 的工具 | `{ server }` |
+| 45 | `mcp_call` | write | 调用 MCP Server 工具（需审批；参数透传） | `{ server, tool, arguments? }` |
+| 46 | `skill_list` | read | 列出已安装的 Skill（SKILL.md 目录包） | `{ includeDisabled? }` |
+| 47 | `skill_read` | read | 读取 Skill 内的文本文件（SKILL.md / references / workflows） | `{ skill, path?, maxChars? }` |
+| 48 | `skill_write` | write | 写入 Skill 运行 workspace / output | `{ skill, runId?, area?, path, content }` |
+| 49 | `skill_run` | write | 按 aidb.skill.json 声明运行 python/node 入口 | `{ skill, entrypoint, runId? }` |
+| 50 | `skill_list_files` | read | 列出 Skill 运行的 workspace/input/output | `{ runId }` |
+| 51 | `skill_worker_run` | write | 在独立 Skill Worker 中运行技能，等待完成后返回最终答复与产物 | `{ skill, prompt, timeoutSeconds? }` |
 
 \* `run_sql`、`run_mql`、`run_redis`、`run_cypher`、`run_cql`、`run_aql` 风险按各自语言的安全分类动态提升；`alter_table` 按 `operations` 动态判定（`add_column` 为 ddl、`drop_column` 为 destructive）；`dryRun=true` 时 DDL 只返回将执行的 SQL（用于预览）。`run_mql` / `run_redis` / `run_cypher` / `run_aql` / `vector_search` 仅用于对应模型的连接，SQL 专属工具（DDL、审计、图表等）在非 SQL 连接上明确返回不支持；例外是 `manage_index`，在 MongoDB 连接上改走结构化索引通道（同一实现服务对象信息面板的建删），不拼 SQL DDL。
 \** 导出写文件为 `write`，不触碰数据库。

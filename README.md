@@ -2,7 +2,7 @@
 
 AI 原生、全平台数据库工作台。Navicat 式的完整数据库操作 + Claude Code 式的 AI 搭档。
 
-支持 **Windows · macOS · Linux · Android · iOS**。内置一个可全权操作数据库的 AI Agent：40 个工具、四级权限、四层记忆、工具轨迹可视化、审批与审计；外加 11 个模块的 Navicat 级工具箱。
+支持 **Windows · macOS · Linux · Android · iOS**。内置一个可全权操作数据库的 AI Agent：51 个工具、四级权限、四层记忆、工具轨迹可视化、审批与审计；外加 15 个模块的 Navicat 级工具箱。
 
 ![Desktop](docs/screenshots/desktop-welcome.png)
 ![Toolbox](docs/screenshots/desktop-toolbox.png)
@@ -63,7 +63,7 @@ AI 原生、全平台数据库工作台。Navicat 式的完整数据库操作 + 
 
 ### AI Agent（核心差异）
 - **Claude Code 式对话**：`❯` 输入、`⏺` 工具卡、参数 / 结果 / SQL 可折叠、Todo 计划、结束统计、思考过程、`@table` 引用、斜杠命令、中断。
-- **40 个数据库工具**：结构检查、搜索、SQL / MQL / Cypher / AQL / Redis 命令 / 向量检索 / 搜索 DSL / 向量与文档写入删除、时序行协议写入、执行计划、样例、列画像、**数据库体检**、**数据质量检查**、**图表生成**、建表、改表、删表、索引、集合/索引建删、导入、导出、备份、历史、计划、记忆写入 / 检索。
+- **51 个数据库工具**：结构检查、搜索、SQL / MQL / Cypher / AQL / Redis 命令 / 向量检索 / 搜索 DSL / 向量与文档写入删除、时序行协议写入、执行计划、样例、列画像、**数据库体检**、**数据质量检查**、**图表生成**、建表、改表、删表、索引、集合/索引建删、导入、导出、备份、历史、计划、记忆写入 / 检索。
 - **SQL Copilot**：编辑器内一键“AI 解释 / AI 优化”，自动把选中 SQL 送入 Agent，输出改写 SQL、精确索引 DDL 与验证查询。
 - **审计闭环**：体检/质量发现的每条问题都附带可执行 SQL，可一键打开到编辑器；写操作前自动备份，审批结果全部落审计。
 - **四级权限**：只读 / 询问 / 自动 / 全自动；只读连接服务端强制；生产环境破坏性操作强制审批；会话级 / 连接级 Allow 规则。
@@ -227,6 +227,12 @@ API Key 加密存储；也可用环境变量 `AIDB_API_KEY`（Bridge）覆盖。
 - [数据模型与协议](docs/05-data-and-api.md)
 - [交付与验证](docs/06-delivery-and-verification.md)
 - [验证报告](docs/07-verification-report.md)
+- [Agent 准确率计划](docs/08-agent-accuracy-plan.md)
+- [多引擎架构](docs/09-multi-engine.md)
+- [真实 MySQL 只读回归](docs/10-real-mysql-readonly-regression.md)
+- [命令化 Agent 工作流](docs/11-command-workflows.md)
+- [机器人与 MCP 插件](docs/12-bots-and-mcp.md)
+- [Skill Host 设计](docs/13-skill-host-plan.md)
 
 ## License
 

@@ -40,7 +40,7 @@
 ## 3. 文档二次验证（M0 闸门）
 
 文档写完后不直接开发，先做一次**独立复核**：
-1. **契约脚本**：检查关键章节存在、内部链接有效、五端平台均出现、40 个工具在 02/04/executor 代码清单中一致、API 表包含 Agent 与配对、SSE 事件类型与协议一致。
+1. **契约脚本**：检查关键章节存在、内部链接有效、五端平台均出现、51 个工具在 02/04/executor 代码清单中一致、API 表包含 Agent 与配对、SSE 事件类型与协议一致。
 2. **交叉一致性**：权限矩阵（04）与功能规格（02）的安全描述一致；数据模型表名与 API 字段一致；UI 的 Agent 元素与 04 的交互映射一致。
 3. **可行性**：核对技术选型与仓库脚本可执行（依赖可安装、Node 版本、打包命令）。
 4. **输出**：`docs/07-verification-report.md` 记录检查项、证据、发现与修复。
@@ -85,14 +85,35 @@ npm --workspace apps/mobile run start
 |---|---|---|
 | 文档契约 | `npm run verify:docs` | 268/268 通过 |
 | 类型检查 | `npm run typecheck`（core / gateway / desktop / mobile） | 全部通过 |
-| 单元测试 | `npm test` → core | 137/137 通过 |
-| 集成测试 | gateway（HTTP / SSE / WebSocket / 审批 / 配对 / 引擎方言 / 工具箱 / 表与数据操作 / 跨请求事务 / SSH 隧道） | 137 个用例 · 125 通过 · 12 跳过（跳过项是需要 `AIDB_TEST_*_PORT` 的联机引擎，未配置即跳过） |
+| 单元测试 | `npm test` → core | 149/149 通过 |
+| 集成测试 | gateway（HTTP / SSE / WebSocket / 审批 / 配对 / 引擎方言 / 工具箱 / 表与数据操作 / 跨请求事务 / SSH 隧道 / Skill Host） | 198 个用例 · 133 通过 · 65 跳过（跳过项是需要 `AIDB_TEST_*_PORT` 的联机引擎，未配置即跳过） |
 | 构建 | core、gateway（esbuild）、desktop（Vite）、mobile web（2.07MB） | 成功 |
-| E2E | `npm run e2e`（桌面 Web + 移动 Web + Electron Shell + Navicat 布局 / 表与数据操作 / 工具箱 / 搜索 / 图表 / 体检 / SSH 隧道） | 221/221 通过（37 项基线 + 184 项联机引擎/Agent/移动端检查） |
+| E2E | `npm run e2e`（桌面 Web + 移动 Web + Electron Shell + Navicat 布局 / 表与数据操作 / 工具箱 / 搜索 / 图表 / 体检 / SSH 隧道） | 139/139 通过（无联机引擎环境变量时的基线；联机引擎检查按环境追加） |
 | Windows 打包 | `electron-builder --dir --win --x64` + 启动 `win-unpacked/AiDB Studio.exe` | 成功；内置 Bridge、1 个连接、Agent 面板可见、无异常 |
+| Windows NSIS 安装包 | `electron-builder --win nsis --x64 --publish never` | 成功产出 `AiDB Studio-0.1.0-setup.exe`（131 MB）+ `.blockmap`；`oneClick=false`、`perMachine=false` |
 | Linux 打包 | `electron-builder --dir --linux --x64` | 生成 `linux-unpacked` |
 | Docker | `docker build --check -f apps/gateway/Dockerfile .` | 通过 |
 | Android | `expo prebuild` + Java 21 / SDK 35 + Gradle `assembleDebug` | 成功产出 119 MB debug APK |
 | macOS / iOS | — | 受宿主系统限制，未产出安装包/IPA |
 
 详细输出、缺陷修复与未覆盖项见 [验证报告](./07-verification-report.md)。
+
+### Windows 覆盖安装 / 升级流程
+
+安装包使用 NSIS、按用户安装（`perMachine: false`），**同 appId + 同 productName 的新版本
+setup 直接覆盖旧版本**，不需要先卸载：
+
+1. 新版本 setup 安装到原目录，桌面 / 开始菜单快捷方式原位更新，不产生第二份安装。
+2. 连接、历史、记忆、导出目录都在 `%APPDATA%/AiDB Studio`（`app.getPath('userData')`），
+   安装目录只放程序文件；`deleteAppDataOnUninstall: false` 保证卸载也不删数据。
+3. 首次运行新版本时，Electron 主进程在拉起 Bridge **之前**读取 `.app-version` 标记：
+   发现版本变化就把 `aidb.db` + `-wal` + `-shm` 整体复制到
+   `backups/upgrade-<旧版本>-to-<新版本>-<时间戳>/`，然后才让 gateway 做结构迁移。
+4. Bridge 健康检查通过后才写入新版本标记；启动失败不会把旧标记覆盖掉，下次仍会备份。
+5. 单实例锁保证覆盖安装后不会有两个进程同时抢同一个数据目录。
+
+验证：`node --test apps/desktop/electron/upgrade.test.cjs`（首次安装、同版本、覆盖升级、
+数据库尚未创建四种情况，以及 NSIS 配置/主进程顺序守卫）。2026-10-29 已实际构建出
+NSIS 安装包验证配置可执行；**没有在本机执行安装**——测试安装会写入真实的
+`%APPDATA%/AiDB Studio` 与卸载注册表项，可能碰到现有用户数据，因此「装 A → 覆盖装 B →
+检查备份」仍留作发布前在隔离虚拟机执行的步骤。

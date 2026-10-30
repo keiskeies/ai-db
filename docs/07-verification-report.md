@@ -1,5 +1,7 @@
 # AiDB Studio — 验证报告
 
+> 2026-10-29 增量：本机真实 MySQL 只读回归 32/32 + UI 14/14（[详见](10-real-mysql-readonly-regression.md)）；查询历史保留、Redis/FalkorDB/达梦超时、Windows 覆盖升级备份已落地；Agent A/B 基线答上率 50%→70%，加入 SQL 自动修复后 A 组最终 SQL 可执行率 **90%**、B 组 **100%**；大 schema 候选表检索经 3 轮固定模型对照后**保持 >150 表阈值**（resolved 未达 5pp 判据），禁用表已在 SQL 与对象级工具上执行层硬隔离（[详见](08-agent-accuracy-plan.md) §9.4–§9.8）。
+>
 > 最后更新：2026-10-27 · 结论：**设计文档闸门通过；v0.3 开发验证通过（宿主环境可执行范围内），未验证项在 §8 明示，无隐藏。**
 
 ## 1. 文档二次验证（M0 闸门）
@@ -25,7 +27,7 @@
 ### 1.3 交叉一致性结论
 
 - 平台矩阵、权限矩阵、工具清单、SSE 事件、元数据表名在文档与实现中一一对应（契约脚本会读取 `tools.ts` 校验）。
-- 文档中的 40 个工具全部在 `packages/core/src/agent/tools.ts` 注册，并由 `apps/gateway/src/executor.ts` 实现。
+- 文档中的 51 个工具全部在 `packages/core/src/agent/tools.ts` 注册，并由 `apps/gateway/src/executor.ts` 实现。
 - 权限矩阵与 `packages/core/src/agent/policy.ts` 一致；SSE / WS 共用 `AgentEvent` 类型。
 
 ## 2. 验证环境
@@ -191,7 +193,7 @@ Expo Web 构建在 390×844 视口通过：配对页、配对码真实兑换、A
 
 ## 8. 未覆盖 / 明确限制
 
-1. **MySQL / PostgreSQL 实连**：驱动、元数据与 DDL 方言已实现，SQLite 覆盖真实集成；本机无 MySQL/PG 实例，未做服务器级测试。
+1. **MySQL / PostgreSQL 实连**：驱动、元数据与 DDL 方言已实现。2026-10-29 已在本机 MySQL（30 库 / 962 表）完成只读回归：235 表对象树、13 万行分页、2.2 万字符长文本、中文数据、EXPLAIN、导出与打印取数全部通过，并修复筛选分页 total 缺陷（详见 [真实 MySQL 只读回归](10-real-mysql-readonly-regression.md)）。真实库上的写入 / DDL / 导入备份仍有意未执行；PostgreSQL 仍只有驱动级测试。
 2. **SSH 隧道实连**：已用一次性 sshd 容器实连验证：密码认证、私钥认证、端口转发、关闭后释放监听端口、密码错误返回 `SSH_CONNECT`。
 3. **真实云模型**：Anthropic / OpenAI 兼容解析通过模拟 SSE 测试；未使用真实 Key 调用（离线模式不依赖）。
 4. **记忆的模型抽取**：离线为显式规则抽取 + 每轮会话摘要；设计中的云端二次提取调用未启用。
