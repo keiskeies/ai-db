@@ -1,16 +1,20 @@
-import { BarChart3, Download, LineChart, Maximize2, PieChart } from 'lucide-react';
+import { BarChart3, Download, Grid3x3, Layers, LineChart, Maximize2, PieChart, Radar, ScatterChart } from 'lucide-react';
 import { CopyButton } from './ui';
 
 /**
  * 只包含图形类型：明细/表格是 AgentPanel 与 QueryView 自己的结果 tab，
  * 工具条里再放一个「明细」就是同一功能的第二个入口。
  */
-export type ChartType = 'bar' | 'line' | 'pie';
+export type ChartType = 'bar' | 'stacked' | 'line' | 'pie' | 'scatter' | 'heatmap' | 'radar';
 
 const TYPES: Array<{ value: ChartType; label: string; icon: typeof BarChart3 }> = [
   { value: 'bar', label: '柱状图', icon: BarChart3 },
+  { value: 'stacked', label: '堆叠柱状图', icon: Layers },
   { value: 'line', label: '折线图', icon: LineChart },
   { value: 'pie', label: '饼图', icon: PieChart },
+  { value: 'scatter', label: '散点图', icon: ScatterChart },
+  { value: 'heatmap', label: '热力图', icon: Grid3x3 },
+  { value: 'radar', label: '雷达图', icon: Radar },
 ];
 
 export interface ChartToolbarProps {

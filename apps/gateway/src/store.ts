@@ -128,6 +128,15 @@ CREATE TABLE IF NOT EXISTS agent_context (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_agent_ctx ON agent_context(connection_id, database_name, kind);
+CREATE TABLE IF NOT EXISTS database_briefs (
+  scope_key TEXT PRIMARY KEY,
+  connection_id TEXT NOT NULL,
+  database_name TEXT,
+  path TEXT NOT NULL,
+  schema_hash TEXT,
+  generated_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS artifacts (
   id TEXT PRIMARY KEY,
   type TEXT NOT NULL CHECK (type IN ('report','compare','diff','recon','fix')),
@@ -400,6 +409,16 @@ interface NotificationChannelRow {
   updated_at: string;
 }
 
+export interface DatabaseBriefRecord {
+  scopeKey: string;
+  connectionId: string;
+  database?: string;
+  path: string;
+  schemaHash?: string;
+  generatedAt: string;
+  updatedAt: string;
+}
+
 export class Store {
   readonly db: DatabaseSync;
   private box: SecretBox;
@@ -464,7 +483,7 @@ export class Store {
         throw err;
       }
     }
-    this.db.exec('PRAGMA user_version = 7');
+    this.db.exec('PRAGMA user_version = 8');
   }
 
   private ensureColumn(table: string, column: string, type: string): void {
@@ -640,6 +659,33 @@ export class Store {
 
   touchConnection(id: string): void {
     this.exec('UPDATE connections SET last_used_at = ? WHERE id = ?', [iso(), id]);
+  }
+
+  // ---------- database briefs (AI_DB.md) ----------
+  getDatabaseBrief(connectionId: string, database?: string): DatabaseBriefRecord | undefined {
+    const row = this.one<Record<string, any>>('SELECT * FROM database_briefs WHERE scope_key = ?', [`${connectionId}/${database ?? ''}`]);
+    if (!row) return undefined;
+    return {
+      scopeKey: row.scope_key,
+      connectionId: row.connection_id,
+      database: row.database_name ?? undefined,
+      path: row.path,
+      schemaHash: row.schema_hash ?? undefined,
+      generatedAt: row.generated_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  saveDatabaseBrief(record: Omit<DatabaseBriefRecord, 'scopeKey' | 'updatedAt'>): DatabaseBriefRecord {
+    const scopeKey = `${record.connectionId}/${record.database ?? ''}`;
+    const now = iso();
+    this.exec(
+      `INSERT INTO database_briefs (scope_key,connection_id,database_name,path,schema_hash,generated_at,updated_at)
+       VALUES (?,?,?,?,?,?,?)
+       ON CONFLICT(scope_key) DO UPDATE SET path=excluded.path, schema_hash=excluded.schema_hash, generated_at=excluded.generated_at, updated_at=excluded.updated_at`,
+      [scopeKey, record.connectionId, record.database ?? null, record.path, record.schemaHash ?? null, record.generatedAt, now],
+    );
+    return this.getDatabaseBrief(record.connectionId, record.database)!;
   }
 
   // ---------- settings ----------

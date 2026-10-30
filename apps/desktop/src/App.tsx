@@ -187,6 +187,7 @@ export default function App() {
   const loadSchema = useApp((s) => s.loadSchema);
   const commandSheetId = useApp((s) => s.commandSheetId);
   const closeCommandSheet = useApp((s) => s.closeCommandSheet);
+  const commandSheetText = useApp((s) => s.commandSheetText);
   const commandSheet = commandSheetId ? getCommand(commandSheetId) : undefined;
 
   useEffect(() => {
@@ -196,8 +197,7 @@ export default function App() {
   useEffect(() => {
     const dark = settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
     document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-    document.documentElement.dataset.density = settings.density;
-  }, [settings.theme, settings.density]);
+  }, [settings.theme]);
 
   useEffect(() => {
     // 接管全局右键：组件自己开菜单时会 preventDefault，这里只兜底
@@ -396,7 +396,7 @@ export default function App() {
       <ToolsHub />
       <ConnectionModal />
       <CommandPalette />
-      {commandSheet ? <CommandSheet command={commandSheet} onClose={closeCommandSheet} /> : null}
+      {commandSheet ? <CommandSheet command={commandSheet} initialText={commandSheetText} onClose={closeCommandSheet} /> : null}
       <ContextMenuHost />
       <Toasts />
     </div>

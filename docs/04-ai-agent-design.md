@@ -149,7 +149,7 @@ for (step = 0; step < maxSteps; step++) {
 | 18 | `memory_search` | read | 检索记忆 | `{ query, limit?, scope? }` |
 | 19 | `audit_database` | read | 数据库体检：缺主键、外键缺索引、重复索引、空表，返回可执行修复 SQL | `{ connectionId, database? }` |
 | 20 | `check_data_quality` | read | 表级数据质量：空值率、空串、区分度、重复主键 | `{ connectionId, table, columns? }` |
-| 21 | `render_chart` | read | 执行聚合 SQL 并渲染柱状/折线/饼图；`ys` 可附加最多 4 个数值列做分组/堆叠对比 | `{ connectionId, sql, type, title?, x?, y?, ys?, stacked? }` |
+| 21 | `render_chart` | read | 执行 SQL 并渲染柱状/堆叠/折线/饼/散点/热力/雷达；`ys` 附加最多 4 个数值度量，热力用 `value` 度量、散点用 `label` 点标签；类型选择规则写在工具描述里 | `{ connectionId, sql, type, title?, x?, y?, ys?, value?, label?, stacked? }` |
 | 22 | `analyze_chart` | read | 执行聚合 SQL，在 Bridge 侧算好统计量（合计/均值/极值/TopN 占比/环比），模型只负责解读，不得自行重算 | `{ connectionId, sql, x?, y?, topN? }` |
 | 23 | `forecast_chart` | read | 时间序列外推：最小二乘或移动平均（按 \|r\| 自动选择），返回方法、斜率/窗口、拟合度、±1.28σ 粗略区间与原始序列；样本 <4 直接拒绝 | `{ connectionId, sql, x?, y?, periods?, method? }` |
 | 24 | `generate_data` | write | 按列语义/类型 + 外键生成并插入测试数据 | `{ connectionId, table, rows?, dryRun? }` |
@@ -183,6 +183,22 @@ for (step = 0; step < maxSteps; step++) {
 
 \* `run_sql`、`run_mql`、`run_redis`、`run_cypher`、`run_cql`、`run_aql` 风险按各自语言的安全分类动态提升；`alter_table` 按 `operations` 动态判定（`add_column` 为 ddl、`drop_column` 为 destructive）；`dryRun=true` 时 DDL 只返回将执行的 SQL（用于预览）。`run_mql` / `run_redis` / `run_cypher` / `run_aql` / `vector_search` 仅用于对应模型的连接，SQL 专属工具（DDL、审计、图表等）在非 SQL 连接上明确返回不支持；例外是 `manage_index`，在 MongoDB 连接上改走结构化索引通道（同一实现服务对象信息面板的建删），不拼 SQL DDL。
 \** 导出写文件为 `write`，不触碰数据库。
+
+#### 图表类型选择（`render_chart`）
+
+模型不再凭习惯默认柱状图；工具描述内置了下表的选择规则，系统提示同时要求按数据形态选型。用户也可以在图表工具条上随时切换类型（前端会按现有数据做降级展示）。
+
+| 类型 | 适合 | 约束 / 不要用 |
+|---|---|---|
+| `bar` | 少量分类的数值比较（≤12 类） | 不用来表达连续时间趋势 |
+| `stacked` | 各分类的构成、部分与整体；多度量必须同单位、非负 | 度量单位不一致时不要堆叠 |
+| `line` | 有序轴（时间/序列）上的变化 | x 轴无序分类时不用折线 |
+| `pie` | 单一度量的占比，3–8 个非负切片 | 不做时间对比、不超过 8 类、不用来比较多期 |
+| `scatter` | 两个数值列之间的相关性，建议 ≥10 个点 | x/y 必须都是数值；分类轴不是散点 |
+| `heatmap` | 一个度量在两个分类维度上的密度/热点（如 星期 × 小时） | 不做 >20×16 的细格子；需要 `value` 度量列 |
+| `radar` | 3–8 个同单位指标的多维对比 | 不混用数量与金额等不同单位；少于 3 轴无意义 |
+
+报告块（`compose_report`）只接受 `bar` / `line` / `pie`，其余类型用于探索阶段，避免报告里出现不可读的矩阵图。
 
 ### 4.1 工具返回统一结构
 ```ts
@@ -297,6 +313,7 @@ pinned → +0.3 且不衰减
   connection context (engine, version, environment, readonly)
   schema snapshot (compressed: tables → columns/types/PK/FK; only attached/relevant/≤N tables)
   business context (terms / join relations / example SQL) — 仅在用户配置过时出现
+  database brief (AI_DB.md digest + coverage + schema drift warning) — /init 生成后出现
   permission mode + approval rules
   memory block (top-K, with ids and scope)
   formatting rules (SQL in code fences, describe results concisely, no invented data)
@@ -307,6 +324,7 @@ pinned → +0.3 且不衰减
 - **Schema 压缩**：默认只注入"数据库名 + 表名 + 行数估计"；`@table` 或 `inspect_schema` 后注入完整列信息；超过 60 表时仅注入与用户词面/记忆相关的表并提示可用 `search_objects`。
 - **业务上下文取舍（P1）**：用户可在工具箱「Agent 上下文」中禁用无关表/列，为表与字段配置业务别名和描述（含枚举值释义），并手工维护 JOIN 关系。`compressSchema(databases, focusTables, budget, bundle)` 据此过滤与标注：禁用的表整行剔除并追加一行隐藏计数提示，被标注的表优先占用明细预算，列输出形如 `status:VARCHAR(20)→订单状态[PAID=已支付，NEW=新建]`，用户描述优先于数据库原生 comment。
 - **零回归约定**：未配置任何覆盖项时 bundle 为 inactive，`compressSchema` 走与引入该机制前**逐字节相同**的分支（有集成测试断言）；`## Business context` 段落整段省略。
+- **数据库交接文档（`/init` → `AI_DB.md`）**：按 `${connectionId}/${database}` 保存；每回合注入摘要（速览、业务、关联、核心表、口径、性能、坑）与覆盖/漂移状态，不含全量附录以控制 token。提示词硬性规定：文档是说明层，不是白名单；表没写进文档不等于不存在；与 schema/工具结果冲突时以工具为准；`inferred` 段落必须先验证。生成器用 schema 指纹与逐表哈希发现新增/删除/改表，文件内容变化会提示重跑 `/init`；每次 `/init` 都全量重建自动段落（业务地图、核心表、Join、指标、性能、坑、全量清单），只有“数据流与新鲜度”“人工补充”两个 manual 段落保留。需要长期维护的文字应写在 manual 段落，避免自动内容长期不更新。
 - **工具结果摘要**：历史中的大结果替换为 `{summary, rowCount, preview(5)}`，完整结果仅保留最近 2 次，控制 token。
 - **压缩**：会话 > 阈值（默认 24k tokens）→ 生成摘要（保留目标、决策、schema 变更、未完成事项）写入 `sessions.summary`，丢弃早期工具大结果。
 
@@ -351,7 +369,7 @@ pinned → +0.3 且不衰减
 6. 解释/优化（基于索引与 EXPLAIN 的规则建议）
 7. 记忆：显式"记住…" → memory_write；"之前…" → memory_search
 8. 体检/质量：巡检 → `audit_database`；空值/重复 → `check_data_quality`
-9. 图表：趋势/分布/占比 → `render_chart`（自动构造聚合 SQL）
+9. 图表：趋势/分布/占比/相关性/二维密度/多维对比 → `render_chart`（自动构造聚合 SQL，按数据形态选类型）
 8. 多步：按"先…再…"拆分最多 3 个工具
 无把握时明确说明"本地模式仅支持基础指令，配置模型可获得完整能力"，不编造结果。
 
@@ -359,6 +377,7 @@ pinned → +0.3 且不衰减
 
 | 命令 | 行为 |
 |---|---|
+| `/init` | 扫描当前库并生成/更新 `AI_DB.md`（可跟一个目录或文件路径）；确定性全量清单 + 模型注解 + 人工段落保留，不弹表单 |
 | `/schema` | 生成当前库结构摘要（表、列、关系、可疑点） |
 | `/audit` | 数据库体检：缺主键、外键缺索引、重复索引、空表 + 修复 SQL |
 | `/quality` | 数据质量检查；**目标表取自已加载 schema 的第一张表**，无表时退化为通用措辞 |

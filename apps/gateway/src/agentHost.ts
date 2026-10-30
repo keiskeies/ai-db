@@ -40,6 +40,17 @@ import type { Store } from './store';
 import type { SkillStore } from './skills';
 import { readAttachment } from './attachments';
 import { allTableScanNeedsScope, disabledTableTarget, disabledToolError, filterDisabledObjects, metadataBlockedError, scopeRequiredError, systemCatalogQuery } from './agentContextGuard';
+import {
+  briefPathFromRegistry,
+  briefPromptBlock,
+  composeDatabaseBrief,
+  defaultBriefPath,
+  loadBrief,
+  readBrief,
+  summarizeInit,
+  writeDatabaseBrief,
+  type LoadedBrief,
+} from './features/databaseBrief';
 
 export interface TurnInput {
   text: string;
@@ -159,8 +170,11 @@ export class AgentHost {
 
   async startTurn(sessionId: string, input: TurnInput, emit: (event: AgentEvent) => void): Promise<void> {
     if (this.active.has(sessionId)) throw new DbError('该会话正在运行，请先中止或等待完成', { code: 'SESSION_BUSY', status: 409 });
-    const text = input.text?.trim();
-    if (!text) throw new DbError('消息不能为空', { code: 'EMPTY_MESSAGE', status: 400 });
+    const rawText = input.text?.trim();
+    if (!rawText) throw new DbError('消息不能为空', { code: 'EMPTY_MESSAGE', status: 400 });
+    const reportMatch = /^\/report(?:\s+([\s\S]+))?$/i.exec(rawText);
+    const reportMode = Boolean(reportMatch?.[1]?.trim());
+    const text = reportMatch?.[1]?.trim() || rawText;
     const session = this.opts.store.getSession(sessionId);
     if (!session) throw new DbError('会话不存在', { code: 'SESSION_NOT_FOUND', status: 404 });
     const mode = MODES.includes(input.mode as PermissionMode) ? (input.mode as PermissionMode) : session.permissionMode;
@@ -172,6 +186,11 @@ export class AgentHost {
     const sameConnection = !session.connectionId || !connectionId || session.connectionId === connectionId;
     const database = input.database || (sameConnection ? session.database : undefined) || stored?.database;
     const conn = stored ? { ...stored, database } : undefined;
+    const initMatch = /^\/init(?:\s+([\s\S]+))?$/i.exec(rawText);
+    if (initMatch) {
+      await this.runInit(sessionId, input, rawText, initMatch[1]?.trim(), emit);
+      return;
+    }
     const settings = this.opts.store.getSettings();
     const profile = getModelProfile(settings.agent);
     if (input.images?.length && !supportsInput(profile, 'image')) {
@@ -186,7 +205,7 @@ export class AgentHost {
       if (controller.signal.aborted) return;
       controller.abort();
       this.opts.store.updateSession(sessionId, { status: 'aborted' });
-    }, Math.max(30_000, Number(process.env.AIDB_AGENT_TURN_MS ?? 480_000)));
+    }, Math.max(30_000, Number(process.env.AIDB_AGENT_TURN_MS ?? (reportMode ? 15 * 60_000 : 480_000))));
     turnTimer.unref();
 
     const store = this.opts.store;
@@ -214,6 +233,13 @@ export class AgentHost {
         schemaError = err?.message ?? '无法读取结构';
       }
     }
+    let brief: LoadedBrief | undefined;
+    if (conn) {
+      const record = this.opts.store.getDatabaseBrief(conn.id, conn.database);
+      const briefPath = record?.path ?? defaultBriefPath(this.opts.config.home, conn);
+      const briefMarkdown = await readBrief(briefPath);
+      if (briefMarkdown && schemas) brief = loadBrief(briefMarkdown, briefPath, schemas);
+    }
 
     const recall = conn
       ? store.recallForTurn(text, { connectionId: conn.id, database: conn.database })
@@ -223,7 +249,7 @@ export class AgentHost {
     const attachmentTables = (input.attachments ?? []).map(String).slice(0, 12);
     const compacted = compactHistory(history.slice(-24), historyTokenBudget(settings.agent, profile));
 
-    const title = session.title === '新会话' || !session.title ? text.slice(0, 28) : session.title;
+    const title = session.title === '新会话' || !session.title ? rawText.slice(0, 28) : session.title;
     store.updateSession(sessionId, {
       connectionId,
       database,
@@ -235,7 +261,7 @@ export class AgentHost {
     store.appendMessage({
       sessionId,
       role: 'user',
-      content: text,
+      content: rawText,
       blocks: images.map((img) => ({ type: 'image' as const, attachmentId: img.id, mime: img.mime, bytes: img.bytes })),
     });
 
@@ -306,6 +332,7 @@ export class AgentHost {
           focusMode: settings.agent.schemaFocus ?? 'auto',
         });
         const extra: string[] = [];
+        if (brief) extra.push(briefPromptBlock(brief));
         if (sessionForAudit.summary) extra.push(`## Earlier session summary\n${sessionForAudit.summary}`);
         if (schemaError) extra.push(`## Schema loading warning\n${schemaError}`);
         if (settings.agent.provider === 'local') {
@@ -401,6 +428,136 @@ export class AgentHost {
     }
     if (status === 'done' && usage.tokensIn + usage.tokensOut > 0) {
       // usage already emitted by the runtime; kept here for future analytics
+    }
+  }
+
+  /**
+   * `/init`：扫描当前库并维护 AI_DB.md。每次执行全量刷新自动段落（新表/删表/改列都会反映），
+   * 只有数据流与人工补充这两个 manual 段落保留；确定性清单是主体，模型只补充注解。
+   */
+  private async runInit(sessionId: string, input: TurnInput, rawText: string, requestedPath: string | undefined, emit: (event: AgentEvent) => void): Promise<void> {
+    const store = this.opts.store;
+    const session = store.getSession(sessionId);
+    if (!session) {
+      emit({ type: 'error', code: 'SESSION_NOT_FOUND', message: '会话不存在' });
+      return;
+    }
+    const connectionId = input.connectionId ?? session.connectionId;
+    const stored = connectionId ? store.getConnection(connectionId) : undefined;
+    if (!stored) {
+      emit({ type: 'error', code: 'NO_CONNECTION', message: '请先在 Agent 顶部选择一个连接和数据库，再运行 /init' });
+      return;
+    }
+    const sameConnection = !session.connectionId || !connectionId || session.connectionId === connectionId;
+    const database = input.database || (sameConnection ? session.database : undefined) || stored.database;
+    const conn = { ...stored, database };
+    const turnId = randomUUID();
+    const controller = new AbortController();
+    this.active.set(sessionId, controller);
+    const timer = setTimeout(() => controller.abort(), 5 * 60_000);
+    timer.unref();
+    const started = Date.now();
+    store.updateSession(sessionId, {
+      connectionId,
+      database,
+      status: 'running',
+      title: session.title === '新会话' || !session.title ? `AI_DB · ${database || conn.name}` : session.title,
+      model: 'init',
+    });
+    store.appendMessage({ sessionId, role: 'user', content: rawText });
+    emit({ type: 'start', turnId, sessionId, model: 'init' });
+    try {
+      const schemas = await this.opts.manager.schema(conn.id, conn.database);
+      if (controller.signal.aborted) throw Object.assign(new Error('已中止'), { code: 'ABORTED' });
+      const settings = store.getSettings();
+      const recall = store.recallForTurn('', { connectionId: conn.id, database: conn.database });
+      const history = store.listHistory({ connectionId: conn.id, limit: 100 }).map((item) => ({ sql: item.sql, status: item.status }));
+      const record = store.getDatabaseBrief(conn.id, conn.database);
+      const path = briefPathFromRegistry({
+        home: this.opts.config.home,
+        connection: conn,
+        storedPath: record?.path,
+        requestedPath,
+      });
+      const existing = await readBrief(path);
+      let provider: ReturnType<typeof createProvider> | undefined;
+      if (settings.agent.provider !== 'local') {
+        try {
+          provider = createProvider(settings.agent);
+        } catch {
+          /* 注解失败不能挡住确定性文档 */
+        }
+      }
+      const result = await composeDatabaseBrief({
+        connection: conn,
+        schemas,
+        bundle: store.agentContextBundle(conn.id, conn.database),
+        glossary: recall.glossary,
+        sqlExamples: recall.sqlExamples,
+        history,
+        provider,
+        signal: controller.signal,
+        home: this.opts.config.home,
+        requestedPath,
+        storedPath: record?.path,
+        existing: existing ?? undefined,
+      });
+      if (controller.signal.aborted) throw Object.assign(new Error('已中止'), { code: 'ABORTED' });
+      await writeDatabaseBrief(result.path, result.markdown, existing ?? undefined);
+      const generatedAt = new Date().toISOString();
+      store.saveDatabaseBrief({
+        connectionId: conn.id,
+        database: conn.database,
+        path: result.path,
+        schemaHash: result.schemaHash,
+        generatedAt,
+      });
+      const content = [summarizeInit(result), existing ? '\n\n已更新现有文件：自动段落全部刷新，数据流与人工补充段落保留。' : '\n\n这是首次生成，后续对话会自动加载它。'].join('');
+      store.appendMessage({ sessionId, role: 'assistant', content });
+      clearTimeout(timer);
+      this.active.delete(sessionId);
+      store.updateSession(sessionId, {
+        status: 'done',
+        summary: `Q: ${rawText.slice(0, 200)}\nA: ${content.slice(0, 400)}`,
+      });
+      emit({ type: 'text_delta', text: content });
+      emit({ type: 'done', turnId, durationMs: Date.now() - started, summary: content.slice(0, 280) });
+      store.addAudit({
+        actor: 'user',
+        connectionId: conn.id,
+        database: conn.database,
+        tool: 'command.init',
+        risk: 'read',
+        approval: 'none',
+        status: 'ok',
+        durationMs: Date.now() - started,
+        meta: {
+          path: result.path,
+          tables: result.stats.tableNames.length,
+          coreTables: result.stats.coreTables.length,
+          joins: result.stats.joins,
+          annotations: result.stats.annotations,
+          schemaHash: result.schemaHash,
+        },
+      });
+    } catch (err: any) {
+      clearTimeout(timer);
+      this.active.delete(sessionId);
+      const aborted = controller.signal.aborted || err?.code === 'ABORTED';
+      store.updateSession(sessionId, { status: aborted ? 'aborted' : 'error' });
+      if (aborted) emit({ type: 'aborted', turnId, reason: '用户中止' });
+      else emit({ type: 'error', code: err?.code ?? 'INIT_FAILED', message: err?.message ?? '初始化失败' });
+      store.addAudit({
+        actor: 'user',
+        connectionId: conn.id,
+        database: conn.database,
+        tool: 'command.init',
+        risk: 'read',
+        approval: 'none',
+        status: 'error',
+        durationMs: Date.now() - started,
+        meta: { path: requestedPath, aborted },
+      });
     }
   }
 

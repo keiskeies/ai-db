@@ -464,7 +464,9 @@ test('能力开关阻止 Skill、MCP 与 AI PPT', async () => {
     assert.equal(deck.status, 403);
     assert.equal(deck.body.error?.code, 'FEATURE_DISABLED');
     const worker = new SkillWorker(gateway.store, gateway.skills, new SkillRunner(gateway.skills, home), executor);
-    assert.throws(() => worker.start('api-skill', 'x'), /关闭/);
+    const manual = worker.start('api-skill', 'manual run is still allowed');
+    assert.ok(manual.runId);
+    worker.cancel(manual.runId);
   } finally {
     gateway.store.saveSettings(before);
   }

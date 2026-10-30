@@ -284,24 +284,33 @@ Rules:
 - Use only read-only tools (inspect_schema, search_objects, run_sql, explain_sql, sample_rows, profile_column, analyze_chart, forecast_chart, render_chart, memory_search, update_plan).
 - Inspect schema before writing SQL when unsure. Keep SQL bounded; use aggregate SQL for summaries.
 - Never calculate totals, deltas, ratios or shares by hand. Use one aggregate SQL or analyze_chart; quote its numbers verbatim. The app computes comparison deltas from the submitted left/right values.
+- Report chart blocks support bar / line / pie only. Choose line for an ordered time axis, bar for category comparisons, and pie only for 2–6 non-negative parts of one whole. Other render_chart types (stacked/scatter/heatmap/radar) are for exploration during the turn, not for compose_report blocks; never force them into a pie just to add a chart.
 - Do not join across different sources. Each source is queried separately; if the user asks for a merged total, aggregate per source and label the result.
 - ${compare ? 'This is a comparison: use layout comparison and include a comparison block with the two numeric results. Both queries must use the same aggregation and filters; only the compared period/segment may differ.' : 'Choose the layout from the user semantics: sections for per-source sections, comparison for side-by-side comparison, merged for summed totals, mixed for a broad report. Do not ask the user which layout.'}
+- The ONLY acceptable completion is a successful compose_report tool call. A plain-text answer is invalid and will be discarded.
 - When ready, call compose_report exactly once. Every data block (metric/table/chart/comparison) MUST include resultRef = the tool call id shown in the tool result; every numeric value must come from that referenced result. The app rejects missing or wrong references.
+- If the data cannot answer the question, still call compose_report with a narrative-only section that states the concrete missing table/column; do not answer with prose.
+- Example metric block: {"kind":"metric","resultRef":"<tool-call-id>","metrics":[{"label":"2024 订单数","value":12345,"resultRef":"<tool-call-id>"}]}
 - After compose_report succeeds, give one short sentence. Reply in the user's language.`;
 
   let captured: ReportSpec | undefined;
+  let composeError = '';
   const knownNumbers = new Set<number>();
   const toolNumbers = new Map<string, Set<number>>();
   const runtime = new AgentRuntime({
     provider,
-    maxSteps: Math.min(10, Math.max(4, settings.agent.maxSteps || 8)),
+    maxSteps: Math.min(40, Math.max(20, (settings.agent.maxSteps || 12) * 2)),
     temperature: settings.agent.temperature,
     generateId: () => randomUUID(),
     tools: providerToolsForReport(),
     getTool: (name) => TOOL_DEFS.get(name),
     buildSystem: () => system,
     requestApproval: async () => ({ decision: 'deny', scope: 'once' }),
-    emit: () => undefined,
+    emit: (event) => {
+      if (event.type === 'tool_result' && event.tool === 'compose_report' && !event.result.ok) {
+        composeError = event.result.error?.message ?? event.result.summary;
+      }
+    },
     executeTool: async (call, abort) => {
       if (call.name === 'compose_report') {
         const args = call.args as any;
@@ -373,6 +382,6 @@ Rules:
     },
   });
   if (result.status !== 'done') throw Object.assign(new Error(result.error?.message ?? '报告生成失败'), { code: result.error?.code ?? 'MODEL_REPORT_FAILED', status: 502 });
-  if (!captured) throw Object.assign(new Error('模型没有提交报告规格'), { code: 'MODEL_REPORT_FAILED', status: 502 });
+  if (!captured) throw Object.assign(new Error(`模型没有提交报告规格${composeError ? `：${composeError}` : ''}`), { code: 'MODEL_REPORT_FAILED', status: 502 });
   return captured;
 }

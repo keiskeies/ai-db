@@ -120,3 +120,9 @@
 .settings-embed-column { height: calc(min(740px, 90vh) - 132px); min-height: 420px; display: flex; flex-direction: column; }
 .settings-feature-bar { display: flex; flex-wrap: wrap; gap: 14px; padding: 0 0 8px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 8px; }
 .settings-embed-column .settings-embed { flex: 1; height: auto; min-height: 0; }
+
+.skill-card { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-top: 1px solid var(--border-subtle); }
+.skill-card:first-of-type { border-top: 0; }
+.skill-card-main { flex: 1; min-width: 0; cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
+.skill-card-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.skill-card-actions { display: flex; align-items: center; gap: 6px; padding-top: 2px; }

@@ -10,6 +10,7 @@ import WebSocket from 'ws';
 import { inflateRawSync } from 'node:zlib';
 import type { AgentEvent, ConnectionConfig, DatabaseSchema, TableInfo, ToolResult } from '@aidb/core';
 import { createGateway } from '../src/server';
+import { defaultBriefPath } from '../src/features/databaseBrief';
 
 const home = mkdtempSync(join(tmpdir(), 'aidb-it-'));
 for (const dir of ['demo', 'exports', 'imports', 'backups']) mkdirSync(join(home, dir), { recursive: true });
@@ -436,7 +437,7 @@ async function runTurn(sessionId: string, text: string, mode = 'ask', approve = 
     headers,
     body: JSON.stringify({ text, mode, ...(database ? { database } : {}) }),
   });
-  assert.equal(res.status, 200);
+  if (res.status !== 200) assert.fail(`${res.status} ${res.url} session=${sessionId}: ${(await res.text()).slice(0, 300)}`);
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -476,6 +477,39 @@ async function runTurn(sessionId: string, text: string, mode = 'ask', approve = 
   }
   return { events, text: answer };
 }
+
+test('/init writes a complete AI_DB.md and remembers a custom folder', async () => {
+  const created = await api<{ session: { id: string } }>('/agent/sessions', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: demo.id }),
+  });
+  assert.equal(created.status, 201);
+  const sessionId = created.body.session.id;
+  const first = await runTurn(sessionId, '/init');
+  assert.ok(first.events.some((event) => event.type === 'done'), JSON.stringify(first.events));
+  assert.match(first.text, /AI_DB\.md/);
+  const defaultPath = defaultBriefPath(home, demo);
+  assert.equal(existsSync(defaultPath), true, first.text);
+  const markdown = readFileSync(defaultPath, 'utf8');
+  assert.match(markdown, /aidb: database-brief/);
+  assert.match(markdown, /## 9\. 附录：全量表清单/);
+  assert.match(markdown, /<!-- aidb:inventory/);
+  assert.match(markdown, /orders/);
+  assert.match(markdown, /users/);
+  assert.match(markdown, /orders\.user_id|order_items|users\.id/);
+
+  const customDir = join(home, 'brief-custom');
+  const second = await runTurn(sessionId, `/init ${customDir}`);
+  assert.ok(second.events.some((event) => event.type === 'done'), JSON.stringify(second.events));
+  const customPath = join(customDir, 'AI_DB.md');
+  assert.equal(existsSync(customPath), true, second.text);
+  assert.match(second.text, /已更新现有文件|首次生成/);
+
+  // 自定义目录会被记住：删掉文件后不带参数重跑也会回到同一条路径
+  rmSync(customPath, { force: true });
+  const third = await runTurn(sessionId, '/init');
+  assert.equal(existsSync(customPath), true, third.text);
+});
 
 test('agent inspects schema, DDL approval, memory and audit', async () => {
   const created = await api<{ session: { id: string } }>('/agent/sessions', {

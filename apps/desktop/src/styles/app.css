@@ -878,3 +878,16 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 /* WHERE 输入框吃掉工具栏剩余宽度，而不是留一块空白 */
 .data-toolbar .data-filter-box { flex: 1 1 180px; min-width: 0; max-width: 640px; }
 .data-toolbar .data-filter-box .inline-input { flex: 1; width: auto; min-width: 90px; }
+
+/* ---------- settings grouped navigation ---------- */
+.settings-nav { overflow: auto; }
+.settings-back { margin-bottom: 8px; color: var(--text-muted); }
+.settings-nav-search { display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 9px; margin-bottom: 4px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-inset); color: var(--text-muted); }
+.settings-nav-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text-primary); font-size: 11px; }
+.settings-nav-search input::placeholder { color: var(--text-muted); }
+.settings-nav-group { display: flex; flex-direction: column; gap: 2px; }
+.settings-nav-label { padding: 12px 10px 4px; color: var(--text-muted); font-size: 9.5px; letter-spacing: .06em; }
+
+.popover-hint { padding: 5px 10px 2px; border-top: 1px solid var(--border-subtle); color: var(--text-muted); font-size: 9.5px; }
+
+.answer-actions { display: flex; gap: 6px; margin-top: 8px; }

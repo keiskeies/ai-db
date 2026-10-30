@@ -10,6 +10,7 @@ import {
   Clock,
   Copy,
   Database,
+  Download,
   Expand,
   History,
   ImagePlus,
@@ -34,6 +35,7 @@ import { COMMANDS, engineMeta, suggestionLabel } from '@aidb/core';
 import { getModelProfile, supportsInput } from '@aidb/core';
 import { api, attachmentObjectUrl, type StoredAttachment } from '../lib/api';
 import { deliverExport } from '../lib/exportDelivery';
+import { desktopBridge } from '../lib/desktop';
 import { formatBytes, formatCell, formatDuration, formatRelative } from '../lib/format';
 import { useApp, type LiveTool } from '../store';
 import { ChartView, type ChartSpec } from './ChartView';
@@ -59,7 +61,10 @@ function readAsBase64(file: File): Promise<string> {
   });
 }
 
+type SlashOption = { key: string; label: string; kind: 'command' | 'preset'; commandId?: string };
+
 const SLASH: Array<{ key: string; label: string; prompt: string | ((tables: TableInfo[]) => string) }> = [
+  { key: '/init', label: '初始化库文档（生成 AI_DB.md）', prompt: '' },
   { key: '/schema', label: '梳理库结构', prompt: '生成当前库的结构摘要：主要表、关系、字段含义与可疑点。' },
   { key: '/audit', label: '数据库体检', prompt: '对当前数据库做一次体检：缺少主键、外键缺索引、重复索引与空表，并给出修复 SQL。' },
   { key: '/quality', label: '数据质量', prompt: (tables) => (tables[0] ? `检查 ${tables[0].name} 的空值、空串和重复主键，并给出排查 SQL。` : '检查当前表的空值、空串和重复主键，并给出排查 SQL。') },
@@ -514,6 +519,82 @@ function UserMessage({ text, images }: { text: string; images?: string[] }) {
   );
 }
 
+function AnswerActions({ text }: { text: string }) {
+  const notify = useApp((s) => s.notify);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      notify('success', '已复制', '回答内容已复制到剪贴板');
+    } catch (err: any) {
+      notify('error', '复制失败', err?.message ?? '剪贴板不可用');
+    }
+  };
+  const stampName = (extension: string) => {
+    const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
+    return `aidb-answer-${stamp}.${extension}`;
+  };
+  const buildHtml = () => {
+    const root = rootRef.current?.closest('.msg-assistant') as HTMLElement | null;
+    const content = root?.querySelector('.content');
+    let body = '';
+    const charts: string[] = [];
+    if (content) {
+      const chartRoots = [...content.querySelectorAll('.agent-chart')];
+      if (!chartRoots.length) chartRoots.push(...content.querySelectorAll('[data-testid="chart-card"]'));
+      for (const chart of chartRoots) charts.push(chart.outerHTML);
+      const clone = content.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll('.answer-actions, .agent-chart, [data-testid="chart-card"], .turn-end, .execution-section, .risk-banner, .tool-card, details').forEach((node) => node.remove());
+      body = clone.innerHTML;
+    }
+    const css = Array.from(document.styleSheets)
+      .map((sheet) => {
+        try {
+          return Array.from(sheet.cssRules).map((rule) => rule.cssText).join('\n');
+        } catch {
+          return '';
+        }
+      })
+      .join('\n');
+    // 打印固定浅色主题：导出文档没有 html[data-theme]，不钉住就会沿用 :root 的深色令牌。
+    // print-color-adjust: exact 是必须的——Chrome 打印默认丢弃背景色，饼图的 conic-gradient
+    // 和图例色块都是背景，网页打印回退或旧主进程未开 printBackground 时会整块变白。
+    return `<!doctype html><html lang="zh-CN" data-theme="light"><head><meta charset="utf-8"><title>AiDB 回答</title><style>
+${css}
+html{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+html,body{height:auto}
+body{background:#fff;color:#111;font:14px/1.7 "Microsoft YaHei",Arial,sans-serif;margin:24px;padding:0}
+article{max-width:960px;margin:0 auto}.agent-chart{margin:20px 0}.answer-actions{display:none}
+@media print{body{background:#fff;color:#111;margin:0}.chart-card,.agent-chart{break-inside:avoid}}
+</style></head><body><article>${body}${charts.map((chart) => `<section class="chart">${chart}</section>`).join('')}</article></body></html>`;
+  };
+  const exportPdf = async () => {
+    const html = buildHtml();
+    if (desktopBridge?.exportPdf) {
+      const result = await desktopBridge.exportPdf({ html, name: stampName('pdf') });
+      if (result.ok) notify('success', '已导出 PDF', result.path);
+      else if (!result.canceled) notify('error', '导出 PDF 失败', result.error);
+      return;
+    }
+    const frame = document.createElement('iframe');
+    frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+    document.body.appendChild(frame);
+    frame.srcdoc = html;
+    frame.onload = () => {
+      frame.contentWindow?.focus();
+      frame.contentWindow?.print();
+      setTimeout(() => frame.remove(), 1000);
+    };
+    notify('info', '打开打印对话框', '选择“另存为 PDF”即可导出');
+  };
+  return (
+    <div className="answer-actions" ref={rootRef}>
+      <button className="btn small" onClick={() => void copy()}><Copy size={11} /> 复制</button>
+      <button className="btn small" onClick={() => void exportPdf()}><Download size={11} /> 导出 PDF</button>
+    </div>
+  );
+}
+
 function AssistantShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="msg-assistant">
@@ -564,6 +645,7 @@ export function AgentPanel() {
 
   const [input, setInput] = useState('');
   const [popover, setPopover] = useState<'none' | 'mention' | 'slash'>('none');
+  const [slashIndex, setSlashIndex] = useState(0);
   const [mentionQuery, setMentionQuery] = useState('');
   const [suggestions, setSuggestions] = useState<QuestionSuggestion[]>([]);
   const [execOpen, setExecOpen] = useState<Set<string>>(new Set());
@@ -594,6 +676,16 @@ export function AgentPanel() {
 
   const activeConnection = connections.find((c) => c.id === activeConnectionId);
   const tables = useMemo(() => (schemas ?? []).flatMap((s) => s.tables), [schemas]);
+  const slashOptions = useMemo<SlashOption[]>(() => {
+    const query = input.trim().replace(/^\//, '').toLowerCase();
+    const commands = COMMANDS.filter((command) => command.id !== 'ask')
+      .filter((command) => !query || command.id.toLowerCase().startsWith(query) || command.aliases.some((alias) => alias.replace(/^\//, '').toLowerCase().startsWith(query)) || command.title.zh.includes(query))
+      .map((command) => ({ key: `/${command.id}`, label: command.title.zh, kind: 'command' as const, commandId: command.id }));
+    const presets = SLASH
+      .filter((item) => !query || item.key.replace(/^\//, '').toLowerCase().startsWith(query) || item.label.includes(query))
+      .map((item) => ({ key: item.key, label: item.label, kind: 'preset' as const }));
+    return [...commands, ...presets];
+  }, [input]);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -688,8 +780,53 @@ export function AgentPanel() {
   }, [sessions, sessionQuery]);
 
   const send = () => {
-    if (!input.trim() || busy) return;
-    const text = input;
+    const value = input.trim();
+    if (!value || busy) return;
+    const token = /^\/([a-zA-Z]+)(?:\s+([\s\S]*))?$/.exec(value);
+    // /init 直接在当前会话执行；参数是可选的目录/文件路径，不弹命令表单。
+    if (token && token[1].toLowerCase() === 'init') {
+      const images = pending.map((item) => item.id);
+      setInput('');
+      setPending([]);
+      setPopover('none');
+      void sendAgent(value, undefined, images);
+      return;
+    }
+    const command = token
+      ? COMMANDS.find((item) => item.id === token[1] || item.aliases.some((alias) => alias.replace(/^\//, '').toLowerCase() === token[1].toLowerCase()))
+      : undefined;
+    if (command) {
+      if (command.id === 'report' && !token?.[2]?.trim()) {
+        setInput('/report ');
+        setPopover('none');
+        notify('info', '/report 需要报告主题', '例如：/report 总结一下三年来的订单增长情况');
+        textareaRef.current?.focus();
+        return;
+      }
+      if (command.id === 'report' && token?.[2]?.trim()) {
+        const images = pending.map((item) => item.id);
+        setInput('');
+        setPending([]);
+        setPopover('none');
+        void sendAgent(value, undefined, images);
+        return;
+      }
+      openCommandSheet(command.id, { text: token?.[2]?.trim() });
+      setInput('');
+      setPopover('none');
+      return;
+    }
+    const preset = token ? SLASH.find((item) => item.key === `/${token[1]}`) : undefined;
+    if (preset?.key === '/memory' || preset?.key === '/clear') {
+      runSlash(preset.key);
+      return;
+    }
+    let text = value;
+    if (preset) {
+      const base = typeof preset.prompt === 'function' ? preset.prompt(tables) : preset.prompt;
+      const extra = token?.[2]?.trim();
+      text = extra ? `${base}\n\n补充要求：${extra}` : base;
+    }
     const images = pending.map((item) => item.id);
     setInput('');
     setPending([]);
@@ -699,6 +836,7 @@ export function AgentPanel() {
 
   const onInput = (value: string) => {
     setInput(value);
+    setSlashIndex(0);
     const mention = value.match(/@([A-Za-z_][A-Za-z0-9_]*)?$/);
     if (mention) {
       setMentionQuery(mention[1] ?? '');
@@ -733,12 +871,27 @@ export function AgentPanel() {
       setPopover('none');
       return;
     }
-    const command = SLASH.find((c) => c.key === key);
-    if (command) {
-      setInput(typeof command.prompt === 'function' ? command.prompt(tables) : command.prompt);
+    if (SLASH.some((item) => item.key === key)) {
+      setInput(`${key} `);
       setPopover('none');
       textareaRef.current?.focus();
     }
+  };
+
+  const selectSlash = (option: SlashOption) => {
+    if (option.kind === 'command' && option.commandId === 'report') {
+      setInput('/report ');
+      setPopover('none');
+      textareaRef.current?.focus();
+      return;
+    }
+    if (option.kind === 'command' && option.commandId) {
+      openCommandSheet(option.commandId);
+      setInput('');
+      setPopover('none');
+      return;
+    }
+    runSlash(option.key);
   };
 
   const renderPersisted = (message: (typeof messages)[number]) => {
@@ -765,6 +918,7 @@ export function AgentPanel() {
             <ResultView result={artifact.result} chartMaxHeight={chartMaxHeight} onOpenEditor={(sql) => openQuery(undefined, sql)} />
           </div>
         ))}
+        {message.content ? <AnswerActions text={message.content} /> : null}
         {toolCount ? (
           <div className="turn-end">
             {toolCount} 次工具调用
@@ -939,6 +1093,7 @@ export function AgentPanel() {
                   </div>
                 ))}
               {live.error ? <div className="risk-banner">{live.error}</div> : null}
+              {!busy && live.text ? <AnswerActions text={live.text} /> : null}
               {live.memories.length ? (
                 <details className="memory-refs" data-testid="live-memories">
                   <summary>
@@ -990,32 +1145,20 @@ export function AgentPanel() {
       ) : null}
       {popover === 'slash' ? (
         <div className="popover mention-popover">
-          {COMMANDS.filter((command) => command.id !== 'ask').filter((command) => {
-            const query = input.trim().replace(/^\//, '').toLowerCase();
-            if (!query) return true;
-            return command.id.startsWith(query) || command.aliases.some((alias) => alias.replace(/^\//, '').toLowerCase().startsWith(query)) || command.title.zh.includes(query);
-          }).map((command) => (
+          {slashOptions.map((option, index) => (
             <button
-              key={command.id}
-              className="popover-item"
-              onClick={() => {
-                openCommandSheet(command.id);
-                setInput('');
-                setPopover('none');
-              }}
+              key={`${option.kind}:${option.key}`}
+              className={`popover-item ${index === slashIndex ? 'active' : ''}`}
+              onMouseEnter={() => setSlashIndex(index)}
+              onClick={() => selectSlash(option)}
             >
               <TerminalSquare size={12} />
-              <span>/{command.id}</span>
-              <span className="k">{command.title.zh}</span>
+              <span>{option.key}</span>
+              <span className="k">{option.label}</span>
             </button>
           ))}
-          {SLASH.filter((c) => c.key.startsWith(input.trim())).map((c) => (
-            <button key={c.key} className="popover-item" onClick={() => runSlash(c.key)}>
-              <TerminalSquare size={12} />
-              <span>{c.key}</span>
-              <span className="k">{c.label}</span>
-            </button>
-          ))}
+          {!slashOptions.length ? <div className="popover-item muted">没有匹配的命令</div> : null}
+          <div className="popover-hint">↑↓ 选择 · Tab 补全 · Enter 执行 · Esc 关闭</div>
         </div>
       ) : null}
 
@@ -1045,6 +1188,35 @@ export function AgentPanel() {
               void uploadImages(files);
             }}
             onKeyDown={(e) => {
+              // /init 没有必填参数：输入完整命令后 Enter 直接执行，不再让菜单吞掉第一次回车。
+              if (popover === 'slash' && e.key === 'Enter' && !e.shiftKey && /^\/init$/i.test(input.trim())) {
+                e.preventDefault();
+                setPopover('none');
+                send();
+                return;
+              }
+              if (popover === 'slash' && slashOptions.length) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setSlashIndex((index) => (index + 1) % slashOptions.length);
+                  return;
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setSlashIndex((index) => (index - 1 + slashOptions.length) % slashOptions.length);
+                  return;
+                }
+                if (e.key === 'Tab') {
+                  e.preventDefault();
+                  selectSlash(slashOptions[slashIndex] ?? slashOptions[0]);
+                  return;
+                }
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  selectSlash(slashOptions[slashIndex] ?? slashOptions[0]);
+                  return;
+                }
+              }
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 send();

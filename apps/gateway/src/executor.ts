@@ -63,6 +63,8 @@ import { compareSchemas } from './features/schemaCompare';
 import { transferData } from './features/transfer';
 import type { Store } from './store';
 
+type RenderChartType = 'bar' | 'stacked' | 'line' | 'pie' | 'scatter' | 'heatmap' | 'radar';
+
 export interface ToolContext {
   sessionId: string;
   connectionId?: string;
@@ -192,7 +194,7 @@ export class ToolExecutor {
     const started = Date.now();
     const features = this.getSettings().features;
     if (!features.skills && (call.name.startsWith('skill_') || call.name === 'skill_worker_run')) {
-      return { ok: false, summary: 'Skill 功能已关闭', error: { code: 'FEATURE_DISABLED', message: 'Skill Host 已在设置中关闭' }, meta: { durationMs: 0 } };
+      return { ok: false, summary: 'Skill 自动调用已关闭', error: { code: 'FEATURE_DISABLED', message: 'Agent 自动调用技能已关闭；可在设置 → Skills 手动运行' }, meta: { durationMs: 0 } };
     }
     if (!features.mcp && (call.name === 'mcp_list_tools' || call.name === 'mcp_call')) {
       return { ok: false, summary: 'MCP 功能已关闭', error: { code: 'FEATURE_DISABLED', message: 'MCP 已在设置中关闭' }, meta: { durationMs: 0 } };
@@ -1106,16 +1108,31 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
 
       case 'render_chart': {
         const conn = this.requireConnection(call, ctx);
+        const chartTypes = ['bar', 'stacked', 'line', 'pie', 'scatter', 'heatmap', 'radar'];
+        const type = (chartTypes.includes(String(a.type)) ? String(a.type) : 'bar') as RenderChartType;
+        if (type === 'heatmap') {
+          return this.renderHeatmap(
+            conn,
+            this.databaseOf(call, conn),
+            String(a.sql ?? ''),
+            typeof a.title === 'string' ? a.title : undefined,
+            typeof a.x === 'string' ? a.x : undefined,
+            typeof a.y === 'string' ? a.y : undefined,
+            typeof a.value === 'string' ? a.value : undefined,
+            started,
+          );
+        }
         return this.renderChart(
           conn,
           this.databaseOf(call, conn),
           String(a.sql ?? ''),
-          a.type === 'line' || a.type === 'pie' ? a.type : 'bar',
+          type,
           typeof a.title === 'string' ? a.title : undefined,
           typeof a.x === 'string' ? a.x : undefined,
           typeof a.y === 'string' ? a.y : undefined,
           Array.isArray(a.ys) ? a.ys.filter((value: unknown): value is string => typeof value === 'string').slice(0, 4) : undefined,
           a.stacked === true,
+          typeof a.label === 'string' ? a.label : undefined,
           started,
         );
       }
@@ -1523,15 +1540,47 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
     conn: ConnectionConfig,
     database: string | undefined,
     sqlText: string,
-    type: 'bar' | 'line' | 'pie',
+    type: RenderChartType,
     title: string | undefined,
     xName: string | undefined,
     yName: string | undefined,
     extraNames: string[] | undefined,
     stacked: boolean,
+    labelName: string | undefined,
     started: number,
   ): Promise<ToolResult> {
     const { sql, columns, rows, x, y, objects } = await this.chartSeries(conn, database, sqlText, xName, yName);
+
+    if (type === 'scatter') {
+      // 散点要保留每一行，不能走 toSeries 的 24 点截断；两个轴都必须是数值。
+      const points = objects
+        .map((row) => {
+          const rawX = row[x];
+          const rawY = row[y];
+          if (rawX === null || rawX === undefined || rawX === '' || rawY === null || rawY === undefined || rawY === '') return null;
+          const xValue = Number(String(rawX).trim());
+          const yValue = Number(String(rawY).trim());
+          if (!Number.isFinite(xValue) || !Number.isFinite(yValue)) return null;
+          const label = labelName ? row[labelName] : undefined;
+          return { x: xValue, y: yValue, ...(label === null || label === undefined || label === '' ? {} : { label: String(label) }) };
+        })
+        .filter((point): point is { x: number; y: number; label?: string } => point !== null)
+        .slice(0, 300);
+      if (points.length < 2) {
+        throw new DbError('散点图至少需要 2 个 x/y 同时为数值的数据点；请显式指定数值列 x、y', { code: 'EMPTY_SERIES' });
+      }
+      const chart = {
+        type,
+        title: title ?? `${y} vs ${x}`,
+        xLabel: x,
+        yLabel: y,
+        sql,
+        series: points.slice(0, 24).map((point) => ({ label: point.label ?? String(point.x), value: point.y })),
+        scatter: points,
+      };
+      return ok(started, `已生成散点图（${points.length} 个点）`, { chart, columns, rows, chartSql: sql });
+    }
+
     const usable = objects.filter((row) => {
       const value = row[y];
       if (value === null || value === undefined || value === '') return false;
@@ -1547,20 +1596,99 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
           return Number.isFinite(value) ? value : 0;
         }),
       }));
+    if (type === 'radar' && series.length < 3) {
+      throw new DbError('雷达图至少需要 3 个类别轴（结果行数不足）', { code: 'EMPTY_SERIES' });
+    }
     const chart = {
       type,
-      title: title ?? `${y} by ${x}`,
+      title: title ?? (type === 'radar' ? `${y} 等 ${series.length} 项指标` : `${y} by ${x}`),
       xLabel: x,
       yLabel: y,
       sql,
       series,
       ...(extraSeries.length ? { extraSeries } : {}),
-      ...(stacked && extraSeries.length ? { stacked: true } : {}),
+      ...((stacked || type === 'stacked') && extraSeries.length ? { stacked: true } : {}),
     };
-    return ok(started, `已生成${type === 'line' ? '折线' : type === 'pie' ? '饼' : '柱状'}图（${series.length} 个数据点）`, {
+    const typeText = type === 'line' ? '折线' : type === 'pie' ? '饼' : type === 'stacked' ? '堆叠柱' : type === 'radar' ? '雷达' : '柱状';
+    return ok(started, `已生成${typeText}图（${type === 'radar' ? `${series.length} 个轴` : `${series.length} 个数据点`}）`, {
       chart,
       columns,
       rows,
+      chartSql: sql,
+    });
+  }
+
+  /**
+   * 热力图不是 (x, y) 序列：需要两个分类轴 + 一个数值度量。
+   * 同格多行按求和合并；轴数量封顶，避免把 500 行明细塞成不可读的细格子。
+   */
+  private async renderHeatmap(
+    conn: ConnectionConfig,
+    database: string | undefined,
+    sqlText: string,
+    title: string | undefined,
+    xName: string | undefined,
+    yName: string | undefined,
+    valueName: string | undefined,
+    started: number,
+  ): Promise<ToolResult> {
+    const sql = sqlText.trim();
+    if (!sql) throw new DbError('该工具需要 SQL');
+    const batch = await this.manager.query(conn.id, sql, { database, maxRows: 500, allowMulti: false, autoLimit: true, actor: 'agent' });
+    const set = batch.sets[0];
+    if (!set || !set.columns.length) throw new DbError('SQL 没有返回结果集');
+    const names = set.columns.map((column) => column.name);
+    const objects = set.rows.map((row) => Object.fromEntries(names.map((name, index) => [name, row[index]])));
+    const isNumeric = (name: string) => objects.some((row) => {
+      const value = row[name];
+      return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(String(value).trim()));
+    });
+    const numeric = names.filter(isNumeric);
+    const textColumns = names.filter((name) => !numeric.includes(name));
+    const x = xName && names.includes(xName) ? xName : textColumns.find((name) => name !== valueName) ?? names[0];
+    const y = yName && names.includes(yName) ? yName : names.find((name) => name !== x && name !== valueName && !numeric.includes(name)) ?? names.find((name) => name !== x);
+    const value = valueName && names.includes(valueName) ? valueName : numeric.find((name) => name !== x && name !== y);
+    if (!x || !y || !value || new Set([x, y, value]).size < 3) {
+      throw new DbError('热力图需要 x、y 两个分类列和一个数值 value 列', { code: 'INVALID_CHART' });
+    }
+    const xLabels: string[] = [];
+    const yLabels: string[] = [];
+    const cells = new Map<string, number>();
+    const XCAP = 20;
+    const YCAP = 16;
+    for (const row of objects) {
+      const rawX = row[x];
+      const rawY = row[y];
+      const rawValue = row[value];
+      if (rawX === null || rawX === undefined || rawX === '' || rawY === null || rawY === undefined || rawY === '') continue;
+      const numericValue = Number(String(rawValue ?? '').trim());
+      if (!Number.isFinite(numericValue) || rawValue === null || rawValue === '') continue;
+      const xKey = String(rawX);
+      const yKey = String(rawY);
+      if (!xLabels.includes(xKey) && xLabels.length < XCAP) xLabels.push(xKey);
+      if (!yLabels.includes(yKey) && yLabels.length < YCAP) yLabels.push(yKey);
+      if (!xLabels.includes(xKey) || !yLabels.includes(yKey)) continue;
+      const key = `${yKey}\u0000${xKey}`;
+      cells.set(key, (cells.get(key) ?? 0) + numericValue);
+    }
+    if (!xLabels.length || !yLabels.length || !cells.size) {
+      throw new DbError('热力图没有有效的数值格子（检查 x/y/value 列）', { code: 'EMPTY_SERIES' });
+    }
+    const values = yLabels.map((yKey) => xLabels.map((xKey) => cells.get(`${yKey}\u0000${xKey}`) ?? 0));
+    const chart = {
+      type: 'heatmap' as const,
+      title: title ?? `${value} · ${y} × ${x}`,
+      xLabel: x,
+      yLabel: y,
+      sql,
+      // 行合计只用于用户切到柱/折/饼/雷达时的降级显示；热力图本身读 heatmap 矩阵。
+      series: yLabels.map((label, row) => ({ label, value: values[row].reduce((sum, cell) => sum + cell, 0) })),
+      heatmap: { xLabels, yLabels, values, valueLabel: value },
+    };
+    return ok(started, `已生成热力图（${yLabels.length} 行 × ${xLabels.length} 列）`, {
+      chart,
+      columns: set.columns,
+      rows: set.rows,
       chartSql: sql,
     });
   }

@@ -22,6 +22,7 @@ export interface DesktopBridge {
   platform: string;
   createTableShortcut: (payload: TableShortcutPayload) => Promise<{ ok: boolean; path?: string; error?: string }>;
   saveExportedFile?: (payload: { sourcePath: string }) => Promise<SaveExportedFileResult>;
+  exportPdf?: (payload: { html: string; name?: string }) => Promise<SaveExportedFileResult>;
   onOpenTable: (callback: (payload: OpenTablePayload) => void) => () => void;
 }
 

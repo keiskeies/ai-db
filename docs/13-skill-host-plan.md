@@ -18,15 +18,15 @@
 
 | 能力 | 管理入口 | 开关 |
 |---|---|---|
-| Skill Host | 设置 → Skills | 每个 Skill 复选框（启用/停用）；Skills 页顶部“允许 Agent 使用 Skill 工具”（全局） |
-| Skill 运行 | 设置 → Skills → 查看 → 运行 Skill Worker | 全局开关关闭后按钮禁用、Worker 启动返回 `FEATURE_DISABLED`；已安装 Skill 仍可查看/导入 |
-| AI PPT / 报告直出 | 命令产物 → AI PPT | Skills 页顶部“启用 AI PPT”；关闭后按钮隐藏，`POST /artifacts/:id/deck` 返回 403 |
+| Skill Host | 设置 → Skills | 每个 Skill 复选框（启用/停用）；Skills 页顶部“允许 Agent 自动调用技能”（全局） |
+| Skill 运行 | 设置 → Skills → 查看 → 运行 Skill Worker | 全局开关关闭只影响 Agent 自动调用；仍可在本页手动运行 Worker |
+| AI PPT / 报告直出 | 命令面板生成报告产物 → AI PPT；`/report 文字` 在 Agent 对话内回答 | Skills 页顶部“启用 AI PPT”；关闭后按钮隐藏，`POST /artifacts/:id/deck` 返回 403 |
 | MCP 工具（Agent） | 设置 → MCP | 每个 Server 的启用/停用；MCP 页顶部“允许 Agent 调用 MCP”（全局） |
 | MCP 出站（外部 Agent） | 外部 MCP 客户端启动 `scripts/aidb-mcp-server.mjs` | MCP 页顶部总开关同时关闭 `?for=mcp` 工具列表与 `/agent/tools/:name` |
 | 通知渠道 | 设置 → 通知 | 每个渠道的启用/停用；禁用渠道发送返回「渠道已禁用」 |
 | Skill 密钥 | 设置 → Skills → 查看 → 密钥 | 逐项设置/清除；值加密存储，不回显 |
 
-关闭是“停止调用/隐藏入口”，不删除已安装 Skill、MCP 配置、密钥或产物；开关就在 Skills / MCP 页面顶部，保存立即生效。AI PPT 入口在报告/对比产物的操作栏。数据库“工具箱”只保留数据库工具，不再混入 Agent 能力。
+关闭是“停止调用/隐藏入口”，不删除已安装 Skill、MCP 配置、密钥或产物；开关就在 Skills / MCP 页面顶部，保存立即生效。AI PPT 入口在报告/对比产物的操作栏。数据库“工具箱”只保留数据库工具，不再混入 Agent 能力。设置导航按“基础 / 集成与连接 / 能力扩展 / 系统”分组，顶部支持搜索；原来的 Agent 页命名为“模型”。
 
 ## 1. 设计原则
 
@@ -139,6 +139,7 @@ metadata:
 - **Bootstrap**：`aidb.skill.json` 的 `bootstrap` entrypoint 在模型开始前顺序执行（PPT Master 为 `guard` + `project-init`），失败即终止并回传明确错误。
 - **适配指南**：manifest `guide` 是宿主维护的精简执行说明，优先于技能内部冗长工作流；不 fork 上游文档。
 - **读写预算**：`skill_read` 支持 `offset/nextOffset` 分段读取；同一片段不重复读，单文件最多 12 段，避免弱模型在超长 workflow 上反复重读。
+- **自动调用与手动运行分离**：关闭“允许 Agent 自动调用技能”后，Agent 看不到技能索引和 `skill_*` 工具；用户仍可在 Skills 页手动运行 Worker。
 - **交互式提问**：`skill_ask` 工具映射为 `skill_question` 事件，UI 弹出问题卡；`POST /skills/runs/:id/answers` 回答后 Worker 原地继续。
 - **取消**：取消会中止 AgentRuntime，并通过 AbortSignal 杀掉正在运行的 skill 子进程。
 - **产物**：运行结束推送 `skill_artifact` 事件，UI 列出 workspace/output 文件并走系统「另存为」；`GET /skills/runs/:id/files` 提供受控下载。
@@ -211,7 +212,7 @@ AIDB_HOME/skill-runs/<runId>/
 - core 类型 `SkillSummary` / `SkillFileEntry`；gateway `skill_list` / `skill_read` 工具（总数 47）。
 - AgentHost 注入 Skills 目录段落。
 - 设置 → Skills：列表、导入、启停、查看 SKILL.md；首次启动自动写入 3 个轻量内置技能（报告写作、SQL 审查、数据字典），PPT Master 作为第三方推荐技能提供一键安装。
-- 验收：已导入真实 PPT Master skill（v6.7.3，13,050 个文件），列表/`workflows/routing.md` 读取/目录注入通过；zip 导入与路径越界测试通过。Skill 工具总数 51；`npm run verify` 全绿：docs 329/329、core 149/149、gateway 133 pass、E2E 139/139。
+- 验收：已导入真实 PPT Master skill（v6.7.3，13,050 个文件），列表/`workflows/routing.md` 读取/目录注入通过；zip 导入与路径越界测试通过。Skill 工具总数 51；`npm run verify` 全绿：docs 329/329、core 149/149、gateway 152 pass、E2E 150/150。
 
 ### S2 沙箱运行时（完成）
 - workspace / input / output；`skill_write` / `skill_run` / `skill_list_files`。
@@ -257,5 +258,5 @@ AIDB_HOME/skill-runs/<runId>/
 - 能导入、启停、读取、卸载任意兼容 `SKILL.md` 的 skill；**已通过**（目录 / zip / Git，含路径越界与备份）。
 - PPT Master 能在 AiDB 中完成一次完整 Generate，输出原生 PPTX；**确定性报告直出已通过**（4 页原生 PPTX，数字与 ReportSpec 一致）；**真实模型生成受本地端点无响应阻塞**。
 - skill 执行有权限、沙箱、审计、取消与错误诊断；**已通过**（命令白名单、超时、路径保护、运行审计、AbortSignal 取消、Python 版本/包检查、密钥加密注入）。
-- S1–S4 全部通过 `npm run verify` 与专用 skill 验收脚本；**S1–S3 通过全量 verify（docs 329/329、core 149/149、gateway 133/198、E2E 139/139）；S4 已完成 Git/npm 导入、模板选择器、Skill→MCP 白名单桥、MCP Server 出站与升级回归。**
+- S1–S4 全部通过 `npm run verify` 与专用 skill 验收脚本；**S1–S3 通过全量 verify（docs 329/329、core 149/149、gateway 152/217、E2E 150/150）；S4 已完成 Git/npm 导入、模板选择器、Skill→MCP 白名单桥、MCP Server 出站与升级回归。**
 - 上游 skill 更新可通过重新导入完成，不修改上游源码。

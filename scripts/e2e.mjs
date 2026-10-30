@@ -1525,9 +1525,9 @@ await page.locator('.settings-nav button').filter({ hasText: 'MCP' }).click();
 await page.waitForFunction(() => document.querySelector('.settings-content')?.textContent?.includes('新增 MCP Server'), null, { timeout: 10000 });
 check('settings MCP panel renders', true);
 await page.locator('.settings-nav button').filter({ hasText: 'Skills' }).click();
-await page.waitForFunction(() => document.querySelector('.settings-content')?.textContent?.includes('推荐技能'), null, { timeout: 10000 });
+await page.waitForFunction(() => document.querySelector('.settings-content')?.textContent?.includes('3 个可用'), null, { timeout: 10000 });
 const settingsSkillsText = await page.locator('.settings-content').innerText();
-check('built-in skills are preinstalled', settingsSkillsText.includes('内置') && settingsSkillsText.includes('已安装'), settingsSkillsText.slice(0, 120));
+check('built-in skills are preinstalled', settingsSkillsText.includes('3 个内置'), settingsSkillsText.slice(0, 120));
 check('settings Skills panel renders', true);
 await page.locator('.settings-modal .modal-head .icon-btn').click();
 await page.waitForTimeout(200);
@@ -1788,15 +1788,31 @@ const multiBars = await page.locator('.query-chart-panel [data-testid="chart-svg
 check('multi-series chart renders grouped bars', multiBars >= queryRows * 2, `${multiBars} bars`);
 const barXs = await page.$$eval('.query-chart-panel [data-testid="chart-svg"] rect', (els) => els.slice(0, 2).map((el) => Number(el.getAttribute('x'))));
 check('grouped bars put series side by side', barXs.length === 2 && barXs[0] !== barXs[1], barXs.join(','));
-await page.click('[data-testid="chart-stacked"]');
+await page.click('[data-testid="chart-type-stacked"]');
 await page.waitForFunction(() => document.querySelector('.query-chart-panel [data-testid="chart-svg"]')?.getAttribute('data-stacked') === 'true', null, { timeout: 5000 });
 const stackedXs = await page.$$eval('.query-chart-panel [data-testid="chart-svg"] rect', (els) => els.slice(0, 2).map((el) => Number(el.getAttribute('x'))));
 check('stacked bars share the same column', stackedXs.length === 2 && stackedXs[0] === stackedXs[1], stackedXs.join(','));
-await page.click('[data-testid="chart-stacked"]');
+await page.click('[data-testid="chart-type-bar"]');
 await page.click('[data-testid="chart-dual"]');
 await page.waitForFunction(() => document.querySelector('.query-chart-panel [data-testid="chart-svg"]')?.getAttribute('data-dual') === 'true', null, { timeout: 5000 });
 check('dual-axis chart draws a right axis', (await page.locator('.query-chart-panel [data-testid="chart-axis-right"]').count()) === 1);
 check('dual-axis chart draws the secondary line', (await page.locator('.query-chart-panel [data-testid="chart-dual-line"]').count()) === 1);
+
+// 新增图形：热力 = 度量行 × 分类列；雷达 = 分类轴 + 多度量；散点 = 两个数值列
+await page.click('[data-testid="chart-type-heatmap"]');
+await page.waitForSelector('.query-chart-panel [data-testid="chart-heatmap-cell"]', { timeout: 5000 });
+const heatCells = await page.locator('.query-chart-panel [data-testid="chart-heatmap-cell"]').count();
+check('heatmap renders a category × measure matrix', heatCells >= queryRows, `${heatCells} cells`);
+await page.click('[data-testid="chart-type-radar"]');
+await page.waitForSelector('.query-chart-panel [data-testid="chart-radar-shape"]', { timeout: 5000 });
+const radarShapes = await page.locator('.query-chart-panel [data-testid="chart-radar-shape"]').count();
+check('radar draws one polygon per measure', radarShapes === 2, `${radarShapes} shapes`);
+await page.click('[data-testid="chart-type-scatter"]');
+await page.waitForFunction(() => document.querySelector('.query-chart-panel [data-testid="chart-svg"]')?.getAttribute('data-scatter') === 'true', null, { timeout: 5000 });
+const scatterPoints = await page.locator('.query-chart-panel [data-testid="chart-scatter"] circle').count();
+check('scatter plot auto-picks numeric x/y and draws points', scatterPoints >= 2, `${scatterPoints} points`);
+await page.click('[data-testid="chart-type-bar"]');
+await page.waitForSelector('.query-chart-panel [data-testid="chart-svg"] rect', { timeout: 5000 });
 const chartCsvPromise = page.waitForResponse((res) => res.url().includes('/api/export') && (res.request().postData() ?? '').includes('"format":"csv"'), { timeout: 20000 }).catch(() => null);
 await page.click('[data-testid="chart-export-csv"]');
 const chartCsvResponse = await chartCsvPromise;
@@ -1823,17 +1839,46 @@ await page.click('[data-testid="agent-send"]');
 await page.waitForFunction(() => document.querySelector('.agent-transcript')?.textContent?.includes('张表'), { timeout: 25000 });
 check('agent inspects schema', (await page.locator('[data-testid="tool-card"]').count()) > 0);
 await page.screenshot({ path: join(shots, 'desktop-agent.png') });
+await page.fill('[data-testid="agent-input"]', '/chart');
+await page.waitForFunction(() => document.querySelector('.popover')?.textContent?.includes('/chart'), null, { timeout: 10000 });
+await page.locator('[data-testid="agent-input"]').press('Tab');
+check('slash command completes with Tab', (await page.locator('[data-testid="agent-input"]').inputValue()) === '/chart ');
+await page.fill('[data-testid="agent-input"]', '');
+await page.fill('[data-testid="agent-input"]', '/report 数据概览');
+await page.locator('[data-testid="agent-input"]').press('Enter');
+await page.waitForFunction(() => document.querySelector('.agent-transcript')?.textContent?.includes('/report 数据概览'), null, { timeout: 10000 });
+check('report runs inline without modal', (await page.locator('.modal').count()) === 0);
+await page.waitForSelector('.answer-actions', { timeout: 30000 });
+const inlineAnswer = await page.locator('.agent-transcript').innerText();
+check('answer offers copy and PDF export', inlineAnswer.includes('复制') && inlineAnswer.includes('导出 PDF') && !inlineAnswer.includes('导出 HTML') && !inlineAnswer.includes('导出 Markdown'));
 await page.fill('[data-testid="agent-input"]', '/report');
-await page.locator('.popover-item', { hasText: '/report' }).click();
-await page.waitForSelector('.modal-head h2:has-text("生成报告")', { timeout: 10000 });
-await page.getByPlaceholder('例如：本周订单与履约情况').fill('数据概览');
-await page.locator('.modal button:has-text("运行")').click();
-await page.waitForFunction(() => document.querySelector('.modal')?.textContent?.includes('概览'), { timeout: 25000 });
-check('slash command report renders an artifact', (await page.locator('.modal').textContent())?.includes('概览'));
-await page.locator('.modal button:has-text("AI PPT")').click();
-await page.waitForFunction(() => document.querySelector('.modal')?.textContent?.includes('PPT Master 生成'), null, { timeout: 10000 });
-check('report offers deterministic PPT Master deck', (await page.locator('.modal').textContent())?.includes('确定性排版'));
-await page.locator('.modal-head button[title="关闭"]').click();
+await page.locator('[data-testid="agent-input"]').press('Enter');
+await page.waitForTimeout(300);
+check('bare /report keeps command token', (await page.locator('[data-testid="agent-input"]').inputValue()) === '/report ');
+check('bare /report does not open source form', (await page.locator('.modal').count()) === 0);
+await page.fill('[data-testid="agent-input"]', '');
+
+await page.fill('[data-testid="agent-input"]', '/in');
+await page.waitForFunction(() => document.querySelector('.popover')?.textContent?.includes('/init'), null, { timeout: 10000 });
+check('slash popover offers /init', (await page.locator('.popover').innerText()).includes('/init'));
+await page.fill('[data-testid="agent-input"]', '/init');
+await page.locator('[data-testid="agent-input"]').press('Enter');
+await page.waitForFunction(() => document.querySelector('.agent-transcript')?.textContent?.includes('AI_DB.md 已生成'), null, { timeout: 60000 });
+check('/init runs inline without a modal', (await page.locator('.modal').count()) === 0);
+const initAnswer = await page.locator('.msg-assistant .content').last().innerText();
+const initPath = /([A-Za-z]:\\[^\r\n]+?AI_DB\.md)/.exec(initAnswer)?.[1]?.trim();
+check('/init reports the generated AI_DB.md path', Boolean(initPath), initAnswer.split('\n').slice(0, 6).join(' | '));
+const initMarkdown = initPath ? await readFile(initPath, 'utf8') : '';
+check(
+  'AI_DB.md contains the onboarding sections and a complete inventory',
+  initMarkdown.includes('## 1. 这个库是干什么的') &&
+    initMarkdown.includes('## 3. 核心表手册') &&
+    initMarkdown.includes('## 9. 附录：全量表清单') &&
+    initMarkdown.includes('<!-- aidb:inventory') &&
+    initMarkdown.includes('orders'),
+  initPath ? `${initMarkdown.length}B` : 'no file',
+);
+await page.fill('[data-testid="agent-input"]', '');
 
 await page.fill('[data-testid="agent-input"]', '创建表 e2e_tasks，包含 id 自增主键, title 文本');
 await page.click('[data-testid="agent-send"]');
@@ -2174,6 +2219,86 @@ async function electronPngExport(app, window) {
   }
 }
 
+// 解压 PDF 内容流，检查是否真的画出了彩色：Chrome 打印默认丢背景色，饼图会整块变白，
+// 只有字节头正确并不算过。scn 表示 conic-gradient 被输出为 pattern，rg 是普通填充色。
+function pdfColorEvidence(bytes) {
+  const raw = bytes.toString('latin1');
+  const streams = [];
+  let index = 0;
+  while ((index = raw.indexOf('stream', index)) >= 0) {
+    let start = index + 'stream'.length;
+    if (raw[start] === '\r') start += 1;
+    if (raw[start] === '\n') start += 1;
+    const end = raw.indexOf('endstream', start);
+    if (end < 0) break;
+    index = end + 'endstream'.length;
+    try {
+      streams.push(zlib.inflateSync(bytes.subarray(start, end), { finishFlush: zlib.constants.Z_SYNC_FLUSH }).toString('latin1'));
+    } catch {
+      /* 非 Flate 流，跳过 */
+    }
+  }
+  const content = streams.join('\n');
+  const fills = [...content.matchAll(/([\d.]+) ([\d.]+) ([\d.]+) rg/g)].map((m) => [Number(m[1]), Number(m[2]), Number(m[3])]);
+  return {
+    chromatic: fills.some((rgb) => Math.max(...rgb) - Math.min(...rgb) > 0.05),
+    gradient: /\b(?:scn|SCN)\b/.test(content),
+  };
+}
+
+// 回答导出 PDF 走主进程 printToPDF + 原生另存为，渲染进程侧没有 download 事件可取证。
+// 这里把 showSaveDialog 钉到临时路径，再从窗口里真实调用一次 preload API。
+async function electronPdfExport(app, window) {
+  const saveTo = join(tmpdir(), `aidb-e2e-electron-${Date.now()}.pdf`);
+  try {
+    await app.evaluate(({ dialog }, target) => {
+      global.__pdfDialog = null;
+      const original = dialog.showSaveDialog.bind(dialog);
+      global.__pdfRestore = () => { dialog.showSaveDialog = original; };
+      dialog.showSaveDialog = async (_win, maybeOptions) => {
+        const options = maybeOptions ?? _win;
+        global.__pdfDialog = { filters: options?.filters ?? null, defaultPath: options?.defaultPath ?? '' };
+        return { canceled: false, filePath: target };
+      };
+    }, saveTo);
+    const html = `<!doctype html><html lang="zh-CN" data-theme="light"><head><meta charset="utf-8"><style>
+      html{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      body{font-family:"Segoe UI",sans-serif;padding:28px;color:#0f172a}
+      h1{font-size:22px;margin:0 0 8px}
+      .chart{border:1px solid #cbd5e1;border-radius:8px;padding:12px;margin-top:14px}
+      .pie{width:120px;height:120px;border-radius:50%;background:conic-gradient(#0891b2 0deg 180deg,#e0af63 180deg 360deg)}
+      .swatch{display:inline-block;width:16px;height:16px;background:#22c55e}
+    </style></head><body>
+      <h1>AiDB 回答导出 PDF 验证</h1>
+      <p>桌面端 printToPDF 渲染中文、SVG 与饼图的 conic-gradient。</p>
+      <div class="chart"><svg width="480" height="200" xmlns="http://www.w3.org/2000/svg">
+        <rect x="30" y="60" width="80" height="120" fill="#0891b2"/>
+        <rect x="160" y="100" width="80" height="80" fill="#22c55e"/>
+        <rect x="290" y="30" width="80" height="150" fill="#f59e0b"/>
+      </svg></div>
+      <div class="pie"></div><span class="swatch"></span>
+    </body></html>`;
+    const result = await window.evaluate((payload) => window.aidbDesktop.exportPdf(payload), { html, name: 'aidb-e2e-answer.pdf' });
+    if (!result?.ok) return `FAIL exportPdf result ${JSON.stringify(result).slice(0, 160)}`;
+    const bytes = await readFile(saveTo);
+    if (bytes.subarray(0, 5).toString('latin1') !== '%PDF-') return `FAIL not a PDF (${bytes.subarray(0, 8).toString('hex')})`;
+    if (bytes.length < 2000) return `FAIL PDF suspiciously small (${bytes.length}B)`;
+    const color = pdfColorEvidence(bytes);
+    if (!color.chromatic) return 'FAIL PDF lost CSS background colors (no chromatic fill)';
+    if (!color.gradient) return 'FAIL pie conic-gradient pattern missing from PDF';
+    const dialogInfo = await app.evaluate(() => global.__pdfDialog);
+    const filtered = Array.isArray(dialogInfo?.filters) && dialogInfo.filters.some((f) => f.extensions?.includes('pdf'));
+    if (!filtered) return `FAIL save dialog without a PDF filter (${JSON.stringify(dialogInfo?.filters)})`;
+    if (!dialogInfo.defaultPath.toLowerCase().endsWith('.pdf')) return `FAIL default name is not .pdf (${dialogInfo.defaultPath})`;
+    return `OK ${bytes.length}B ${dialogInfo.defaultPath.split(/[\\/]/).pop()}`;
+  } catch (err) {
+    return `FAIL ${String(err).split('\n')[0].slice(0, 180)}`;
+  } finally {
+    await app.evaluate(() => global.__pdfRestore?.()).catch(() => undefined);
+    rmSync(saveTo, { force: true });
+  }
+}
+
 let electronBinary;
 const candidates =
   process.platform === 'win32'
@@ -2202,6 +2327,7 @@ if (electronBinary) {
   delete env.VITE_DEV_SERVER_URL; // 必须走内嵌 Bridge + dist，才是真实的桌面形态
   let electronOk = false;
   let exportDetail = 'not attempted';
+  let pdfDetail = 'not attempted';
   let lastError = '';
   for (let attempt = 1; attempt <= 2 && !electronOk; attempt++) {
     let app;
@@ -2243,6 +2369,7 @@ if (electronBinary) {
         check('second launch reuses the window and forwards the deep link', secondExit === 0 && forwarded, `exit=${secondExit} forwarded=${forwarded}`);
         await window.screenshot({ path: join(shots, 'electron-desktop.png') });
         exportDetail = await electronPngExport(app, window);
+        pdfDetail = await electronPdfExport(app, window);
       } else lastError = 'no connections in Electron window';
       await app.close();
       app = undefined;
@@ -2254,6 +2381,7 @@ if (electronBinary) {
   }
   check('electron shell boots with embedded bridge', electronOk, electronOk ? '' : lastError);
   check('electron 桌面形态导出真 PNG', electronOk && exportDetail.startsWith('OK'), exportDetail);
+  check('electron 回答导出真 PDF（含图表 HTML）', electronOk && pdfDetail.startsWith('OK'), pdfDetail);
 } else {
   console.log('SKIP  electron shell — no Electron binary installed');
 }

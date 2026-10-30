@@ -14,6 +14,7 @@ import { formatDuration } from '../lib/format';
 import { formatSql } from '../lib/sqlFormat';
 import { useApp, type Tab } from '../store';
 import { ChartView, type ChartSpec } from './ChartView';
+import type { ChartType } from './ChartToolbar';
 import { DataGrid } from './DataGrid';
 import { GraphView } from './GraphView';
 import { VectorSearchPanel } from './VectorSearchPanel';
@@ -141,13 +142,12 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const [historyQuery, setHistoryQuery] = useState('');
   const [favoriteOnly, setFavoriteOnly] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [chartType, setChartType] = useState<'bar' | 'line' | 'pie'>('bar');
+  const [chartType, setChartType] = useState<ChartType>('bar');
   const [snippets, setSnippets] = useState<Array<{ id: string; name: string; sql: string; createdAt: string }>>([]);
   const [snippetsLoading, setSnippetsLoading] = useState(false);
   const [chartX, setChartX] = useState('');
   const [chartY, setChartY] = useState('');
   const [extraY, setExtraY] = useState<string[]>([]);
-  const [chartStacked, setChartStacked] = useState(false);
   const [chartDual, setChartDual] = useState(false);
   const [databases, setDatabases] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -541,7 +541,7 @@ ${text}
       .filter((name) => name !== effectiveY && names.includes(name))
       .map((name) => ({ name, index: names.indexOf(name) }));
     const points = set.rows
-      .slice(0, 24)
+      .slice(0, chartType === 'scatter' ? 200 : 24)
       .map((row) => ({
         label: String(row[xIndex] ?? '—'),
         value: Number(row[yIndex]),
@@ -562,10 +562,10 @@ ${text}
       extraSeries: extraColumns.length
         ? extraColumns.map((column, offset) => ({ name: column.name, values: points.map((point) => point.extras[offset]) }))
         : undefined,
-      stacked: chartStacked || undefined,
+      stacked: chartType === 'stacked' || undefined,
       dualAxis: chartDual || undefined,
     };
-  }, [set, chartX, chartY, chartType, extraY, chartStacked, chartDual]);
+  }, [set, chartX, chartY, chartType, extraY, chartDual]);
 
   const numericColumns = useMemo(() => {
     if (!set) return [];
@@ -573,6 +573,24 @@ ${text}
       .filter((_, index) => set.rows.some((row) => Number.isFinite(Number(row[index]))))
       .map((column) => column.name);
   }, [set]);
+
+  // 散点必须有数值 X/Y：切过去时自动换到前两个数值列，避免用分类列当 x 轴画出假相关。
+  const changeChartType = (next: ChartType) => {
+    setChartType(next);
+    if (next !== 'bar' && next !== 'stacked') setChartDual(false);
+    if (next !== 'scatter' || !set) return;
+    const numeric = set.columns
+      .filter((_, index) => set.rows.some((row) => {
+        const value = row[index];
+        return value !== null && value !== undefined && String(value).trim() !== '' && Number.isFinite(Number(value));
+      }))
+      .map((column) => column.name);
+    if (numeric.length < 2) return;
+    const x = numeric.includes(chartX) ? chartX : numeric[0];
+    const y = numeric.includes(chartY) && chartY !== x ? chartY : numeric.find((name) => name !== x)!;
+    if (x !== chartX) setChartX(x);
+    if (y !== chartY) setChartY(y);
+  };
 
   const applyHistory = (text: string) => {
     const view = viewRef.current;
@@ -888,18 +906,13 @@ ${text}
                           {name}
                         </button>
                       ))}
-                    <button
-                      className={`btn small ${chartStacked ? 'active' : ''}`}
-                      onClick={() => { setChartStacked((value) => !value); setChartDual(false); }}
-                      title="柱状图按列堆叠"
-                      data-testid="chart-stacked"
-                    >
-                      堆叠
-                    </button>
-                    {extraY.filter((name) => name !== chartSpec.yLabel).length === 1 ? (
+                    {extraY.filter((name) => name !== chartSpec.yLabel).length === 1 && (chartType === 'bar' || chartType === 'stacked') ? (
                       <button
                         className={`btn small ${chartDual ? 'active' : ''}`}
-                        onClick={() => { setChartDual((value) => !value); setChartStacked(false); }}
+                        onClick={() => {
+                          setChartDual((value) => !value);
+                          if (chartType === 'stacked') setChartType('bar');
+                        }}
                         title="附加列使用右侧独立刻度"
                         data-testid="chart-dual"
                       >
@@ -911,7 +924,7 @@ ${text}
                 <ChartView
                   chart={chartSpec}
                   typeOverride={chartType}
-                  onTypeChange={setChartType}
+                  onTypeChange={changeChartType}
                   maxPoints={60}
                   columns={set?.columns.map((column) => column.name)}
                   x={chartX}

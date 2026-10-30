@@ -317,6 +317,7 @@ ${skill.body}`,
       license: meta.license ?? (typeof metadata.license === 'string' ? metadata.license : undefined),
       enabled: !existsSync(join(dir, '.disabled')),
       builtin: existsSync(join(dir, '.builtin')),
+      runnable: Boolean(this.getManifest(id)?.entrypoints?.length),
       fileCount: countFiles(dir),
       updatedAt: statSync(skillFile).mtime.toISOString(),
     };

@@ -90,6 +90,32 @@ ipcMain.handle('save-export-file', async (_event, payload) => {
   }
 });
 
+// 回答导出 PDF：主进程渲染 HTML 后打印为 PDF，避免新窗口被 windowOpenHandler 拦截。
+ipcMain.handle('export-pdf', async (_event, payload) => {
+  const html = String(payload?.html ?? '');
+  if (!html) return { ok: false, error: '导出内容为空' };
+  const safeName = String(payload?.name ?? 'aidb-answer.pdf').replace(/[^\w.\-一-鿿]+/g, '_');
+  const options = {
+    title: '导出 PDF',
+    buttonLabel: '保存',
+    defaultPath: path.join(app.getPath('downloads'), safeName),
+    filters: [{ name: 'PDF 文档', extensions: ['pdf'] }],
+  };
+  const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+  const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
+  try {
+    await win.loadURL(`data:text/html;base64,${Buffer.from(html, 'utf8').toString('base64')}`);
+    const pdf = await win.webContents.printToPDF({ printBackground: true, pageSize: 'A4' });
+    await fs.promises.writeFile(result.filePath, pdf);
+    return { ok: true, path: result.filePath };
+  } catch (err) {
+    return { ok: false, error: String(err?.message ?? err) };
+  } finally {
+    win.destroy();
+  }
+});
+
 // 图表 PNG、ERD SVG、审计 CSV 这类导出在桌面端一律走原生「另存为」。Electron 不挂
 // 这个处理器时也会弹框，但没有类型过滤器，用户存出来的文件可能丢扩展名。
 function registerExportDialogs() {

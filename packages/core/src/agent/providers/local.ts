@@ -765,8 +765,36 @@ export class LocalProvider implements LlmProvider {
         yield* finish('请指定要分析的表，例如：“按 status 统计 orders 并画柱状图”。');
         return;
       }
-      const type: 'bar' | 'line' | 'pie' = /(折线|趋势|line)/.test(prompt) ? 'line' : /(饼|占比|pie)/.test(prompt) ? 'pie' : 'bar';
       const q = (name: string) => quoteIdent(name, engine);
+      const numericColumns = (table.columns ?? []).filter((c) => /(int|real|float|double|decimal|numeric|number)/i.test(c.type));
+      const advanced = /(热力|heatmap|雷达|radar|堆叠|stacked)/i.exec(prompt);
+      if (advanced) {
+        yield* finish(`离线规则模式还没有「${advanced[0]}」的取数模板；配置模型后可以直接生成，或先在编辑器里写好聚合 SQL 再用图表页。`);
+        return;
+      }
+      if (/(散点|相关|scatter|correlation)/i.test(prompt) && numericColumns.length < 2) {
+        yield* finish(`\`${table.name}\` 需要至少两个数值列才能画散点图（当前：${numericColumns.map((c) => c.name).join('、') || '无'}）。`);
+        return;
+      }
+      if (/(散点|相关|scatter|correlation)/i.test(prompt) && numericColumns.length >= 2) {
+        const mentioned = numericColumns.filter((c) => prompt.toLowerCase().includes(c.name.toLowerCase()));
+        const xColumn = mentioned[0] ?? numericColumns[0];
+        const yColumn = mentioned[1] ?? numericColumns.find((c) => c.name !== xColumn.name)!;
+        yield* callTool(
+          mkCall('render_chart', {
+            connectionId,
+            database,
+            sql: `SELECT ${q(xColumn.name)} AS ${q('x')}, ${q(yColumn.name)} AS ${q('y')} FROM ${q(table.name)} LIMIT 200`,
+            type: 'scatter',
+            title: `${yColumn.name} vs ${xColumn.name}`,
+            x: 'x',
+            y: 'y',
+          }),
+          `我把 \`${xColumn.name}\` 和 \`${yColumn.name}\` 的原始数值画成散点图，观察相关性（不先聚合）。`,
+        );
+        return;
+      }
+      const type: 'bar' | 'line' | 'pie' = /(折线|趋势|line)/.test(prompt) ? 'line' : /(饼|占比|pie)/.test(prompt) ? 'pie' : 'bar';
       let sql: string;
       let xField: string;
       let chartTitle: string;

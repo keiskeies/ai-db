@@ -711,7 +711,15 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: 'render_chart',
     description:
-      'Execute a SELECT and render the result as a chart in the agent transcript. Use for trends (line), distributions (bar) and proportions (pie). x/y refer to result column names.',
+      `Execute a SELECT and render the result as a chart in the agent transcript. Pick the type from the data shape and the question — never default to bar out of habit:
+- bar: compare magnitudes across a small set of categories (≤12); x is the category, y/ys are numeric measures.
+- stacked: show how parts compose each category total (or a time series); every measure must share one unit and be non-negative; pass ys and set type=stacked.
+- line: change over an ordered axis (time, sequence); x must be ordered, not an unordered category list.
+- pie: parts of one whole; a single measure with 3–8 non-negative slices. Never use pie for time series, comparisons across periods, or more than 8 categories.
+- scatter: relationship/correlation between two numeric columns; x and y are both numeric, ideally ≥10 points; optional label names each point. Not for categories or time buckets.
+- heatmap: one numeric measure across two categorical dimensions (e.g. weekday × hour, region × category); pass the two category columns as x and y and the measure as value. Best for spotting density/hot spots; avoid >20×16 cells.
+- radar: compare 3–8 same-unit measures for one or a few records; x is the record/category axis, y plus ys are the measures. Never mix units (count with amount) or use fewer than 3 axes.
+x/y/ys/value/label are result column names, not SQL expressions.`,
     risk: 'read',
     inputSchema: {
       type: 'object',
@@ -721,12 +729,14 @@ export const TOOLS: ToolDefinition[] = [
         ...connectionProp,
         ...databaseProp,
         sql: { type: 'string' },
-        type: { type: 'string', enum: ['bar', 'line', 'pie'] },
+        type: { type: 'string', enum: ['bar', 'stacked', 'line', 'pie', 'scatter', 'heatmap', 'radar'] },
         title: { type: 'string' },
-        x: { type: 'string', description: 'Category / x-axis column name' },
-        y: { type: 'string', description: 'Numeric / y-axis column name' },
-        ys: { type: 'array', items: { type: 'string' }, description: 'Additional numeric columns to compare alongside y' },
-        stacked: { type: 'boolean', description: 'Stack the series instead of grouping them (bar charts)' },
+        x: { type: 'string', description: 'Column name: category axis (bar/line/pie/radar), numeric x (scatter), horizontal category (heatmap)' },
+        y: { type: 'string', description: 'Column name: numeric measure (bar/line/pie/scatter/radar), row category (heatmap)' },
+        ys: { type: 'array', items: { type: 'string' }, description: 'Additional numeric measure columns (bar/stacked/line/radar), at most 4' },
+        value: { type: 'string', description: 'Heatmap only: numeric measure column' },
+        label: { type: 'string', description: 'Scatter only: optional column used to label each point in the tooltip' },
+        stacked: { type: 'boolean', description: 'Legacy alias for type=stacked; ignored by other types' },
       },
     },
     summarize: (a) => `${a.title ?? '生成图表'}（${a.type}）`,

@@ -447,7 +447,6 @@ export interface FeatureSettings {
 
 export interface AppSettings {
   theme: 'dark' | 'light' | 'system';
-  density: 'compact' | 'comfortable';
   locale: 'zh' | 'en';
   defaultLimit: number;
   queryTimeoutMs: number;
@@ -462,7 +461,6 @@ export interface AppSettings {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
-  density: 'compact',
   locale: 'zh',
   defaultLimit: 100,
   queryTimeoutMs: 30000,

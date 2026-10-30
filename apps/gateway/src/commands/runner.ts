@@ -126,6 +126,7 @@ export class CommandRunner {
       finished: false,
       waiters: [],
     };
+    const defaultTimeoutMs = command.id === 'report' ? 15 * 60_000 : ['compare', 'fix'].includes(command.id) ? 10 * 60_000 : 120_000;
     state.timer = setTimeout(() => {
       if (!state.finished) {
         this.store.updateArtifactRun(state.artifactRunId, {
@@ -135,7 +136,7 @@ export class CommandRunner {
         });
         this.cancel(state.info.id);
       }
-    }, options.timeoutMs ?? 120_000);
+    }, options.timeoutMs ?? defaultTimeoutMs);
     state.timer.unref?.();
     this.runs.set(run.id, state);
     this.emit(state, { type: 'run_started', runId: run.id, command: command.id, startedAt: new Date().toISOString() });

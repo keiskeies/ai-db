@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, FolderUp, Loader2, Play, Save, Square, Trash2 } from 'lucide-react';
+import { BookOpen, FolderUp, Loader2, Play, Save, Search, Square, Trash2 } from 'lucide-react';
 import type { SkillDetail, SkillSummary } from '@aidb/core';
 import { api, streamSkillRun, type SkillWorkerEvent, type SkillWorkerRun } from '../../lib/api';
 import { deliverExportedFile } from '../../lib/desktop';
@@ -62,6 +62,7 @@ export function SkillsTool() {
   const [gitSubdir, setGitSubdir] = useState('');
   const [npmSpec, setNpmSpec] = useState('');
   const [installingPpt, setInstallingPpt] = useState(false);
+  const [query, setQuery] = useState('');
   const [secrets, setSecrets] = useState<{ declared: string[]; set: string[] }>({ declared: [], set: [] });
   const [secretDraft, setSecretDraft] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -248,10 +249,6 @@ export function SkillsTool() {
   };
 
   const startRun = async (skill: SkillDetail) => {
-    if (!features.skills) {
-      notify('warning', 'Skill Host 已关闭', '在设置 → Skills 页顶部开启');
-      return;
-    }
     if (!skill.enabled) {
       notify('warning', 'Skill 已禁用', '先启用再运行');
       return;
@@ -340,6 +337,11 @@ export function SkillsTool() {
   };
 
   const outputFiles = run?.outputs.filter((file) => file.type === 'file' && file.area !== 'input') ?? [];
+  const filteredSkills = useMemo(() => {
+    const text = query.trim().toLowerCase();
+    if (!text) return skills;
+    return skills.filter((skill) => `${skill.name} ${skill.id} ${skill.description}`.toLowerCase().includes(text));
+  }, [skills, query]);
   const templateGroups = useMemo(() => {
     const kinds = ['brands', 'styles', 'layouts', 'decks'];
     const groups = new Map<string, string[]>();
@@ -360,7 +362,7 @@ export function SkillsTool() {
         <span className="muted">SKILL.md 目录包 · 子 Agent 执行 · 产物带回</span>
       </div>
       <div className="tool-scroll">
-        {!features.skills ? <div className="dash-empty" style={{ color: 'var(--warning, #D6B45A)' }}>Skill Host 已在 设置 → Skills 中关闭；仍可管理 Skill，但 Agent/Worker 不会调用。</div> : null}
+        {!features.skills ? <div className="dash-empty" style={{ color: 'var(--warning, #D6B45A)' }}>Agent 自动调用已关闭；仍可在本页手动运行 Skill Worker。</div> : null}
         <div className="panel" style={{ padding: 10, marginBottom: 10 }}>
           <div className="panel-head" style={{ paddingLeft: 0 }}>推荐技能</div>
           <div className="tool-row" style={{ padding: 0, border: 0 }}>
@@ -430,21 +432,36 @@ export function SkillsTool() {
           </div>
         </details>
         <div className="panel" style={{ marginBottom: 10 }}>
-          <div className="panel-head">已安装 <span className="badge">{skills.length}</span></div>
+          <div className="panel-head">
+            技能
+            <span className="badge">{skills.length} 个可用 · {skills.filter((skill) => skill.builtin).length} 个内置</span>
+          </div>
+          <div style={{ padding: '0 10px 8px' }}>
+            <div className="search-box">
+              <Search size={12} />
+              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索技能…" />
+            </div>
+          </div>
           {loading ? <div className="dash-empty"><Loader2 size={14} className="spin" /> 读取中…</div> : null}
-          {!loading && !skills.length ? <div className="dash-empty">还没有 Skill。可以导入 D:\item\ppt-master\skills\ppt-master 试试。</div> : null}
-          {skills.map((skill) => (
-            <div key={skill.id} className="transfer-row">
-              <input type="checkbox" checked={skill.enabled} onChange={() => void toggle(skill)} title="启用 / 禁用" />
-              <span style={{ flex: 1 }}>
-                <strong>{skill.name}</strong>
-                {skill.builtin ? <span className="badge" style={{ marginLeft: 6 }}>内置</span> : null}
-                <span className="muted"> · {skill.id}{skill.version ? ` v${skill.version}` : ''}</span>
-                <div className="muted" style={{ fontSize: 10 }}>{skill.description.slice(0, 140)}</div>
-              </span>
-              <span className="badge">{skill.fileCount} 文件</span>
-              <button className="btn small" onClick={() => void open(skill)}>查看</button>
-              <button className="icon-btn" onClick={() => void remove(skill)} title="卸载"><Trash2 size={12} /></button>
+          {!loading && !skills.length ? <div className="dash-empty">还没有 Skill。可以从上方一键安装，或手动导入。</div> : null}
+          {!loading && skills.length && !filteredSkills.length ? <div className="dash-empty">没有匹配的技能。</div> : null}
+          {filteredSkills.map((skill) => (
+            <div key={skill.id} className="skill-card">
+              <div className="skill-card-main" onClick={() => void open(skill)}>
+                <div className="skill-card-title">
+                  <strong>{skill.name}</strong>
+                  {skill.builtin ? <span className="badge">内置</span> : null}
+                  {skill.runnable ? <span className="badge read">子代理</span> : null}
+                  {!skill.enabled ? <span className="badge">已停用</span> : null}
+                </div>
+                <div className="muted" style={{ fontSize: 10.5, lineHeight: 1.5 }}>{skill.description.slice(0, 160)}</div>
+                <div className="muted" style={{ fontSize: 10 }}>{skill.id}{skill.version ? ` · v${skill.version}` : ''} · {skill.fileCount} 个文件</div>
+              </div>
+              <div className="skill-card-actions">
+                <input type="checkbox" checked={skill.enabled} onChange={() => void toggle(skill)} title="启用 / 禁用" />
+                <button className="btn small" onClick={() => void open(skill)}>查看</button>
+                <button className="icon-btn" onClick={() => void remove(skill)} title="卸载"><Trash2 size={12} /></button>
+              </div>
             </div>
           ))}
         </div>
@@ -468,7 +485,7 @@ export function SkillsTool() {
                 />
               </div>
               <div className="tool-row" style={{ padding: '8px 0 0', border: 0 }}>
-                <button className="btn primary" onClick={() => void startRun(detail)} disabled={!features.skills || starting || run?.status === 'running'}>
+                <button className="btn primary" onClick={() => void startRun(detail)} disabled={starting || run?.status === 'running'}>
                   {starting || run?.status === 'running' ? <Loader2 size={12} className="spin" /> : <Play size={12} />}
                   运行 Skill Worker
                 </button>

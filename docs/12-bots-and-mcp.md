@@ -190,7 +190,7 @@ Agent 的调用路径：先 `mcp_list_tools` 发现工具，再 `mcp_call`；`mc
 - `notification-migration.test.ts`：旧版 `CHECK(type IN ...)` 表结构迁移后可写入新平台类型（1 个测试）。
 - `mcp.test.ts`：stdio MCP Server 配置、工具发现、`mcp_list_tools` / `mcp_call` 执行（1 个测试）。
 - `mcp-server.test.ts`：AiDB 作为 stdio MCP Server 的 initialize / tools/list / 只读 tools/call（1 个测试）。
-- `npm run verify` 全绿：docs 329/329、core 149/149、gateway 133/198、E2E 139/139。
+- `npm run verify` 全绿：docs 329/329、core 149/149、gateway 152/217、E2E 150/150。
 - E2E 覆盖：设置内通知渠道/MCP/Skills 面板、数据库工具箱不含 Agent 能力、工具数 51、报告命令、AI PPT 面板、移动端命令。
 
 ## 8. 暂不支持

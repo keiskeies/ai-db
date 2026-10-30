@@ -5,22 +5,57 @@ import { useApp, type ContextMenuItem } from '../store';
 import { ChartToolbar, type ChartType } from './ChartToolbar';
 
 export interface ChartSpec {
-  type: 'bar' | 'line' | 'pie';
+  type: ChartType;
   title: string;
   xLabel: string;
   yLabel: string;
   sql?: string;
   series: Array<{ label: string; value: number }>;
-  /** 多列对比：与 series 等长的附加数值列（柱状/折线） */
+  /** 多列对比：与 series 等长的附加数值列（柱状/堆叠/折线/雷达） */
   extraSeries?: Array<{ name: string; values: number[] }>;
-  /** 柱状图多系列时按列堆叠（正负分开累计） */
+  /** 柱状图多系列时按列堆叠（正负分开累计）；type='stacked' 时等效 */
   stacked?: boolean;
   /** 双轴：仅一个附加列时，它使用右侧独立刻度并以折线绘制 */
   dualAxis?: boolean;
+  /** 散点：x/y 都是数值列；label 用于 tooltip（如商品名） */
+  scatter?: Array<{ x: number; y: number; label?: string }>;
+  /** 热力：行 × 列矩阵，values[row][column] */
+  heatmap?: { xLabels: string[]; yLabels: string[]; values: number[][]; valueLabel?: string };
   /** forecast_chart 的外推段：虚线 + 半透明区间带，接在 series 之后 */
   forecast?: Array<{ label: string; value: number; lower: number; upper: number }>;
   /** forecast_chart 的方法说明，必须原样展示给用户 */
   note?: string;
+}
+
+function seriesColors(chart: ChartSpec) {
+  return [
+    { name: chart.yLabel || '值', values: chart.series.map((point) => point.value), color: '#45c8c3' },
+    ...(chart.extraSeries ?? [])
+      .filter((extra) => extra.values.length === chart.series.length)
+      .map((extra, index) => ({ name: extra.name, values: extra.values, color: COLORS[(index + 1) % COLORS.length] })),
+  ];
+}
+
+function heatmapOf(chart: ChartSpec) {
+  if (chart.heatmap?.xLabels.length && chart.heatmap.yLabels.length) return chart.heatmap;
+  // Agent 侧切到热力时如果只带了单序列，就把「数值列 × 分类」摊成一行热力带，
+  // 而不是弹空图——工具条的类型切换必须始终有结果。
+  const list = seriesColors(chart);
+  if (!chart.series.length) return null;
+  return {
+    xLabels: chart.series.map((point) => point.label || '—'),
+    yLabels: list.map((entry) => entry.name),
+    values: list.map((entry) => entry.values),
+    valueLabel: chart.yLabel,
+  };
+}
+
+function scatterOf(chart: ChartSpec, maxPoints: number) {
+  if (chart.scatter?.length) return chart.scatter.slice(0, maxPoints);
+  return chart.series.slice(0, maxPoints).map((point, index) => {
+    const numeric = Number(point.label);
+    return { x: Number.isFinite(numeric) ? numeric : index + 1, y: point.value, label: point.label };
+  });
 }
 
 const COLORS = ['#45c8c3', '#e0af63', '#a9c97e', '#8fa8f0', '#e58cb0', '#c48fc8', '#6e9fbf', '#d98e6e'];
@@ -74,11 +109,18 @@ export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, z
     />
   );
 
-  const body = type === 'pie' ? (
-    <PieBody chart={chart} maxPoints={maxPoints} />
-  ) : (
-    <AxisBody chart={chart} type={type} maxPoints={maxPoints} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} />
-  );
+  const body =
+    type === 'pie' ? (
+      <PieBody chart={chart} maxPoints={maxPoints} />
+    ) : type === 'scatter' ? (
+      <ScatterBody chart={chart} maxPoints={maxPoints} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} />
+    ) : type === 'heatmap' ? (
+      <HeatmapBody chart={chart} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} />
+    ) : type === 'radar' ? (
+      <RadarBody chart={chart} maxPoints={maxPoints} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} />
+    ) : (
+      <AxisBody chart={chart} type={type} maxPoints={maxPoints} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} />
+    );
 
   return (
     <div
@@ -155,6 +197,197 @@ function PieBody({ chart, maxPoints }: { chart: ChartSpec; maxPoints: number }) 
   );
 }
 
+function SeriesLegend({ series }: { series: Array<{ name: string; color: string }> }) {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, padding: '0 4px 2px', fontSize: 11, color: 'var(--text-secondary)' }} data-testid="chart-series-legend">
+      {series.map((entry) => (
+        <span key={entry.name} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <i style={{ width: 8, height: 8, borderRadius: 2, background: entry.color, display: 'inline-block' }} />
+          {entry.name}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function ScatterBody({ chart, maxPoints, zoomed, svgRef, maxHeight }: { chart: ChartSpec; maxPoints: number; zoomed: boolean; svgRef: RefObject<SVGSVGElement>; maxHeight?: number }) {
+  const measured = useElementWidth(svgRef, zoomed ? 720 : 380);
+  const points = scatterOf(chart, maxPoints);
+  if (!points.length) {
+    return <div className="dash-empty" data-testid="chart-empty">没有可绘制的散点（x/y 需要同时为数值）。</div>;
+  }
+  const width = zoomed ? 720 : Math.max(260, Math.round(measured));
+  const naturalHeight = Math.round(width * (zoomed ? 320 / 720 : 176 / 380));
+  const height = zoomed ? 320 : maxHeight !== undefined ? Math.max(140, Math.min(350, maxHeight)) : Math.max(140, Math.min(chartHeightCap(), naturalHeight));
+  const pad = { left: 46, right: 14, top: 12, bottom: 30 };
+  const innerW = width - pad.left - pad.right;
+  const innerH = height - pad.top - pad.bottom;
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const bloom = (lo: number, hi: number): [number, number] => {
+    if (lo === hi) return [lo - 0.5, hi + 0.5];
+    const margin = (hi - lo) * 0.06;
+    return [lo - margin, hi + margin];
+  };
+  const [xMin, xMax] = bloom(Math.min(...xs), Math.max(...xs));
+  const [yMin, yMax] = bloom(Math.min(...ys), Math.max(...ys));
+  const sx = (value: number) => pad.left + ((value - xMin) / (xMax - xMin || 1)) * innerW;
+  const sy = (value: number) => pad.top + innerH - ((value - yMin) / (yMax - yMin || 1)) * innerH;
+  const xTicks = [0, 0.25, 0.5, 0.75, 1];
+  return (
+    <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} className="chart-svg" role="img" aria-label={chart.title} data-testid="chart-svg" data-scatter="true">
+      {xTicks.map((ratio) => {
+        const gy = pad.top + innerH * ratio;
+        return (
+          <g key={`y-${ratio}`}>
+            <line x1={pad.left} x2={width - pad.right} y1={gy} y2={gy} className="chart-grid" />
+            <text x={pad.left - 5} y={gy + 3} textAnchor="end" className="chart-axis">{formatTick(yMax - (yMax - yMin) * ratio)}</text>
+          </g>
+        );
+      })}
+      {xTicks.map((ratio) => (
+        <text key={`x-${ratio}`} x={pad.left + innerW * ratio} y={height - 9} textAnchor="middle" className="chart-axis">
+          {formatTick(xMin + (xMax - xMin) * ratio)}
+        </text>
+      ))}
+      <g data-testid="chart-scatter">
+        {points.map((point, index) => (
+          <circle key={`${point.label ?? point.x}-${index}`} cx={sx(point.x)} cy={sy(point.y)} r={zoomed ? 3.2 : 2.8} fill={COLORS[0]} fillOpacity={0.82}>
+            <title>{`${point.label ? `${point.label} · ` : ''}${point.x.toLocaleString()}, ${point.y.toLocaleString()}`}</title>
+          </circle>
+        ))}
+      </g>
+    </svg>
+  );
+}
+
+function HeatmapBody({ chart, zoomed, svgRef, maxHeight }: { chart: ChartSpec; zoomed: boolean; svgRef: RefObject<SVGSVGElement>; maxHeight?: number }) {
+  const measured = useElementWidth(svgRef, zoomed ? 720 : 380);
+  const matrix = heatmapOf(chart);
+  if (!matrix || !matrix.xLabels.length || !matrix.yLabels.length) {
+    return <div className="dash-empty" data-testid="chart-empty">热力图需要一组行/列分类和一个数值度量。</div>;
+  }
+  const width = zoomed ? 720 : Math.max(300, Math.round(measured));
+  const labelW = Math.min(112, Math.max(46, Math.max(...matrix.yLabels.map((label) => Math.min(12, label.length))) * 7.4 + 10));
+  const pad = { left: labelW, right: 12, top: 8, bottom: 30 };
+  const cellW = Math.max(10, (width - pad.left - pad.right) / matrix.xLabels.length);
+  const cap = maxHeight ?? (zoomed ? 320 : 300);
+  const cellH = Math.max(13, Math.min(32, (cap - pad.top - pad.bottom) / matrix.yLabels.length));
+  const height = Math.round(pad.top + pad.bottom + cellH * matrix.yLabels.length);
+  const flat = matrix.values.flat().filter((value) => Number.isFinite(value));
+  const hi = Math.max(1, ...flat);
+  const lo = Math.min(0, ...flat);
+  const showValues = cellW >= 28 && cellH >= 15;
+  return (
+    <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} className="chart-svg" role="img" aria-label={chart.title} data-testid="chart-svg" data-heatmap="true">
+      {matrix.yLabels.map((label, row) => (
+        <text key={`y-${label}`} x={pad.left - 6} y={pad.top + cellH * row + cellH / 2 + 3} textAnchor="end" className="chart-axis">
+          {label.length > 12 ? `${label.slice(0, 12)}…` : label}
+        </text>
+      ))}
+      {matrix.yLabels.map((yLabelOfRow, row) =>
+        matrix.xLabels.map((xLabel, column) => {
+          const value = matrix.values[row]?.[column];
+          const numeric = Number.isFinite(value) ? value : 0;
+          const ratio = (numeric - lo) / (hi - lo || 1);
+          return (
+            <g key={`${xLabel}-${yLabelOfRow}`}>
+              <rect
+                data-testid="chart-heatmap-cell"
+                x={pad.left + column * cellW + 1}
+                y={pad.top + row * cellH + 1}
+                width={Math.max(1, cellW - 2)}
+                height={Math.max(1, cellH - 2)}
+                rx={2}
+                fill={COLORS[0]}
+                fillOpacity={0.06 + ratio * 0.86}
+                stroke="rgba(128,136,132,.35)"
+                strokeWidth={0.5}
+              >
+                <title>{`${xLabel} · ${yLabelOfRow}: ${numeric.toLocaleString()}${matrix.valueLabel ? `（${matrix.valueLabel}）` : ''}`}</title>
+              </rect>
+              {showValues ? (
+                <text x={pad.left + column * cellW + cellW / 2} y={pad.top + row * cellH + cellH / 2 + 3} textAnchor="middle" className="chart-axis">
+                  {formatTick(numeric)}
+                </text>
+              ) : null}
+            </g>
+          );
+        }),
+      )}
+      {matrix.xLabels.map((label, column) => (
+        <text key={`x-${label}`} x={pad.left + column * cellW + cellW / 2} y={height - 10} textAnchor="middle" className="chart-axis">
+          {label.length > 10 ? `${label.slice(0, 10)}…` : label}
+        </text>
+      ))}
+    </svg>
+  );
+}
+
+function RadarBody({ chart, maxPoints, zoomed, svgRef, maxHeight }: { chart: ChartSpec; maxPoints: number; zoomed: boolean; svgRef: RefObject<SVGSVGElement>; maxHeight?: number }) {
+  const measured = useElementWidth(svgRef, zoomed ? 720 : 380);
+  const history = chart.series.slice(0, maxPoints);
+  if (history.length < 3) {
+    return <div className="dash-empty" data-testid="chart-empty">雷达图至少需要 3 个类别轴。</div>;
+  }
+  const extras = (chart.extraSeries ?? []).filter((extra) => extra.values.length >= history.length);
+  const seriesList = [
+    { name: chart.yLabel || '值', values: history.map((point) => point.value), color: COLORS[0] },
+    ...extras.map((extra, index) => ({ name: extra.name, values: extra.values.slice(0, history.length), color: COLORS[(index + 1) % COLORS.length] })),
+  ];
+  const width = zoomed ? 720 : Math.max(280, Math.round(measured));
+  const height = zoomed ? 320 : maxHeight !== undefined ? Math.max(180, Math.min(350, maxHeight)) : Math.max(180, Math.min(320, Math.round(width * 0.68)));
+  const cx = width / 2;
+  const cy = height / 2 + 4;
+  const radius = Math.max(40, Math.min(width, height) / 2 - 38);
+  const hi = Math.max(1, ...seriesList.flatMap((entry) => entry.values));
+  const count = history.length;
+  const angle = (index: number) => -Math.PI / 2 + (index * 2 * Math.PI) / count;
+  const at = (index: number, ratio: number) => [cx + Math.cos(angle(index)) * radius * ratio, cy + Math.sin(angle(index)) * radius * ratio] as const;
+  const polygon = (ratio: number) => history.map((_, index) => at(index, ratio).join(',')).join(' ');
+  return (
+    <>
+      <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} className="chart-svg" role="img" aria-label={chart.title} data-testid="chart-svg" data-radar="true">
+        {[0.25, 0.5, 0.75, 1].map((ratio) => (
+          <polygon key={ratio} points={polygon(ratio)} className="chart-grid" fill="none" />
+        ))}
+        {history.map((point, index) => {
+          const [x, y] = at(index, 1);
+          const [labelX, labelY] = at(index, 1.14);
+          const anchor = Math.cos(angle(index)) > 0.25 ? 'start' : Math.cos(angle(index)) < -0.25 ? 'end' : 'middle';
+          return (
+            <g key={point.label}>
+              <line x1={cx} y1={cy} x2={x} y2={y} className="chart-grid" />
+              <text x={labelX} y={labelY + 3} textAnchor={anchor} className="chart-axis">{point.label.length > 9 ? `${point.label.slice(0, 9)}…` : point.label}</text>
+            </g>
+          );
+        })}
+        {seriesList.map((entry) => (
+          <g key={entry.name} data-testid="chart-radar-shape">
+            <polygon
+              points={entry.values.map((value, index) => at(index, Math.max(0, Math.min(1, value / hi))).join(',')).join(' ')}
+              fill={entry.color}
+              fillOpacity={0.14}
+              stroke={entry.color}
+              strokeWidth={2}
+              strokeLinejoin="round"
+            />
+            {entry.values.map((value, index) => {
+              const [x, y] = at(index, Math.max(0, Math.min(1, value / hi)));
+              return (
+                <circle key={`${entry.name}-${index}`} cx={x} cy={y} r={2.4} fill={entry.color}>
+                  <title>{`${entry.name} · ${history[index].label}: ${value.toLocaleString()}`}</title>
+                </circle>
+              );
+            })}
+          </g>
+        ))}
+      </svg>
+      {seriesList.length > 1 ? <SeriesLegend series={seriesList} /> : null}
+    </>
+  );
+}
+
 interface AxisBodyProps {
   chart: ChartSpec;
   type: ChartType;
@@ -195,8 +428,9 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
   const history = chart.series.slice(0, maxPoints);
   const extras = (chart.extraSeries ?? []).filter((extra) => extra.values.length === history.length);
   const multi = extras.length > 0;
-  const stacked = type === 'bar' && multi && chart.stacked === true;
-  const dual = multi && chart.dualAxis === true && extras.length === 1 && !stacked;
+  const isBar = type === 'bar' || type === 'stacked';
+  const stacked = isBar && multi && (type === 'stacked' || chart.stacked === true);
+  const dual = isBar && multi && chart.dualAxis === true && extras.length === 1 && !stacked;
   const seriesList = [
     { name: chart.yLabel, values: history.map((point) => point.value), color: '#45c8c3' },
     ...extras.map((extra, index) => ({ name: extra.name, values: extra.values, color: COLORS[(index + 1) % COLORS.length] })),
@@ -307,7 +541,7 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
         );
       })}
       {lo < 0 ? <line x1={pad.left} x2={width - pad.right} y1={y(0)} y2={y(0)} className="chart-zero" /> : null}
-      {type === 'bar' && (!multi || dual)
+      {isBar && (!multi || dual)
         ? history.map((point, index) => {
             const top = y(Math.max(point.value, 0));
             const bottom = y(Math.min(point.value, 0));
@@ -330,7 +564,7 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
             );
           })
         : null}
-      {type === 'bar' && multi && !stacked && !dual
+      {isBar && multi && !stacked && !dual
         ? history.map((point, index) => {
             const groupWidth = Math.min(band * 0.82, 96);
             const barWidth = groupWidth / seriesList.length;
@@ -355,7 +589,7 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
             });
           })
         : null}
-      {type === 'bar' && multi && stacked
+      {isBar && multi && stacked
         ? history.map((point, index) => {
             let positive = 0;
             let negative = 0;
@@ -444,16 +678,7 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight }: AxisBod
         ) : null,
       )}
     </svg>
-    {multi ? (
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, padding: '0 4px 2px', fontSize: 11, color: 'var(--text-secondary)' }} data-testid="chart-series-legend">
-        {seriesList.map((entry) => (
-          <span key={entry.name} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <i style={{ width: 8, height: 8, borderRadius: 2, background: entry.color, display: 'inline-block' }} />
-            {entry.name}
-          </span>
-        ))}
-      </div>
-    ) : null}
+    {multi ? <SeriesLegend series={seriesList} /> : null}
     </>
   );
 }

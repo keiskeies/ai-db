@@ -93,7 +93,6 @@ export class SkillWorker {
     const manifest = this.skills.getManifest(skillId);
     if (!manifest?.entrypoints?.length) throw Object.assign(new Error('Skill 未声明 aidb.skill.json entrypoints'), { code: 'SKILL_MANIFEST_REQUIRED', status: 400 });
     const settings = this.store.getSettings();
-    if (!settings.features.skills) throw Object.assign(new Error('Skill Host 已在设置中关闭'), { code: 'FEATURE_DISABLED', status: 403 });
     if (settings.agent.provider === 'local') throw Object.assign(new Error('Skill Worker 需要配置模型'), { code: 'MODEL_REQUIRED', status: 400 });
     const provider = this.providerFactory(settings.agent);
     const run = this.runner.createRun(skillId);

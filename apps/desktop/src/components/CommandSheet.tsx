@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Play, RotateCcw, X } from 'lucide-react';
 import type { ArtifactInfo, CommandDefinition, CommandRunEvent, CommandRunInfo, CommandRunInput, CommandSourceInput, NotificationChannelInfo } from '@aidb/core';
 import { api, streamCommandRun, type SkillWorkerRun } from '../lib/api';
@@ -12,6 +12,7 @@ import { RiskBadge } from './ui';
 
 interface Props {
   command: CommandDefinition;
+  initialText?: string;
   onClose: () => void;
 }
 
@@ -102,26 +103,37 @@ function defaultValues(command: CommandDefinition): Record<string, unknown> {
   return values;
 }
 
-function initialSources(command: CommandDefinition, connections: Array<{ id: string; name: string; database?: string }>, activeId?: string): CommandSourceInput[] {
+function initialSources(command: CommandDefinition, connections: Array<{ id: string; name: string; database?: string }>, activeId?: string, activeDatabase?: string): CommandSourceInput[] {
   const first = connections.find((connection) => connection.id === activeId) ?? connections[0];
   const second = connections.find((connection) => connection.id !== first?.id) ?? first;
   const count = Math.max(command.sources.min, first ? 1 : 0);
   const picks = count >= 2 ? [first, second] : [first];
   return picks.filter(Boolean).map((connection, index) => ({
     connectionId: connection!.id,
-    database: connection!.database,
+    database: connection!.id === activeId && activeDatabase ? activeDatabase : connection!.database,
     label: connection!.name || `源 ${index + 1}`,
   }));
 }
 
-export function CommandSheet({ command, onClose }: Props) {
+export function CommandSheet({ command, initialText, onClose }: Props) {
   const connections = useApp((s) => s.connections);
   const activeConnectionId = useApp((s) => s.activeConnectionId);
+  const activeDatabase = useApp((s) => s.agentDatabase);
   const schemas = useApp((s) => s.schemas);
   const notify = useApp((s) => s.notify);
   const features = useApp((s) => s.settings.features);
-  const [sources, setSources] = useState<CommandSourceInput[]>(() => initialSources(command, connections, activeConnectionId));
-  const [values, setValues] = useState<Record<string, unknown>>(() => defaultValues(command));
+  const [sources, setSources] = useState<CommandSourceInput[]>(() => initialSources(command, connections, activeConnectionId, activeDatabase));
+  const [values, setValues] = useState<Record<string, unknown>>(() => {
+    const base = defaultValues(command);
+    const text = initialText?.trim();
+    if (text) {
+      if ('topic' in base) base.topic = text;
+      if ('metric' in base) base.metric = text;
+    }
+    return base;
+  });
+  const quick = Boolean(initialText?.trim()) && command.id === 'report' && connections.length > 0;
+  const autoStarted = useRef(false);
   const [running, setRunning] = useState(false);
   const [run, setRun] = useState<CommandRunInfo | null>(null);
   const [events, setEvents] = useState<CommandRunEvent[]>([]);
@@ -152,7 +164,7 @@ export function CommandSheet({ command, onClose }: Props) {
 
   useEffect(() => {
     if (sources.length || !connections.length) return;
-    setSources(initialSources(command, connections, activeConnectionId));
+    setSources(initialSources(command, connections, activeConnectionId, activeDatabase));
   }, [connections, activeConnectionId, command, sources.length]);
 
   const refreshRecent = async () => {
@@ -353,6 +365,13 @@ export function CommandSheet({ command, onClose }: Props) {
       setRunning(false);
     }
   };
+
+  useEffect(() => {
+    if (!quick || autoStarted.current || !sources.length) return;
+    autoStarted.current = true;
+    void start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quick, sources.length]);
 
   const rerun = async () => {
     if (!artifactId || running) return;
@@ -757,8 +776,9 @@ export function CommandSheet({ command, onClose }: Props) {
         </div>
         <div className="modal-body" style={{ display: 'flex', gap: 14, minHeight: 0 }}>
           <div className="tool-pane" style={{ flex: 1, minWidth: 0 }}>
-            <div className="muted" style={{ fontSize: 11, marginBottom: 8 }}>{command.description.zh}</div>
-            <div className="tool-scroll" style={{ padding: 0 }}>
+            <div className="muted" style={{ display: quick ? 'none' : undefined, fontSize: 11, marginBottom: 8 }}>{command.description.zh}</div>
+            {quick ? <div className="muted" style={{ fontSize: 11, lineHeight: 1.7, marginBottom: 8 }}>已使用当前连接与报告主题自动运行。</div> : null}
+            <div className="tool-scroll" style={{ display: quick ? 'none' : undefined, padding: 0 }}>
               <div className="field">
                 <label>数据源</label>
                 {sources.map((source, index) => (

@@ -85,7 +85,7 @@ export class AnthropicProvider implements LlmProvider {
         ...(thinking ? { thinking: { type: 'enabled', budget_tokens: thinking } } : {}),
         system: req.system,
         messages: toAnthropicMessages(req.messages),
-        tools: req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })),
+        ...(req.tools.length ? { tools: req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })) } : {}),
         stream: true,
       }),
       signal,

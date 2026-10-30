@@ -14,6 +14,7 @@ import {
   Palette,
   Plus,
   RefreshCw,
+  Search,
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
@@ -57,6 +58,7 @@ export function SettingsModal() {
   const revokeDevice = useApp((s) => s.revokeDevice);
 
   const [tab, setTab] = useState<TabKey>('appearance');
+  const [navQuery, setNavQuery] = useState('');
   const [form, setForm] = useState<AppSettings>(settings);
   const [apiKey, setApiKey] = useState('');
   const [audit, setAudit] = useState<AuditEntry[]>([]);
@@ -205,17 +207,39 @@ export function SettingsModal() {
     }
   };
 
-  const nav: Array<{ key: TabKey; label: string; icon: React.ReactNode }> = [
-    { key: 'appearance', label: t('appearance'), icon: <Palette size={14} /> },
-    { key: 'query', label: t('editor'), icon: <SlidersHorizontal size={14} /> },
-    { key: 'agent', label: t('agentSettings'), icon: <Bot size={14} /> },
-    { key: 'skills', label: 'Skills', icon: <BookOpen size={14} /> },
-    { key: 'mcp', label: 'MCP', icon: <Plug size={14} /> },
-    { key: 'notify', label: '通知', icon: <Bell size={14} /> },
-    { key: 'bridge', label: t('bridge'), icon: <Network size={14} /> },
-    { key: 'data', label: t('dataSettings'), icon: <Database size={14} /> },
-    { key: 'about', label: t('about'), icon: <Info size={14} /> },
+  const navGroups: Array<{ label: string; items: Array<{ key: TabKey; label: string; icon: React.ReactNode; keywords?: string }> }> = [
+    {
+      label: '基础',
+      items: [
+        { key: 'appearance', label: t('appearance'), icon: <Palette size={14} />, keywords: '主题 颜色 语言 theme' },
+        { key: 'query', label: t('editor'), icon: <SlidersHorizontal size={14} />, keywords: '查询 超时 行数 SQL 编辑器' },
+        { key: 'agent', label: '模型', icon: <Bot size={14} />, keywords: 'Agent provider api key 温度 推理 模型' },
+      ],
+    },
+    {
+      label: '集成与连接',
+      items: [{ key: 'notify', label: '通知与机器人', icon: <Bell size={14} />, keywords: '通知 机器人 飞书 企微 微信 钉钉 Slack Discord Telegram QQ' }],
+    },
+    {
+      label: '能力扩展',
+      items: [
+        { key: 'skills', label: 'Agent Skills', icon: <BookOpen size={14} />, keywords: '技能 技能包 PPT Master 内置' },
+        { key: 'mcp', label: 'MCP 与工具', icon: <Plug size={14} />, keywords: 'MCP 工具 外部 Server' },
+      ],
+    },
+    {
+      label: '系统',
+      items: [
+        { key: 'bridge', label: t('bridge'), icon: <Network size={14} />, keywords: '网关 配对 移动端 连接' },
+        { key: 'data', label: '数据与备份', icon: <Database size={14} />, keywords: '数据 备份 导出 导入' },
+        { key: 'about', label: t('about'), icon: <Info size={14} />, keywords: '关于 版本 许可 依赖' },
+      ],
+    },
   ];
+  const navText = navQuery.trim().toLowerCase();
+  const visibleNavGroups = navGroups
+    .map((group) => ({ ...group, items: group.items.filter((item) => !navText || `${item.label} ${item.keywords ?? ''}`.toLowerCase().includes(navText)) }))
+    .filter((group) => group.items.length > 0);
 
   const savable = tab === 'appearance' || tab === 'query' || tab === 'agent';
 
@@ -232,12 +256,23 @@ export function SettingsModal() {
         </div>
         <div className="settings-layout" style={{ flex: 1, minHeight: 0 }}>
           <nav className="settings-nav">
-            {nav.map((item) => (
-              <button key={item.key} className={tab === item.key ? 'active' : ''} onClick={() => setTab(item.key)}>
-                {item.icon}
-                {item.label}
-              </button>
+            <button className="settings-back" onClick={() => setOpen(false)}>← 返回工作区</button>
+            <div className="settings-nav-search">
+              <Search size={12} />
+              <input value={navQuery} onChange={(e) => setNavQuery(e.target.value)} placeholder="搜索设置…" />
+            </div>
+            {visibleNavGroups.map((group) => (
+              <div className="settings-nav-group" key={group.label}>
+                <div className="settings-nav-label">{group.label}</div>
+                {group.items.map((item) => (
+                  <button key={item.key} className={tab === item.key ? 'active' : ''} onClick={() => setTab(item.key)}>
+                    {item.icon}
+                    {item.label}
+                  </button>
+                ))}
+              </div>
             ))}
+            {!visibleNavGroups.length ? <div className="dash-empty">没有匹配的设置。</div> : null}
           </nav>
           <div className="settings-content">
             {tab === 'appearance' ? (
@@ -257,13 +292,6 @@ export function SettingsModal() {
                     <select className="select" value={form.locale} onChange={(e) => setForm({ ...form, locale: e.target.value as AppSettings['locale'] })}>
                       <option value="zh">中文</option>
                       <option value="en">English</option>
-                    </select>
-                  </div>
-                  <div className="field">
-                    <label>密度</label>
-                    <select className="select" value={form.density} onChange={(e) => setForm({ ...form, density: e.target.value as AppSettings['density'] })}>
-                      <option value="compact">紧凑</option>
-                      <option value="comfortable">舒适</option>
                     </select>
                   </div>
                 </div>
@@ -333,7 +361,7 @@ export function SettingsModal() {
             {tab === 'agent' ? (
               <>
                 <div className="settings-section settings-section-wide">
-                <h3>{t('agentSettings')}</h3>
+                <h3>模型</h3>
                 <div className="field">
                   <label>服务商快捷配置</label>
                   <div className="preset-groups">
@@ -582,7 +610,10 @@ export function SettingsModal() {
                       checked={settings.features.skills}
                       onChange={(e) => void saveSettings({ features: { ...settings.features, skills: e.target.checked } })}
                     />
-                    允许 Agent / Worker 使用 Skill 工具
+                    <span>
+                      允许 Agent 自动调用技能
+                      <span className="muted" style={{ display: 'block', fontSize: 10 }}>关闭后仍可在本页手动运行；Agent 看不到技能索引和 skill_* 工具。</span>
+                    </span>
                   </label>
                   <label className="row gap-6" style={{ alignItems: 'center', fontSize: 11 }}>
                     <input

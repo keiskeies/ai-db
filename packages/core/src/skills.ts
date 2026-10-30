@@ -7,6 +7,8 @@ export interface SkillSummary {
   enabled: boolean;
   /** 随 AiDB 内置的技能，卸载后不会被重新加回。 */
   builtin?: boolean;
+  /** 声明了 entrypoints，可在独立 Skill Worker 中运行。 */
+  runnable?: boolean;
   fileCount: number;
   updatedAt: string;
 }

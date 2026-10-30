@@ -153,7 +153,8 @@ interface AppStore {
   settingsOpen: boolean;
   paletteOpen: boolean;
   commandSheetId?: string;
-  openCommandSheet: (id: string) => void;
+  commandSheetText?: string;
+  openCommandSheet: (id: string, options?: { text?: string }) => void;
   closeCommandSheet: () => void;
   toolsOpen: boolean;
   toolsActive: string;
@@ -285,8 +286,9 @@ export const useApp = create<AppStore>((set, get) => ({
   toolsOpen: false,
   toolsActive: 'search',
   commandSheetId: undefined,
-  openCommandSheet: (id) => set({ commandSheetId: id, paletteOpen: false }),
-  closeCommandSheet: () => set({ commandSheetId: undefined }),
+  commandSheetText: undefined,
+  openCommandSheet: (id, options) => set({ commandSheetId: id, commandSheetText: options?.text, paletteOpen: false }),
+  closeCommandSheet: () => set({ commandSheetId: undefined, commandSheetText: undefined }),
   toasts: [],
   devices: [],
 

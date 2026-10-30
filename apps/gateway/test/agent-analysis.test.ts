@@ -173,3 +173,89 @@ test('render_chart supports multi-series comparison', async () => {
   assert.equal(chart.extraSeries[0].values.length, chart.series.length, '附加列必须与主序列等长');
   assert.equal(chart.stacked, true);
 });
+
+test('render_chart stacked type stacks without relying on the legacy flag', async () => {
+  const result = await run('render_chart', {
+    sql: 'SELECT status, COUNT(*) AS cnt, SUM(total_cents) AS gmv FROM orders GROUP BY status',
+    type: 'stacked',
+    ys: ['gmv'],
+  });
+  assert.equal(result.ok, true, result.error?.message);
+  const chart = (result.data as any).chart;
+  assert.equal(chart.type, 'stacked');
+  assert.equal(chart.stacked, true);
+});
+
+test('render_chart scatter keeps raw numeric x/y pairs and point labels', async () => {
+  const result = await run('render_chart', {
+    sql: 'SELECT total_cents, user_id, status FROM orders WHERE total_cents IS NOT NULL LIMIT 80',
+    type: 'scatter',
+    x: 'total_cents',
+    y: 'user_id',
+    label: 'status',
+  });
+  assert.equal(result.ok, true, result.error?.message);
+  const chart = (result.data as any).chart;
+  assert.equal(chart.type, 'scatter');
+  assert.equal(chart.scatter.length >= 2, true, '散点至少需要两个点');
+  assert.equal(chart.scatter.every((point: any) => Number.isFinite(point.x) && Number.isFinite(point.y)), true);
+  assert.equal(chart.scatter.some((point: any) => typeof point.label === 'string'), true, 'label 列应进入 tooltip');
+  assert.equal(chart.series.length <= 24, true);
+});
+
+test('render_chart scatter refuses a categorical x axis instead of faking one', async () => {
+  const result = await run('render_chart', {
+    sql: 'SELECT status, COUNT(*) AS cnt FROM orders GROUP BY status',
+    type: 'scatter',
+    x: 'status',
+    y: 'cnt',
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.error?.message ?? '', /散点图至少需要/);
+});
+
+test('render_chart heatmap builds a category × category matrix with summed cells', async () => {
+  const result = await run('render_chart', {
+    sql: 'SELECT status, channel, COUNT(*) AS cnt FROM orders GROUP BY status, channel',
+    type: 'heatmap',
+    x: 'status',
+    y: 'channel',
+    value: 'cnt',
+  });
+  assert.equal(result.ok, true, result.error?.message);
+  const chart = (result.data as any).chart;
+  assert.equal(chart.type, 'heatmap');
+  assert.equal(chart.heatmap.xLabels.length >= 2, true);
+  assert.equal(chart.heatmap.yLabels.length >= 2, true);
+  assert.equal(chart.heatmap.values.length, chart.heatmap.yLabels.length);
+  assert.equal(chart.heatmap.values.every((row: number[]) => row.length === chart.heatmap.xLabels.length), true);
+  assert.equal(chart.heatmap.values.flat().reduce((sum: number, cell: number) => sum + cell, 0) > 0, true);
+  assert.equal(chart.series.length, chart.heatmap.yLabels.length, '行合计用于切回其它图形');
+  assert.match(result.summary, /热力图/);
+});
+
+test('render_chart heatmap requires two categories and a numeric value', async () => {
+  const result = await run('render_chart', { sql: 'SELECT status FROM orders', type: 'heatmap' });
+  assert.equal(result.ok, false);
+  assert.match(result.error?.message ?? '', /热力图需要/);
+});
+
+test('render_chart radar keeps multiple measures and enforces three axes', async () => {
+  const result = await run('render_chart', {
+    sql: 'SELECT status, COUNT(*) AS cnt, SUM(total_cents) AS gmv FROM orders GROUP BY status',
+    type: 'radar',
+    ys: ['gmv'],
+  });
+  assert.equal(result.ok, true, result.error?.message);
+  const chart = (result.data as any).chart;
+  assert.equal(chart.type, 'radar');
+  assert.equal(chart.series.length >= 3, true);
+  assert.equal(chart.extraSeries?.length, 1);
+
+  const tooFew = await run('render_chart', {
+    sql: "SELECT 'a' AS k, 1 AS v UNION ALL SELECT 'b', 2",
+    type: 'radar',
+  });
+  assert.equal(tooFew.ok, false);
+  assert.match(tooFew.error?.message ?? '', /3 个类别轴/);
+});
