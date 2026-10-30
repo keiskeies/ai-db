@@ -6,6 +6,9 @@ import {
   Info,
   KeyRound,
   ListChecks,
+  BookOpen,
+  Bell,
+  Plug,
   Loader2,
   Network,
   Palette,
@@ -34,8 +37,11 @@ import { api, TOKEN } from '../lib/api';
 import { formatBytes, formatRelative } from '../lib/format';
 import { useApp } from '../store';
 import { RiskBadge } from './ui';
+import { SkillsTool } from './tools/SkillsTool';
+import { McpTool } from './tools/McpTool';
+import { NotificationsTool } from './tools/NotificationsTool';
 
-type TabKey = 'appearance' | 'query' | 'agent' | 'bridge' | 'data' | 'about';
+type TabKey = 'appearance' | 'query' | 'agent' | 'skills' | 'mcp' | 'notify' | 'bridge' | 'data' | 'about';
 
 export function SettingsModal() {
   const open = useApp((s) => s.settingsOpen);
@@ -203,6 +209,9 @@ export function SettingsModal() {
     { key: 'appearance', label: t('appearance'), icon: <Palette size={14} /> },
     { key: 'query', label: t('editor'), icon: <SlidersHorizontal size={14} /> },
     { key: 'agent', label: t('agentSettings'), icon: <Bot size={14} /> },
+    { key: 'skills', label: 'Skills', icon: <BookOpen size={14} /> },
+    { key: 'mcp', label: 'MCP', icon: <Plug size={14} /> },
+    { key: 'notify', label: '通知', icon: <Bell size={14} /> },
     { key: 'bridge', label: t('bridge'), icon: <Network size={14} /> },
     { key: 'data', label: t('dataSettings'), icon: <Database size={14} /> },
     { key: 'about', label: t('about'), icon: <Info size={14} /> },
@@ -288,6 +297,28 @@ export function SettingsModal() {
                       onChange={(e) => setForm({ ...form, queryTimeoutMs: Number(e.target.value) })}
                     />
                   </div>
+                  <div className="field">
+                    <label>历史保留条数</label>
+                    <input
+                      className="input"
+                      type="number"
+                      min={10}
+                      max={100000}
+                      value={form.historyLimit}
+                      onChange={(e) => setForm({ ...form, historyLimit: Number(e.target.value) })}
+                    />
+                  </div>
+                  <div className="field">
+                    <label>历史保留天数</label>
+                    <input
+                      className="input"
+                      type="number"
+                      min={0}
+                      max={3650}
+                      value={form.historyRetentionDays}
+                      onChange={(e) => setForm({ ...form, historyRetentionDays: Number(e.target.value) })}
+                    />
+                  </div>
                 </div>
                 <label className="checkbox">
                   <input type="checkbox" checked={form.autoLimit} onChange={(e) => setForm({ ...form, autoLimit: e.target.checked })} /> {t('autoLimit')}
@@ -295,7 +326,7 @@ export function SettingsModal() {
                 <label className="checkbox">
                   <input type="checkbox" checked={form.allowMultiStatement} onChange={(e) => setForm({ ...form, allowMultiStatement: e.target.checked })} /> {t('allowMulti')}
                 </label>
-                <p className="desc">多语句默认关闭；关闭时服务端会拒绝一次执行多条 SQL，避免误操作。</p>
+                <p className="desc">多语句默认关闭；关闭时服务端会拒绝一次执行多条 SQL，避免误操作。收藏的历史不会被条数或天数裁剪；天数填 0 表示不按时间清理。</p>
               </div>
             ) : null}
 
@@ -467,6 +498,19 @@ export function SettingsModal() {
                     <label>上下文压缩阈值（tokens）</label>
                     <input className="input" type="number" min={4000} step={1000} value={form.agent.compactionThreshold} onChange={(e) => setAgent({ compactionThreshold: Number(e.target.value) })} />
                   </div>
+                  <div className="field">
+                    <label>大 schema 候选表检索</label>
+                    <select
+                      className="select"
+                      value={form.agent.schemaFocus ?? 'auto'}
+                      onChange={(e) => setAgent({ schemaFocus: e.target.value as 'auto' | 'on' | 'off' })}
+                      data-testid="settings-schema-focus"
+                    >
+                      <option value="auto">自动（超过 150 表或 2500 列）</option>
+                      <option value="on">总是开启</option>
+                      <option value="off">关闭</option>
+                    </select>
+                  </div>
                 </div>
                 <label className="checkbox">
                   <input type="checkbox" checked={form.agent.autoMemory} onChange={(e) => setAgent({ autoMemory: e.target.checked })} />
@@ -528,6 +572,46 @@ export function SettingsModal() {
                 </div>
               </>
             ) : null}
+
+            {tab === 'skills' ? (
+              <div className="settings-embed-column">
+                <div className="settings-feature-bar">
+                  <label className="row gap-6" style={{ alignItems: 'center', fontSize: 11 }}>
+                    <input
+                      type="checkbox"
+                      checked={settings.features.skills}
+                      onChange={(e) => void saveSettings({ features: { ...settings.features, skills: e.target.checked } })}
+                    />
+                    允许 Agent / Worker 使用 Skill 工具
+                  </label>
+                  <label className="row gap-6" style={{ alignItems: 'center', fontSize: 11 }}>
+                    <input
+                      type="checkbox"
+                      checked={settings.features.reportDeck}
+                      onChange={(e) => void saveSettings({ features: { ...settings.features, reportDeck: e.target.checked } })}
+                    />
+                    启用 AI PPT（报告 → 原生 PPTX，需 PPT Master）
+                  </label>
+                </div>
+                <div className="settings-embed"><SkillsTool /></div>
+              </div>
+            ) : null}
+            {tab === 'mcp' ? (
+              <div className="settings-embed-column">
+                <div className="settings-feature-bar">
+                  <label className="row gap-6" style={{ alignItems: 'center', fontSize: 11 }}>
+                    <input
+                      type="checkbox"
+                      checked={settings.features.mcp}
+                      onChange={(e) => void saveSettings({ features: { ...settings.features, mcp: e.target.checked } })}
+                    />
+                    允许 Agent 调用已配置的 MCP Server
+                  </label>
+                </div>
+                <div className="settings-embed"><McpTool /></div>
+              </div>
+            ) : null}
+            {tab === 'notify' ? <div className="settings-embed"><NotificationsTool /></div> : null}
 
             {tab === 'bridge' ? (
               <div className="settings-section">

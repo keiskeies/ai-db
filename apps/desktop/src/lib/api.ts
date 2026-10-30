@@ -5,17 +5,31 @@ import type {
   AgentMessage,
   AgentSessionMeta,
   AppSettings,
+  ArtifactInfo,
+  ArtifactRunInfo,
+  ArtifactScheduleInfo,
   AuditEntry,
   BackupInfo,
+  CommandDefinition,
+  CommandRunEvent,
+  CommandRunInfo,
+  CommandRunInput,
   ConnectionConfig,
   DatabaseSchema,
   DeviceInfo,
+  McpServerInfo,
   Memory,
   ModelInfo,
+  NotificationChannelInfo,
+  NotificationChannelType,
   QueryBatchResult,
   QuestionSuggestion,
   QueryResult,
   RedisKeyDetail,
+  SkillDetail,
+  SkillReadResult,
+  SkillRunFile,
+  SkillSummary,
   TableInfo,
 } from '@aidb/core';
 
@@ -174,6 +188,88 @@ export interface StoredAttachment {
   bytes: number;
 }
 
+export async function streamCommandRun(
+  runId: string,
+  onEvent: (event: CommandRunEvent) => void,
+  after = 0,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`/api/commands/runs/${encodeURIComponent(runId)}/events?after=${after}`, {
+    headers: { authorization: `Bearer ${TOKEN}` },
+    signal,
+  });
+  if (!res.ok || !res.body) throw new ApiError(`命令进度读取失败（${res.status}）`, { code: 'COMMAND_STREAM', status: res.status });
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
+    let idx = buffer.indexOf('\n\n');
+    while (idx !== -1) {
+      const frame = buffer.slice(0, idx).trim();
+      buffer = buffer.slice(idx + 2);
+      if (frame && !frame.startsWith(':')) {
+        const data = frame
+          .split('\n')
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trim())
+          .join('\n');
+        if (data) {
+          try {
+            onEvent(JSON.parse(data) as CommandRunEvent);
+          } catch {
+            /* ignore malformed frame */
+          }
+        }
+      }
+      idx = buffer.indexOf('\n\n');
+    }
+  }
+}
+
+export async function streamSkillRun(
+  runId: string,
+  onEvent: (event: SkillWorkerEvent) => void,
+  after = 0,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`/api/skills/runs/${encodeURIComponent(runId)}/events?after=${after}`, {
+    headers: { authorization: `Bearer ${TOKEN}` },
+    signal,
+  });
+  if (!res.ok || !res.body) throw new ApiError(`Skill 进度读取失败（${res.status}）`, { code: 'SKILL_STREAM', status: res.status });
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
+    let idx = buffer.indexOf('\n\n');
+    while (idx !== -1) {
+      const frame = buffer.slice(0, idx).trim();
+      buffer = buffer.slice(idx + 2);
+      if (frame && !frame.startsWith(':')) {
+        const data = frame
+          .split('\n')
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trim())
+          .join('\n');
+        if (data) {
+          try {
+            onEvent(JSON.parse(data) as SkillWorkerEvent);
+          } catch {
+            /* ignore malformed frame */
+          }
+        }
+      }
+      idx = buffer.indexOf('\n\n');
+    }
+  }
+}
+
 const attachmentUrls = new Map<string, string>();
 
 /** 图片走带令牌的 fetch 再转 object URL，避免把令牌暴露在 <img src> 里。 */
@@ -187,10 +283,98 @@ export async function attachmentObjectUrl(id: string): Promise<string> {
   return url;
 }
 
+export interface SkillWorkerRun {
+  runId: string;
+  skill: string;
+  status: 'running' | 'succeeded' | 'failed' | 'canceled';
+  text: string;
+  error?: string;
+  outputs: SkillRunFile[];
+  workspace?: string;
+  project?: string;
+  startedAt: string;
+  finishedAt?: string;
+}
+
+export type SkillWorkerEvent =
+  | AgentEvent
+  | { type: 'skill_question'; id: string; question: string; options?: string[] }
+  | { type: 'skill_answer'; id: string; answer: string }
+  | { type: 'skill_artifact'; workspace: string; files: SkillRunFile[] };
+
 export const api = {
   health: () => request<{ ok: boolean; version: string; demoReady: boolean }>('/health'),
   bootstrap: () => request<BootstrapData>('/bootstrap'),
   tools: () => request<{ tools: any[] }>('/agent/tools'),
+  commands: () => request<{ commands: CommandDefinition[] }>('/commands'),
+  startCommand: (id: string, input: CommandRunInput, saveAs?: { title?: string }) =>
+    request<{ run: CommandRunInfo }>(`/commands/${encodeURIComponent(id)}/runs`, {
+      method: 'POST',
+      body: JSON.stringify({ input, saveAs }),
+    }),
+  commandRun: (id: string) => request<{ run: CommandRunInfo }>(`/commands/runs/${encodeURIComponent(id)}`),
+  cancelCommandRun: (id: string) => request<{ ok: boolean }>(`/commands/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
+  artifacts: (params: { type?: string; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (params.type) q.set('type', params.type);
+    if (params.limit) q.set('limit', String(params.limit));
+    return request<{ artifacts: ArtifactInfo[] }>(`/artifacts${q.size ? `?${q.toString()}` : ''}`);
+  },
+  artifact: (id: string) => request<{ artifact: ArtifactInfo }>(`/artifacts/${encodeURIComponent(id)}`),
+  artifactRuns: (id: string, limit = 20) =>
+    request<{ runs: ArtifactRunInfo[] }>(`/artifacts/${encodeURIComponent(id)}/runs?limit=${limit}`),
+  rerunArtifact: (id: string) =>
+    request<{ run: CommandRunInfo }>(`/artifacts/${encodeURIComponent(id)}/runs`, { method: 'POST', body: JSON.stringify({}) }),
+  exportArtifact: (id: string, format: 'xlsx' | 'pptx') =>
+    request<{ path: string; rows: number; bytes: number; format: string }>(`/artifacts/${encodeURIComponent(id)}/export?format=${format}`),
+  artifactDeck: (id: string, body: { skill?: string; template?: string; mode?: 'deterministic' | 'agent' }) =>
+    request<{ run: { runId: string; skill: string; status: string } }>(`/artifacts/${encodeURIComponent(id)}/deck`, { method: 'POST', body: JSON.stringify(body) }),
+  artifactSchedule: (id: string) => request<{ schedule: ArtifactScheduleInfo | null }>(`/artifacts/${encodeURIComponent(id)}/schedule`),
+  executeReconRepair: (id: string, body: { confirm: string; steps?: number[] }) =>
+    request<{ executed: number; failed: number; backupPath?: string; verification?: { ok: boolean; missingInRight: number; extraInRight: number; valueChanged: number } }>(`/artifacts/${encodeURIComponent(id)}/recon/execute`, { method: 'POST', body: JSON.stringify(body) }),
+  executeFixPlan: (id: string, body: { confirm: string; backup: boolean; steps?: number[]; dryRun?: boolean }) =>
+    request<{ backupPath?: string; executed: number; failed: number; results: any[]; verification?: { ok: boolean; summary: string; findings: number }; transaction?: 'committed' | 'rolled_back' | 'none'; dryRun?: boolean }>(`/artifacts/${encodeURIComponent(id)}/fix/execute`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  setArtifactSchedule: (id: string, body: { intervalSeconds: number; enabled?: boolean; refreshNarrative?: boolean; notifyChannels?: string[] }) =>
+    request<{ schedule: ArtifactScheduleInfo }>(`/artifacts/${encodeURIComponent(id)}/schedule`, { method: 'POST', body: JSON.stringify(body) }),
+  skills: (includeDisabled = false) => request<{ skills: SkillSummary[] }>(`/skills?includeDisabled=${includeDisabled ? 1 : 0}`),
+  skill: (id: string) => request<{ skill: SkillDetail }>(`/skills/${encodeURIComponent(id)}`),
+  skillFile: (id: string, path: string) => request<SkillReadResult>(`/skills/${encodeURIComponent(id)}/file?path=${encodeURIComponent(path)}`),
+  importSkill: (body: { path?: string; zipBase64?: string; git?: string; npm?: string; ref?: string; subdir?: string; id?: string }) =>
+    request<{ skill: SkillSummary }>('/skills/import', { method: 'POST', body: JSON.stringify(body) }),
+  enableSkill: (id: string, enabled: boolean) =>
+    request<{ skill: SkillSummary }>(`/skills/${encodeURIComponent(id)}/enable`, { method: 'POST', body: JSON.stringify({ enabled }) }),
+  deleteSkill: (id: string) => request<void>(`/skills/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  skillSecrets: (id: string) => request<{ declared: string[]; set: string[] }>(`/skills/${encodeURIComponent(id)}/secrets`),
+  saveSkillSecrets: (id: string, secrets: Record<string, string>) =>
+    request<{ declared: string[]; set: string[] }>(`/skills/${encodeURIComponent(id)}/secrets`, { method: 'PUT', body: JSON.stringify({ secrets }) }),
+  deleteSkillSecret: (id: string, name: string) =>
+    request<{ declared: string[]; set: string[] }>(`/skills/${encodeURIComponent(id)}/secrets/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  startSkillRun: (id: string, prompt?: string) =>
+    request<{ run: { runId: string; skill: string; status: string } }>(`/skills/${encodeURIComponent(id)}/runs`, { method: 'POST', body: JSON.stringify({ prompt }) }),
+  skillRun: (runId: string) => request<{ run: SkillWorkerRun }>(`/skills/runs/${encodeURIComponent(runId)}`),
+  answerSkillQuestion: (runId: string, questionId: string, answer: string) =>
+    request<{ ok: boolean }>(`/skills/runs/${encodeURIComponent(runId)}/answers`, { method: 'POST', body: JSON.stringify({ questionId, answer }) }),
+  cancelSkillRun: (runId: string) => request<{ ok: boolean }>(`/skills/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' }),
+  mcpServers: () => request<{ servers: McpServerInfo[] }>('/mcp/servers'),
+  createMcpServer: (body: { name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }) =>
+    request<{ server: McpServerInfo }>('/mcp/servers', { method: 'POST', body: JSON.stringify(body) }),
+  updateMcpServer: (id: string, body: { name?: string; command?: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }) =>
+    request<{ server: McpServerInfo }>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteMcpServer: (id: string) => request<void>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  mcpTools: (id: string) => request<{ server: McpServerInfo; tools: Array<{ name: string; description?: string; inputSchema?: unknown }> }>(`/mcp/servers/${encodeURIComponent(id)}/tools`),
+  notificationChannels: () => request<{ channels: NotificationChannelInfo[] }>('/notifications/channels'),
+  createNotificationChannel: (body: { name: string; type: NotificationChannelType; config: Record<string, unknown>; enabled?: boolean }) =>
+    request<{ channel: NotificationChannelInfo }>('/notifications/channels', { method: 'POST', body: JSON.stringify(body) }),
+  updateNotificationChannel: (id: string, body: { name?: string; config?: Record<string, unknown>; enabled?: boolean }) =>
+    request<{ channel: NotificationChannelInfo }>(`/notifications/channels/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteNotificationChannel: (id: string) => request<void>(`/notifications/channels/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  testNotificationChannel: (id: string) =>
+    request<{ result: { ok: boolean; message: string; name: string } }>(`/notifications/channels/${encodeURIComponent(id)}/test`, { method: 'POST' }),
+  deleteArtifactSchedule: (id: string) => request<void>(`/artifacts/${encodeURIComponent(id)}/schedule`, { method: 'DELETE' }),
+  deleteArtifact: (id: string) => request<void>(`/artifacts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   connections: () => request<{ connections: ConnectionConfig[] }>('/connections'),
   createConnection: (body: Record<string, unknown>) => request<{ connection: ConnectionConfig }>('/connections', { method: 'POST', body: JSON.stringify(body) }),

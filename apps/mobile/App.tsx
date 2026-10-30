@@ -65,6 +65,7 @@ import {
   type BridgeConfig,
   type DataPage,
 } from './src/bridge';
+import { CommandSheet } from './src/CommandSheet';
 import { colors, modeLabels, radius, riskColor, riskLabels } from './src/theme';
 
 type TabKey = 'chat' | 'data' | 'connections' | 'memory' | 'settings';
@@ -300,6 +301,7 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
   const [memoryQuery, setMemoryQuery] = useState('');
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const sessionIdRef = useRef<string | undefined>(undefined);
@@ -681,6 +683,13 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
 
   return (
     <KeyboardAvoidingView style={styles.app} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <CommandSheet
+        visible={commandOpen}
+        onClose={() => setCommandOpen(false)}
+        bridge={client}
+        connections={connections}
+        activeConnectionId={activeConnectionId}
+      />
       <View style={[styles.topSafe, { paddingTop: insets.top }]} />
       <View style={styles.topbar}>
         <View style={styles.brandRow}>
@@ -717,6 +726,7 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
             onOpenSessions={() => setPicker('sessions')}
             onOpenConnections={() => setPicker('connections')}
             onOpenTables={() => setPicker('tables')}
+            onOpenCommands={() => setCommandOpen(true)}
             onOpenRecent={(id) => void openSession(id)}
             scrollRef={scrollRef}
             tables={tables}
@@ -1016,6 +1026,7 @@ function ChatScreen({
   onOpenSessions,
   onOpenConnections,
   onOpenTables,
+  onOpenCommands,
   onOpenRecent,
   scrollRef,
   tables,
@@ -1038,6 +1049,7 @@ function ChatScreen({
   onOpenSessions: () => void;
   onOpenConnections: () => void;
   onOpenTables: () => void;
+  onOpenCommands: () => void;
   onOpenRecent: (id: string) => void;
   scrollRef: React.RefObject<ScrollView>;
   tables: TableInfo[];
@@ -1158,6 +1170,9 @@ function ChatScreen({
           </View>
         </ScrollView>
         <View style={styles.inputBox}>
+          <Pressable style={styles.iconButton} onPress={onOpenCommands} testID="m-commands">
+            <TerminalSquare size={15} color={colors.accent} />
+          </Pressable>
           <Pressable style={styles.iconButton} onPress={onOpenTables}>
             <AtSign size={15} color={colors.muted} />
           </Pressable>

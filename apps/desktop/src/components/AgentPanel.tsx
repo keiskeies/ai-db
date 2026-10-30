@@ -30,7 +30,7 @@ import {
   Zap,
 } from 'lucide-react';
 import type { AgentMessageBlock, PermissionMode, QuestionSuggestion, Risk, TableInfo, ToolResult } from '@aidb/core';
-import { engineMeta, suggestionLabel } from '@aidb/core';
+import { COMMANDS, engineMeta, suggestionLabel } from '@aidb/core';
 import { getModelProfile, supportsInput } from '@aidb/core';
 import { api, attachmentObjectUrl, type StoredAttachment } from '../lib/api';
 import { deliverExport } from '../lib/exportDelivery';
@@ -555,6 +555,7 @@ export function AgentPanel() {
   const abortAgent = useApp((s) => s.abortAgent);
   const resolveApproval = useApp((s) => s.resolveApproval);
   const openMemory = useApp((s) => s.openMemory);
+  const openCommandSheet = useApp((s) => s.openCommandSheet);
   const clearPrefill = useApp((s) => s.clearPrefill);
   const setActiveConnection = useApp((s) => s.setActiveConnection);
   const openQuery = useApp((s) => s.openQuery);
@@ -989,6 +990,25 @@ export function AgentPanel() {
       ) : null}
       {popover === 'slash' ? (
         <div className="popover mention-popover">
+          {COMMANDS.filter((command) => command.id !== 'ask').filter((command) => {
+            const query = input.trim().replace(/^\//, '').toLowerCase();
+            if (!query) return true;
+            return command.id.startsWith(query) || command.aliases.some((alias) => alias.replace(/^\//, '').toLowerCase().startsWith(query)) || command.title.zh.includes(query);
+          }).map((command) => (
+            <button
+              key={command.id}
+              className="popover-item"
+              onClick={() => {
+                openCommandSheet(command.id);
+                setInput('');
+                setPopover('none');
+              }}
+            >
+              <TerminalSquare size={12} />
+              <span>/{command.id}</span>
+              <span className="k">{command.title.zh}</span>
+            </button>
+          ))}
           {SLASH.filter((c) => c.key.startsWith(input.trim())).map((c) => (
             <button key={c.key} className="popover-item" onClick={() => runSlash(c.key)}>
               <TerminalSquare size={12} />

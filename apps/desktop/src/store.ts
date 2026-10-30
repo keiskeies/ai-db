@@ -152,6 +152,9 @@ interface AppStore {
   memories: Memory[];
   settingsOpen: boolean;
   paletteOpen: boolean;
+  commandSheetId?: string;
+  openCommandSheet: (id: string) => void;
+  closeCommandSheet: () => void;
   toolsOpen: boolean;
   toolsActive: string;
   openTools: (tool?: string) => void;
@@ -281,6 +284,9 @@ export const useApp = create<AppStore>((set, get) => ({
   paletteOpen: false,
   toolsOpen: false,
   toolsActive: 'search',
+  commandSheetId: undefined,
+  openCommandSheet: (id) => set({ commandSheetId: id, paletteOpen: false }),
+  closeCommandSheet: () => set({ commandSheetId: undefined }),
   toasts: [],
   devices: [],
 

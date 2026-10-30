@@ -4,6 +4,10 @@ import type {
   AgentMessage,
   AgentSessionMeta,
   AppSettings,
+  ArtifactRunInfo,
+  CommandDefinition,
+  CommandRunInfo,
+  CommandRunInput,
   ConnectionConfig,
   DatabaseSchema,
   DeviceInfo,
@@ -149,6 +153,25 @@ export class BridgeClient {
 
   schema(connectionId: string) {
     return this.request<{ schemas: DatabaseSchema[] }>(`/connections/${connectionId}/schema`);
+  }
+
+  commands() {
+    return this.request<{ commands: CommandDefinition[] }>('/commands');
+  }
+
+  startCommand(id: string, input: CommandRunInput, saveAs?: { title?: string }) {
+    return this.request<{ run: CommandRunInfo }>(`/commands/${encodeURIComponent(id)}/runs`, {
+      method: 'POST',
+      body: JSON.stringify({ input, saveAs }),
+    });
+  }
+
+  commandRun(id: string) {
+    return this.request<{ run: CommandRunInfo }>(`/commands/runs/${encodeURIComponent(id)}`);
+  }
+
+  artifactRuns(id: string, limit = 1) {
+    return this.request<{ runs: ArtifactRunInfo[] }>(`/artifacts/${encodeURIComponent(id)}/runs?limit=${limit}`);
   }
 
   data(connectionId: string, table: string, limit = 50, offset = 0) {

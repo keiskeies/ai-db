@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { getCommand } from '@aidb/core';
 import type { ContextMenuItem } from './store';
 import { desktopBridge, type OpenTablePayload } from './lib/desktop';
 import {
@@ -25,6 +26,7 @@ import {
 } from 'lucide-react';
 import { useApp } from './store';
 import { CommandPalette } from './components/CommandPalette';
+import { CommandSheet } from './components/CommandSheet';
 import { ContextMenuHost } from './components/ContextMenu';
 import { PaneSplitter } from './components/PaneSplitter';
 import { ConnectionModal } from './components/ConnectionModal';
@@ -183,6 +185,9 @@ export default function App() {
   const toggleConnection = useApp((s) => s.toggleConnection);
   const saveSettings = useApp((s) => s.saveSettings);
   const loadSchema = useApp((s) => s.loadSchema);
+  const commandSheetId = useApp((s) => s.commandSheetId);
+  const closeCommandSheet = useApp((s) => s.closeCommandSheet);
+  const commandSheet = commandSheetId ? getCommand(commandSheetId) : undefined;
 
   useEffect(() => {
     void boot();
@@ -391,6 +396,7 @@ export default function App() {
       <ToolsHub />
       <ConnectionModal />
       <CommandPalette />
+      {commandSheet ? <CommandSheet command={commandSheet} onClose={closeCommandSheet} /> : null}
       <ContextMenuHost />
       <Toasts />
     </div>

@@ -13,6 +13,7 @@ import {
   Wrench,
   Sun,
 } from 'lucide-react';
+import { COMMANDS } from '@aidb/core';
 import { useApp } from '../store';
 
 export function CommandPalette() {
@@ -27,6 +28,7 @@ export function CommandPalette() {
   const agentOpen = useApp((s) => s.agentOpen);
   const openMemory = useApp((s) => s.openMemory);
   const openTools = useApp((s) => s.openTools);
+  const openCommandSheet = useApp((s) => s.openCommandSheet);
   const setSettingsOpen = useApp((s) => s.setSettingsOpen);
   const openBackup = useApp((s) => s.openBackup);
   const saveSettings = useApp((s) => s.saveSettings);
@@ -44,6 +46,13 @@ export function CommandPalette() {
       { id: 'agent', label: t('command_toggle_agent'), hint: 'Ctrl+Shift+A', icon: <Bot size={14} />, run: () => setAgentOpen(!agentOpen) },
       { id: 'memory', label: t('command_memory'), hint: 'Brain', icon: <Brain size={14} />, run: () => openMemory() },
       { id: 'tools', label: '工具箱（搜索 / 对比 / 传输 / 监控 / 调度）', hint: 'Tools', icon: <Wrench size={14} />, run: () => openTools() },
+      ...COMMANDS.filter((command) => command.id !== 'ask').map((command) => ({
+        id: `command-${command.id}`,
+        label: `${command.title.zh} /${command.id}`,
+        hint: '命令',
+        icon: <TerminalSquare size={14} />,
+        run: () => openCommandSheet(command.id),
+      })),
       { id: 'backup', label: t('command_backup'), hint: 'Backup', icon: <ShieldCheck size={14} />, run: () => void openBackup() },
       { id: 'settings', label: t('command_settings'), hint: 'Ctrl+,', icon: <Settings size={14} />, run: () => setSettingsOpen(true) },
       {
@@ -61,7 +70,7 @@ export function CommandPalette() {
         run: () => openQuery(conn.id),
       })),
     ],
-    [t, theme, connections, openConnectionEditor, openQuery, refreshAll, setAgentOpen, agentOpen, openMemory, openTools, setSettingsOpen, openBackup, saveSettings],
+    [t, theme, connections, openConnectionEditor, openQuery, refreshAll, setAgentOpen, agentOpen, openMemory, openTools, openCommandSheet, setSettingsOpen, openBackup, saveSettings],
   );
 
   const filtered = useMemo(() => {
