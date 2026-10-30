@@ -2,6 +2,7 @@ import { Redis } from 'ioredis';
 import type { Engine, GraphData, QueryResult, StructuredQuery, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions, StructuredQueryDriver } from './types';
 import { DbError } from './types';
+import { withQueryTimeout } from './timeout';
 
 export interface FalkorOptions {
   host: string;
@@ -157,6 +158,10 @@ export class FalkorDriver implements StructuredQueryDriver {
         password: this.opts.password || undefined,
         tls: this.opts.ssl ? {} : undefined,
         lazyConnect: true,
+        connectTimeout: 8000,
+        // 安全网：普通元数据调用不会无限挂住；用户查询由更短的 queryTimeoutMs 控制
+        commandTimeout: 300_000,
+        enableReadyCheck: false,
         maxRetriesPerRequest: 1,
         enableOfflineQueue: false,
       });
@@ -261,7 +266,14 @@ export class FalkorDriver implements StructuredQueryDriver {
     const graph = opts.database || this.opts.database || 'aidb';
     const started = Date.now();
     const statement = query.text.trim();
-    const reply = await this.call('GRAPH.QUERY', graph, inlineParams(statement, query.params));
+    const reply = await withQueryTimeout(this.call('GRAPH.QUERY', graph, inlineParams(statement, query.params)), opts.timeoutMs, {
+      code: 'FALKOR_TIMEOUT',
+      label: 'FalkorDB 查询',
+      onTimeout: () => {
+        this.client?.disconnect();
+        this.client = undefined;
+      },
+    });
     const { header, rows, stats } = replyShape(reply);
     const messages = statsMessage(stats);
     if (!header.length) {
@@ -311,9 +323,7 @@ export class FalkorDriver implements StructuredQueryDriver {
   }
 
   async close(): Promise<void> {
-    if (this.client) {
-      await this.client.quit().catch(() => undefined);
-      this.client = undefined;
-    }
+    this.client?.disconnect();
+    this.client = undefined;
   }
 }

@@ -54,7 +54,7 @@ function valueOf(hit: Record<string, any>, key: string): unknown {
 
 const ES_TYPES = new Set(['text', 'keyword', 'boolean', 'long', 'integer', 'short', 'double', 'float', 'date', 'ip', 'nested', 'object', 'geo_point', 'binary']);
 
-function hitsToResult(hits: Array<Record<string, any>>, started: number, statement: string, truncated: boolean): QueryResult {
+function hitsToResult(hits: Array<Record<string, any>>, started: number, statement: string, truncated: boolean, total = hits.length): QueryResult {
   const keys: string[] = [];
   const seen = new Set<string>();
   for (const hit of hits) {
@@ -78,6 +78,7 @@ function hitsToResult(hits: Array<Record<string, any>>, started: number, stateme
     rowCount: rows.length,
     durationMs: Date.now() - started,
     truncated,
+    messages: [`total=${total}`],
     statement,
     resultKind: 'documents',
   };
@@ -183,7 +184,7 @@ export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDri
     const total = Number(response?.hits?.total?.value ?? hits.length);
     const relation = String(response?.hits?.total?.relation ?? 'eq');
     const truncated = relation === 'gte' ? hits.length >= size : total > hits.length;
-    return hitsToResult(hits, started, JSON.stringify({ ...query, size }), truncated);
+    return hitsToResult(hits, started, JSON.stringify({ ...query, size }), truncated, total);
   }
 
   async run(sql: string, opts: RunOptions = {}): Promise<QueryResult> {

@@ -247,7 +247,7 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 
 ## 11. 已知限制
 
-- 查询超时：MySQL / PostgreSQL / ClickHouse / SQL Server / Oracle 按 `queryTimeoutMs` 生效（ClickHouse 用 AbortSignal，SQL Server 用 requestTimeout，Oracle 用 callTimeout）；SQLite/DuckDB 为同步执行无法中断，达梦取决于驱动能力。
+- 查询超时：MySQL / PostgreSQL / ClickHouse / SQL Server / Oracle / Redis / FalkorDB / 达梦按 `queryTimeoutMs` 生效（ClickHouse 用 AbortSignal，SQL Server 用 requestTimeout，Oracle 用 callTimeout；Redis / FalkorDB / 达梦超时后主动断开在途连接）。Redis / FalkorDB 另设 300s 连接级安全上限，避免元数据调用永久挂起；SQLite/DuckDB 为同步执行无法中断。
 
 - MongoDB 结构是采样推断，不能替代模型校验；authSource / replicaSet 可通过在 Host 字段填完整 `mongodb://` URI 传入。
 - Redis 键浏览基于 SCAN 采样，超大键空间只展示当前批次；`SELECT` 被拒绝，请用数据库下拉切换 DB。

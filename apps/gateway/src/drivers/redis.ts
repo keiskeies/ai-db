@@ -1,8 +1,8 @@
 import { Redis } from 'ioredis';
 import { parseRedisCommandLine } from '@aidb/core';
 import type { Engine, QueryResult, RedisKeyDetail, RedisQuery, StructuredQuery, TableInfo } from '@aidb/core';
-import type { CreateRedisKeyInput, Driver, DriverTestResult, RedisKeyDriver, RunOptions, StructuredQueryDriver } from './types';
-import { DbError } from './types';
+import { DbError, type CreateRedisKeyInput, type Driver, type DriverTestResult, type RedisKeyDriver, type RunOptions, type StructuredQueryDriver } from './types';
+import { withQueryTimeout } from './timeout';
 
 const MODULE_LABEL: Record<string, string> = {
   ReJSON: 'JSON',
@@ -280,7 +280,9 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
         db: index,
         lazyConnect: true,
         connectTimeout: 8000,
-        commandTimeout: 20000,
+        // 安全网：普通元数据调用不会无限挂住；用户查询由更短的 queryTimeoutMs 控制
+        commandTimeout: 300_000,
+        enableReadyCheck: false,
         maxRetriesPerRequest: 1,
         tls: this.opts.ssl ? {} : undefined,
       });
@@ -294,6 +296,15 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
     const client = this.client(database);
     if (client.status === 'wait') await client.connect();
     return client;
+  }
+
+  /** 超时后丢弃连接：慢命令不会被后续请求继续排队，重连后即可恢复。 */
+  private drop(database?: string): void {
+    const index = this.dbIndex(database);
+    const client = this.clients.get(index);
+    if (!client) return;
+    this.clients.delete(index);
+    client.disconnect();
   }
 
   private async modules(client: Redis): Promise<string[]> {
@@ -777,7 +788,11 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
     const statement = [command, ...args].join(' ');
     try {
       const client = await this.ready(opts.database);
-      const raw = await client.call(command, ...args);
+      const raw = await withQueryTimeout(client.call(command, ...args), opts.timeoutMs, {
+        code: 'REDIS_TIMEOUT',
+        label: `Redis 命令 ${command}`,
+        onTimeout: () => this.drop(opts.database),
+      });
       const maxRows = Math.max(1, Math.min(opts.maxRows && opts.maxRows > 0 ? opts.maxRows : 500, 5000));
       return resultFromRedis(command, args, raw, started, statement, maxRows);
     } catch (err: any) {
@@ -797,15 +812,8 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
   }
 
   async close(): Promise<void> {
-    await Promise.all(
-      [...this.clients.values()].map(async (client) => {
-        try {
-          await client.quit();
-        } catch {
-          client.disconnect();
-        }
-      }),
-    );
+    // 直接断开：对卡死的服务端等待 QUIT 会让关闭流程一起挂住。
+    for (const client of this.clients.values()) client.disconnect();
     this.clients.clear();
   }
 }

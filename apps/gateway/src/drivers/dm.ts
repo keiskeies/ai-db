@@ -2,6 +2,7 @@ import dmdb from 'dmdb';
 import type { ColumnInfo, Engine, IndexInfo, QueryResult, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions } from './types';
 import { DbError } from './types';
+import { withQueryTimeout } from './timeout';
 
 export interface DmOptions {
   host: string;
@@ -89,11 +90,20 @@ export class DmDriver implements Driver {
 
   private async execute(sql: string, params: unknown[], opts: RunOptions = {}): Promise<{ result: dmdb.Result<Record<string, unknown>>; columns: { name: string; type?: string }[] }> {
     return this.withConnection(async (connection) => {
-      const result = (await connection.execute(sql, params, {
-        autoCommit: true,
-        maxRows: opts.maxRows,
-        outFormat: dmdb.OUT_FORMAT_OBJECT,
-      })) as dmdb.Result<Record<string, unknown>>;
+      const result = (await withQueryTimeout(
+        connection.execute(sql, params, {
+          autoCommit: true,
+          maxRows: opts.maxRows,
+          outFormat: dmdb.OUT_FORMAT_OBJECT,
+        }) as Promise<dmdb.Result<Record<string, unknown>>>,
+        opts.timeoutMs,
+        {
+          code: 'DM_TIMEOUT',
+          label: '达梦查询',
+          // 关闭在途连接才能真正取消全表扫描；下次查询会从池里取新连接。
+          onTimeout: () => void connection.close().catch(() => undefined),
+        },
+      )) as dmdb.Result<Record<string, unknown>>;
       const columns = metaList(result.metaData).map((meta) => ({ name: meta.name, type: meta.dbTypeName }));
       return { result, columns };
     });
@@ -272,11 +282,22 @@ export class DmDriver implements Driver {
     if (!connection) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
     const started = Date.now();
     try {
-      const result = (await connection.execute(sql, params, {
-        autoCommit: false,
-        maxRows: opts.maxRows,
-        outFormat: dmdb.OUT_FORMAT_OBJECT,
-      })) as dmdb.Result<Record<string, unknown>>;
+      const result = (await withQueryTimeout(
+        connection.execute(sql, params, {
+          autoCommit: false,
+          maxRows: opts.maxRows,
+          outFormat: dmdb.OUT_FORMAT_OBJECT,
+        }) as Promise<dmdb.Result<Record<string, unknown>>>,
+        opts.timeoutMs,
+        {
+          code: 'DM_TIMEOUT',
+          label: '达梦查询',
+          onTimeout: () => {
+            this.txConnections.delete(sessionId);
+            void connection.close().catch(() => undefined);
+          },
+        },
+      )) as dmdb.Result<Record<string, unknown>>;
       const columns = metaList(result.metaData).map((meta) => ({ name: meta.name, type: meta.dbTypeName }));
       const rows = (result.rows ?? []).map((row) => columns.map((column) => normalizeValue(row[column.name])));
       return {
