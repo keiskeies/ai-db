@@ -43,4 +43,12 @@ linux:
   artifactName: ${productName}-${version}-${arch}.${ext}
 nsis:
   oneClick: false
+  perMachine: false
+  allowElevation: true
   allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: AiDB Studio
+  runAfterFinish: true
+  # 覆盖安装视为升级：保留 %APPDATA%/AiDB Studio 下的连接、历史与备份
+  deleteAppDataOnUninstall: false

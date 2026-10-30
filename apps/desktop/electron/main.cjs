@@ -50,15 +50,22 @@ const EXPORT_FILTERS = {
   json: { name: 'JSON 文件', extensions: ['json'] },
   xml: { name: 'XML 文件', extensions: ['xml'] },
   xlsx: { name: 'Excel 工作簿', extensions: ['xlsx'] },
+  pptx: { name: 'PowerPoint 演示文稿', extensions: ['pptx'] },
+  md: { name: 'Markdown 文档', extensions: ['md'] },
 };
 
-// 数据导出由网关直接写进 userData/exports，界面上只拿到路径；桌面端在这里补系统
-// 「另存为」：只允许搬运导出目录内的文件，用户取消时原文件保留。
+// 数据导出由网关直接写进 userData/exports，Skill Worker 产物在 userData/skill-runs；
+// 桌面端在这里补系统「另存为」：只允许搬运这两个目录内的文件，用户取消时原文件保留。
 ipcMain.handle('save-export-file', async (_event, payload) => {
   const source = path.resolve(String(payload?.sourcePath ?? ''));
-  const root = path.join(app.getPath('userData'), 'exports');
-  const rel = path.relative(root, source);
-  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return { ok: false, error: '只允许保存导出目录中的文件' };
+  const userData = app.getPath('userData');
+  const inside = (root) => {
+    const rel = path.relative(root, source);
+    return Boolean(rel) && !rel.startsWith('..') && !path.isAbsolute(rel);
+  };
+  if (!inside(path.join(userData, 'exports')) && !inside(path.join(userData, 'skill-runs'))) {
+    return { ok: false, error: '只允许保存导出目录或 Skill 产物目录中的文件' };
+  }
   try {
     await fs.promises.access(source, fs.constants.R_OK);
   } catch {
