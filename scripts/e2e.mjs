@@ -1536,6 +1536,29 @@ await fsCard.getByRole('button', { name: '发现工具' }).click();
 await page.waitForFunction(() => document.querySelector('.settings-content')?.textContent?.includes('read_file'), null, { timeout: 10000 });
 check('built-in filesystem tools are discoverable', true);
 check('settings MCP panel renders', true);
+
+// Agent 工具目录（只读）
+await page.locator('.settings-content [data-testid="agent-tool-catalog"] .panel-head').click();
+await page.waitForFunction(() => document.querySelectorAll('.settings-content .agent-catalog-row').length > 0, null, { timeout: 10000 });
+const catalogRows = await page.locator('.settings-content .agent-catalog-row').count();
+const catalogGroups = await page.locator('.settings-content .agent-catalog-group-head').count();
+check(
+  'agent tool catalog lists every tool grouped by capability',
+  catalogRows === 52 && catalogGroups >= 8,
+  `rows=${catalogRows} groups=${catalogGroups}`,
+);
+const catalogText = await page.locator('.settings-content [data-testid="agent-tool-catalog"]').evaluate((el) => el.textContent ?? '');
+check('run_sql appears in the catalog with its multi-statement constraint', /run_sql/.test(catalogText) && catalogText.includes('允许多语句'));
+check('catalog marks MCP tools as gated by the MCP switch', catalogText.includes('总开关'));
+await page.locator('.settings-content [data-testid="agent-tool-catalog"] input[aria-label="过滤 Agent 工具"]').fill('事务');
+await page.waitForFunction(() => document.querySelectorAll('.settings-content .agent-catalog-row').length === 7, null, { timeout: 5000 });
+const filteredRows = await page.locator('.settings-content .agent-catalog-row').count();
+check('catalog filter narrows to the matching group', filteredRows === 7, `rows=${filteredRows}`);
+await page.locator('.settings-content [data-testid="agent-tool-catalog"] input[aria-label="过滤 Agent 工具"]').fill('');
+const catalogToggles = await page.locator('.settings-content [data-testid="agent-tool-catalog"] input[type="checkbox"], .settings-content [data-testid="agent-tool-catalog"] button').count();
+check('catalog is read-only (no switches or buttons inside)', catalogToggles === 0, `controls=${catalogToggles}`);
+await page.locator('.settings-content [data-testid="agent-tool-catalog"]').scrollIntoViewIfNeeded();
+await page.screenshot({ path: join(shots, 'desktop-agent-tools.png') });
 await page.locator('.settings-nav button').filter({ hasText: '网络搜索' }).click();
 await page.waitForFunction(() => document.querySelector('.settings-content')?.textContent?.includes('已启用后端'), null, { timeout: 10000 });
 await page.waitForSelector('.settings-content .search-backend', { timeout: 10000 });

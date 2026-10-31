@@ -177,6 +177,12 @@ Agent 的调用路径：先 `mcp_list_servers` 拿到真实 id，再 `mcp_list_t
 - 适合外部 Agent 让 AiDB 查结构、跑只读 SQL、做统计；写库仍必须回到 AiDB 内走审批。
 - 外部客户端拿到的结果文本含完整工具结果；token 只从环境变量读取，不写日志。
 
+### 4.6 Agent 工具目录（只读）
+
+MCP 工具与第一方 Agent 工具是两套东西：`run_sql`、`inspect_schema` 这类 52 个第一方工具不来自任何 MCP Server，也不受 MCP 开关影响。为了让它们可见，设置 → MCP 与工具 页底部提供**只读**的「Agent 工具目录」：按能力分组列出全部 52 个工具，每行给出工具名、风险徽标、工具说明与「可用条件」（由风险等级 + 功能总开关推导）。
+
+目录不提供任何启停控件——单个工具不可配置开关，可用性只由权限模式、连接只读标记与功能总开关决定。分组数据在 `packages/core/src/agent/toolGroups.ts`，core 测试断言分组与 `TOOL_NAMES` 一一对应（不遗漏、不重复），新增工具忘记归组即测试失败，避免页面清单与真实能力漂移。
+
 ## 5. API
 
 | 方法 | 路径 | 作用 |
@@ -208,10 +214,11 @@ Agent 的调用路径：先 `mcp_list_servers` 拿到真实 id，再 `mcp_list_t
 - `notification-migration.test.ts`：旧版 `CHECK(type IN ...)` 表结构迁移后可写入新平台类型（1 个测试）。
 - `mcp.test.ts`：stdio MCP Server 配置、工具发现、`mcp_list_tools` / `mcp_call` 执行（1 个测试）。
 - `builtin-mcp.test.ts`：内置 filesystem/git/web 的目录白名单、递归列举、server 省略时按工具名反推、ripgrep、SSRF 拦截与工具发现。
+- `tool-catalog.test.ts`（core）：Agent 工具目录分组与 52 个工具一一对应（不遗漏、不重复），且每项都有风险与可用条件说明。
 - `multi-statement.test.ts`：只读多语句脚本放行，含写脚本在未开启多语句时以 `MULTI_STATEMENT_DISABLED` + 拆分提示拒绝。
 - `search.test.ts`：11 个后端目录与默认启用 4 个免密钥后端、Key 加密保存且不回显、聚合去重与单后端失败隔离、本地 SearXNG 兼容端点跑通 JSON 路径、`web_search` 复用同一套设置（3 个测试）。
 - `mcp-server.test.ts`：AiDB 作为 stdio MCP Server 的 initialize / tools/list / 只读 tools/call（1 个测试）。
-- `npm run verify` 全绿：docs 335/335、core 150/150、gateway 188/253、E2E 196/196。
+- `npm run verify` 全绿：docs 335/335、core 153/153、gateway 188/253、E2E 201/201。
 - E2E 覆盖：设置内通知渠道/MCP/Skills 面板、数据库工具箱不含 Agent 能力、工具数 52、报告命令、AI PPT 面板、移动端命令。
 
 ## 8. 暂不支持

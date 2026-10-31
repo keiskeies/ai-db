@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, Plug, Plus, RefreshCw, Trash2, X } from 'lucide-react';
-import { builtinMcpServer, type McpServerInfo } from '@aidb/core';
+import { Loader2, Plug, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
+import { AGENT_TOOL_GROUPS, agentToolCatalog, builtinMcpServer, type McpServerInfo } from '@aidb/core';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
 
@@ -20,6 +20,25 @@ export function McpTool() {
   const [command, setCommand] = useState('npx');
   const [args, setArgs] = useState('');
   const [env, setEnv] = useState('');
+  const [toolQuery, setToolQuery] = useState('');
+
+  const catalog = useMemo(() => agentToolCatalog(), []);
+  const catalogGroups = useMemo(() => {
+    const needle = toolQuery.trim().toLowerCase();
+    const matched = needle
+      ? catalog.filter(
+          (entry) =>
+            entry.name.toLowerCase().includes(needle) ||
+            entry.description.toLowerCase().includes(needle) ||
+            entry.groupLabel.toLowerCase().includes(needle),
+        )
+      : catalog;
+    return AGENT_TOOL_GROUPS.map((group) => ({
+      id: group.id,
+      label: group.label,
+      entries: matched.filter((entry) => entry.groupId === group.id),
+    })).filter((group) => group.entries.length);
+  }, [catalog, toolQuery]);
 
   const load = async () => {
     setLoading(true);
@@ -283,6 +302,48 @@ export function McpTool() {
           </div>
           <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
             <button className="btn primary" onClick={() => void create()}><Plus size={12} /> 保存</button>
+          </div>
+        </details>
+        <details className="panel agent-catalog" data-testid="agent-tool-catalog">
+          <summary className="panel-head">
+            Agent 工具目录 <span className="muted">（只读 · {catalog.length} 个）</span>
+          </summary>
+          <div className="agent-catalog-body">
+            <div className="agent-catalog-bar">
+              <div className="search-box" style={{ flex: 1, minWidth: 220 }}>
+                <Search size={12} />
+                <input
+                  value={toolQuery}
+                  onChange={(e) => setToolQuery(e.target.value)}
+                  placeholder="按工具名、说明或分组过滤，例如 run_sql"
+                  aria-label="过滤 Agent 工具"
+                />
+              </div>
+              <span className="muted" style={{ fontSize: 11 }}>
+                {catalogGroups.reduce((sum, group) => sum + group.entries.length, 0)} / {catalog.length}
+              </span>
+            </div>
+            {!catalogGroups.length ? <div className="dash-empty">没有匹配的工具。</div> : null}
+            {catalogGroups.map((group) => (
+              <div key={group.id} className="agent-catalog-group">
+                <div className="agent-catalog-group-head">
+                  {group.label} <span className="muted">{group.entries.length}</span>
+                </div>
+                {group.entries.map((entry) => (
+                  <div key={entry.name} className="agent-catalog-row">
+                    <span className="mono agent-catalog-name">{entry.name}</span>
+                    <span className={`badge ${entry.risk === 'dynamic' ? '' : entry.risk}`.trim()}>{entry.risk}</span>
+                    <div className="agent-catalog-text">
+                      <div title={entry.description}>{entry.description}</div>
+                      <div className="muted">{entry.constraint}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ))}
+            <div className="muted" style={{ fontSize: 10 }}>
+              这里只展示，不能逐个启停。可用性由权限模式（只读 / 询问 / 自动 / 全自动）、连接只读标记与上面的功能总开关决定；这些是第一方 Agent 工具，与上方的 MCP Server 无关。
+            </div>
           </div>
         </details>
       </div>

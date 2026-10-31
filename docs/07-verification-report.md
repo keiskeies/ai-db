@@ -124,7 +124,7 @@
 
 ### 4.4 截图（docs/screenshots/）
 
-`desktop-welcome` `desktop-data` `desktop-query` `desktop-query-chart` `desktop-toolbox` `desktop-table-menu` `desktop-agent` `desktop-chart` `desktop-audit` `desktop-approval` `desktop-agent-ddl` `desktop-settings` `desktop-search-settings` `desktop-light` `desktop-memory` `desktop-relations` `desktop-connection-engines` `mobile-pairing` `mobile-chat` `mobile-agent` `mobile-data` `mobile-memory` `mobile-settings` `electron-desktop` `packaged-windows`。
+`desktop-welcome` `desktop-data` `desktop-query` `desktop-query-chart` `desktop-toolbox` `desktop-table-menu` `desktop-agent` `desktop-chart` `desktop-audit` `desktop-approval` `desktop-agent-ddl` `desktop-settings` `desktop-search-settings` `desktop-agent-tools` `desktop-light` `desktop-memory` `desktop-relations` `desktop-connection-engines` `mobile-pairing` `mobile-chat` `mobile-agent` `mobile-data` `mobile-memory` `mobile-settings` `electron-desktop` `packaged-windows`。
 
 ## 5. 关键缺陷与修复（真实发生）
 
@@ -369,4 +369,20 @@ Expo Web 构建在 390×844 视口通过：配对页、配对码真实兑换、A
 | 健康遥测与探测 | `POST /search/backends/:id/probe` 用固定查询探测；行内显示耗时或失败原因 | ✅ |
 | 截图 | E2E 输出 `desktop-search-settings.png` | ✅ |
 
-回归：docs 335/335、core 150/150、gateway 188 pass / 65 skip（共 253）、E2E 196/196，控制台错误 0。
+回归：docs 335/335、core 153/153、gateway 188 pass / 65 skip（共 253）、E2E 201/201，控制台错误 0。
+
+## 14. Agent 工具目录（只读）
+
+`run_sql` 这类第一方工具不属于任何 MCP Server，此前在设置里完全不可见，用户只能读文档才知道 Agent 会什么。补一个只读目录，不做任何假开关。
+
+| 验证项 | 方式 | 结果 |
+|---|---|---|
+| 覆盖完整 | `tool-catalog.test.ts`：分组并集与 `TOOL_NAMES` 一一对应，不遗漏也不重复 | ✅ |
+| 归组强制 | 同上：分组引用不存在的工具、或工具未归组（`groupId=other`）即失败 | ✅ |
+| 可用条件 | 同上：每项含风险推导出的中文说明；MCP/Skill 组额外标注总开关，`run_sql` 标注多语句开关，`mcp_call` 标注 server 反推 | ✅ |
+| 渲染 | E2E：52 行 / 11 个分组，风险徽标按 read/write/ddl/destructive/dynamic 着色 | ✅ |
+| 过滤 | E2E：输入「事务」→ 命中分组名，行数 7/52 | ✅ |
+| 只读 | E2E：目录内 checkbox 与 button 数量为 0 | ✅ |
+| 截图 | E2E 输出 `desktop-agent-tools.png` | ✅ |
+
+回归：docs 335/335、core 153/153、gateway 188 pass / 65 skip（共 253）、E2E 201/201，控制台错误 0。

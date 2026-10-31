@@ -12,6 +12,7 @@ export * from './analysis/stats';
 export * from './analysis/forecast';
 export * from './agent/types';
 export * from './agent/tools';
+export * from './agent/toolGroups';
 export * from './agent/builtinMcp';
 export * from './agent/policy';
 export * from './agent/memory';

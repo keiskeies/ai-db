@@ -212,7 +212,7 @@ AIDB_HOME/skill-runs/<runId>/
 - core 类型 `SkillSummary` / `SkillFileEntry`；gateway `skill_list` / `skill_read` 工具（总数 47）。
 - AgentHost 注入 Skills 目录段落。
 - 设置 → Skills：列表、导入、启停、查看 SKILL.md；首次启动自动写入 3 个轻量内置技能（报告写作、SQL 审查、数据字典），PPT Master 作为第三方推荐技能提供一键安装。
-- 验收：已导入真实 PPT Master skill（v6.7.3，13,050 个文件），列表/`workflows/routing.md` 读取/目录注入通过；zip 导入与路径越界测试通过。Skill 工具总数 52；`npm run verify` 全绿：docs 335/335、core 150/150、gateway 187 pass、E2E 196/196。
+- 验收：已导入真实 PPT Master skill（v6.7.3，13,050 个文件），列表/`workflows/routing.md` 读取/目录注入通过；zip 导入与路径越界测试通过。Skill 工具总数 52；`npm run verify` 全绿：docs 335/335、core 153/153、gateway 187 pass、E2E 201/201。
 
 ### S2 沙箱运行时（完成）
 - workspace / input / output；`skill_write` / `skill_run` / `skill_list_files`。
