@@ -9,6 +9,7 @@ import {
   buildDropObject,
   buildExplain,
   buildSelectTable,
+  builtinMcpServer,
   classifySql,
   cqlQueryFromArgs,
   cypherQueryFromArgs,
@@ -113,6 +114,7 @@ const DB_TOOLS = new Set([
   'schema_diff',
   'recon_data',
   'transfer_data',
+  'mcp_list_servers',
   'mcp_list_tools',
   'mcp_call',
 ]);
@@ -196,7 +198,7 @@ export class ToolExecutor {
     if (!features.skills && (call.name.startsWith('skill_') || call.name === 'skill_worker_run')) {
       return { ok: false, summary: 'Skill 自动调用已关闭', error: { code: 'FEATURE_DISABLED', message: 'Agent 自动调用技能已关闭；可在设置 → Skills 手动运行' }, meta: { durationMs: 0 } };
     }
-    if (!features.mcp && (call.name === 'mcp_list_tools' || call.name === 'mcp_call')) {
+    if (!features.mcp && (call.name === 'mcp_list_servers' || call.name === 'mcp_list_tools' || call.name === 'mcp_call')) {
       return { ok: false, summary: 'MCP 功能已关闭', error: { code: 'FEATURE_DISABLED', message: 'MCP 已在设置中关闭' }, meta: { durationMs: 0 } };
     }
     const tool = getTool(call.name);
@@ -1279,11 +1281,31 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
         return ok(started, `${skill}/${result.path}${result.truncated ? '（已截断）' : ''}`, result);
       }
 
+      case 'mcp_list_servers': {
+        const includeDisabled = a.includeDisabled === true;
+        const servers = this.store.listMcpServers().filter((server) => includeDisabled || server.enabled);
+        return ok(started, `${servers.length} 个 MCP Server`, {
+          servers: servers.map((server) => {
+            const definition = server.builtin ? builtinMcpServer(server.builtin) : undefined;
+            return {
+              id: server.id,
+              name: server.name,
+              enabled: server.enabled,
+              builtin: definition?.kind ?? null,
+              description: definition?.description,
+              argsLabel: definition?.argsLabel,
+              args: definition ? server.args : undefined,
+              tools: definition?.tools.map((tool) => ({ name: tool.name, risk: tool.risk })),
+            };
+          }),
+        });
+      }
+
       case 'mcp_list_tools': {
         const { server, tools } = await listMcpTools(this.store, String(a.server ?? ''));
         return ok(started, `${server.name} 提供 ${tools.length} 个 MCP 工具`, {
           server,
-          tools: tools.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })),
+          tools: tools.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema, risk: tool.risk })),
         });
       }
 

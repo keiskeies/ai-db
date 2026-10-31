@@ -124,7 +124,7 @@
 
 ### 4.4 截图（docs/screenshots/）
 
-`desktop-welcome` `desktop-data` `desktop-query` `desktop-query-chart` `desktop-toolbox` `desktop-table-menu` `desktop-agent` `desktop-chart` `desktop-audit` `desktop-approval` `desktop-agent-ddl` `desktop-settings` `desktop-light` `desktop-memory` `desktop-relations` `desktop-connection-engines` `mobile-pairing` `mobile-chat` `mobile-agent` `mobile-data` `mobile-memory` `mobile-settings` `electron-desktop` `packaged-windows`。
+`desktop-welcome` `desktop-data` `desktop-query` `desktop-query-chart` `desktop-toolbox` `desktop-table-menu` `desktop-agent` `desktop-chart` `desktop-audit` `desktop-approval` `desktop-agent-ddl` `desktop-settings` `desktop-search-settings` `desktop-light` `desktop-memory` `desktop-relations` `desktop-connection-engines` `mobile-pairing` `mobile-chat` `mobile-agent` `mobile-data` `mobile-memory` `mobile-settings` `electron-desktop` `packaged-windows`。
 
 ## 5. 关键缺陷与修复（真实发生）
 
@@ -267,7 +267,7 @@ Expo Web 构建在 390×844 视口通过：配对页、配对码真实兑换、A
 | 查询构建器 | 选表 / 连接 / 列 / WHERE / 排序 / 行数 → SQL | `QueryBuilderTool` → 编辑器 | ✅ |
 | 结构对比与同步 | 两连接 DDL diff、目标方言语、确认后执行 | core diff 单测；gateway 集成；`/schema/compare`、`/schema/sync` | ✅ |
 | 数据对比 | 行数 + 主键指纹；差异表替换 | gateway 集成；`/data/compare` | ✅ |
-| 数据传输 | 跨连接建表 + 批量数据复制（追加 / 清空） | gateway 集成；`/transfer` | ✅ |
+| 数据传输 | 跨连接建表 + 批量数据复制（追加 / 清空），SSE 逐表阶段与行数进度 | gateway 集成；`/transfer`、`/transfer/stream` | ✅ |
 | 数据生成 | 按列语义 / 类型 / 外键生成 1–5000 行，预览后写入 | gateway 集成；Agent `generate_data` | ✅ |
 | 服务器监控 | 指标 + 会话 + 终止会话（8 引擎适配） | `/monitor`、`/monitor/sessions/:id`；工具箱 UI | ✅ |
 | 自动化任务 | 定时 SQL / 备份，立即运行、启停、状态 | `JobScheduler`（15s tick，最小 30s）；`/jobs`；集成测试 | ✅ |
@@ -354,3 +354,19 @@ Expo Web 构建在 390×844 视口通过：配对页、配对码真实兑换、A
 | 控制台错误 | 0 |
 
 截图：`desktop-welcome`（Ribbon）、`desktop-data`（行号 + 双行工具栏 + 表/视图分组）、`desktop-table-menu`（表右键菜单）、`desktop-query`（连接/库下拉 + 双行查询工具栏）。
+
+## 13. v0.4 聚合网络搜索验证（2026-11-01）
+
+按参考设计补齐 11 个搜索后端与聚合设置页，`web_search` 与设置页共用同一套配置和凭证库。
+
+| 验证项 | 方式 | 结果 |
+|---|---|---|
+| 后端目录与默认值 | `search.test.ts`：11 个后端、4 个免密钥默认启用、`numResults=8`、`dedupe=url` | ✅ |
+| 凭证加密与不回显 | `search.test.ts` + E2E：保存后 `keyStatus.brave=true`，`GET /settings` 与页面文本均不含明文，`__CLEAR__` 可清除 | ✅ |
+| 聚合去重与失败隔离 | `search.test.ts`：本地 SearXNG 兼容端点返回 3 条（含 utm 重复）→ 合并 2 条，Brave 缺 Key 仅标记该后端失败 | ✅ |
+| `web_search` 复用设置 | `search.test.ts`：仅启用 Brave 且无 Key 时返回 `SEARCH_ALL_FAILED` | ✅ |
+| 设置页布局 | E2E：11 行后端 / 4 个默认勾选 / 8 个密钥输入（7 个 Key + SearXNG）/ 全局参数与结果策略分组 | ✅ |
+| 健康遥测与探测 | `POST /search/backends/:id/probe` 用固定查询探测；行内显示耗时或失败原因 | ✅ |
+| 截图 | E2E 输出 `desktop-search-settings.png` | ✅ |
+
+回归：docs 335/335、core 150/150、gateway 187 pass / 65 skip（共 252）、E2E 196/196，控制台错误 0。

@@ -28,7 +28,7 @@ export function CommandPalette() {
   const agentOpen = useApp((s) => s.agentOpen);
   const openMemory = useApp((s) => s.openMemory);
   const openTools = useApp((s) => s.openTools);
-  const openCommandSheet = useApp((s) => s.openCommandSheet);
+  const prefillAgent = useApp((s) => s.prefillAgent);
   const setSettingsOpen = useApp((s) => s.setSettingsOpen);
   const openBackup = useApp((s) => s.openBackup);
   const saveSettings = useApp((s) => s.saveSettings);
@@ -49,9 +49,9 @@ export function CommandPalette() {
       ...COMMANDS.filter((command) => command.id !== 'ask').map((command) => ({
         id: `command-${command.id}`,
         label: `${command.title.zh} /${command.id}`,
-        hint: '命令',
+        hint: 'Agent 命令',
         icon: <TerminalSquare size={14} />,
-        run: () => openCommandSheet(command.id),
+        run: () => prefillAgent(`/${command.id} `),
       })),
       { id: 'backup', label: t('command_backup'), hint: 'Backup', icon: <ShieldCheck size={14} />, run: () => void openBackup() },
       { id: 'settings', label: t('command_settings'), hint: 'Ctrl+,', icon: <Settings size={14} />, run: () => setSettingsOpen(true) },
@@ -70,7 +70,7 @@ export function CommandPalette() {
         run: () => openQuery(conn.id),
       })),
     ],
-    [t, theme, connections, openConnectionEditor, openQuery, refreshAll, setAgentOpen, agentOpen, openMemory, openTools, openCommandSheet, setSettingsOpen, openBackup, saveSettings],
+    [t, theme, connections, openConnectionEditor, openQuery, refreshAll, setAgentOpen, agentOpen, openMemory, openTools, prefillAgent, setSettingsOpen, openBackup, saveSettings],
   );
 
   const filtered = useMemo(() => {

@@ -116,3 +116,171 @@
 @media (max-width: 1000px) {
   .toasts { left: 14px; right: 14px; width: auto; }
 }
+
+/* ---------- 仪表板：跟着库走的活查询卡片 ---------- */
+.dash-view {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+  padding: 12px 14px 16px;
+  overflow: auto;
+  background: var(--bg-app);
+}
+.dash-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.dash-title { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
+.dash-title svg { color: var(--accent); }
+.dash-actions { display: flex; align-items: center; gap: 6px; }
+.dash-meta { font-size: 9.5px; color: var(--text-muted); }
+.dash-loading { display: flex; align-items: center; gap: 8px; padding: 24px 4px; font-size: 11px; color: var(--text-muted); }
+
+.dash-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.dash-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-panel);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  overflow: hidden;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+}
+.dash-card:hover { border-color: var(--border-strong); box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22); }
+.dash-card.wide { grid-column: 1 / -1; }
+.dash-card-body { padding: 6px 6px 0; }
+/* ChartView 自带卡片外观，套进仪表板时不要出现两层边框 */
+.dash-card .chart-card { border: none; box-shadow: none; background: transparent; padding: 0; }
+.dash-card-empty { display: flex; flex-direction: column; gap: 6px; padding: 14px 12px; font-size: 11.5px; color: var(--text-primary); }
+.dash-card-empty-hint { font-size: 10px; color: var(--text-muted); line-height: 1.5; }
+.dash-card-sql {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  background: var(--code-bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  max-height: 84px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.dash-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px 5px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-rail);
+}
+.dash-foot-space { flex: 1; }
+.dash-tag {
+  font-size: 9px;
+  letter-spacing: 0.3px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.dash-tag.ai { background: var(--agent-soft); color: var(--agent); }
+.dash-card-foot .icon-btn.danger:hover { color: var(--danger); }
+
+/* 滚动容器的子项一律不收缩：.panel 的 overflow:hidden 会把「新建卡片」表单压成一条横线 */
+.dash-view > * { flex-shrink: 0; }
+.dash-composer { display: flex; flex-direction: column; gap: 8px; padding: 10px; }
+.dash-composer-foot { display: flex; align-items: center; gap: 8px; }
+.dash-sql { font-family: var(--font-mono); font-size: 10.5px; line-height: 1.55; resize: vertical; min-height: 76px; }
+.dash-compose-ai { display: flex; align-items: center; gap: 8px; }
+.dash-compose-ai .input { flex: 1; min-width: 0; }
+.dash-ai-icon { color: var(--agent); flex: 0 0 auto; }
+.dash-ai-hint { margin-top: -3px; font-size: 9.5px; color: var(--text-muted); line-height: 1.45; }
+.dash-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-app);
+}
+.dash-preview-head { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 9.5px; color: var(--text-muted); }
+.dash-preview-head .dash-meta { white-space: nowrap; }
+.dash-preview-stale { color: var(--warning); font-size: 9.5px; }
+.dash-preview .chart-card { border: none; box-shadow: none; background: transparent; padding: 0; }
+.dash-preview-error {
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--danger) 26%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 10.5px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+.dash-preview-note { font-size: 9.5px; line-height: 1.5; color: var(--text-muted); }
+.dash-preview-table-wrap {
+  overflow: auto;
+  max-height: 220px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+.dash-preview-table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 9.5px; }
+.dash-preview-table th {
+  position: sticky;
+  top: 0;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-rail);
+  color: var(--text-muted);
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+.dash-preview-table td {
+  max-width: 220px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dash-preview-table tr:last-child td { border-bottom: none; }
+.dash-preview-empty { padding: 10px; font-size: 10px; color: var(--text-muted); }
+.dash-time { max-width: 168px; font-size: 9.5px; padding: 2px 4px; }
+.dash-empty p { margin: 6px 0 0; font-size: 10.5px; line-height: 1.65; color: var(--text-muted); }
+.dash-empty-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.dash-favorites-head { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-primary); }
+.dash-favorite {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.dash-favorite:hover { background: var(--bg-hover); }
+.dash-favorite code {
+  font-size: 9.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.dash-favorite input { margin-top: 3px; accent-color: var(--accent); }

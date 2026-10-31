@@ -119,16 +119,31 @@ CREATE TABLE mcp_servers (
 
 ### 4.2 Agent 工具
 
-新增全局工具（总数 51）：
+新增全局工具（总数 52）：
 
 | 工具 | 风险 | 作用 |
 |---|---|---|
+| `mcp_list_servers` | read | 列出已配置 MCP Server 的 id、启停状态、目录/域名与内置工具名；调用前先看这里 |
 | `mcp_list_tools` | read | 列出一个 MCP Server 的工具与 JSON Schema |
-| `mcp_call` | write | 调用指定工具，参数透传；默认需要审批 |
+| `mcp_call` | 动态* | 调用指定工具，参数透传；内置只读工具直接执行，写工具与外部 Server 默认需要审批 |
 
-Agent 的调用路径：先 `mcp_list_tools` 发现工具，再 `mcp_call`；`mcp_call` 在 `ask` 模式触发审批，`readonly` 模式拒绝。结果文本作为工具摘要返回，完整结果保留在 `data`。
+Agent 的调用路径：先 `mcp_list_servers` 拿到真实 id，再 `mcp_list_tools` 发现工具，最后 `mcp_call`；系统提示注入已配置服务器目录，禁止猜名字。`mcp_call` 在 `ask` 模式对写工具触发审批，`readonly` 模式拒绝；内置只读工具（如 `read_file`、`git_status`、`fetch_url`）按 read 风险直接执行。结果文本作为工具摘要返回，完整结果保留在 `data`。
 
-### 4.3 飞书 MCP 示例
+`*` 仅当调用的是内置 Server 的固定 id（`builtin-filesystem` 等）或保留名称（`filesystem` / `git` / `web`）且工具声明为 `read` 时按 read 处理；其他情况一律按 write 审批，避免用户自建的服务器继承免审批。**「本会话允许」跨回合保留到会话删除；「始终允许」在本次 AiDB 运行内有效，重启后重新询问；MCP 写审批的签名包含路径/URL，不会因批准一个文件而放行同工具的其他路径。**
+
+### 4.3 内置 MCP Server
+
+第一方内置 3 个 Server，进程内运行，不需要 npx、不下载第三方包，在设置 → MCP 与工具 中启停与配置：
+
+| Server | 默认 | 配置项 | 工具 | 安全边界 |
+|---|---|---|---|---|
+| `builtin-filesystem` | 启用 | 允许目录（绝对路径） | `list_directory` / `read_file` / `read_multiple_files` / `search_files` / `grep_files` / `file_info` / `write_file` / `edit_file` / `move_file` / `delete_file` | 目录白名单 + realpath 校验；拒绝 `..` 与符号链接逃逸；读/写上限 2 MB；`grep_files` 支持 `context` / `outputMode`，优先调用 ripgrep（可用 `AIDB_RG_PATH` 指定二进制，缺失或正则不兼容时回退 JS）；`delete_file` 仅限单文件、需 confirm、destructive 审批；写/移动需审批 |
+| `builtin-git` | 启用 | 仓库目录 | `git_status` / `git_log` / `git_diff` / `git_show` | 只读子命令；固定参数白名单；ref 与路径校验 |
+| `builtin-web` | 关闭 | 域名限制（可选；留空=所有公网） | `fetch_url` / `web_search` | 仅 HTTP(S)；拦截 loopback/内网/链路本地/云元数据地址；重定向逐跳复检；正文上限 1 MB；`web_search` 聚合 Exa / Parallel / DuckDuckGo / SearXNG + Brave / Tavily / Serper / Mojeek / DeepSeek / Anthropic / OpenAI，并发、去重、单后端失败隔离 |
+
+未配置目录时 filesystem 不暴露任何文件；web 默认关闭。内置 Server 不可删除、不可改名或改命令，只能启停与修改目录/域名。**不内置 shell**：任意命令执行不在 MCP 层开放，统一走 Skill Host 的声明式入口与命令白名单。
+
+### 4.4 飞书 MCP 示例
 
 在设置 → MCP 添加：
 
@@ -139,9 +154,9 @@ Agent 的调用路径：先 `mcp_list_tools` 发现工具，再 `mcp_call`；`mc
 环境变量：{"APP_ID":"...","APP_SECRET":"..."}
 ```
 
-具体参数以所用 MCP Server 的 README 为准；AiDB 不预置任何第三方包。配置后点击“发现工具”，Agent 即可在 `/ask` 中通过 `mcp_list_tools` / `mcp_call` 使用。
+具体参数以所用 MCP Server 的 README 为准；AiDB 不预置第三方包（内置 Server 是第一方实现）。配置后点击“发现工具”，Agent 即可在 `/ask` 中通过 `mcp_list_servers` / `mcp_list_tools` / `mcp_call` 使用。
 
-### 4.4 AiDB 作为 MCP Server（出站）
+### 4.5 AiDB 作为 MCP Server（出站）
 
 `scripts/aidb-mcp-server.mjs` 是 stdio MCP Server，把 AiDB 的只读工具暴露给 Claude Desktop / Cursor 等外部 MCP 客户端。先启动网关，再在客户端配置：
 
@@ -158,6 +173,7 @@ Agent 的调用路径：先 `mcp_list_tools` 发现工具，再 `mcp_call`；`mc
 ```
 
 - `tools/list` 只返回 `read` 与 `dynamic` 工具；`tools/call` 走 `POST /agent/tools/:name`，服务端再次按风险过滤，写工具返回 `TOOL_READ_ONLY`。
+- 出站桥不暴露 `mcp_list_servers` / `mcp_list_tools` / `mcp_call`：本地 MCP（文件系统、Git、网页抓取）只能在 AiDB 内使用，外部客户端不能借道读取本机文件或访问网页。
 - 适合外部 Agent 让 AiDB 查结构、跑只读 SQL、做统计；写库仍必须回到 AiDB 内走审批。
 - 外部客户端拿到的结果文本含完整工具结果；token 只从环境变量读取，不写日志。
 
@@ -179,6 +195,8 @@ Agent 的调用路径：先 `mcp_list_tools` 发现工具，再 `mcp_call`；`mc
 - 通知配置 / MCP 环境变量加密存储，列表不返回秘密。
 - Inbound 默认关闭，必须显式 `inbound: true`；建议配置白名单。
 - 机器人只读：即使群成员要求写库，readonly 模式也会拒绝。
+- 机器人 / 移动端等远程回合不注入 MCP 工具（文件系统 / Git / 网页抓取）：远程设备不能借 Agent 读取本机文件或访问网页；出站 MCP 桥同样不暴露 `mcp_*`。
+- Skill Worker 即使被授权 filesystem，也不执行破坏性 MCP 工具（如 `delete_file`）；删除必须回到主会话由用户审批。
 - MCP 命令是本机执行；只允许用户手动配置，不提供远程下发配置。
 - `mcp_call` 默认审批；不要给不受信任的 MCP Server 配置高权限环境变量。
 - 出站 MCP Server 只执行只读工具；写操作在服务端按风险拒绝，不依赖客户端自律。
@@ -189,9 +207,11 @@ Agent 的调用路径：先 `mcp_list_tools` 发现工具，再 `mcp_call`；`mc
 - `notifications.test.ts`：飞书/企微/OneBot/钉钉/Slack/Discord/Telegram payload、签名、定时报告投递、飞书 challenge、飞书 inbound、OneBot inbound（4 个测试）。
 - `notification-migration.test.ts`：旧版 `CHECK(type IN ...)` 表结构迁移后可写入新平台类型（1 个测试）。
 - `mcp.test.ts`：stdio MCP Server 配置、工具发现、`mcp_list_tools` / `mcp_call` 执行（1 个测试）。
+- `builtin-mcp.test.ts`：内置 filesystem/git/web 的目录白名单、ripgrep、SSRF 拦截与工具发现。
+- `search.test.ts`：11 个后端目录与默认启用 4 个免密钥后端、Key 加密保存且不回显、聚合去重与单后端失败隔离、本地 SearXNG 兼容端点跑通 JSON 路径、`web_search` 复用同一套设置（3 个测试）。
 - `mcp-server.test.ts`：AiDB 作为 stdio MCP Server 的 initialize / tools/list / 只读 tools/call（1 个测试）。
-- `npm run verify` 全绿：docs 329/329、core 149/149、gateway 152/217、E2E 150/150。
-- E2E 覆盖：设置内通知渠道/MCP/Skills 面板、数据库工具箱不含 Agent 能力、工具数 51、报告命令、AI PPT 面板、移动端命令。
+- `npm run verify` 全绿：docs 335/335、core 150/150、gateway 187/252、E2E 196/196。
+- E2E 覆盖：设置内通知渠道/MCP/Skills 面板、数据库工具箱不含 Agent 能力、工具数 52、报告命令、AI PPT 面板、移动端命令。
 
 ## 8. 暂不支持
 

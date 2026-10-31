@@ -40,7 +40,7 @@
 ## 3. 文档二次验证（M0 闸门）
 
 文档写完后不直接开发，先做一次**独立复核**：
-1. **契约脚本**：检查关键章节存在、内部链接有效、五端平台均出现、51 个工具在 02/04/executor 代码清单中一致、API 表包含 Agent 与配对、SSE 事件类型与协议一致。
+1. **契约脚本**：检查关键章节存在、内部链接有效、五端平台均出现、52 个工具在 02/04/executor 代码清单中一致、API 表包含 Agent 与配对、SSE 事件类型与协议一致。
 2. **交叉一致性**：权限矩阵（04）与功能规格（02）的安全描述一致；数据模型表名与 API 字段一致；UI 的 Agent 元素与 04 的交互映射一致。
 3. **可行性**：核对技术选型与仓库脚本可执行（依赖可安装、Node 版本、打包命令）。
 4. **输出**：`docs/07-verification-report.md` 记录检查项、证据、发现与修复。
@@ -83,12 +83,12 @@ npm --workspace apps/mobile run start
 
 | 关卡 | 命令 / 方式 | 结果 |
 |---|---|---|
-| 文档契约 | `npm run verify:docs` | 329/329 通过 |
+| 文档契约 | `npm run verify:docs` | 335/335 通过 |
 | 类型检查 | `npm run typecheck`（core / gateway / desktop / mobile） | 全部通过 |
-| 单元测试 | `npm test` → core | 149/149 通过 |
-| 集成测试 | gateway（HTTP / SSE / WebSocket / 审批 / 配对 / 引擎方言 / 工具箱 / 表与数据操作 / 跨请求事务 / SSH 隧道 / Skill Host / 图表类型 / `/init`） | 217 个用例 · 152 通过 · 65 跳过（跳过项是需要 `AIDB_TEST_*_PORT` 的联机引擎，未配置即跳过） |
+| 单元测试 | `npm test` → core | 150/150 通过 |
+| 集成测试 | gateway（HTTP / SSE / WebSocket / 审批 / 配对 / 引擎方言 / 工具箱 / 表与数据操作 / 跨请求事务 / SSH 隧道 / Skill Host / 图表类型 / `/init` / 内置 MCP / 聚合搜索） | 252 个用例 · 187 通过 · 65 跳过（跳过项是需要 `AIDB_TEST_*_PORT` 的联机引擎，未配置即跳过） |
 | 构建 | core、gateway（esbuild）、desktop（Vite）、mobile web（2.07MB） | 成功 |
-| E2E | `npm run e2e`（桌面 Web + 移动 Web + Electron Shell + Navicat 布局 / 表与数据操作 / 工具箱 / 搜索 / 柱/堆叠/折线/饼/散点/热力/雷达 / `/init` 文档生成 / 体检 / SSH 隧道 / 回答导出 PDF） | 150/150 通过（无联机引擎环境变量时的基线；联机引擎检查按环境追加） |
+| E2E | `npm run e2e`（桌面 Web + 移动 Web + Electron Shell + Navicat 布局 / 表与数据操作 / 工具箱 / 搜索 / 网络搜索设置 / 柱/堆叠/折线/饼/散点/热力/雷达 / `/init` 文档生成 / 命令内联 / 体检 / SSH 隧道 / 回答导出 PDF / 新建卡片 AI 生成与预览） | 196/196 通过（无联机引擎环境变量时的基线；联机引擎检查按环境追加） |
 | Windows 打包 | `electron-builder --dir --win --x64` + 启动 `win-unpacked/AiDB Studio.exe` | 成功；内置 Bridge、1 个连接、Agent 面板可见、无异常 |
 | Windows NSIS 安装包 | `electron-builder --win nsis --x64 --publish never` | 成功产出 `AiDB Studio-0.1.0-setup.exe`（131 MB）+ `.blockmap`；`oneClick=false`、`perMachine=false` |
 | Linux 打包 | `electron-builder --dir --linux --x64` | 生成 `linux-unpacked` |

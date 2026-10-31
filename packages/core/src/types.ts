@@ -337,6 +337,113 @@ export const EMPTY_AGENT_CONTEXT_BUNDLE: AgentContextBundle = {
   relations: [],
 };
 
+/** 仪表板卡片的图表类型；与桌面端 ChartType 是同一组字面量，可直接互转。 */
+export type DashboardChartType = 'bar' | 'stacked' | 'line' | 'pie' | 'scatter' | 'heatmap' | 'radar';
+
+export const DASHBOARD_CHART_TYPES: DashboardChartType[] = ['bar', 'stacked', 'line', 'pie', 'scatter', 'heatmap', 'radar'];
+
+/** 单板卡片上限：再多就不再是「常用问题面板」，而是没人看的BI墙。 */
+export const DASHBOARD_CARD_LIMIT = 12;
+
+export type DashboardCardSource = 'ai' | 'favorite' | 'manual';
+
+export interface DashboardCard {
+  id: string;
+  connectionId: string;
+  database?: string;
+  title: string;
+  sql: string;
+  chartType: DashboardChartType;
+  /** 列名提示；缺省时由 buildChartSpec 推断 */
+  x?: string;
+  y?: string;
+  /** 参与板级时间筛选的时间列；必须被 SQL 投影出来，否则视为不参与 */
+  timeColumn?: string;
+  span: 1 | 2;
+  position: number;
+  source: DashboardCardSource;
+  /** false = AI 草稿，可被整批替换；true = 用户固定，生成不得覆盖 */
+  pinned: boolean;
+  lastRunAt?: string;
+  lastStatus?: 'ok' | 'error';
+  lastError?: string;
+  /** 上次结果快照：打开即见图，随后后台重跑 */
+  lastResult?: { columns: Array<{ name: string }>; rows: unknown[][] };
+  schemaHash?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DashboardCardInput {
+  connectionId: string;
+  database?: string;
+  title: string;
+  sql: string;
+  chartType: DashboardChartType;
+  x?: string;
+  y?: string;
+  timeColumn?: string;
+  span?: 1 | 2;
+  position?: number;
+  source?: DashboardCardSource;
+  pinned?: boolean;
+  /** 生成器试跑已经跑过一次，把结果当快照带走，卡片入板即可渲染，不必再打一轮 */
+  lastResult?: { columns: Array<{ name: string }>; rows: unknown[][] };
+}
+
+/** 板级时间范围：只对声明了 timeColumn 的卡片生效，用外层包裹实现。 */
+export interface DashboardTimeRange {
+  from?: string;
+  to?: string;
+}
+
+export interface DashboardCardResult {
+  cardId: string;
+  status: 'ok' | 'error';
+  columns: Array<{ name: string }>;
+  rows: unknown[][];
+  durationMs: number;
+  error?: string;
+  /** 时间筛选让查询失败时回退到不筛选的结果，UI 必须据此标注「筛选未生效」 */
+  filterSkipped?: boolean;
+}
+
+/** 新建卡片的试跑预览：与卡片刷新同一条只读执行路径，只多一个 error 让表单内联显示。 */
+export interface DashboardPreview {
+  columns: Array<{ name: string }>;
+  rows: unknown[][];
+  rowCount: number;
+  durationMs: number;
+  truncated?: boolean;
+  error?: string;
+}
+
+/** 一句话需求 → 单张卡片：模型返回 SQL 并已完成只读试跑。 */
+export interface DashboardComposeResult {
+  usedModel: boolean;
+  title: string;
+  sql: string;
+  chartType: DashboardChartType;
+  x?: string;
+  y?: string;
+  timeColumn?: string;
+  preview: DashboardPreview;
+  notes: string[];
+}
+
+/** 定时刷新默认关闭：后台默默跑查询对生产库是风险，必须逐板显式开启。 */
+export interface DashboardScheduleInfo {
+  connectionId: string;
+  database?: string;
+  intervalSeconds: number;
+  enabled: boolean;
+  notifyChannels: string[];
+  lastRunAt?: string;
+  lastStatus?: 'ok' | 'error';
+  lastError?: string;
+  updatedAt: string;
+}
+
 /** bundle 是否含任何会改变 prompt 输出的内容；false 时必须走完全等同旧行为的路径。 */
 export function isAgentContextActive(bundle?: AgentContextBundle | null): boolean {
   if (!bundle) return false;
@@ -405,6 +512,24 @@ export interface ModelProfile {
   reasoningTiers?: ModelReasoningTier[];
 }
 
+/** 服务商下的一个模型：id 是发给接口的模型名，name 是界面展示名。 */
+export interface AgentModelEntry {
+  id: string;
+  name?: string;
+}
+
+/** 一个可切换的模型来源（服务商连接）：同一端点 + 密钥下可以挂多个模型。 */
+export interface AgentModelConfig {
+  id: string;
+  /** 服务商展示名；缺省显示模型名或端点。 */
+  name?: string;
+  provider: AgentSettings['provider'];
+  preset?: string;
+  baseUrl: string;
+  /** 该服务商下可选的模型；顺序即列表顺序，至少一个。 */
+  models: AgentModelEntry[];
+}
+
 export interface AgentSettings {
   provider: 'local' | 'anthropic' | 'openai' | 'ollama';
   /** 服务商预设标识（deepseek / kimi / ollama …），用于界面回显与取模型列表。 */
@@ -426,6 +551,14 @@ export interface AgentSettings {
   /** 大 schema 候选表检索：auto 仅在超大 schema 启用；on/off 强制。 */
   schemaFocus?: 'auto' | 'on' | 'off';
   hasApiKey?: boolean;
+  /** 可切换的模型来源列表；缺省时用当前 provider/baseUrl/model 合成一个默认连接。 */
+  modelConfigs?: AgentModelConfig[];
+  /** 当前使用的连接 id（对应 modelConfigs[].id）；具体模型名见 model。 */
+  activeModelId?: string;
+  /** 每个连接是否已保存密钥；只读，由 Bridge 在公开设置里填充。 */
+  modelApiKeyStatus?: Record<string, boolean>;
+  /** 提交设置时的密钥变更（连接 id → 新密钥或 __CLEAR__），只写不读。 */
+  modelKeys?: Record<string, string>;
 }
 
 export interface EmbeddingSettings {
@@ -445,6 +578,75 @@ export interface FeatureSettings {
   mcp: boolean;
 }
 
+export type SearchBackendId =
+  | 'exa'
+  | 'parallel'
+  | 'duckduckgo'
+  | 'searxng'
+  | 'brave'
+  | 'tavily'
+  | 'serper'
+  | 'mojeek'
+  | 'deepseek'
+  | 'anthropic'
+  | 'openai';
+
+export interface SearchSettings {
+  enabled: SearchBackendId[];
+  numResults: number;
+  concurrency: number;
+  timeoutMs: number;
+  timeRange: 'any' | 'day' | 'week' | 'month' | 'year';
+  language?: string;
+  dedupe: 'url' | 'none';
+  rerank: boolean;
+  safeSearch: boolean;
+  healthTelemetry: boolean;
+  searxngBaseUrl: string;
+  anthropicModel?: string;
+  openaiModel?: string;
+  /** Read-only: which optional backends have a saved key. */
+  keyStatus?: Record<string, boolean>;
+  /** Write-only: key changes (new value or __CLEAR__). */
+  searchKeys?: Record<string, string>;
+}
+
+export interface SearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+  source: string;
+  publishedAt?: string;
+  score?: number;
+  sources?: string[];
+}
+
+export interface SearchBackendReport {
+  id: SearchBackendId;
+  ok: boolean;
+  count: number;
+  ms: number;
+  error?: string;
+}
+
+export interface SearchResponse {
+  query: string;
+  results: SearchResult[];
+  backends: SearchBackendReport[];
+  total: number;
+  deduped: number;
+}
+
+export interface SearchBackendHealth {
+  id: SearchBackendId;
+  status: 'idle' | 'ok' | 'error';
+  lastMs?: number;
+  lastAt?: string;
+  lastError?: string;
+  successes: number;
+  failures: number;
+}
+
 export interface AppSettings {
   theme: 'dark' | 'light' | 'system';
   locale: 'zh' | 'en';
@@ -457,6 +659,7 @@ export interface AppSettings {
   agent: AgentSettings;
   embedding: EmbeddingSettings;
   features: FeatureSettings;
+  search: SearchSettings;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -487,6 +690,21 @@ export const DEFAULT_SETTINGS: AppSettings = {
     model: 'text-embedding-3-small',
   },
   features: { skills: true, reportDeck: true, mcp: true },
+  search: {
+    enabled: ['exa', 'parallel', 'duckduckgo', 'searxng'],
+    numResults: 8,
+    concurrency: 6,
+    timeoutMs: 30000,
+    timeRange: 'any',
+    language: '',
+    dedupe: 'url',
+    rerank: false,
+    safeSearch: true,
+    healthTelemetry: true,
+    searxngBaseUrl: 'https://searx.be',
+    anthropicModel: 'claude-sonnet-4-20250514',
+    openaiModel: 'gpt-5.1',
+  },
 };
 
 export interface AgentPlanItem {

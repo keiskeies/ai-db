@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@aidb/core": "*",
+    "@codemirror/autocomplete": "^6.20.4",
     "@codemirror/lang-sql": "^6.8.0",
     "@codemirror/language": "^6.13.1",
     "@codemirror/state": "^6.5.0",

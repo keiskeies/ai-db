@@ -121,9 +121,9 @@ for (step = 0; step < maxSteps; step++) {
 - `audit_database` 在入口过滤禁用表（实测 116 表库禁用 1 张后 `tablesChecked=115`），
   聚合结果再做一次递归脱敏，防止 findings/结果对象带出禁用表名。
 
-## 4. 工具目录（51 个）
+## 4. 工具目录（52 个）
 
-> 命令化的任务入口（`/report`、`/compare`、`/diff`、`/recon`、`/fix`）见 [命令化 Agent 工作流设计与开发计划](./11-command-workflows.md)。命令私有工具（如 `compose_report`）只在该命令的 Agent 步骤内可用，不计入下表的 51 个全局工具。
+> 命令化的任务入口（`/report`、`/compare`、`/diff`、`/recon`、`/fix`）见 [命令化 Agent 工作流设计与开发计划](./11-command-workflows.md)。命令私有工具（如 `compose_report`）只在该命令的 Agent 步骤内可用，不计入下表的 52 个全局工具。
 
 风险等级：`read < write < ddl < destructive`。所有工具入参使用 JSON Schema（`additionalProperties: false`）。
 
@@ -173,16 +173,29 @@ for (step = 0; step < maxSteps; step++) {
 | 42 | `recon_data` | read | 两个源的键级 / 字段级对账（SQL 表、Redis 键空间、MongoDB/Elasticsearch 文档） | `{ left, right, fieldMap?, level?, baseSide?, maxKeys? }` |
 | 43 | `transfer_data` | write | 跨连接复制表结构与数据，目标缺失表自动创建 | `{ sourceConnectionId, targetConnectionId, tables?, mode?, createMissing? }` |
 | 44 | `mcp_list_tools` | read | 列出已配置 MCP Server 的工具 | `{ server }` |
-| 45 | `mcp_call` | write | 调用 MCP Server 工具（需审批；参数透传） | `{ server, tool, arguments? }` |
-| 46 | `skill_list` | read | 列出已安装的 Skill（SKILL.md 目录包） | `{ includeDisabled? }` |
-| 47 | `skill_read` | read | 读取 Skill 内的文本文件（SKILL.md / references / workflows） | `{ skill, path?, maxChars? }` |
-| 48 | `skill_write` | write | 写入 Skill 运行 workspace / output | `{ skill, runId?, area?, path, content }` |
-| 49 | `skill_run` | write | 按 aidb.skill.json 声明运行 python/node 入口 | `{ skill, entrypoint, runId? }` |
-| 50 | `skill_list_files` | read | 列出 Skill 运行的 workspace/input/output | `{ runId }` |
-| 51 | `skill_worker_run` | write | 在独立 Skill Worker 中运行技能，等待完成后返回最终答复与产物 | `{ skill, prompt, timeoutSeconds? }` |
+| 45 | `mcp_list_servers` | read | 列出已配置 MCP Server（含内置与外部）、id、启停状态、目录/域名与内置工具名；调用前先看这里，禁止猜服务器名 | `{ includeDisabled? }` |
+| 46 | `mcp_call` | 动态* | 调用 MCP Server 工具；内置只读工具直接执行，写工具与外部 Server 需审批 | `{ server, tool, arguments? }` |
+| 47 | `skill_list` | read | 列出已安装的 Skill（SKILL.md 目录包） | `{ includeDisabled? }` |
+| 48 | `skill_read` | read | 读取 Skill 内的文本文件（SKILL.md / references / workflows） | `{ skill, path?, maxChars? }` |
+| 49 | `skill_write` | write | 写入 Skill 运行 workspace / output | `{ skill, runId?, area?, path, content }` |
+| 50 | `skill_run` | write | 按 aidb.skill.json 声明运行 python/node 入口 | `{ skill, entrypoint, runId? }` |
+| 51 | `skill_list_files` | read | 列出 Skill 运行的 workspace/input/output | `{ runId }` |
+| 52 | `skill_worker_run` | write | 在独立 Skill Worker 中运行技能，等待完成后返回最终答复与产物 | `{ skill, prompt, timeoutSeconds? }` |
 
-\* `run_sql`、`run_mql`、`run_redis`、`run_cypher`、`run_cql`、`run_aql` 风险按各自语言的安全分类动态提升；`alter_table` 按 `operations` 动态判定（`add_column` 为 ddl、`drop_column` 为 destructive）；`dryRun=true` 时 DDL 只返回将执行的 SQL（用于预览）。`run_mql` / `run_redis` / `run_cypher` / `run_aql` / `vector_search` 仅用于对应模型的连接，SQL 专属工具（DDL、审计、图表等）在非 SQL 连接上明确返回不支持；例外是 `manage_index`，在 MongoDB 连接上改走结构化索引通道（同一实现服务对象信息面板的建删），不拼 SQL DDL。
+\* `run_sql`、`run_mql`、`run_redis`、`run_cypher`、`run_cql`、`run_aql` 风险按各自语言的安全分类动态提升；`alter_table` 按 `operations` 动态判定（`add_column` 为 ddl、`drop_column` 为 destructive）；`mcp_call` 按内置 Server 的工具声明动态判定（只读工具为 read，写工具与外部 Server 为 write）；`dryRun=true` 时 DDL 只返回将执行的 SQL（用于预览）。`run_mql` / `run_redis` / `run_cypher` / `run_aql` / `vector_search` 仅用于对应模型的连接，SQL 专属工具（DDL、审计、图表等）在非 SQL 连接上明确返回不支持；例外是 `manage_index`，在 MongoDB 连接上改走结构化索引通道（同一实现服务对象信息面板的建删），不拼 SQL DDL。
 \** 导出写文件为 `write`，不触碰数据库。
+
+#### 内置 MCP Server
+
+AiDB 预置 3 个第一方 MCP Server（进程内运行，不需要 npx、不下载第三方包），在 **设置 → MCP 与工具** 中启停与配置：
+
+| Server | 默认 | 配置 | 工具 | 边界 |
+|---|---|---|---|---|
+| `builtin-filesystem` | 启用 | 允许目录（绝对路径） | `list_directory` / `read_file` / `read_multiple_files` / `search_files` / `grep_files` / `file_info` / `write_file` / `edit_file` / `move_file` / `delete_file` | 未配置目录时不可访问任何文件；路径必须落在授权目录内，符号链接逃逸与 `..` 越界均拒绝；读写上限 2 MB；`grep_files` 支持上下文/文件/计数模式并优先用 ripgrep；`delete_file` 仅限文件且需 confirm，按 destructive 审批，目录不可删 |
+| `builtin-git` | 启用 | 仓库目录 | `git_status` / `git_log` / `git_diff` / `git_show` | 只读子命令，固定参数白名单；`ref` / 路径校验，不执行任意 git 参数 |
+| `builtin-web` | 关闭 | 域名限制（可选；留空=所有公网） | `fetch_url` / `web_search` | 仅 HTTP(S)；默认拦截 loopback、内网、链路本地与云元数据地址，重定向逐跳复检；正文上限 1 MB；`web_search` 聚合 Exa / Parallel / DuckDuckGo / SearXNG 与可选 Key 后端（Brave / Tavily / Serper / Mojeek / DeepSeek / Anthropic / OpenAI），并发 fan-out、URL 去重、单后端失败不影响整体 |
+
+Agent 通过 `mcp_list_servers` 获取真实 id（`builtin-filesystem` 等）与已配置目录，再用 `mcp_list_tools` / `mcp_call` 调用；系统提示同时注入这份目录，禁止猜服务器名。内置只读工具按 `read` 风险直接执行，`write_file` / `edit_file` / `move_file` 在询问模式逐次审批，`delete_file` 按 destructive 审批且只允许单文件。外部 stdio MCP Server 仍按用户配置启动，风险默认 `write`。**工具审批中的「始终允许」只放行调用，不等于目录白名单；文件系统仍须在设置里显式授权目录。** 不内置 shell：任意命令执行由 Skill Host 的声明式入口 + 白名单负责。
 
 #### 图表类型选择（`render_chart`）
 
@@ -257,8 +270,9 @@ type ToolResult = {
 
 ## 6. 计划（Todo）
 
-- 系统提示要求：多步任务（≥3 步）开始前调用 `update_plan`；每完成一步更新状态。
-- 计划状态仅存在于会话；渲染于对话流每轮末尾；`completed` 项不删除，便于回溯。
+- 系统提示要求：多步任务（≥3 步）开始前调用 `update_plan`；每完成一步更新状态，并保持同一组计划项，只改状态。
+- 运行期兜底：计划存在未完成项且连续两个工具没有触发 `update_plan` 时，在工具结果尾部追加 `[plan reminder]`，提醒模型上报进度。
+- 计划状态仅存在于会话；持久化视图只渲染最新一份计划，`completed` 项不删除，便于回溯。
 - 计划与工具轨迹共同构成"可审计的工作过程"。
 
 ## 7. 记忆架构
@@ -377,6 +391,11 @@ pinned → +0.3 且不衰减
 
 | 命令 | 行为 |
 |---|---|
+| `/report` | 围绕当前库/主题生成报告：工具查数、指标卡/表格/图表，数字全部来自工具 |
+| `/compare` | 对比数据：Agent 自行推断两组对象，输出对比表 + 双柱图 + 差异结论；跨源一致性走 recon_data |
+| `/diff` | 结构差异：schema_diff 输出新增/删除/变更 + 破坏性提示 + 目标方言 DDL |
+| `/recon` | 跨源一致性：recon_data 输出 matched/different/missing 计数 + 具体差异键与字段 |
+| `/fix` | 体检与修复：audit_database/check_data_quality，findings + 证据 + 修复 SQL，不自动改库 |
 | `/init` | 扫描当前库并生成/更新 `AI_DB.md`（可跟一个目录或文件路径）；确定性全量清单 + 模型注解 + 人工段落保留，不弹表单 |
 | `/schema` | 生成当前库结构摘要（表、列、关系、可疑点） |
 | `/audit` | 数据库体检：缺主键、外键缺索引、重复索引、空表 + 修复 SQL |
@@ -389,6 +408,8 @@ pinned → +0.3 且不衰减
 | `/clear` | 新建会话（清空上下文） |
 
 `/quality` 与 `/chart` 的 prompt 是 `(tables: TableInfo[]) => string`，**在点击时**按当前连接的已加载 schema 现算，因此不会像早期实现那样把不存在的 `orders` 写死进模板。
+
+`/report`、`/compare`、`/diff`、`/recon`、`/fix` 都是 Agent 语义命令：斜杠只补全 token，执行时由 `apps/gateway/src/commandIntents.ts` 注入目标与交付约束，Agent 自己选工具、推断对象、问澄清问题；不打开参数表单。`/init` 是唯一有专用确定性管线的内联命令（写 `AI_DB.md`）。
 
 `@table`：输入框弹出库/表选择器；注入该表完整 schema 到本轮上下文，并在消息上显示可移除 chip。`@schema` 注入整库摘要。
 

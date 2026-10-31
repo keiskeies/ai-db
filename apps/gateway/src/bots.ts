@@ -112,7 +112,7 @@ async function askAndReply(
     let answer = '';
     await host.startTurn(
       session.id,
-      { text, mode: 'readonly', connectionId: config.connectionId, database: config.database },
+      { text, mode: 'readonly', connectionId: config.connectionId, database: config.database, disableMcp: true },
       (event: AgentEvent) => {
         if (event.type === 'text_delta') answer += event.text;
       },

@@ -237,6 +237,7 @@ export class AgentRuntime {
     let toolCount = 0;
     let sqlRepairs = 0;
     let plan: AgentPlanItem[] = [];
+    let toolsSincePlan = 0;
 
     deps.emit({ type: 'start', turnId, sessionId: input.sessionId, model: deps.provider.label });
     if (input.context.memories?.length) {
@@ -313,6 +314,7 @@ export class AgentRuntime {
 
       messages.push({ role: 'assistant', content: stepText, toolCalls: calls });
 
+      let planUpdatedThisStep = false;
       for (const call of calls) {
         if (input.signal?.aborted) return aborted();
         toolCount++;
@@ -336,6 +338,8 @@ export class AgentRuntime {
             status: it.status === 'done' || it.status === 'doing' ? it.status : 'todo',
           }));
           deps.emit({ type: 'plan', items: plan });
+          toolsSincePlan = 0;
+          planUpdatedThisStep = true;
           const res: ToolResult = { ok: true, summary: `计划已更新（${plan.length} 项）`, data: { items: plan }, meta: { durationMs: 0 } };
           deps.emit({ type: 'tool_result', callId: call.id, tool: call.name, result: res });
           messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: serializeForModel(res) });
@@ -412,6 +416,13 @@ export class AgentRuntime {
             resultRef: call.id,
             repair: buildRepairHint(String(call.args.sql), res, input.context.databases, sqlRepairs),
           });
+        }
+        toolsSincePlan += 1;
+        // 模型常常只在开头建一次计划就忘了更新：连续两个工具后仍停在旧状态时，
+        // 在工具结果尾部追加一次提醒，让计划卡真的能走到 5/5。
+        if (!planUpdatedThisStep && plan.length && toolsSincePlan >= 2 && plan.some((item) => item.status !== 'done')) {
+          modelContent += '\n\n[plan reminder] The visible task plan is stale. Call update_plan now with the same items: mark finished steps done, mark the current step doing, then continue. Do not replace the plan with a shorter one.';
+          toolsSincePlan = 0;
         }
         messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: modelContent });
       }

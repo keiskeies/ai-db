@@ -40,7 +40,15 @@ export function DatabaseSelect({ connectionId, value, onChange, allowAll, allLab
 
   if (options.length <= 1) return null;
   return (
-    <select className={className} data-testid={testId} value={value} disabled={disabled} style={style} title="数据库" onChange={(e) => onChange(e.target.value)}>
+    <select
+      className={className}
+      data-testid={testId}
+      value={value}
+      disabled={disabled}
+      style={style}
+      title={conn?.database ? `数据库（连接默认：${conn.database}）` : '数据库'}
+      onChange={(e) => onChange(e.target.value)}
+    >
       {allowAll ? <option value="">{allLabel}</option> : null}
       {options.map((name) => (
         <option key={name} value={name}>{name}</option>

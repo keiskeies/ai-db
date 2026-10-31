@@ -38,7 +38,7 @@ writeFileSync(
 writeFileSync(
   join(skillDir, 'aidb.skill.json'),
   JSON.stringify({
-    permissions: { fs: ['workspace', 'output'], process: ['node'], network: false, mcp: ['other'] },
+    permissions: { fs: ['workspace', 'output'], process: ['node'], network: false, mcp: ['other', 'filesystem'] },
     secrets: ['DEMO_TOKEN'],
     entrypoints: [
       { id: 'make', command: ['${node}', '${skillDir}/scripts/run.cjs'], args: ['${workspace}', '${output}'], timeoutMs: 5000 },
@@ -414,6 +414,60 @@ test('Skill Worker 拒绝未授权的 MCP Server', async () => {
   assert.ok(state.events.some((event) => event.type === 'tool_result' && event.tool === 'mcp_list_tools' && !event.result.ok && event.result.error?.code === 'SKILL_MCP_DENIED'));
 });
 
+
+test('Skill Worker 不执行破坏性 MCP 工具', async () => {
+  if (!gateway.skills.getSkill('api-skill')) {
+    await api('/skills/import', { method: 'POST', body: JSON.stringify({ path: skillDir, id: 'api-skill' }) });
+  }
+  const settings = gateway.store.getSettings();
+  gateway.store.saveSettings({ ...settings, agent: { ...settings.agent, provider: 'openai', model: 'fake-skill-model', apiKey: 'fake' } });
+  let calls = 0;
+  const provider: any = {
+    id: 'fake',
+    label: 'Fake',
+    async *stream() {
+      calls++;
+      if (calls === 1) {
+        yield {
+          type: 'tool_call',
+          call: {
+            id: 'd1',
+            name: 'mcp_call',
+            args: { server: 'filesystem', tool: 'delete_file', arguments: { path: 'C:/server/kbook/backend/delete-me.txt', confirm: 'delete-me.txt' } },
+          },
+        };
+        yield { type: 'done', stopReason: 'tool_use' };
+        return;
+      }
+      yield { type: 'text', text: 'destroy blocked' };
+      yield { type: 'done', stopReason: 'end_turn' };
+    },
+  };
+  const worker = new SkillWorker(
+    gateway.store,
+    gateway.skills,
+    new SkillRunner(gateway.skills, home),
+    new ToolExecutor(gateway.store, gateway.manager, gateway.config, () => gateway.store.getSettings(), gateway.skills),
+    () => provider,
+  );
+  const started = worker.start('api-skill', 'try delete');
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    if (worker.get(started.runId)?.status !== 'running') break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const state = worker.get(started.runId)!;
+  assert.equal(state.status, 'succeeded', state.error);
+  assert.ok(
+    state.events.some(
+      (event) =>
+        event.type === 'tool_result' &&
+        event.tool === 'mcp_call' &&
+        !event.result.ok &&
+        event.result.error?.code === 'SKILL_MCP_DESTRUCTIVE_DENIED',
+    ),
+  );
+});
 
 test('Skill 升级保留旧版本备份且新版本生效', () => {
   const store = new SkillStore(home);

@@ -15,6 +15,14 @@ import type {
   CommandRunInfo,
   CommandRunInput,
   ConnectionConfig,
+  DashboardCard,
+  DashboardCardResult,
+  DashboardCardSource,
+  DashboardChartType,
+  DashboardComposeResult,
+  DashboardPreview,
+  DashboardScheduleInfo,
+  DashboardTimeRange,
   DatabaseSchema,
   DeviceInfo,
   McpServerInfo,
@@ -180,6 +188,107 @@ export async function streamTurn(sessionId: string, payload: TurnPayload, onEven
       idx = buffer.indexOf('\n\n');
     }
   }
+}
+
+export type TransferPhase = 'create' | 'read' | 'truncate' | 'write';
+
+export interface TransferTableResult {
+  table: string;
+  status: 'ok' | 'error' | 'skipped';
+  rows: number;
+  created: boolean;
+  truncated: boolean;
+  error?: string;
+}
+
+export type TransferEvent =
+  | { type: 'start'; mode: 'append' | 'replace'; tables: string[] }
+  | { type: 'table-start'; table: string; index: number; total: number }
+  | { type: 'phase-start'; table: string; phase: TransferPhase }
+  | {
+      type: 'phase-done';
+      table: string;
+      phase: TransferPhase;
+      durationMs: number;
+      rows?: number;
+      columns?: number;
+      skippedColumns?: number;
+      batches?: number;
+      limitReached?: boolean;
+      ddl?: string;
+    }
+  | { type: 'progress'; table: string; rows: number; totalRows: number }
+  | {
+      type: 'table-done';
+      table: string;
+      result: TransferTableResult;
+      durationMs: number;
+      columns: number;
+      skippedColumns: number;
+      batches: number;
+      limitReached: boolean;
+    }
+  | { type: 'table-error'; table: string; error: string; phase: TransferPhase; durationMs: number; rows: number }
+  | { type: 'error'; code: string; message: string }
+  | { type: 'done'; result: { results: TransferTableResult[]; totalRows: number; createdTables: number }; durationMs: number };
+
+async function readSse(res: Response, onEvent: (event: unknown) => void): Promise<void> {
+  if (!res.body) throw new ApiError('响应不支持流式读取', { code: 'SSE_BODY', status: res.status });
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
+    let idx = buffer.indexOf('\n\n');
+    while (idx !== -1) {
+      const frame = buffer.slice(0, idx).trim();
+      buffer = buffer.slice(idx + 2);
+      if (frame && !frame.startsWith(':')) {
+        const data = frame
+          .split('\n')
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trim())
+          .join('\n');
+        if (data) {
+          try {
+            onEvent(JSON.parse(data));
+          } catch {
+            /* ignore malformed frame */
+          }
+        }
+      }
+      idx = buffer.indexOf('\n\n');
+    }
+  }
+}
+
+export async function streamTransfer(
+  body: Record<string, unknown>,
+  onEvent: (event: TransferEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch('/api/transfer/stream', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => '');
+    let message = `数据传输请求失败（${res.status}）`;
+    let code = 'TRANSFER_REQUEST';
+    try {
+      const parsed = JSON.parse(text);
+      message = parsed?.error?.message ?? message;
+      code = parsed?.error?.code ?? code;
+    } catch {
+      /* keep */
+    }
+    throw new ApiError(message, { code, status: res.status });
+  }
+  await readSse(res, (event) => onEvent(event as TransferEvent));
 }
 
 export interface StoredAttachment {
@@ -364,7 +473,7 @@ export const api = {
   updateMcpServer: (id: string, body: { name?: string; command?: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }) =>
     request<{ server: McpServerInfo }>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteMcpServer: (id: string) => request<void>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  mcpTools: (id: string) => request<{ server: McpServerInfo; tools: Array<{ name: string; description?: string; inputSchema?: unknown }> }>(`/mcp/servers/${encodeURIComponent(id)}/tools`),
+  mcpTools: (id: string) => request<{ server: McpServerInfo; tools: Array<{ name: string; description?: string; inputSchema?: unknown; risk?: 'read' | 'write' | 'destructive' }> }>(`/mcp/servers/${encodeURIComponent(id)}/tools`),
   notificationChannels: () => request<{ channels: NotificationChannelInfo[] }>('/notifications/channels'),
   createNotificationChannel: (body: { name: string; type: NotificationChannelType; config: Record<string, unknown>; enabled?: boolean }) =>
     request<{ channel: NotificationChannelInfo }>('/notifications/channels', { method: 'POST', body: JSON.stringify(body) }),
@@ -485,6 +594,51 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  dashboardCards: (params: { connectionId: string; database?: string }) => {
+    const q = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) if (value) q.set(key, String(value));
+    return request<{ supported: boolean; limit: number; cards: DashboardCard[] }>(`/dashboards/cards?${q.toString()}`);
+  },
+  dashboardSaveCard: (body: {
+    id?: string;
+    connectionId: string;
+    database?: string;
+    title: string;
+    sql: string;
+    chartType: DashboardChartType;
+    x?: string;
+    y?: string;
+    timeColumn?: string;
+    span?: 1 | 2;
+    pinned?: boolean;
+    source?: DashboardCardSource;
+  }) => request<{ card: DashboardCard; cards: DashboardCard[] }>('/dashboards/cards', { method: 'POST', body: JSON.stringify(body) }),
+  dashboardDeleteCard: (id: string) =>
+    request<{ cards: DashboardCard[] }>(`/dashboards/cards/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  dashboardCompose: (body: { connectionId: string; database?: string; prompt: string }) =>
+    request<DashboardComposeResult>('/dashboards/compose', { method: 'POST', body: JSON.stringify(body) }),
+  dashboardPreview: (body: { connectionId: string; database?: string; sql: string }) =>
+    request<{ preview: DashboardPreview }>('/dashboards/preview', { method: 'POST', body: JSON.stringify(body) }),
+  dashboardReorderCards: (ids: string[]) =>
+    request<{ cards: DashboardCard[] }>('/dashboards/cards/reorder', { method: 'POST', body: JSON.stringify({ ids }) }),
+  dashboardRefresh: (body: { connectionId: string; database?: string; cardIds?: string[]; range?: DashboardTimeRange }) =>
+    request<{ results: DashboardCardResult[]; cards: DashboardCard[] }>('/dashboards/refresh', { method: 'POST', body: JSON.stringify(body) }),
+  dashboardDiscardDrafts: (body: { connectionId: string; database?: string }) =>
+    request<{ discarded: number; cards: DashboardCard[] }>('/dashboards/drafts', { method: 'DELETE', body: JSON.stringify(body) }),
+  dashboardGenerate: (body: { connectionId: string; database?: string; limit?: number }) =>
+    request<{ created: number; usedModel: boolean; notes: string[]; cards: DashboardCard[] }>('/dashboards/generate', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  dashboardSchedule: (params: { connectionId: string; database?: string }) => {
+    const q = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) if (value) q.set(key, String(value));
+    return request<{ schedule: DashboardScheduleInfo | null }>(`/dashboards/schedule?${q.toString()}`);
+  },
+  dashboardSetSchedule: (body: { connectionId: string; database?: string; intervalSeconds: number; notifyChannels?: string[] }) =>
+    request<{ schedule: DashboardScheduleInfo | null }>('/dashboards/schedule', { method: 'PUT', body: JSON.stringify(body) }),
+  dashboardReport: (body: { connectionId: string; database?: string }) =>
+    request<{ artifact: ArtifactInfo }>('/dashboards/report', { method: 'POST', body: JSON.stringify(body) }),
   data: (params: { connectionId: string; table: string; database?: string; limit?: number; offset?: number; orderBy?: string; orderDir?: string; where?: string }) => {
     const q = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== null && value !== '') q.set(key, String(value));
@@ -586,6 +740,10 @@ export const api = {
     ),
 
   updateSettings: (body: Record<string, unknown>) => request<{ settings: AppSettings }>('/settings', { method: 'PUT', body: JSON.stringify(body) }),
+  searchBackends: () => request<{ backends: Array<{ id: string; label: string; needsKey: boolean; group: 'free' | 'key' }>; health: Array<{ id: string; status: string; lastMs?: number; lastAt?: string; lastError?: string; successes: number; failures: number }>; keyStatus: Record<string, boolean> }>('/search/backends'),
+  searchQuery: (body: { query: string; numResults?: number }) => request<{ query: string; results: Array<{ title: string; url: string; snippet: string; source: string; publishedAt?: string; score?: number; sources?: string[] }>; backends: Array<{ id: string; ok: boolean; count: number; ms: number; error?: string }>; total: number; deduped: number }>('/search/query', { method: 'POST', body: JSON.stringify(body) }),
+  probeSearchBackend: (id: string) => request<{ health: { id: string; status: string; lastMs?: number; lastAt?: string; lastError?: string; successes: number; failures: number } }>(`/search/backends/${encodeURIComponent(id)}/probe`, { method: 'POST', body: JSON.stringify({}) }),
+  resetSearchHealth: () => request<{ health: Array<{ id: string; status: string; lastMs?: number; lastAt?: string; lastError?: string; successes: number; failures: number }> }>('/search/backends/reset', { method: 'POST', body: JSON.stringify({}) }),
   searchDatabase: (body: { connectionId: string; database?: string; query: string; scope?: 'objects' | 'data' | 'all' }) =>
     request<any>('/search', { method: 'POST', body: JSON.stringify(body) }),
   compareSchemas: (body: { sourceId: string; sourceDatabase?: string; targetId: string; targetDatabase?: string }) =>
@@ -604,7 +762,7 @@ export const api = {
     request<{ supported: boolean; options: Array<{ label: string; value: string }>; note?: string }>(
       `/table-options?connectionId=${encodeURIComponent(connectionId)}&table=${encodeURIComponent(table)}${database ? `&database=${encodeURIComponent(database)}` : ''}`,
     ),
-  agentModels: (body: { kind: string; baseUrl: string; apiKey?: string }) =>
+  agentModels: (body: { kind: string; baseUrl: string; apiKey?: string; modelConfigId?: string }) =>
     request<{ models: string[]; infos: ModelInfo[]; endpoint: string }>('/agent/models', { method: 'POST', body: JSON.stringify(body) }),
   uploadAttachment: (body: { mime: string; base64: string }) =>
     request<{ attachment: StoredAttachment }>('/agent/attachments', { method: 'POST', body: JSON.stringify(body) }),

@@ -1,5 +1,4 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { getCommand } from '@aidb/core';
 import type { ContextMenuItem } from './store';
 import { desktopBridge, type OpenTablePayload } from './lib/desktop';
 import {
@@ -16,6 +15,7 @@ import {
   Clock,
   Eye,
   History,
+  LayoutDashboard,
   Moon,
   Network,
   Settings,
@@ -26,7 +26,6 @@ import {
 } from 'lucide-react';
 import { useApp } from './store';
 import { CommandPalette } from './components/CommandPalette';
-import { CommandSheet } from './components/CommandSheet';
 import { ContextMenuHost } from './components/ContextMenu';
 import { PaneSplitter } from './components/PaneSplitter';
 import { ConnectionModal } from './components/ConnectionModal';
@@ -168,6 +167,7 @@ export default function App() {
   const activeConnectionId = useApp((s) => s.activeConnectionId);
   const activeTabId = useApp((s) => s.activeTabId);
   const tabs = useApp((s) => s.tabs);
+  const agentDatabase = useApp((s) => s.agentDatabase);
   const agentOpen = useApp((s) => s.agentOpen);
   const setAgentOpen = useApp((s) => s.setAgentOpen);
   const sidebarOpen = useApp((s) => s.sidebarOpen);
@@ -180,16 +180,12 @@ export default function App() {
   const openTools = useApp((s) => s.openTools);
   const openQuery = useApp((s) => s.openQuery);
   const openRelations = useApp((s) => s.openRelations);
+  const openDashboard = useApp((s) => s.openDashboard);
   const openConnectionEditor = useApp((s) => s.openConnectionEditor);
   const selectConnection = useApp((s) => s.selectConnection);
   const toggleConnection = useApp((s) => s.toggleConnection);
   const saveSettings = useApp((s) => s.saveSettings);
   const loadSchema = useApp((s) => s.loadSchema);
-  const commandSheetId = useApp((s) => s.commandSheetId);
-  const closeCommandSheet = useApp((s) => s.closeCommandSheet);
-  const commandSheetText = useApp((s) => s.commandSheetText);
-  const commandSheet = commandSheetId ? getCommand(commandSheetId) : undefined;
-
   useEffect(() => {
     void boot();
   }, [boot]);
@@ -279,6 +275,11 @@ export default function App() {
 
   const activeConn = connections.find((c) => c.id === activeConnectionId);
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
+  // 面包屑的「连接 › 库」以当前页签为准：页签自带连接/库时优先用它，
+  // 其次才是 Agent 选库和连接配置里的默认库（默认库只在编辑连接时变，不能代表当前库）。
+  const crumbTabConn = activeTab && 'connectionId' in activeTab ? connections.find((c) => c.id === activeTab.connectionId) : undefined;
+  const crumbConn = crumbTabConn ?? activeConn;
+  const crumbDatabase = (activeTab && 'database' in activeTab && activeTab.database) || agentDatabase || crumbConn?.database || '';
   const dark = settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
 
   return (
@@ -354,6 +355,14 @@ export default function App() {
         <RibbonButton icon={<Clock size={20} />} label="自动运行" tone="cyan" onClick={() => openTools('jobs')} />
         <RibbonButton icon={<Network size={20} />} label="模型" tone="fuchsia" onClick={() => openRelations()} />
         <RibbonButton icon={<BarChart3 size={20} />} label="图表" tone="pink" onClick={() => openQuery()} />
+        <RibbonButton
+          icon={<LayoutDashboard size={20} />}
+          label="仪表板"
+          tone="rose"
+          active={activeTab?.kind === 'dashboard'}
+          onClick={() => openDashboard()}
+          testId="ribbon-dashboard"
+        />
       </div>
 
       <div className="shell" style={{ ['--sidebar-w' as string]: `${sidebarWidth}px`, ['--agent-w' as string]: `${agentWidth}px` }}>
@@ -380,9 +389,9 @@ export default function App() {
         </span>
         <span className="sep" />
         <span className="item">
-          <Network size={10} /> {activeConn?.name ?? '未选择连接'}
+          <Network size={10} /> {crumbConn?.name ?? '未选择连接'}
         </span>
-        {activeConn ? <span className="item">{activeConn.database ?? ''}</span> : null}
+        {crumbConn && crumbDatabase ? <span className="item">{crumbDatabase}</span> : null}
         <span className="sep" />
         <span className="item">{activeTab?.title ?? ''}</span>
         <div className="spacer" />
@@ -396,7 +405,6 @@ export default function App() {
       <ToolsHub />
       <ConnectionModal />
       <CommandPalette />
-      {commandSheet ? <CommandSheet command={commandSheet} initialText={commandSheetText} onClose={closeCommandSheet} /> : null}
       <ContextMenuHost />
       <Toasts />
     </div>

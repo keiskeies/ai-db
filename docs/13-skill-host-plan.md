@@ -212,7 +212,7 @@ AIDB_HOME/skill-runs/<runId>/
 - core 类型 `SkillSummary` / `SkillFileEntry`；gateway `skill_list` / `skill_read` 工具（总数 47）。
 - AgentHost 注入 Skills 目录段落。
 - 设置 → Skills：列表、导入、启停、查看 SKILL.md；首次启动自动写入 3 个轻量内置技能（报告写作、SQL 审查、数据字典），PPT Master 作为第三方推荐技能提供一键安装。
-- 验收：已导入真实 PPT Master skill（v6.7.3，13,050 个文件），列表/`workflows/routing.md` 读取/目录注入通过；zip 导入与路径越界测试通过。Skill 工具总数 51；`npm run verify` 全绿：docs 329/329、core 149/149、gateway 152 pass、E2E 150/150。
+- 验收：已导入真实 PPT Master skill（v6.7.3，13,050 个文件），列表/`workflows/routing.md` 读取/目录注入通过；zip 导入与路径越界测试通过。Skill 工具总数 52；`npm run verify` 全绿：docs 335/335、core 150/150、gateway 187 pass、E2E 196/196。
 
 ### S2 沙箱运行时（完成）
 - workspace / input / output；`skill_write` / `skill_run` / `skill_list_files`。
@@ -258,5 +258,5 @@ AIDB_HOME/skill-runs/<runId>/
 - 能导入、启停、读取、卸载任意兼容 `SKILL.md` 的 skill；**已通过**（目录 / zip / Git，含路径越界与备份）。
 - PPT Master 能在 AiDB 中完成一次完整 Generate，输出原生 PPTX；**确定性报告直出已通过**（4 页原生 PPTX，数字与 ReportSpec 一致）；**真实模型生成受本地端点无响应阻塞**。
 - skill 执行有权限、沙箱、审计、取消与错误诊断；**已通过**（命令白名单、超时、路径保护、运行审计、AbortSignal 取消、Python 版本/包检查、密钥加密注入）。
-- S1–S4 全部通过 `npm run verify` 与专用 skill 验收脚本；**S1–S3 通过全量 verify（docs 329/329、core 149/149、gateway 152/217、E2E 150/150）；S4 已完成 Git/npm 导入、模板选择器、Skill→MCP 白名单桥、MCP Server 出站与升级回归。**
+- S1–S4 全部通过 `npm run verify` 与专用 skill 验收脚本；**S1–S3 通过全量 verify（docs 329/329、core 149/149、gateway 157/222、E2E 152/152）；S4 已完成 Git/npm 导入、模板选择器、Skill→MCP 白名单桥、MCP Server 出站与升级回归。**
 - 上游 skill 更新可通过重新导入完成，不修改上游源码。

@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import type { McpServerInfo, ToolResult } from '@aidb/core';
+import { builtinMcpKindOf, type JsonSchema, type McpServerInfo, type ToolResult } from '@aidb/core';
 import type { Store } from './store';
+import { BuiltinMcpClient } from './builtinMcp';
 
 interface JsonRpcResponse {
   jsonrpc: '2.0';
@@ -12,7 +13,14 @@ interface JsonRpcResponse {
 export interface McpTool {
   name: string;
   description?: string;
-  inputSchema?: Record<string, unknown>;
+  inputSchema?: JsonSchema;
+  risk?: 'read' | 'write' | 'destructive';
+}
+
+interface McpClientLike {
+  tools(): Promise<McpTool[]>;
+  call(tool: string, args: Record<string, unknown>): Promise<ToolResult>;
+  close(): void;
 }
 
 class McpClient {
@@ -151,7 +159,7 @@ class McpClient {
   }
 }
 
-const clients = new Map<string, McpClient>();
+const clients = new Map<string, McpClientLike>();
 
 function resolveServer(store: Store, ref: string): McpServerInfo {
   const servers = store.listMcpServers();
@@ -161,12 +169,14 @@ function resolveServer(store: Store, ref: string): McpServerInfo {
   return server;
 }
 
-function clientFor(store: Store, server: McpServerInfo): McpClient {
+function clientFor(store: Store, server: McpServerInfo): McpClientLike {
   const signature = `${server.command}\u0000${server.args.join('\u0000')}`;
   const cached = clients.get(server.id);
   if (cached && (cached as any).signature === signature) return cached;
   cached?.close();
-  const client = new McpClient(server, store.getMcpServerEnv(server.id));
+  const client: McpClientLike = builtinMcpKindOf(server.command)
+    ? new BuiltinMcpClient(server)
+    : new McpClient(server, store.getMcpServerEnv(server.id));
   (client as any).signature = signature;
   clients.set(server.id, client);
   return client;

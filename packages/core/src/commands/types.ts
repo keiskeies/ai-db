@@ -179,12 +179,16 @@ export interface NotificationChannelInfo {
 }
 
 
+import type { BuiltinMcpKind } from '../agent/builtinMcp';
+
 export interface McpServerInfo {
   id: string;
   name: string;
   command: string;
   args: string[];
   enabled: boolean;
+  /** Set when the server is a first-party built-in; command is `builtin:<kind>`. */
+  builtin?: BuiltinMcpKind;
   createdAt: string;
   updatedAt: string;
 }

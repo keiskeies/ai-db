@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { basicSetup, EditorView } from 'codemirror';
+import { acceptCompletion } from '@codemirror/autocomplete';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { Compartment, EditorState, Prec } from '@codemirror/state';
 import { tags as t } from '@lezer/highlight';
 import { keymap } from '@codemirror/view';
 import { MSSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql as sqlLang, type SQLNamespace } from '@codemirror/lang-sql';
-import { AlignLeft, BarChart3, Bookmark, Database, Download, FileDown, FilePlus, FileUp, History, ListChecks, Network, Play, Plus, Sparkles, Star, Table2, TerminalSquare, Trash2, WandSparkles, Wrench } from 'lucide-react';
-import type { ConnectionConfig, DatabaseSchema, QueryBatchResult } from '@aidb/core';
+import { AlignLeft, BarChart3, Bookmark, Database, Download, FileDown, FilePlus, FileUp, History, ListChecks, Network, Play, Plus, Pin, Sparkles, Star, Table2, TerminalSquare, Trash2, WandSparkles, Wrench } from 'lucide-react';
+import type { ConnectionConfig, DashboardChartType, DatabaseSchema, QueryBatchResult } from '@aidb/core';
 import { engineMeta, editsRecords, supportsTransactions, writesDocuments, writesLineProtocol } from '@aidb/core';
 import { api } from '../lib/api';
 import { deliverExport } from '../lib/exportDelivery';
@@ -15,6 +16,7 @@ import { formatSql } from '../lib/sqlFormat';
 import { useApp, type Tab } from '../store';
 import { ChartView, type ChartSpec } from './ChartView';
 import type { ChartType } from './ChartToolbar';
+import { buildChartSpec, numericColumnNames } from './buildChartSpec';
 import { DataGrid } from './DataGrid';
 import { GraphView } from './GraphView';
 import { VectorSearchPanel } from './VectorSearchPanel';
@@ -198,6 +200,9 @@ export function QueryView({ tab }: { tab: QueryTab }) {
                 return true;
               },
             },
+            // 补全列表打开时 Tab 直接接受当前项；未打开时 acceptCompletion 返回 false，
+            // 继续落到默认按键行为（缩进 / 焦点切换）不变。
+            { key: 'Tab', run: acceptCompletion },
           ]),
         ),
         basicSetup,
@@ -527,64 +532,43 @@ ${text}
   });
   const messages = batch?.messages ?? [];
 
-  const chartSpec: ChartSpec | null = useMemo(() => {
-    if (!set?.columns.length || !set.rows.length) return null;
-    const names = set.columns.map((column) => column.name);
-    const fallbackX = names[0];
-    const numericIndex = set.columns.findIndex((_, index) => set.rows.some((row) => Number.isFinite(Number(row[index]))));
-    const effectiveX = chartX && names.includes(chartX) ? chartX : fallbackX;
-    const effectiveY = chartY && names.includes(chartY) ? chartY : names[numericIndex > 0 ? numericIndex : Math.min(1, names.length - 1)];
-    if (!effectiveX || !effectiveY || effectiveX === effectiveY) return null;
-    const xIndex = names.indexOf(effectiveX);
-    const yIndex = names.indexOf(effectiveY);
-    const extraColumns = extraY
-      .filter((name) => name !== effectiveY && names.includes(name))
-      .map((name) => ({ name, index: names.indexOf(name) }));
-    const points = set.rows
-      .slice(0, chartType === 'scatter' ? 200 : 24)
-      .map((row) => ({
-        label: String(row[xIndex] ?? '—'),
-        value: Number(row[yIndex]),
-        extras: extraColumns.map((column) => {
-          const value = Number(row[column.index]);
-          return Number.isFinite(value) ? value : 0;
-        }),
-      }))
-      .filter((point) => Number.isFinite(point.value));
-    if (!points.length) return null;
-    return {
-      type: chartType,
-      title: `${effectiveY} by ${effectiveX}`,
-      xLabel: effectiveX,
-      yLabel: effectiveY,
-      sql: set.statement,
-      series: points.map((point) => ({ label: point.label, value: point.value })),
-      extraSeries: extraColumns.length
-        ? extraColumns.map((column, offset) => ({ name: column.name, values: points.map((point) => point.extras[offset]) }))
-        : undefined,
-      stacked: chartType === 'stacked' || undefined,
-      dualAxis: chartDual || undefined,
-    };
-  }, [set, chartX, chartY, chartType, extraY, chartDual]);
+  const chartSpec: ChartSpec | null = useMemo(
+    () => buildChartSpec({ data: set, type: chartType, x: chartX, y: chartY, extraY, dualAxis: chartDual }),
+    [set, chartX, chartY, chartType, extraY, chartDual],
+  );
 
-  const numericColumns = useMemo(() => {
-    if (!set) return [];
-    return set.columns
-      .filter((_, index) => set.rows.some((row) => Number.isFinite(Number(row[index]))))
-      .map((column) => column.name);
-  }, [set]);
+  // 图表背后的 SQL 就是卡片本身：钉到仪表板后每次打开都会重新执行，不是截图。
+  const pinToDashboard = async () => {
+    if (!chartSpec?.sql) {
+      notify('warning', '这张图没有可复用的 SQL');
+      return;
+    }
+    try {
+      await api.dashboardSaveCard({
+        connectionId: tab.connectionId,
+        database: tab.database,
+        title: chartSpec.title,
+        sql: chartSpec.sql,
+        chartType: chartSpec.type as DashboardChartType,
+        x: chartSpec.xLabel,
+        y: chartSpec.yLabel,
+        pinned: true,
+        source: 'manual',
+      });
+      notify('success', '已钉到仪表板', `${chartSpec.title} · 打开仪表板会重新执行这条查询`);
+    } catch (err: any) {
+      notify('error', '加入仪表板失败', err?.message);
+    }
+  };
+
+  const numericColumns = useMemo(() => numericColumnNames(set), [set]);
 
   // 散点必须有数值 X/Y：切过去时自动换到前两个数值列，避免用分类列当 x 轴画出假相关。
   const changeChartType = (next: ChartType) => {
     setChartType(next);
     if (next !== 'bar' && next !== 'stacked') setChartDual(false);
     if (next !== 'scatter' || !set) return;
-    const numeric = set.columns
-      .filter((_, index) => set.rows.some((row) => {
-        const value = row[index];
-        return value !== null && value !== undefined && String(value).trim() !== '' && Number.isFinite(Number(value));
-      }))
-      .map((column) => column.name);
+    const numeric = numericColumnNames(set, true);
     if (numeric.length < 2) return;
     const x = numeric.includes(chartX) ? chartX : numeric[0];
     const y = numeric.includes(chartY) && chartY !== x ? chartY : numeric.find((name) => name !== x)!;
@@ -921,6 +905,11 @@ ${text}
                     ) : null}
                   </div>
                 ) : null}
+                <div className="row gap-4" style={{ padding: '6px 10px 0' }}>
+                  <button className="btn small" onClick={() => void pinToDashboard()} title="把这张图钉到当前库的仪表板" data-testid="chart-pin-dashboard">
+                    <Pin size={12} /> 加入仪表板
+                  </button>
+                </div>
                 <ChartView
                   chart={chartSpec}
                   typeOverride={chartType}

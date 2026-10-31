@@ -92,7 +92,7 @@ test('health, bootstrap and demo seed', async () => {
 
   const boot = await api<{ connections: ConnectionConfig[]; tools: unknown[]; settings: { agent: { provider: string } } }>('/bootstrap');
   assert.equal(boot.status, 200);
-  assert.equal(boot.body.tools.length, 51);
+  assert.equal(boot.body.tools.length, 52);
   demo = boot.body.connections.find((c) => c.engine === 'sqlite')!;
   assert.ok(demo, 'demo connection exists');
   assert.equal(boot.body.settings.agent.provider, 'local');
@@ -733,6 +733,43 @@ test('productivity toolkit: search, compare, sync, transfer, generate, monitor, 
   });
   assert.ok(dataCompare.body.result.rows.some((row: any) => row.table === 'orders' && row.status === 'same'));
   assert.ok(dataCompare.body.result.rows.some((row: any) => row.table === 'users' && row.status === 'different'));
+
+  const streamRes = await fetch(`${base}/api/transfer/stream`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ sourceId: demo.id, targetId, tables: ['orders'], mode: 'replace' }),
+  });
+  assert.equal(streamRes.status, 200);
+  const readSse = async (res: Response) =>
+    (await res.text())
+      .split('\n\n')
+      .map((frame) => frame.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('\n'))
+      .filter(Boolean)
+      .map((data) => JSON.parse(data) as any);
+  const streamEvents = await readSse(streamRes);
+  assert.ok(streamEvents.some((event) => event.type === 'start' && event.mode === 'replace'));
+  assert.ok(streamEvents.some((event) => event.type === 'table-start' && event.table === 'orders'));
+  assert.ok(streamEvents.some((event) => event.type === 'phase-done' && event.phase === 'read' && event.rows === 900));
+  assert.ok(streamEvents.some((event) => event.type === 'phase-done' && event.phase === 'truncate'));
+  assert.ok(streamEvents.some((event) => event.type === 'phase-done' && event.phase === 'write' && event.rows === 900 && event.batches === 5));
+  assert.ok(streamEvents.some((event) => event.type === 'progress' && event.table === 'orders' && event.totalRows === 900));
+  const streamDone = streamEvents.find((event) => event.type === 'done');
+  assert.equal(streamDone?.result.totalRows, 900);
+  assert.equal(streamDone?.result.results[0].rows, 900);
+  const streamedCount = await api<{ batch: { sets: Array<{ rows: unknown[][] }> } }>('/query', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: targetId, sql: 'SELECT COUNT(*) FROM orders' }),
+  });
+  assert.equal(Number(streamedCount.body.batch.sets[0].rows[0][0]), 900);
+
+  const failedStream = await fetch(`${base}/api/transfer/stream`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ sourceId: demo.id, targetId, tables: ['orders'], mode: 'append' }),
+  });
+  const failedEvents = await readSse(failedStream);
+  assert.ok(failedEvents.some((event) => event.type === 'table-error' && event.phase === 'write' && /UNIQUE/.test(event.error)));
+  assert.equal(failedEvents.find((event) => event.type === 'done')?.result.results[0].status, 'error');
 
   const advanced = await api<{ objects: any }>(`/objects?connectionId=${demo.id}`);
   assert.equal(advanced.body.objects.supported, true);

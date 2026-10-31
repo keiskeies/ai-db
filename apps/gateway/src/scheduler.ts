@@ -1,7 +1,7 @@
 import type { JobInfo } from '@aidb/core';
 import type { GatewayConfig } from './config';
 import type { ConnectionManager } from './manager';
-import { notifyArtifact } from './notifications';
+import { notifyArtifact, sendNotification } from './notifications';
 import { dumpDatabase } from './services';
 import type { Store } from './store';
 
@@ -10,6 +10,8 @@ export class JobScheduler {
   private running = new Set<string>();
   private artifactRunning = new Set<string>();
   private artifactRunner?: (artifactId: string) => Promise<{ ok: boolean; message: string }>;
+  private dashboardRunning = new Set<string>();
+  private dashboardRunner?: (connectionId: string, database?: string) => Promise<{ ok: boolean; message: string }>;
 
   constructor(
     private store: Store,
@@ -19,6 +21,10 @@ export class JobScheduler {
 
   setArtifactRunner(runner: (artifactId: string) => Promise<{ ok: boolean; message: string }>): void {
     this.artifactRunner = runner;
+  }
+
+  setDashboardRunner(runner: (connectionId: string, database?: string) => Promise<{ ok: boolean; message: string }>): void {
+    this.dashboardRunner = runner;
   }
 
   start(): void {
@@ -42,6 +48,7 @@ export class JobScheduler {
       void this.runJob(job.id).catch(() => undefined);
     }
     await this.tickArtifacts(now);
+    await this.tickDashboards(now);
   }
 
   private async tickArtifacts(now: number): Promise<void> {
@@ -63,6 +70,27 @@ export class JobScheduler {
 
   isRunning(id: string): boolean {
     return this.running.has(id);
+  }
+
+  /** 仪表板定时刷新：与 artifact 定时同一套节流，最小 60 秒，同一块板不并发跑。 */
+  private async tickDashboards(now: number): Promise<void> {
+    if (!this.dashboardRunner) return;
+    for (const schedule of this.store.listDashboardSchedules()) {
+      const scope = `${schedule.connectionId}/${schedule.database ?? ''}`;
+      if (this.dashboardRunning.has(scope)) continue;
+      const last = schedule.lastRunAt ? new Date(schedule.lastRunAt).getTime() : 0;
+      if (now - last < Math.max(60, schedule.intervalSeconds) * 1000) continue;
+      this.dashboardRunning.add(scope);
+      void this.dashboardRunner(schedule.connectionId, schedule.database)
+        .then(async (result) => {
+          this.store.markDashboardScheduleRun(schedule.connectionId, schedule.database, result.ok ? 'ok' : 'error', result.ok ? undefined : result.message);
+          for (const channelId of schedule.notifyChannels) {
+            await sendNotification(this.store, channelId, `仪表板刷新${result.ok ? '完成' : '失败'}：${result.message}`).catch(() => undefined);
+          }
+        })
+        .catch((err: any) => this.store.markDashboardScheduleRun(schedule.connectionId, schedule.database, 'error', err?.message ?? '定时刷新失败'))
+        .finally(() => this.dashboardRunning.delete(scope));
+    }
   }
 
   async runJob(id: string): Promise<{ ok: boolean; message: string }> {

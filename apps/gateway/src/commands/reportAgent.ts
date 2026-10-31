@@ -282,6 +282,7 @@ ${schemaText}
 
 Rules:
 - Use only read-only tools (inspect_schema, search_objects, run_sql, explain_sql, sample_rows, profile_column, analyze_chart, forecast_chart, render_chart, memory_search, update_plan).
+- For 3+ steps, call update_plan first, then call it again after each finished step: mark the step done and the next step doing. Never leave the plan at 0/N while continuing to run tools. Keep the same plan items across updates and only change their statuses; do not replace the plan with a shorter one unless the task scope itself changed.
 - Inspect schema before writing SQL when unsure. Keep SQL bounded; use aggregate SQL for summaries.
 - Never calculate totals, deltas, ratios or shares by hand. Use one aggregate SQL or analyze_chart; quote its numbers verbatim. The app computes comparison deltas from the submitted left/right values.
 - Report chart blocks support bar / line / pie only. Choose line for an ordered time axis, bar for category comparisons, and pie only for 2–6 non-negative parts of one whole. Other render_chart types (stacked/scatter/heatmap/radar) are for exploration during the turn, not for compose_report blocks; never force them into a pie just to add a chart.

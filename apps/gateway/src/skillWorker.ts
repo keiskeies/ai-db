@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { relative } from 'node:path';
 import {
   AgentRuntime,
+  builtinMcpServer,
+  builtinMcpToolRisk,
   createProvider,
   getTool,
   providerTools,
@@ -248,6 +250,18 @@ export class SkillWorker {
       bootstrapNote = `\nBootstrap steps ${bootstrapIds.join(', ')} already ran. Project directory: ${project}\nProject directory relative to workspace: ${relative(workspace, project).replace(/\\/g, '/')}\nDo not run bootstrap entrypoints again. Write page files with skill_write into that project's svg_output before running quality or export.`;
     }
     const mcpServers = manifest.permissions?.mcp ?? [];
+    const declaredMcp = this.store
+      .listMcpServers()
+      .filter((server) => mcpServers.includes('*') || mcpServers.includes(server.id) || mcpServers.includes(server.name));
+    const mcpCatalog = declaredMcp
+      .filter((server) => server.enabled)
+      .map((server) => {
+        const definition = server.builtin ? builtinMcpServer(server.builtin) : undefined;
+        const tools = definition ? `tools: ${definition.tools.map((tool) => `${tool.name}(${tool.risk})`).join(', ')}` : 'call mcp_list_tools for its tools';
+        const args = definition && server.args.length ? `; ${definition.argsLabel}: ${server.args.join(', ')}` : '';
+        return `- ${server.id} (name: ${server.name}); ${tools}${args}`;
+      })
+      .join('\n');
     const entrypoints = (manifest.entrypoints ?? []).map((entry) => `- ${entry.id}: ${entry.command.join(' ')}${entry.args ? ` ${entry.args.join(' ')}` : ''}`).join('\n');
     const system = `You are AiDB Skill Worker for "${skill.name}" (${state.skill}). Follow the skill instructions below and complete the task in the sandbox.
 Skill directory: ${skillDir}
@@ -258,7 +272,7 @@ Input dir: ${runDir}/input
 Output dir: ${runDir}/output
 Declared entrypoints (use skill_run):
 ${entrypoints}
-${mcpServers.length ? `Authorized MCP servers (mcp_list_tools / mcp_call): ${mcpServers.join(', ')}` : 'MCP tools are not authorized for this skill.'}
+${mcpServers.length ? `Authorized MCP servers (use the exact id with mcp_list_tools / mcp_call):\n${mcpCatalog || '(none enabled)'}` : 'MCP tools are not authorized for this skill.'}
 ${bootstrapNote}
 
 Rules:
@@ -333,11 +347,20 @@ ${(skill.body ?? '').slice(0, 20000)}`;
         const mcpCall = call.name === 'mcp_list_tools' || call.name === 'mcp_call';
         if (mcpCall) {
           const server = String(call.args.server ?? '');
-          if (!mcpServers.includes('*') && !mcpServers.includes(server)) {
+          if (!mcpServers.includes('*') && !declaredMcp.some((item) => item.id === server || item.name === server)) {
             return {
               ok: false,
               summary: 'MCP Server 未授权',
               error: { code: 'SKILL_MCP_DENIED', message: `Skill 未授权 MCP Server：${server}` },
+              meta: { durationMs: 0 },
+            };
+          }
+          const declared = declaredMcp.find((item) => item.id === server || item.name === server);
+          if (call.name === 'mcp_call' && builtinMcpToolRisk(declared?.id ?? server, String(call.args.tool ?? '')) === 'destructive') {
+            return {
+              ok: false,
+              summary: 'Skill 不能执行破坏性 MCP 工具',
+              error: { code: 'SKILL_MCP_DESTRUCTIVE_DENIED', message: 'Skill Worker 不执行破坏性 MCP 工具（如 delete_file），请让用户在主会话确认' },
               meta: { durationMs: 0 },
             };
           }

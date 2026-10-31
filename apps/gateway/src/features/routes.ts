@@ -1,13 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { Router, type NextFunction, type Request, type Response } from 'express';
-import { engineMeta, isSqlEngine, type TableMaintenanceAction } from '@aidb/core';
+import { encodeSse, engineMeta, isSqlEngine, sseHeaders, type TableMaintenanceAction } from '@aidb/core';
 import type { GatewayConfig } from '../config';
 import type { ConnectionManager } from '../manager';
 import type { Store } from '../store';
 import type { JobScheduler } from '../scheduler';
 import { compareSchemas } from './schemaCompare';
 import { searchDatabase } from './search';
-import { transferData } from './transfer';
+import { transferData, TransferAbortedError, type TransferEvent, type TransferResult } from './transfer';
 import { generateData } from './generate';
 import { killSession, monitorConnection } from './monitor';
 import { listUsers, manageUser } from './users';
@@ -251,6 +251,75 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
         meta: { sourceId, tables: result.results.length, rows: result.totalRows },
       });
       res.json({ result });
+    }),
+  );
+
+  router.post(
+    '/transfer/stream',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const sourceId = str(body.sourceId);
+      const targetId = str(body.targetId);
+      if (!sourceId || !targetId) throw Object.assign(new Error('sourceId 与 targetId 必填'), { code: 'INVALID_INPUT', status: 400 });
+      const started = Date.now();
+      res.writeHead(200, sseHeaders());
+      res.flushHeaders?.();
+      let finished = false;
+      let closed = false;
+      const heartbeat = setInterval(() => {
+        if (!finished && !closed && !res.writableEnded) res.write(': ping\n\n');
+      }, 15000);
+      const send = (event: TransferEvent) => {
+        if (finished || closed || res.writableEnded) return;
+        res.write(encodeSse(event));
+      };
+      res.on('close', () => {
+        if (!res.writableEnded) closed = true;
+      });
+      let result: TransferResult | undefined;
+      let failure: string | undefined;
+      try {
+        result = await transferData(store, manager, {
+          sourceId,
+          sourceDatabase: str(body.sourceDatabase),
+          targetId,
+          targetDatabase: str(body.targetDatabase),
+          tables: Array.isArray(body.tables) ? (body.tables as string[]) : undefined,
+          mode: body.mode === 'replace' ? 'replace' : 'append',
+          createMissing: body.createMissing !== false,
+          limit: Number(body.limit) || undefined,
+          onEvent: send,
+          shouldAbort: () => closed,
+        });
+        manager.invalidate(targetId);
+      } catch (err: any) {
+        failure = String(err?.message ?? '传输失败');
+        if (!(err instanceof TransferAbortedError)) {
+          send({ type: 'error', code: err?.code ?? 'TRANSFER_ERROR', message: failure });
+        }
+      } finally {
+        finished = true;
+        clearInterval(heartbeat);
+        store.addAudit({
+          actor: 'user',
+          connectionId: targetId,
+          database: str(body.targetDatabase),
+          tool: 'data.transfer',
+          risk: 'write',
+          approval: 'manual',
+          status: result && !result.results.some((item) => item.status === 'error') ? 'ok' : 'error',
+          durationMs: Date.now() - started,
+          meta: {
+            sourceId,
+            tables: result?.results.length ?? (Array.isArray(body.tables) ? body.tables.length : 0),
+            rows: result?.totalRows ?? 0,
+            failed: result?.results.filter((item) => item.status === 'error').length ?? 0,
+            aborted: closed,
+            error: failure,
+          },
+        });
+        if (!res.writableEnded) res.end();
+      }
     }),
   );
 

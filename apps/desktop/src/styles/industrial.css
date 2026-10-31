@@ -180,8 +180,19 @@ body {
   background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
 }
 .cap-card:hover { border-color: color-mix(in srgb, var(--agent) 55%, transparent); background: var(--agent-soft); }
-.msg-user { gap: 7px; }
-.msg-user .bubble { padding: 7px 9px; font-size: 11.8px; line-height: 1.6; background: color-mix(in srgb, var(--bg-elevated) 88%, transparent); }
+.msg-user { gap: 8px; }
+.msg-user .bubble {
+  padding: 8px 11px; font-size: 11.8px; line-height: 1.6;
+  border: 1px solid color-mix(in srgb, var(--agent) 24%, var(--border-subtle));
+  border-radius: 10px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--agent) 10%, var(--bg-elevated)), color-mix(in srgb, var(--agent) 4%, var(--bg-panel)));
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--agent) 58%, transparent), inset 0 1px 0 rgba(255, 255, 255, .05), 0 3px 10px rgba(0, 0, 0, .16);
+}
+[data-theme='light'] .msg-user .bubble {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--agent) 3%, #ffffff), color-mix(in srgb, var(--agent) 8%, #ffffff));
+  border-color: color-mix(in srgb, var(--agent) 24%, rgba(16, 20, 20, .12));
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--agent) 62%, transparent), inset 0 1px 0 #ffffff, 0 2px 8px rgba(15, 20, 20, .07);
+}
 .msg-assistant { gap: 7px; }
 .msg-assistant .avatar {
   width: 17px; height: 17px; flex-basis: 17px;
@@ -295,31 +306,91 @@ body {
   background: var(--bg-app);
 }
 .chart-card {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-app) 60%, transparent);
-  padding: 8px 9px;
-  margin-top: 7px;
+  position: relative;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 42%, transparent);
+  border-radius: 10px;
+  background:
+    radial-gradient(120% 80% at 100% 0%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 60%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 55%, transparent), color-mix(in srgb, var(--bg-app) 55%, transparent));
+  padding: 11px 12px 9px;
+  margin-top: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .035);
 }
-.chart-head { display: flex; align-items: center; gap: 6px; font-size: 10.5px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
-.chart-head .badge { margin-left: auto; }
-.chart-svg { width: 100%; height: auto; max-height: min(400px, 55vh); display: block; overflow: visible; }
-/* 双保险：Agent 面板里任何路径渲染的图表都不允许超过 350（含历史消息、工具卡内嵌） */
-.agent-panel .chart-svg { max-height: min(350px, max(200px, calc(100dvh - 420px))); }
-.chart-grid { stroke: var(--border-subtle); stroke-width: 1; stroke-dasharray: 2 4; }
-.chart-axis { fill: var(--text-muted); font-size: 8px; font-family: var(--font-mono); }
-.chart-foot { display: flex; align-items: center; gap: 6px; font-size: 8.5px; color: var(--text-muted); margin-top: 3px; }
-.chart-open { margin-left: auto; border: none; background: transparent; color: var(--accent); font-size: 9px; display: inline-flex; align-items: center; gap: 3px; padding: 2px 3px; }
-.chart-open:hover { color: var(--accent-hover); text-decoration: underline; }
-.chart-toolbar { display: flex; align-items: center; gap: 5px; padding: 3px 0 5px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 5px; flex-wrap: wrap; }
+/* 亮色下助手面板是纯白，图表卡需要一层明确的「卡片面」才能和背景分开 */
+[data-theme='light'] .chart-card {
+  background:
+    radial-gradient(120% 80% at 100% 0%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 58%),
+    linear-gradient(180deg, #fcfdfc 0%, #eff4f2 100%);
+  border-color: rgba(16, 20, 20, .16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .92), 0 8px 22px rgba(15, 20, 20, .07);
+}
+.chart-hover-tip {
+  position: absolute; z-index: 6; pointer-events: none;
+  transform: translate(-50%, calc(-100% - 9px));
+  max-width: 260px; padding: 5px 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border-strong));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg-panel) 88%, transparent);
+  color: var(--text-primary);
+  font-size: 10px; line-height: 1.55; white-space: pre-line;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .35);
+}
+.chart-head { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 650; letter-spacing: .1px; color: var(--text-primary); margin-bottom: 7px; }
+.chart-head::before { content: ''; width: 3px; height: 12px; border-radius: 2px; flex: 0 0 3px; background: linear-gradient(180deg, var(--accent), var(--accent-2)); }
+.chart-kind { margin-left: auto; padding: 2px 7px; border: 1px solid var(--border-subtle); border-radius: 999px; background: color-mix(in srgb, var(--bg-app) 60%, transparent); color: var(--text-muted); font-family: var(--font-mono); font-size: 8.5px; letter-spacing: .08em; }
+.chart-svg { width: 100%; height: auto; max-height: min(400px, 55vh); display: block; overflow: visible; margin-top: 2px; }
+/* AI 对话里的图表统一 300px 高：柱状/折线/饼图/热力/雷达/散点切换时不跳动 */
+.agent-panel .chart-svg { max-height: 300px; }
+.chart-grid { stroke: var(--border-subtle); stroke-width: 1; stroke-opacity: .62; stroke-dasharray: none; }
+.chart-axis { fill: var(--text-muted); font-size: 9px; font-family: var(--font-ui); font-variant-numeric: tabular-nums; }
+.chart-axis-label { fill: var(--text-secondary); }
+.chart-bar, .chart-dot, .heat-cell, .rose-petal {
+  transform-box: fill-box; transform-origin: center;
+  transition: transform .16s ease, filter .16s ease, opacity .16s ease, stroke .16s ease;
+}
+.chart-bar { transform-origin: 50% 100%; }
+.chart-bar:hover { transform: scaleX(1.045) scaleY(1.015); stroke: rgba(255, 255, 255, .28); stroke-width: 1; filter: brightness(1.13) drop-shadow(0 0 7px currentColor) drop-shadow(0 4px 8px rgba(0, 0, 0, .32)); }
+.chart-dot:hover { transform: scale(1.55); stroke: rgba(255, 255, 255, .5); stroke-width: 1; filter: brightness(1.15) drop-shadow(0 0 5px currentColor); }
+.heat-cell:hover { transform: scale(1.06); stroke: rgba(255, 255, 255, .22); stroke-width: .8; filter: brightness(1.08) drop-shadow(0 0 5px currentColor) drop-shadow(0 2px 5px rgba(0, 0, 0, .25)); }
+.rose-petal:hover { transform: scale(1.025); stroke: rgba(255, 255, 255, .22); stroke-width: .8; filter: brightness(1.11) drop-shadow(0 0 7px currentColor) drop-shadow(0 2px 6px rgba(0, 0, 0, .28)); }
+.chart-radar-shape polygon { transform-box: fill-box; transform-origin: center; transition: filter .16s ease; }
+.chart-radar-shape:hover polygon { filter: brightness(1.1) drop-shadow(0 0 5px currentColor); }
+.line-hover-guide { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 4; opacity: 0; transition: opacity .16s ease; pointer-events: none; }
+.line-hover-dot { opacity: 0; transform-box: fill-box; transform-origin: center; transform: scale(.6); transition: opacity .16s ease, transform .16s ease, filter .16s ease; pointer-events: none; stroke: var(--bg-panel); stroke-width: 1.5; }
+.line-hover-col:hover .line-hover-guide { opacity: .38; }
+.line-hover-col:hover .line-hover-dot { opacity: 1; transform: scale(1); filter: brightness(1.1) drop-shadow(0 0 5px currentColor); }
+.chart-foot { display: flex; align-items: center; gap: 6px; margin-top: 7px; padding-top: 6px; border-top: 1px dashed var(--border-subtle); font-size: 9px; color: var(--text-muted); }
+.chart-open { margin-left: auto; border: none; background: transparent; color: var(--accent); font-size: 9.5px; display: inline-flex; align-items: center; gap: 3px; padding: 2px 5px; border-radius: 4px; }
+.chart-open:hover { color: var(--accent-hover); background: var(--accent-soft); text-decoration: none; }
+.chart-toolbar { display: flex; align-items: center; gap: 4px; padding: 0 0 8px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 8px; flex-wrap: wrap; }
 .chart-toolbar .spacer { flex: 1; }
-.chart-types { display: inline-flex; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); overflow: hidden; }
-.chart-type { border: none; background: transparent; color: var(--text-muted); padding: 3px 6px; display: inline-flex; align-items: center; cursor: pointer; }
-.chart-type + .chart-type { border-left: 1px solid var(--border-subtle); }
+.chart-toolbar .icon-btn { width: 24px; height: 24px; padding: 0; border-radius: 6px; color: var(--text-muted); }
+.chart-toolbar .icon-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+.chart-toolbar .btn.small { width: 22px; height: 22px; min-width: 0; padding: 0; border: none; background: transparent; color: var(--text-muted); }
+.chart-toolbar .btn.small:hover { color: var(--text-primary); background: var(--bg-hover); }
+.chart-types { display: inline-flex; gap: 1px; padding: 2px; border: 1px solid var(--border-subtle); border-radius: 8px; background: color-mix(in srgb, var(--bg-app) 65%, transparent); }
+.chart-type { border: none; background: transparent; color: var(--text-muted); padding: 3px 5px; border-radius: 6px; display: inline-flex; align-items: center; cursor: pointer; transition: color .12s ease, background .12s ease; }
 .chart-type:hover { color: var(--text-primary); background: var(--bg-hover); }
-.chart-type.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
-.chart-axis-pick { display: inline-flex; align-items: center; gap: 3px; font-size: 9px; color: var(--text-muted); }
-.chart-axis-pick .select { width: 108px; font-size: 10px; padding: 2px 4px; }
+.chart-type.active { color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent); }
+.chart-type:disabled { opacity: .28; cursor: not-allowed; }
+.chart-type:disabled:hover { color: var(--text-muted); background: transparent; }
+.chart-adapt-note {
+  margin: -1px 0 8px; padding: 5px 8px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 0 5px 5px 0;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  color: var(--text-secondary); font-size: 9.5px; line-height: 1.5;
+}
+.chart-axis-pick { display: inline-flex; align-items: center; gap: 4px; padding: 0 2px; font-size: 9px; color: var(--text-muted); }
+.chart-axis-pick .select {
+  width: 96px; height: 22px; padding: 0 22px 0 6px;
+  border: 1px solid var(--border-subtle); border-radius: 6px;
+  background-color: color-mix(in srgb, var(--bg-app) 65%, transparent);
+  background-position: calc(100% - 12px) 9px, calc(100% - 8px) 9px;
+  color: var(--text-secondary); font-size: 10px;
+}
+.chart-axis-pick .select:hover { border-color: var(--border-strong); color: var(--text-primary); }
 .chart-note { margin-top: 5px; padding: 5px 7px; border-left: 2px solid var(--warning); background: color-mix(in srgb, var(--warning) 9%, transparent); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; font-size: 9.5px; line-height: 1.6; color: var(--text-secondary); }
 .chart-zero { stroke: var(--text-muted); stroke-width: 1; stroke-opacity: .5; }
 .chart-modal { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.55); display: grid; place-items: center; padding: 24px; }
@@ -330,15 +401,14 @@ body {
 .chart-result-tab { border: none; background: transparent; color: var(--text-muted); font-size: 10px; padding: 3px 8px; cursor: pointer; border-bottom: 2px solid transparent; }
 .chart-result-tab:hover { color: var(--text-primary); }
 .chart-result-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-.pie-row { display: flex; align-items: center; gap: 12px; padding: 4px 0; }
-.pie { width: 108px; height: 108px; border-radius: 50%; position: relative; flex: 0 0 108px; box-shadow: 0 0 24px rgba(0,0,0,.2); }
-.pie-hole { position: absolute; inset: 18px; border-radius: 50%; background: var(--bg-panel); display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px solid var(--border-subtle); }
-.pie-hole span { font-size: 12px; font-weight: 700; font-family: var(--font-mono); }
-.pie-hole em { font-style: normal; font-size: 8px; color: var(--text-muted); }
-.pie-legend { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.pie-legend-row { display: flex; align-items: center; gap: 5px; font-size: 9.5px; color: var(--text-secondary); }
-.pie-legend-row .swatch { width: 7px; height: 7px; border-radius: 2px; flex: 0 0 7px; }
-.pie-legend-row em { margin-left: auto; font-style: normal; font-family: var(--font-mono); font-size: 9px; color: var(--text-muted); }
+.pie-row { position: relative; display: flex; align-items: center; justify-content: center; padding: 0; }
+.rose-title { fill: var(--text-primary); font-family: var(--font-ui); font-size: 12.5px; font-weight: 700; letter-spacing: .1px; }
+.rose-label-name { fill: var(--text-primary); font-family: var(--font-ui); font-size: 8.5px; font-weight: 600; }
+.rose-label-value { fill: var(--text-muted); font-family: var(--font-ui); font-size: 8px; }
+.heat-cell-value { font-family: var(--font-mono); font-size: 8.5px; font-weight: 500; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 6px; padding: 7px 2px 1px; }
+.chart-legend > span { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px 2px 5px; border: 1px solid var(--border-subtle); border-radius: 999px; background: color-mix(in srgb, var(--bg-app) 55%, transparent); font-size: 9.5px; color: var(--text-secondary); }
+.chart-legend i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: 0 0 7px; }
 .findings { display: flex; flex-direction: column; gap: 7px; margin-top: 8px; }
 .finding {
   border: 1px solid var(--border-subtle);

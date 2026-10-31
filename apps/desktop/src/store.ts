@@ -23,7 +23,11 @@ export type Tab =
   | { id: string; kind: 'data'; title: string; connectionId: string; database?: string; table: string }
   | { id: string; kind: 'query'; title: string; connectionId: string; database?: string; sql: string }
   | { id: string; kind: 'design'; title: string; connectionId: string; database?: string; table?: string }
-  | { id: string; kind: 'relations'; title: string; connectionId: string; database?: string };
+  | { id: string; kind: 'relations'; title: string; connectionId: string; database?: string }
+  | { id: string; kind: 'dashboard'; title: string; connectionId: string; database?: string };
+
+/** 设置页签；composer 等入口可指定打开位置。 */
+export type SettingsTab = 'appearance' | 'query' | 'agent' | 'skills' | 'mcp' | 'search' | 'notify' | 'bridge' | 'data' | 'about';
 
 export interface LiveTool {
   callId: string;
@@ -84,7 +88,25 @@ export interface ContextMenuState {
 
 const UI_KEY = 'aidb.ui';
 
-function readUiPrefs(): { sidebarOpen?: boolean; sidebarWidth?: number; agentWidth?: number; groupOrder?: string[]; connectionOrder?: string[]; hiddenColumns?: Record<string, string[]>; collapsedGroups?: string[] } {
+interface UiPrefs {
+  sidebarOpen?: boolean;
+  sidebarWidth?: number;
+  agentWidth?: number;
+  groupOrder?: string[];
+  connectionOrder?: string[];
+  hiddenColumns?: Record<string, string[]>;
+  collapsedGroups?: string[];
+  /** 上次使用的连接与每个连接各自记住的数据库 */
+  activeConnectionId?: string;
+  agentDatabaseByConnection?: Record<string, string>;
+  /** 仪表板的时间范围视角按「连接/库」记住，切回来不用重新选 */
+  dashboardRange?: Record<string, string>;
+  /** 侧栏展开状态也跨刷新保留，不再每次自动展开连接默认库 */
+  expandedConnections?: Record<string, boolean>;
+  expandedSchemas?: Record<string, boolean>;
+}
+
+function readUiPrefs(): UiPrefs {
   try {
     return JSON.parse(localStorage.getItem(UI_KEY) ?? '{}');
   } catch {
@@ -92,12 +114,17 @@ function readUiPrefs(): { sidebarOpen?: boolean; sidebarWidth?: number; agentWid
   }
 }
 
-function saveUiPrefs(patch: { sidebarOpen?: boolean; sidebarWidth?: number; agentWidth?: number; groupOrder?: string[]; connectionOrder?: string[]; hiddenColumns?: Record<string, string[]>; collapsedGroups?: string[] }): void {
+function saveUiPrefs(patch: UiPrefs): void {
   try {
     localStorage.setItem(UI_KEY, JSON.stringify({ ...readUiPrefs(), ...patch }));
   } catch {
     /* 隐私模式写不进去也不影响使用 */
   }
+}
+
+function rememberedAgentDatabase(connectionId?: string): string {
+  if (!connectionId) return '';
+  return readUiPrefs().agentDatabaseByConnection?.[connectionId] ?? '';
 }
 
 interface AppStore {
@@ -125,6 +152,7 @@ interface AppStore {
   connectionOrder: string[];
   setConnectionOrder: (order: string[]) => void;
   hiddenColumns: Record<string, string[]>;
+  dashboardRange: Record<string, string>;
   setHiddenColumns: (key: string, columns: string[]) => void;
   collapsedGroups: string[];
   setCollapsedGroups: (groups: string[]) => void;
@@ -151,11 +179,11 @@ interface AppStore {
   memoryQuery: string;
   memories: Memory[];
   settingsOpen: boolean;
+  /** 打开设置时定位的页签；空表示默认页。 */
+  settingsTab?: SettingsTab;
+  /** 从 MCP 目录错误跳转到设置时，预填到文件系统卡片的目录。 */
+  mcpPathHint?: string;
   paletteOpen: boolean;
-  commandSheetId?: string;
-  commandSheetText?: string;
-  openCommandSheet: (id: string, options?: { text?: string }) => void;
-  closeCommandSheet: () => void;
   toolsOpen: boolean;
   toolsActive: string;
   openTools: (tool?: string) => void;
@@ -183,11 +211,13 @@ interface AppStore {
   openQuery: (connectionId?: string, sql?: string, title?: string, database?: string) => void;
   openDesign: (connectionId?: string, table?: string, database?: string) => void;
   openRelations: (connectionId?: string, database?: string) => void;
+  openDashboard: (connectionId?: string, database?: string) => void;
   closeTab: (id: string) => void;
   closeOtherTabs: (id: string) => void;
   closeAllTabs: () => void;
   setActiveTab: (id: string) => void;
   updateTab: (id: string, patch: Partial<Tab>) => void;
+  setDashboardRange: (scopeKey: string, value: string) => void;
 
   openConnectionEditor: (mode: 'new' | 'edit', connection?: ConnectionConfig) => void;
   closeConnectionEditor: () => void;
@@ -223,7 +253,8 @@ interface AppStore {
   saveMemory: (id: string, patch: Record<string, unknown>) => Promise<void>;
   removeMemory: (id: string) => Promise<void>;
 
-  setSettingsOpen: (open: boolean) => void;
+  setSettingsOpen: (open: boolean, tab?: SettingsTab) => void;
+  setMcpPathHint: (path?: string) => void;
   setPaletteOpen: (open: boolean) => void;
   saveSettings: (patch: Record<string, unknown>) => Promise<void>;
   startPairing: () => Promise<void>;
@@ -259,8 +290,8 @@ export const useApp = create<AppStore>((set, get) => ({
   schemas: {},
   loadedDatabases: {},
   schemaLoading: {},
-  expandedConnections: {},
-  expandedSchemas: {},
+  expandedConnections: readUiPrefs().expandedConnections ?? {},
+  expandedSchemas: readUiPrefs().expandedSchemas ?? {},
   tabs: [WELCOME],
   activeTabId: 'welcome',
   printRequested: false,
@@ -271,6 +302,7 @@ export const useApp = create<AppStore>((set, get) => ({
   groupOrder: readUiPrefs().groupOrder ?? [],
   connectionOrder: readUiPrefs().connectionOrder ?? [],
   hiddenColumns: readUiPrefs().hiddenColumns ?? {},
+  dashboardRange: readUiPrefs().dashboardRange ?? {},
   collapsedGroups: readUiPrefs().collapsedGroups ?? [],
   agentWidth: readUiPrefs().agentWidth ?? 384,
   agentMessages: [],
@@ -285,10 +317,6 @@ export const useApp = create<AppStore>((set, get) => ({
   paletteOpen: false,
   toolsOpen: false,
   toolsActive: 'search',
-  commandSheetId: undefined,
-  commandSheetText: undefined,
-  openCommandSheet: (id, options) => set({ commandSheetId: id, commandSheetText: options?.text, paletteOpen: false }),
-  closeCommandSheet: () => set({ commandSheetId: undefined, commandSheetText: undefined }),
   toasts: [],
   devices: [],
 
@@ -321,9 +349,11 @@ export const useApp = create<AppStore>((set, get) => ({
         agentMode: (data.sessions[0]?.permissionMode as PermissionMode) ?? 'ask',
       });
       if (!data.connections.length) return;
-      const demo = data.connections.find((c) => c.name.startsWith('Demo')) ?? data.connections[0];
-      set({ activeConnectionId: demo.id });
-      await get().loadSchema(demo.id);
+      const prefs = readUiPrefs();
+      const preferred = prefs.activeConnectionId ? data.connections.find((c) => c.id === prefs.activeConnectionId) : undefined;
+      const target = preferred ?? data.connections.find((c) => c.name.startsWith('Demo')) ?? data.connections[0];
+      set({ activeConnectionId: target.id, agentDatabase: rememberedAgentDatabase(target.id) });
+      await get().loadSchema(target.id);
     } catch (err) {
       set({ booted: false, bootError: errorText(err) });
     }
@@ -369,10 +399,8 @@ export const useApp = create<AppStore>((set, get) => ({
           loadedDatabases: { ...s.loadedDatabases, [connectionId]: keep },
         }));
         const targets = refresh ? previouslyLoaded : conn.database && databases.includes(conn.database) ? [conn.database] : [];
-        for (const name of targets) {
-          if (!refresh) set((s) => ({ expandedSchemas: { ...s.expandedSchemas, [`${connectionId}:${name}`]: true } }));
-          void get().loadSchema(connectionId, refresh, name);
-        }
+        // 只预取默认库的表，不再自动展开它；展开状态由用户的点击决定并持久化
+        for (const name of targets) void get().loadSchema(connectionId, refresh, name);
         return;
       }
       const { schemas } = await api.getSchema(connectionId, refresh);
@@ -386,19 +414,30 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 
   selectConnection: (id) => {
-    set((s) => ({ activeConnectionId: id, ...(s.activeConnectionId === id ? {} : { agentDatabase: '' }) }));
+    const previous = get().activeConnectionId;
+    set({ activeConnectionId: id, ...(previous === id ? {} : { agentDatabase: rememberedAgentDatabase(id) }) });
     if (!get().schemas[id]) void get().loadSchema(id);
   },
 
-  setActiveConnection: (id) => set((s) => ({ activeConnectionId: id, ...(s.activeConnectionId === id ? {} : { agentDatabase: '' }) })),
+  setActiveConnection: (id) => {
+    const previous = get().activeConnectionId;
+    set({ activeConnectionId: id, ...(previous === id ? {} : { agentDatabase: rememberedAgentDatabase(id) }) });
+  },
 
   toggleConnection: (id) => {
     const open = !get().expandedConnections[id];
-    set((s) => ({ expandedConnections: { ...s.expandedConnections, [id]: open }, activeConnectionId: id }));
+    const expandedConnections = { ...get().expandedConnections, [id]: open };
+    const previous = get().activeConnectionId;
+    set({ expandedConnections, activeConnectionId: id, ...(previous === id ? {} : { agentDatabase: rememberedAgentDatabase(id) }) });
+    saveUiPrefs({ expandedConnections });
     if (open && !get().schemas[id]) void get().loadSchema(id);
   },
 
-  toggleSchema: (key) => set((s) => ({ expandedSchemas: { ...s.expandedSchemas, [key]: !s.expandedSchemas[key] } })),
+  toggleSchema: (key) => {
+    const expandedSchemas = { ...get().expandedSchemas, [key]: !get().expandedSchemas[key] };
+    set({ expandedSchemas });
+    saveUiPrefs({ expandedSchemas });
+  },
 
   requestPrint: () => set({ printRequested: true }),
   consumePrint: () => set({ printRequested: false }),
@@ -508,6 +547,28 @@ export const useApp = create<AppStore>((set, get) => ({
     else if (database && !(get().loadedDatabases[connId] ?? []).includes(database)) void get().loadSchema(connId, false, database);
   },
 
+  openDashboard: (connectionId, database) => {
+    const connId = connectionId ?? get().activeConnectionId;
+    if (!connId) {
+      get().openConnectionEditor('new');
+      return;
+    }
+    const conn = get().connections.find((c) => c.id === connId);
+    if (conn && !engineMeta(conn.engine).languages.includes('sql')) {
+      get().notify('warning', '该引擎没有仪表板', `${engineMeta(conn.engine).label} 的查询结果不是表格图表，放不进卡片`);
+      return;
+    }
+    const db = database ?? conn?.database;
+    const id = `dashboard:${connId}:${db ?? ''}`;
+    if (get().tabs.find((tab) => tab.id === id)) {
+      set({ activeTabId: id, activeConnectionId: connId });
+      return;
+    }
+    const tab: Tab = { id, kind: 'dashboard', title: '仪表板', connectionId: connId, database: db };
+    set((s) => ({ tabs: [...s.tabs.filter((t) => t.id !== 'welcome'), tab], activeTabId: id, activeConnectionId: connId }));
+    if (!get().schemas[connId]) void get().loadSchema(connId);
+  },
+
   closeTab: (id) => {
     const { tabs, activeTabId } = get();
     const index = tabs.findIndex((t) => t.id === id);
@@ -535,25 +596,42 @@ export const useApp = create<AppStore>((set, get) => ({
     set((s) => ({ tabs: s.tabs.map((tab) => (tab.id === id ? ({ ...tab, ...patch } as Tab) : tab)) }));
   },
 
+  setDashboardRange: (scopeKey, value) => {
+    const next = { ...get().dashboardRange, [scopeKey]: value };
+    set({ dashboardRange: next });
+    saveUiPrefs({ dashboardRange: next });
+  },
+
   openConnectionEditor: (mode, connection) => set({ connectionEditor: { mode, connection } }),
   closeConnectionEditor: () => set({ connectionEditor: undefined }),
 
   saveConnection: async (body) => {
     try {
       const current = get().connectionEditor;
+      const creating = !(current?.mode === 'edit' && current.connection);
       const result = current?.mode === 'edit' && current.connection ? await api.updateConnection(current.connection.id, body) : await api.createConnection(body);
       const { connections } = await api.connections();
       const previousActive = get().activeConnectionId;
+      const expandedConnections = { ...get().expandedConnections, [result.connection.id]: true };
       set({
         connections,
         connectionEditor: undefined,
         activeConnectionId: result.connection.id,
-        expandedConnections: { ...get().expandedConnections, [result.connection.id]: true },
+        expandedConnections,
         schemas: { ...get().schemas, [result.connection.id]: get().schemas[result.connection.id] ?? [] },
         ...(previousActive !== result.connection.id ? { agentDatabase: '' } : {}),
       });
+      saveUiPrefs({ expandedConnections });
       get().notify('success', get().t('saved'));
-      void get().loadSchema(result.connection.id);
+      void get().loadSchema(result.connection.id).then(() => {
+        // 只对新建连接打开一次它的默认库，方便看到表；已有连接仍尊重用户手动展开/收起
+        const database = creating ? result.connection.database : undefined;
+        if (!database) return;
+        const key = `${result.connection.id}:${database}`;
+        const expandedSchemas = { ...get().expandedSchemas, [key]: true };
+        set({ expandedSchemas });
+        saveUiPrefs({ expandedSchemas });
+      });
       return result.connection;
     } catch (err) {
       get().notify('error', get().t('error'), errorText(err));
@@ -850,11 +928,16 @@ export const useApp = create<AppStore>((set, get) => ({
       }
     } finally {
       currentAbort = undefined;
+      const startedAt = get().live?.startedAt;
       const sid = get().agentSessionId;
       if (sid) {
         try {
           const detail = await api.getSession(sid);
-          set({ agentSessionMeta: detail.session, agentMessages: detail.messages, live: undefined });
+          // 本地模型几十毫秒就结束，状态条会闪一下；至少展示 320ms，避免看不见也看不清。
+          const remaining = startedAt ? Math.max(0, 320 - (Date.now() - startedAt)) : 0;
+          if (remaining) await new Promise((resolve) => setTimeout(resolve, remaining));
+          // 等待期间用户可能已切到新会话/另一条会话，旧回合的收尾结果不能再写回。
+          if (get().agentSessionId === sid) set({ agentSessionMeta: detail.session, agentMessages: detail.messages, live: undefined });
         } catch {
           /* keep live state */
         }
@@ -929,7 +1012,8 @@ export const useApp = create<AppStore>((set, get) => ({
     }
   },
 
-  setSettingsOpen: (open) => set({ settingsOpen: open }),
+  setSettingsOpen: (open, tab) => set({ settingsOpen: open, settingsTab: open ? tab : undefined }),
+  setMcpPathHint: (path) => set({ mcpPathHint: path }),
   setPaletteOpen: (open) => set({ paletteOpen: open }),
   openTools: (tool) => set({ toolsOpen: true, toolsActive: tool ?? get().toolsActive }),
   closeTools: () => set({ toolsOpen: false }),
@@ -989,3 +1073,17 @@ export const useApp = create<AppStore>((set, get) => ({
     get().notify('success', get().t('refresh'));
   },
 }));
+
+// 连接和库选择属于会话外的 UI 状态：跨刷新记住，避免每次都退回连接默认库。
+useApp.subscribe((state, previous) => {
+  if (state.activeConnectionId !== previous.activeConnectionId) {
+    saveUiPrefs({ activeConnectionId: state.activeConnectionId });
+  }
+  if (state.agentDatabase !== previous.agentDatabase && state.activeConnectionId) {
+    const prefs = readUiPrefs();
+    const agentDatabaseByConnection = { ...(prefs.agentDatabaseByConnection ?? {}) };
+    if (state.agentDatabase) agentDatabaseByConnection[state.activeConnectionId] = state.agentDatabase;
+    else delete agentDatabaseByConnection[state.activeConnectionId];
+    saveUiPrefs({ agentDatabaseByConnection });
+  }
+});

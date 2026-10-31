@@ -1,6 +1,7 @@
 import type { Environment, PermissionMode, Risk } from '../types';
 import { classifySql, extractTableRef } from '../sql/classify';
 import { classifyAql, classifyCql, classifyCypher, classifyMql, classifyRedis, aqlQueryFromArgs, cqlQueryFromArgs, cypherQueryFromArgs, formatStructuredQuery, mqlQueryFromArgs, redisQueryFromArgs } from '../query';
+import { builtinMcpToolRisk } from './builtinMcp';
 import type { ToolCall, ToolDefinition } from './types';
 
 export type PermissionVerdict = 'allow' | 'ask' | 'deny';
@@ -16,6 +17,10 @@ export interface PermissionContext {
 /** Resolve the effective risk for a call, including dynamic SQL classification. */
 export function resolveRisk(call: ToolCall, tool: ToolDefinition): Risk {
   if (tool.risk === 'dynamic') {
+    if (call.name === 'mcp_call') {
+      // Only namespaced built-in ids inherit read auto-approval; external servers stay write.
+      return builtinMcpToolRisk(String(call.args.server ?? ''), String(call.args.tool ?? '')) ?? 'write';
+    }
     if (call.name === 'run_sql') {
       const sql = String(call.args.sql ?? '');
       return sql.trim() ? classifySql(sql).risk : 'ddl';
@@ -52,6 +57,17 @@ export function toolSignature(call: ToolCall): string {
   else if (call.name === 'delete_collection' && typeof call.args.name === 'string') target = call.args.name;
   else if (call.name === 'run_cql' && typeof call.args.query === 'string') target = call.args.query.slice(0, 40);
   else if (call.name === 'run_aql' && typeof call.args.query === 'string') target = call.args.query.slice(0, 40);
+  else if (call.name === 'mcp_call') {
+    const mcpArgs = call.args.arguments && typeof call.args.arguments === 'object' ? (call.args.arguments as Record<string, unknown>) : undefined;
+    const detail = typeof mcpArgs?.path === 'string'
+      ? mcpArgs.path
+      : typeof mcpArgs?.url === 'string'
+        ? mcpArgs.url
+        : typeof mcpArgs?.source === 'string'
+          ? `${mcpArgs.source}>${String(mcpArgs.destination ?? '')}`
+          : '';
+    target = `${String(call.args.server ?? '')}.${String(call.args.tool ?? '')}${detail ? `:${detail.slice(0, 200)}` : ''}`;
+  }
   else if (call.args.index && typeof call.args.index === 'object') {
     const idx = call.args.index as Record<string, unknown>;
     if (typeof idx.name === 'string') target = idx.name;
@@ -106,6 +122,22 @@ export function describeCall(call: ToolCall): { summary: string; sql?: string } 
       return { summary: `导出数据到 ${String(a.format ?? 'csv')}` };
     case 'backup_database':
       return { summary: '备份数据库' };
+    case 'mcp_list_servers':
+      return { summary: '列出 MCP Server' };
+    case 'mcp_list_tools':
+      return { summary: `列出 MCP 工具 ${String(a.server ?? '')}` };
+    case 'mcp_call': {
+      const target = `${String(a.server ?? '')}.${String(a.tool ?? '')}`;
+      const args = a.arguments && typeof a.arguments === 'object' ? (a.arguments as Record<string, unknown>) : undefined;
+      const detail = typeof args?.path === 'string'
+        ? args.path
+        : typeof args?.url === 'string'
+          ? args.url
+          : typeof args?.source === 'string'
+            ? `${args.source} → ${String(args.destination ?? '')}`
+            : undefined;
+      return { summary: `MCP ${target}${detail ? ` · ${detail.slice(0, 160)}` : ''}` };
+    }
     default:
       return { summary: call.name };
   }

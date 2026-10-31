@@ -3,6 +3,7 @@ import {
   activeReasoningTier,
   AgentRuntime,
   buildSystemPrompt,
+  builtinMcpServer,
   compactHistory,
   createProvider,
   extractHeuristicMemories,
@@ -19,6 +20,7 @@ import {
   type AgentEvent,
   type AgentMessageBlock,
   type AgentRunInput,
+  type AppSettings,
   type ApprovalDecision,
   type ApprovalPayload,
   type DatabaseSchema,
@@ -51,6 +53,7 @@ import {
   writeDatabaseBrief,
   type LoadedBrief,
 } from './features/databaseBrief';
+import { parseCommandIntent } from './commandIntents';
 
 export interface TurnInput {
   text: string;
@@ -61,6 +64,8 @@ export interface TurnInput {
   connectionId?: string;
   /** 本回合的目标库；缺省用会话记录的库，再缺省用连接默认库。 */
   database?: string;
+  /** 机器人等远程入口不得触达本机 MCP（文件系统 / Git / 网页抓取）。 */
+  disableMcp?: boolean;
 }
 
 export interface AgentHostOptions {
@@ -99,11 +104,49 @@ function imagesOf(blocks: AgentMessageBlock[], dir: string): AttachedImage[] {
   return out;
 }
 
+/** Give the model the actual MCP catalog; guessing server names produces 404s. */
+function mcpPromptBlock(store: Store): string {
+  const servers = store.listMcpServers().filter((server) => server.enabled);
+  if (!servers.length) return '## MCP servers\n(none configured — do not call MCP tools)';
+  const lines = servers.map((server) => {
+    const definition = server.builtin ? builtinMcpServer(server.builtin) : undefined;
+    if (!definition) return `- ${server.id} — external server (name: ${server.name}); call mcp_list_tools for its tools.`;
+    const tools = definition.tools.map((tool) => `${tool.name}(${tool.risk})`).join(', ');
+    const args = server.args.length
+      ? `${definition.argsLabel}: ${server.args.join(', ')}`
+      : definition.kind === 'web'
+        ? '域名限制: 未设置（允许所有公网地址；内网与回环始终拦截）'
+        : `${definition.argsLabel}: (未配置，需用户在 设置 → MCP 与工具 配置)`;
+    const searchNote = definition.kind === 'web' && server.enabled
+      ? ' Use web_search for discovery (Exa/Parallel/DuckDuckGo/SearXNG + keyed backends); use fetch_url only for a known URL.'
+      : '';
+    return `- ${server.id} — built-in ${definition.kind} (name: ${server.name}); ${args}. Tools: ${tools}.${searchNote}`;
+  });
+  return `## MCP servers\nUse the exact server id for mcp_list_tools / mcp_call; never guess a server name. Built-in read tools run directly; writes need approval in ask mode.\n${lines.join('\n')}`;
+}
+
+/** Tools visible to a turn; remote (bot/mobile/external WS) turns must not reach local MCP. */
+export function visibleAgentTools(settings: Pick<AppSettings, 'features'>, allowMcp: boolean) {
+  return providerTools().filter(
+    (tool) =>
+      (settings.features.skills || !tool.name.startsWith('skill_')) &&
+      ((settings.features.mcp && allowMcp) || !tool.name.startsWith('mcp_')),
+  );
+}
+
 export class AgentHost {
   private active = new Map<string, AbortController>();
   private approvals = new Map<string, PendingApproval>();
+  /** "本会话允许"：跨回合保留，直到会话删除或进程退出。 */
+  private sessionAllowed = new Map<string, Set<string>>();
+  /** "始终允许"：本次运行内跨会话保留；重启 AiDB 后重新询问。 */
+  private alwaysAllowed = new Set<string>();
 
   constructor(private opts: AgentHostOptions) {}
+
+  forgetSessionApprovals(sessionId: string): void {
+    this.sessionAllowed.delete(sessionId);
+  }
 
   isRunning(sessionId: string): boolean {
     return this.active.has(sessionId);
@@ -172,9 +215,10 @@ export class AgentHost {
     if (this.active.has(sessionId)) throw new DbError('该会话正在运行，请先中止或等待完成', { code: 'SESSION_BUSY', status: 409 });
     const rawText = input.text?.trim();
     if (!rawText) throw new DbError('消息不能为空', { code: 'EMPTY_MESSAGE', status: 400 });
-    const reportMatch = /^\/report(?:\s+([\s\S]+))?$/i.exec(rawText);
-    const reportMode = Boolean(reportMatch?.[1]?.trim());
-    const text = reportMatch?.[1]?.trim() || rawText;
+    // 斜杠命令是目的信号：裸命令也有默认任务，不让用户补表单参数。
+    const parsedCommand = parseCommandIntent(rawText);
+    const intent = parsedCommand?.intent;
+    const text = parsedCommand?.task ?? rawText;
     const session = this.opts.store.getSession(sessionId);
     if (!session) throw new DbError('会话不存在', { code: 'SESSION_NOT_FOUND', status: 404 });
     const mode = MODES.includes(input.mode as PermissionMode) ? (input.mode as PermissionMode) : session.permissionMode;
@@ -205,7 +249,7 @@ export class AgentHost {
       if (controller.signal.aborted) return;
       controller.abort();
       this.opts.store.updateSession(sessionId, { status: 'aborted' });
-    }, Math.max(30_000, Number(process.env.AIDB_AGENT_TURN_MS ?? (reportMode ? 15 * 60_000 : 480_000))));
+    }, Math.max(30_000, Number(process.env.AIDB_AGENT_TURN_MS ?? (intent?.timeoutMs ?? 480_000))));
     turnTimer.unref();
 
     const store = this.opts.store;
@@ -308,12 +352,14 @@ export class AgentHost {
     };
 
     const memoryContext: Memory[] = memories;
-    const allowedTools = providerTools().filter(
-      (tool) => (settings.features.skills || !tool.name.startsWith('skill_')) && (settings.features.mcp || !tool.name.startsWith('mcp_')),
-    );
+    const allowMcp = input.disableMcp !== true;
+    const allowedTools = visibleAgentTools(settings, allowMcp);
+    const sessionAllowed = this.sessionAllowed.get(sessionId) ?? new Set<string>();
+    this.sessionAllowed.set(sessionId, sessionAllowed);
     const runtime = new AgentRuntime({
       provider,
-      maxSteps: settings.agent.maxSteps,
+      // 语义命令通常要「看结构 → 多次查数 → 出图」，给足步数；普通提问保持用户设置。
+      maxSteps: intent ? Math.min(40, Math.max(16, (settings.agent.maxSteps || 12) * 2)) : settings.agent.maxSteps,
       temperature: settings.agent.temperature,
       maxTokens: maxOutputTokensOf(settings.agent, profile),
       reasoning: activeReasoningTier(settings.agent, profile),
@@ -332,9 +378,11 @@ export class AgentHost {
           focusMode: settings.agent.schemaFocus ?? 'auto',
         });
         const extra: string[] = [];
+        if (intent) extra.push(intent.instruction);
         if (brief) extra.push(briefPromptBlock(brief));
         if (sessionForAudit.summary) extra.push(`## Earlier session summary\n${sessionForAudit.summary}`);
         if (schemaError) extra.push(`## Schema loading warning\n${schemaError}`);
+        if (settings.features.mcp && allowMcp) extra.push(mcpPromptBlock(this.opts.store));
         if (settings.agent.provider === 'local') {
           extra.push('## Runtime\nYou are running with the offline Local Reasoner. Keep to clear, rule-parsable instructions; if a request is ambiguous, explain what you can do.');
         }
@@ -390,8 +438,8 @@ export class AgentHost {
         connectionReadonly: conn?.readonly ?? false,
         history: compacted,
         context: { connection: conn, databases: schemas, memories, agentContext: businessContext, glossary: recall.glossary, attachmentTables },
-        sessionAllowed: new Set<string>(),
-        alwaysAllowed: new Set<string>(),
+        sessionAllowed,
+        alwaysAllowed: this.alwaysAllowed,
         signal: controller.signal,
       });
       status = result.status;

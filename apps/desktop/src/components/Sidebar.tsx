@@ -29,6 +29,7 @@ import {
   KeyRound,
   Upload,
   PanelLeftClose,
+  LayoutDashboard,
 } from 'lucide-react';
 import type { ConnectionConfig, DatabaseSchema, Engine, TableInfo } from '@aidb/core';
 import { addField, engineMeta, managesIndexes, managesObjects } from '@aidb/core';
@@ -85,6 +86,7 @@ export function Sidebar() {
   const openQuery = useApp((s) => s.openQuery);
   const openDesign = useApp((s) => s.openDesign);
   const openRelations = useApp((s) => s.openRelations);
+  const openDashboard = useApp((s) => s.openDashboard);
   const openConnectionEditor = useApp((s) => s.openConnectionEditor);
   const deleteConnection = useApp((s) => s.deleteConnection);
   const loadSchema = useApp((s) => s.loadSchema);
@@ -755,6 +757,7 @@ export function Sidebar() {
                                   { label: '转储 SQL 文件…', icon: <Archive size={13} />, onClick: () => setDbDialog({ kind: 'dump', conn, database: schema.name }) },
                                   { label: '', icon: null, sep: true, onClick: () => undefined },
                                   { label: '逆向数据库到模型…', icon: <Network size={13} />, onClick: () => openRelations(conn.id, schema.name) },
+                                  { label: '打开仪表板', icon: <LayoutDashboard size={13} />, onClick: () => openDashboard(conn.id, schema.name) },
                                   { label: '在数据库中查找…', icon: <FileSearch size={13} />, onClick: () => openTools('search') },
                                   { label: '', icon: null, sep: true, onClick: () => undefined },
                                   {
@@ -916,6 +919,9 @@ export function Sidebar() {
         </button>
         <button className="icon-btn" title="关系图" data-testid="open-relations" onClick={() => openRelations()} disabled={!activeConnectionId}>
           <Network size={14} />
+        </button>
+        <button className="icon-btn" title="仪表板" data-testid="open-dashboard" onClick={() => openDashboard()} disabled={!activeConnectionId}>
+          <LayoutDashboard size={14} />
         </button>
         <button className="icon-btn" title={t('refresh')} onClick={() => void refreshAll()}>
           <RefreshCw size={14} />

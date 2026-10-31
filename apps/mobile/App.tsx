@@ -40,6 +40,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react-native';
+import { COMMANDS } from '@aidb/core';
 import type {
   AgentEvent,
   AgentMessage,
@@ -65,7 +66,6 @@ import {
   type BridgeConfig,
   type DataPage,
 } from './src/bridge';
-import { CommandSheet } from './src/CommandSheet';
 import { colors, modeLabels, radius, riskColor, riskLabels } from './src/theme';
 
 type TabKey = 'chat' | 'data' | 'connections' | 'memory' | 'settings';
@@ -683,13 +683,39 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
 
   return (
     <KeyboardAvoidingView style={styles.app} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <CommandSheet
-        visible={commandOpen}
-        onClose={() => setCommandOpen(false)}
-        bridge={client}
-        connections={connections}
-        activeConnectionId={activeConnectionId}
-      />
+      <Modal visible={commandOpen} transparent animationType="slide" onRequestClose={() => setCommandOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + 14, maxHeight: '80%' }]}>
+            <View style={styles.sheetHead}>
+              <Text style={styles.sheetTitle}>命令</Text>
+              <Pressable style={styles.iconButton} testID="m-command-close" onPress={() => setCommandOpen(false)}>
+                <X size={16} color={colors.text} />
+              </Pressable>
+            </View>
+            <Text style={styles.hint}>选一个目的即可，Agent 会自己理解并执行，不需要填参数。</Text>
+            <ScrollView>
+              {COMMANDS.filter((command) => command.id !== 'ask').map((command) => (
+                <Pressable
+                  key={command.id}
+                  style={styles.sessionRow}
+                  testID={`m-command-${command.id}`}
+                  onPress={() => {
+                    setCommandOpen(false);
+                    setInput(`/${command.id} `);
+                  }}
+                >
+                  <TerminalSquare size={14} color={colors.agent} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.listTitle}>{command.title.zh}</Text>
+                    <Text style={styles.listMeta} numberOfLines={2}>{command.description.zh}</Text>
+                  </View>
+                  <Text style={{ color: colors.muted, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 10 }}>/{command.id}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
       <View style={[styles.topSafe, { paddingTop: insets.top }]} />
       <View style={styles.topbar}>
         <View style={styles.brandRow}>

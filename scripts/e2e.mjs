@@ -122,7 +122,9 @@ const api = async (path, init = {}) => {
 const boot = (await api('/bootstrap')).body;
 const demo = boot.connections.find((c) => c.engine === 'sqlite');
 check('bridge bootstrap', Boolean(demo), demo?.name);
-check('51 agent tools', boot.tools.length === 51, String(boot.tools.length));
+check('52 agent tools', boot.tools.length === 52, String(boot.tools.length));
+const builtinMcp = (await api('/mcp/servers')).body.servers.filter((server) => server.builtin);
+check('built-in MCP servers seeded', ['filesystem', 'git', 'web'].every((kind) => builtinMcp.some((server) => server.builtin === kind)), builtinMcp.map((server) => server.builtin).join(','));
 
 const MONGO_PORT = process.env.AIDB_TEST_MONGO_PORT ? Number(process.env.AIDB_TEST_MONGO_PORT) : undefined;
 const REDIS_PORT = process.env.AIDB_TEST_REDIS_PORT ? Number(process.env.AIDB_TEST_REDIS_PORT) : undefined;
@@ -1523,7 +1525,48 @@ check('notification presets cover seven platforms', ['飞书群机器人','企�
 check('settings notification channels panel renders', true);
 await page.locator('.settings-nav button').filter({ hasText: 'MCP' }).click();
 await page.waitForFunction(() => document.querySelector('.settings-content')?.textContent?.includes('新增 MCP Server'), null, { timeout: 10000 });
+await page.waitForFunction(() => document.querySelectorAll('.settings-content .transfer-row').length >= 3, null, { timeout: 10000 });
+const mcpText = await page.locator('.settings-content').evaluate((el) => el.textContent ?? '');
+check('built-in MCP cards render', mcpText.includes('文件系统') && mcpText.includes('内置') && mcpText.includes('Git'), mcpText.slice(0, 160));
+const fsCard = page.locator('.settings-content .panel > div').filter({ hasText: '文件系统' }).first();
+await fsCard.locator('input').first().fill(home);
+await fsCard.getByRole('button', { name: '添加' }).click();
+await page.waitForFunction((value) => document.querySelector('.settings-content')?.textContent?.includes(value), home, { timeout: 10000 });
+await fsCard.getByRole('button', { name: '发现工具' }).click();
+await page.waitForFunction(() => document.querySelector('.settings-content')?.textContent?.includes('read_file'), null, { timeout: 10000 });
+check('built-in filesystem tools are discoverable', true);
 check('settings MCP panel renders', true);
+await page.locator('.settings-nav button').filter({ hasText: '网络搜索' }).click();
+await page.waitForFunction(() => document.querySelector('.settings-content')?.textContent?.includes('已启用后端'), null, { timeout: 10000 });
+await page.waitForSelector('.settings-content .search-backend', { timeout: 10000 });
+const searchText = await page.locator('.settings-content').evaluate((el) => el.textContent ?? '');
+check('search settings render 11 backends', searchText.includes('已启用后端') && ['Exa', 'Parallel', 'DuckDuckGo', 'SearXNG', 'Brave', 'Tavily', 'Serper', 'Mojeek', 'DeepSeek', 'Anthropic', 'OpenAI'].every((label) => searchText.includes(label)), searchText.slice(0, 160));
+const searchBackends = await page.locator('.settings-content .search-backend').count();
+const checkedBackends = await page.locator('.settings-content .search-backend input:checked').count();
+check('search panel lists every backend with four free defaults', searchBackends === 11 && checkedBackends === 4, `${searchBackends} rows / ${checkedBackends} checked`);
+check('search panel groups global params and result strategy', searchText.includes('全局参数') && searchText.includes('结果策略') && searchText.includes('numResults') && searchText.includes('backendTimeoutMs'));
+const searchKeyInputs = await page.locator('.settings-content .search-key input').count();
+check('search panel exposes seven key fields plus searxng', searchKeyInputs === 8, `${searchKeyInputs} key inputs`);
+check('search settings have no key required for free backends', searchText.includes('已配置密钥：0/7'), searchText.slice(0, 160));
+await page.screenshot({ path: join(shots, 'desktop-search-settings.png') });
+// A key typed here must land in the encrypted vault and never echo back into the page.
+const braveKey = page.locator('.settings-content .search-key input[aria-label="brave API Key"]');
+await braveKey.fill('brave-e2e-key');
+await page.locator('.settings-content .search-actions button.btn.primary').click();
+await page.waitForFunction(() => document.querySelector('.settings-content')?.textContent?.includes('已配置密钥：1/7'), null, { timeout: 10000 });
+const afterKeyText = await page.locator('.settings-content').evaluate((el) => el.textContent ?? '');
+check('search key saves without echoing secret', afterKeyText.includes('已配置密钥：1/7') && !afterKeyText.includes('brave-e2e-key'));
+check('settings search panel renders', true);
+await page.locator('.settings-content .search-key input[aria-label="brave API Key"]').fill('__CLEAR__');
+await page.locator('.settings-content .search-actions button.btn.primary').click();
+await page.waitForFunction(() => document.querySelector('.settings-content')?.textContent?.includes('已配置密钥：0/7'), null, { timeout: 10000 });
+check('search key can be cleared', true);
+const searchBackendBefore = (await api('/search/backends')).body;
+await page.locator('.settings-content .search-actions button').filter({ hasText: '重置状态' }).click();
+await page.waitForFunction(() => document.body.textContent?.includes('已重置后端健康状态'), null, { timeout: 10000 });
+const searchBackendAfter = (await api('/search/backends')).body;
+check('search health telemetry resets', searchBackendAfter.health.every((item) => item.status === 'idle' && item.failures === 0) && searchBackendBefore.backends.length === 11, JSON.stringify(searchBackendAfter.health.slice(0, 2)));
+check('reset button drives the health endpoint', true);
 await page.locator('.settings-nav button').filter({ hasText: 'Skills' }).click();
 await page.waitForFunction(() => document.querySelector('.settings-content')?.textContent?.includes('3 个可用'), null, { timeout: 10000 });
 const settingsSkillsText = await page.locator('.settings-content').innerText();
@@ -1761,6 +1804,17 @@ await page.keyboard.type('SELECT * FROM ord');
 await page.waitForSelector('.cm-tooltip-autocomplete', { timeout: 8000 });
 const completionText = await page.locator('.cm-tooltip-autocomplete').innerText();
 check('SQL editor completes table names from the schema', /orders/i.test(completionText), completionText.replace(/\s+/g, ' ').slice(0, 60));
+const selectedCompletion = (await page.locator('.cm-tooltip-autocomplete li[aria-selected]').innerText()).trim();
+await page.keyboard.press('Tab');
+await page.waitForFunction(
+  (label) => {
+    const text = (document.querySelector('.cm-content')?.textContent ?? '').trim().toUpperCase();
+    return text.endsWith(`FROM ${label}`.toUpperCase()) && !document.querySelector('.cm-tooltip-autocomplete');
+  },
+  selectedCompletion,
+  { timeout: 8000 },
+);
+check('Tab accepts the highlighted completion', true, selectedCompletion);
 await page.keyboard.press('Escape');
 
 await page.locator('[data-testid="tab-query"]').first().click({ button: 'right' });
@@ -1803,6 +1857,21 @@ await page.click('[data-testid="chart-type-heatmap"]');
 await page.waitForSelector('.query-chart-panel [data-testid="chart-heatmap-cell"]', { timeout: 5000 });
 const heatCells = await page.locator('.query-chart-panel [data-testid="chart-heatmap-cell"]').count();
 check('heatmap renders a category × measure matrix', heatCells >= queryRows, `${heatCells} cells`);
+// 热力图：格内数值必须和背景亮度反色，否则高亮格会看不见
+await page.waitForSelector('.query-chart-panel .heat-cell-value', { timeout: 5000 });
+const heatContrast = await page.locator('.query-chart-panel .chart-card').evaluate((card) => {
+  const rgb = (value) => (value.match(/\d+/g) ?? []).map(Number);
+  const lum = ([r = 0, g = 0, b = 0]) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return [...card.querySelectorAll('[data-testid="chart-heatmap-cell"]')]
+    .map((rect) => {
+      const text = rect.parentElement?.querySelector('.heat-cell-value');
+      if (!text) return null;
+      const textFill = text.getAttribute('fill') ?? '';
+      return { ok: lum(rgb(rect.getAttribute('fill') ?? '')) > 0.45 ? textFill === '#10201c' : textFill === '#f2fbf8', textFill };
+    })
+    .filter(Boolean);
+});
+check('heatmap values switch text color by cell brightness', heatContrast.length > 0 && heatContrast.every((item) => item.ok), heatContrast.slice(0, 4).map((item) => item.textFill).join(' '));
 await page.click('[data-testid="chart-type-radar"]');
 await page.waitForSelector('.query-chart-panel [data-testid="chart-radar-shape"]', { timeout: 5000 });
 const radarShapes = await page.locator('.query-chart-panel [data-testid="chart-radar-shape"]').count();
@@ -1834,9 +1903,26 @@ check('SQL Copilot prefills the agent', prefilled.includes('优化') && prefille
 // 连接只有单库（SQLite）时库选择器应当隐藏；多库时有独立探针覆盖（.tools/probes/db-pickers.mjs）
 check('single-database connection hides the agent database picker', (await page.locator('[data-testid="agent-db"]').count()) === 0);
 
+// 记录一轮里状态条出现过的文案，验证它会随阶段变化
+await page.evaluate(() => {
+  window.__activityLabels = new Set();
+  window.__activityObserver = new MutationObserver(() => {
+    const label = document.querySelector('[data-testid="agent-activity"] .activity-label')?.textContent;
+    if (label) window.__activityLabels.add(label);
+  });
+  window.__activityObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+});
 await page.fill('[data-testid="agent-input"]', '看看有哪些表');
 await page.click('[data-testid="agent-send"]');
+await page.waitForSelector('[data-testid="agent-activity"]', { timeout: 10000 });
+check('live activity bar appears while the agent works', (await page.locator('[data-testid="agent-activity"] .activity-label').textContent()) !== '');
 await page.waitForFunction(() => document.querySelector('.agent-transcript')?.textContent?.includes('张表'), { timeout: 25000 });
+await page.waitForFunction(() => !document.querySelector('[data-testid="agent-activity"]'), { timeout: 10000 });
+const activityLabels = await page.evaluate(() => {
+  window.__activityObserver?.disconnect();
+  return [...(window.__activityLabels ?? [])];
+});
+check('activity label changes as the turn advances', activityLabels.length >= 2, activityLabels.join(' | '));
 check('agent inspects schema', (await page.locator('[data-testid="tool-card"]').count()) > 0);
 await page.screenshot({ path: join(shots, 'desktop-agent.png') });
 await page.fill('[data-testid="agent-input"]', '/chart');
@@ -1856,6 +1942,15 @@ await page.locator('[data-testid="agent-input"]').press('Enter');
 await page.waitForTimeout(300);
 check('bare /report keeps command token', (await page.locator('[data-testid="agent-input"]').inputValue()) === '/report ');
 check('bare /report does not open source form', (await page.locator('.modal').count()) === 0);
+await page.fill('[data-testid="agent-input"]', '');
+
+await page.fill('[data-testid="agent-input"]', '/comp');
+await page.waitForFunction(() => document.querySelector('.popover')?.textContent?.includes('/compare'), null, { timeout: 10000 });
+await page.locator('[data-testid="agent-input"]').press('Tab');
+check(
+  'command completion inserts a purpose token without a form',
+  (await page.locator('[data-testid="agent-input"]').inputValue()) === '/compare ' && (await page.locator('.modal').count()) === 0,
+);
 await page.fill('[data-testid="agent-input"]', '');
 
 await page.fill('[data-testid="agent-input"]', '/in');
@@ -1900,10 +1995,10 @@ const lastExec = execSections.last();
 check('execution steps fold away by default', (await lastExec.evaluate((el) => el.hasAttribute('open'))) === false);
 check('chart is hoisted into the conclusion, not nested in a tool card', (await page.locator('.tool-card [data-testid="chart-card"]').count()) === 0 && (await page.locator('[data-testid="agent-chart"]').count()) > 0);
 
-const settledChart = await page.locator('[data-testid="agent-chart"] [data-testid="chart-svg"]').boundingBox();
-check('agent chart is a stable 350px tall', Boolean(settledChart) && Math.abs(settledChart.height - 350) <= 1, settledChart ? `${Math.round(settledChart.width)}x${Math.round(settledChart.height)}` : 'no chart');
+const settledChart = await page.locator('[data-testid="agent-chart"] [data-testid="chart-svg"], [data-testid="agent-chart"] .pie-row').first().boundingBox();
+check('agent chart is a stable 300px tall', Boolean(settledChart) && Math.abs(settledChart.height - 300) <= 1, settledChart ? `${Math.round(settledChart.width)}x${Math.round(settledChart.height)}` : 'no chart');
 
-// 图表高度要压在可见聊天区之内：先把 AI 面板拖宽，再压矮窗口
+// 固定高度：面板拖宽、窗口压矮、切换类型都不应改变绘图区高度
 const agentSplit = await page.locator('[data-testid="splitter-agent"]').boundingBox();
 await page.mouse.move(agentSplit.x + 2, agentSplit.y + 200);
 await page.mouse.down();
@@ -1912,13 +2007,72 @@ await page.mouse.up();
 await page.waitForTimeout(300);
 await page.setViewportSize({ width: 1440, height: 620 });
 await page.waitForTimeout(700);
-const shortTranscript = await page.locator('.agent-transcript').evaluate((el) => el.clientHeight);
-const shortChart = await page.locator('[data-testid="agent-chart"] [data-testid="chart-svg"]').boundingBox();
+const shortChart = await page.locator('[data-testid="agent-chart"] [data-testid="chart-svg"], [data-testid="agent-chart"] .pie-row').first().boundingBox();
+check('agent chart keeps its 300px height in a short transcript', Boolean(shortChart) && Math.abs(shortChart.height - 300) <= 1, shortChart ? `${Math.round(shortChart.width)}x${Math.round(shortChart.height)}` : 'no chart');
+
+// 本轮刚生成的图表在最后；前面的 /report 可能也带图表
+const liveChartCard = page.locator('[data-testid="agent-chart"] .chart-card').last();
+// AI 图表按数据结构限制可选类型：status 分类 4 类、单度量 => line/stacked/scatter/heatmap 不可用
+const unsuitable = [];
+for (const type of ['line', 'stacked', 'scatter', 'heatmap']) {
+  const button = liveChartCard.locator(`[data-testid="chart-type-${type}"]`);
+  unsuitable.push({ type, disabled: await button.isDisabled(), title: await button.getAttribute('title') });
+}
 check(
-  'agent chart shrinks into the visible transcript',
-  Boolean(shortChart) && shortChart.height <= shortTranscript && shortChart.height <= 400,
-  shortChart ? `${Math.round(shortChart.width)}x${Math.round(shortChart.height)} in ${shortTranscript}` : 'no chart',
+  'AI charts disable unsuitable types with a reason',
+  unsuitable.every((item) => item.disabled && /：/.test(item.title ?? '')),
+  unsuitable.map((item) => `${item.type}:${item.title}`).join(' | '),
 );
+const chartTypeHeights = [];
+for (const type of ['pie', 'radar', 'bar']) {
+  await liveChartCard.locator(`[data-testid="chart-type-${type}"]`).click();
+  await page.waitForTimeout(120);
+  const body = await liveChartCard.locator('[data-testid="chart-svg"], .pie-row').first().boundingBox();
+  chartTypeHeights.push({ type, height: body?.height ?? 0 });
+}
+check(
+  'chart height stays 300px for suitable AI chart types',
+  chartTypeHeights.every((item) => Math.abs(item.height - 300) <= 1),
+  chartTypeHeights.map((item) => `${item.type}:${Math.round(item.height)}`).join(' '),
+);
+
+// 花瓣饼图：每瓣有直接指向的标签和引线，百分比合计为 100，hover 立即出精确 tooltip
+await liveChartCard.locator('[data-testid="chart-type-pie"]').click();
+await page.waitForSelector('[data-testid="chart-rose-petal"]', { timeout: 5000 });
+const petalCount = await liveChartCard.locator('[data-testid="chart-rose-petal"]').count();
+const roseLabelCount = await liveChartCard.locator('[data-testid="chart-rose-label"]').count();
+const roseLeaderCount = await liveChartCard.locator('[data-testid="chart-rose-leader"]').count();
+check(
+  'rose pie draws petals with direct labels and leaders',
+  petalCount > 0 && petalCount <= 8 && roseLabelCount === petalCount && roseLeaderCount === petalCount,
+  `${petalCount} petals · ${roseLabelCount} labels · ${roseLeaderCount} leaders`,
+);
+const petalTips = await liveChartCard.locator('[data-testid="chart-rose-petal"]').evaluateAll((els) => els.map((el) => el.getAttribute('data-tip') ?? ''));
+const petalPercent = petalTips.reduce((sum, tip) => {
+  const value = /（([\d.]+)%）/.exec(tip)?.[1];
+  return sum + (value ? Number(value) : tip.includes('（<0.1%）') ? 0.05 : 0);
+}, 0);
+check('rose pie percentages add up to 100', petalTips.length > 0 && Math.abs(petalPercent - 100) <= 0.8, `${petalPercent.toFixed(1)}%`);
+await liveChartCard.locator('[data-testid="chart-rose-petal"]').first().hover();
+await page.waitForSelector('[data-testid="chart-hover-tip"]', { timeout: 5000 });
+const roseTip = (await page.locator('[data-testid="chart-hover-tip"]').textContent()) ?? '';
+check('rose petal hover shows an immediate tooltip', /%/.test(roseTip) && /\d/.test(roseTip), roseTip.replace(/\s+/g, ' ').slice(0, 60));
+
+await liveChartCard.locator('[data-testid="chart-type-bar"]').click();
+await page.waitForTimeout(200);
+await liveChartCard.locator('[data-testid="chart-svg"] rect[data-tip]').first().hover();
+await page.waitForSelector('[data-testid="chart-hover-tip"]', { timeout: 5000 });
+const barTip = (await page.locator('[data-testid="chart-hover-tip"]').textContent()) ?? '';
+check('bar hover shows exact values', /\d/.test(barTip), barTip.replace(/\s+/g, ' ').slice(0, 60));
+
+// 手动上滑后停止跟随，回到底部按钮可以跳回最新输出
+await page.locator('.agent-transcript').evaluate((el) => { el.scrollTop = 0; });
+await page.waitForTimeout(250);
+check('scrolling up reveals the jump-to-bottom button', await page.locator('[data-testid="agent-scroll-bottom"]').isVisible());
+await page.locator('[data-testid="agent-scroll-bottom"]').click();
+await page.waitForTimeout(700);
+const bottomGap = await page.locator('.agent-transcript').evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+check('jump button returns to the latest output', bottomGap <= 4, `${Math.round(bottomGap)}px from bottom`);
 await page.setViewportSize({ width: 1440, height: 900 });
 await page.locator('[data-testid="splitter-agent"]').dblclick();
 await page.waitForTimeout(600);
@@ -1926,7 +2080,7 @@ await page.screenshot({ path: join(shots, 'desktop-chart.png') });
 
 // ---------------- P3 图表三 tab / 工具条 / PNG ----------------
 // 锚点用 chart-tabs 而不是 chart-card：切到「明细」时图表卡会卸载，用它定位会瞬间失效
-const chartToolCard = page.locator('[data-testid="agent-chart"]').first();
+const chartToolCard = page.locator('[data-testid="agent-chart"]').last();
 check('chart result offers 图表/明细/SQL tabs', (await chartToolCard.locator('[data-testid="chart-tabs"] button').count()) === 3, await chartToolCard.locator('[data-testid="chart-tabs"] button').allTextContents().then((t) => t.join('|')).catch(() => ''));
 await chartToolCard.locator('[data-testid="chart-tab-rows"]').click();
 check('明细 tab exposes the rows the tool already returned', (await chartToolCard.locator('.tool-table tbody tr').count()) > 0, `${await chartToolCard.locator('.tool-table tbody tr').count()} rows`);
@@ -1936,8 +2090,8 @@ await chartToolCard.locator('[data-testid="chart-tab-chart"]').click();
 check('switching back restores the chart', (await chartToolCard.locator('[data-testid="chart-svg"]').count()) === 1);
 const chartCard = chartToolCard.locator('[data-testid="chart-card"]');
 check('chart toolbar is shared into the agent card', (await chartCard.locator('[data-testid="chart-toolbar"]').count()) === 1);
-await chartCard.locator('[data-testid="chart-type-line"]').click();
-check('chart type switches without a round trip', /LINE/.test((await chartCard.locator('.chart-head .badge').textContent()) ?? ''));
+await chartCard.locator('[data-testid="chart-type-pie"]').click();
+check('chart type switches without a round trip', /PIE/.test((await chartCard.locator('.chart-kind').textContent()) ?? ''));
 await chartCard.locator('[data-testid="chart-type-bar"]').click();
 const pngDownload = page.waitForEvent('download', { timeout: 15000 });
 await chartCard.locator('[data-testid="chart-export-png"]').click();
@@ -1945,17 +2099,28 @@ const pngPath = await (await pngDownload).path();
 const pngHead = (await readFile(pngPath)).subarray(0, 4);
 check('chart PNG export produces a real PNG', pngHead[0] === 0x89 && pngHead[1] === 0x50 && pngHead[2] === 0x4e && pngHead[3] === 0x47, `${pngHead.toString('hex')} ${(await statSync(pngPath)).size}B`);
 
-// ---------------- P4 执行详情 ----------------
-const execToggles = page.locator('[data-testid="exec-toggle"]');
-check('每轮消息提供执行详情入口', (await execToggles.count()) > 0, `${await execToggles.count()} toggles`);
-await execToggles.first().click();
-const execDetail = page.locator('[data-testid="exec-detail"]').first();
-check('执行详情抽屉展开', (await execDetail.count()) === 1);
-check('时间线至少一行且带耗时', (await execDetail.locator('.exec-row').count()) > 0 && /\d/.test((await execDetail.locator('.exec-ms').first().textContent()) ?? ''));
-check('汇总行给出调用次数', /次调用/.test((await execDetail.locator('[data-testid="exec-summary"]').textContent()) ?? ''), (await execDetail.locator('[data-testid="exec-summary"]').textContent()) ?? '');
-await execDetail.locator('.exec-head').first().click();
-check('单行可展开看参数', (await execDetail.locator('.exec-body').count()) > 0);
-await execToggles.first().click();
+// ---------------- P4 执行过程内直接看结果数据 ----------------
+// 前面的 /chart 与 /report 走的是 render_chart / 命令工具，不产生 run_sql 卡；
+// 这里先跑一条明确的 SELECT，保证执行过程里有 SQL 工具卡和真实结果行可展开。
+await page.fill('[data-testid="agent-input"]', 'SELECT * FROM orders LIMIT 5');
+await page.click('[data-testid="agent-send"]');
+await page.waitForFunction(
+  () => [...document.querySelectorAll('[data-testid="tool-card"]')].some((el) => el.textContent?.includes('run_sql')),
+  null,
+  { timeout: 30000 },
+);
+await page.waitForFunction(() => !document.querySelector('[data-testid="agent-activity"]'), null, { timeout: 10000 });
+check('重复的执行详情入口已移除', (await page.locator('[data-testid="exec-toggle"]').count()) === 0);
+await page.locator('[data-testid="execution-section"]').evaluateAll((els) => els.forEach((el) => el.setAttribute('open', '')));
+const sqlToolCards = page.locator('[data-testid="tool-card"]').filter({ hasText: 'run_sql' });
+check('执行过程提供 run_sql 工具卡', (await sqlToolCards.count()) > 0, `${await sqlToolCards.count()} cards`);
+let resultRows = 0;
+for (let index = 0; index < Math.min(await sqlToolCards.count(), 5); index++) {
+  const card = sqlToolCards.nth(index);
+  if ((await card.locator('.tool-body').count()) === 0) await card.locator('.tool-head').click();
+  resultRows = Math.max(resultRows, await card.locator('.tool-table tbody tr').count());
+}
+check('展开工具卡能看到真实结果行', resultRows > 0, `${resultRows} rows`);
 
 // ---------------- P2 追问建议 ----------------
 check('回合结束后出现追问建议', (await page.locator('[data-testid="agent-followups"] .suggest-chip').count()) > 0, `${await page.locator('[data-testid="agent-followups"] .suggest-chip').count()} chips`);
@@ -1977,7 +2142,9 @@ const suggestChips = page.locator('[data-testid="agent-suggestions"] .suggest-ch
 const chipCount = await suggestChips.count();
 check('空会话给出猜你想问', chipCount > 0 && chipCount <= 6, `${chipCount} chips`);
 const chipText = (await suggestChips.first().textContent()) ?? '';
-await suggestChips.first().click();
+// 空会话建议可能因动画/重渲染而短暂不稳定，直接在 DOM 上触发点击，随后等待输入框同步。
+await suggestChips.first().evaluate((el) => el.click());
+await page.waitForFunction(() => (document.querySelector('[data-testid="agent-input"]')?.value ?? '').length > 4, null, { timeout: 5000 });
 check('点击推荐填入输入框且不自动发送', (await page.locator('[data-testid="agent-input"]').inputValue()).length > 4 && chipText.length > 0);
 await page.fill('[data-testid="agent-input"]', '');
 
@@ -2108,6 +2275,105 @@ check('relationship diagram renders tables', erdNodes >= 5, `${erdNodes} nodes`)
 await page.screenshot({ path: join(shots, 'desktop-relations.png') });
 await page.locator('.tab.active .tab-close').click();
 
+// ---------------- 仪表板：每库一块板的活查询卡片 ----------------
+const dashList = async () => (await api(`/dashboards/cards?connectionId=${demo.id}`)).body?.cards ?? [];
+for (const card of await dashList()) await api(`/dashboards/cards/${card.id}`, { method: 'DELETE' });
+const rejectedCard = await api('/dashboards/cards', { method: 'POST', body: JSON.stringify({ connectionId: demo.id, title: '危险卡片', sql: 'DELETE FROM orders' }) });
+check('dashboard rejects non-read-only card', rejectedCard.status === 400 && JSON.stringify(rejectedCard.body).includes('DASHBOARD_NOT_READ_ONLY'), `${rejectedCard.status}`);
+const multiCard = await api('/dashboards/cards', { method: 'POST', body: JSON.stringify({ connectionId: demo.id, title: '多语句', sql: 'SELECT 1; SELECT 2' }) });
+check('dashboard rejects multi-statement card', multiCard.status === 400, `${multiCard.status}`);
+const madeCard = await api('/dashboards/cards', {
+  method: 'POST',
+  body: JSON.stringify({
+    connectionId: demo.id,
+    title: '月度订单',
+    sql: "SELECT strftime('%Y-%m', created_at) AS month, COUNT(*) AS orders, SUM(total_cents) AS amount FROM orders GROUP BY month ORDER BY month",
+    chartType: 'line',
+    timeColumn: 'month',
+  }),
+});
+check('dashboard card created', madeCard.status === 200 && Boolean(madeCard.body?.card?.id), `${madeCard.status}`);
+
+await page.locator('.tree-node', { hasText: 'Demo' }).first().click().catch(() => undefined);
+await page.waitForTimeout(400);
+await page.click('[data-testid="open-dashboard"]');
+await page.waitForSelector('[data-testid="tab-dashboard"]', { timeout: 10000 });
+await page.waitForSelector('[data-testid="dashboard-card"]', { timeout: 20000 });
+await page.waitForSelector('[data-testid="dashboard-card"] [data-testid="chart-svg"]', { timeout: 20000 });
+const dashCharts = await page.locator('[data-testid="dashboard-card"] [data-testid="chart-svg"]').count();
+check('dashboard renders charts from live SQL', dashCharts >= 1, `${dashCharts} charts`);
+const dashBox = await page.locator('[data-testid="dashboard-card"] [data-testid="chart-svg"]').first().boundingBox();
+check('dashboard chart respects the 300px cap', Boolean(dashBox) && dashBox.height > 80 && dashBox.height <= 302, `${Math.round(dashBox?.height ?? 0)}px`);
+const dashSeries = await page.locator('[data-testid="dashboard-card"] [data-testid="chart-series-legend"] span').count();
+check('multi-measure card draws every numeric column', dashSeries >= 2, `${dashSeries} series`);
+check('mismatched measures get a right axis instead of a flat line', (await page.locator('[data-testid="dashboard-card"] [data-testid="chart-axis-right"]').count()) === 1);
+
+// 新建卡片：一句需求 → AI/离线口径生成 SQL → 试跑预览 → 保存为固定卡
+await page.click('[data-testid="dashboard-add"]');
+await page.fill('[data-testid="dashboard-card-prompt"]', '按状态统计订单');
+await page.click('[data-testid="dashboard-card-compose"]');
+await page
+  .waitForFunction(
+    () => {
+      const button = document.querySelector('[data-testid="dashboard-card-compose"]');
+      return Boolean(button) && !/生成中/.test(button.textContent ?? '');
+    },
+    null,
+    { timeout: 30000 },
+  )
+  .catch(() => undefined);
+const composedSql = await page.locator('[data-testid="dashboard-card-sql"]').inputValue();
+const composedPreview = await page.locator('[data-testid="dashboard-card-preview"]').count();
+check('composer turns a sentence into SQL and previews it', composedSql.length > 20 && composedPreview === 1, `${composedSql.slice(0, 50)} preview=${composedPreview}`);
+const beforeComposeSave = (await dashList()).length;
+await page.click('[data-testid="dashboard-card-save"]');
+await page
+  .waitForFunction((count) => document.querySelectorAll('[data-testid="dashboard-card"]').length === count + 1, beforeComposeSave, { timeout: 20000 })
+  .catch(() => undefined);
+const composedCard = (await dashList()).find((card) => card.source === 'ai');
+check('AI-composed card saves its column hints', Boolean(composedCard?.x && composedCard?.y), JSON.stringify(composedCard ?? {}).slice(0, 140));
+if (composedCard) await api(`/dashboards/cards/${composedCard.id}`, { method: 'DELETE' });
+
+const rangeCount = await page.locator('[data-testid="dashboard-range"]').count();
+check('board time range appears once a card declares a time column', rangeCount === 1, `${rangeCount}`);
+if (rangeCount) {
+  await page.selectOption('[data-testid="dashboard-range"]', '7d');
+  await page.waitForTimeout(1500);
+  check('range switch keeps the board alive', (await page.locator('[data-testid="dashboard-card"]').count()) >= 1);
+  await page.selectOption('[data-testid="dashboard-range"]', 'all');
+  await page.waitForTimeout(800);
+}
+await page.click('[data-testid="dashboard-generate"]');
+await page
+  .waitForFunction(() => document.querySelectorAll('[data-testid="dashboard-card"][data-pinned="0"]').length > 0, null, { timeout: 150000 })
+  .catch(() => undefined);
+const draftNodes = await page.locator('[data-testid="dashboard-card"][data-pinned="0"]').count();
+const pinnedNodes = await page.locator('[data-testid="dashboard-card"][data-pinned="1"]').count();
+check('AI drafts generated without a curated brief', draftNodes >= 1, `${draftNodes} drafts`);
+check('pinned cards survive generation', pinnedNodes >= 1, `${pinnedNodes} pinned`);
+const draftCharts = await page.locator('[data-testid="dashboard-card"][data-pinned="0"] [data-testid="chart-svg"]').count();
+check('every draft card passed its trial run before entering the board', draftCharts === draftNodes, `${draftCharts}/${draftNodes}`);
+const boardTotal = await dashList();
+check('board stays within the 12-card limit', boardTotal.length <= 12, `${boardTotal.length} cards`);
+await page.click('[data-testid="dashboard-discard"]');
+await page.waitForFunction(() => document.querySelectorAll('[data-testid="dashboard-card"][data-pinned="0"]').length === 0, null, { timeout: 20000 });
+check('discard clears drafts and keeps pinned cards', (await page.locator('[data-testid="dashboard-card"]').count()) === pinnedNodes);
+const scheduleOn = await api('/dashboards/schedule', { method: 'PUT', body: JSON.stringify({ connectionId: demo.id, intervalSeconds: 300 }) });
+check('scheduled refresh stores an interval with a 60s floor', scheduleOn.status === 200 && scheduleOn.body?.schedule?.intervalSeconds === 300, JSON.stringify(scheduleOn.body?.schedule ?? {}).slice(0, 120));
+const scheduleList = await api(`/dashboards/cards?connectionId=${demo.id}`);
+check('board still lists cards while a schedule is active', scheduleList.status === 200, `${(scheduleList.body?.cards ?? []).length} cards`);
+await api('/dashboards/schedule', { method: 'PUT', body: JSON.stringify({ connectionId: demo.id, intervalSeconds: 0 }) });
+const scheduleOff = await api('/dashboards/schedule?connectionId=' + demo.id);
+check('scheduled refresh can be turned off again', scheduleOff.body?.schedule === null, JSON.stringify(scheduleOff.body));
+const reportOut = await api('/dashboards/report', { method: 'POST', body: JSON.stringify({ connectionId: demo.id }) });
+const reportId = reportOut.body?.artifact?.id;
+check('board exports a report artifact', reportOut.status === 200 && Boolean(reportId), `${reportOut.status} ${JSON.stringify(reportOut.body ?? {}).slice(0, 90)}`);
+if (reportId) {
+  const deck = await api(`/artifacts/${reportId}/export?format=pptx`);
+  check('report artifact renders a real PPTX deck', deck.status === 200 && (deck.body?.bytes ?? 0) > 1000, `${deck.status} ${deck.body?.bytes ?? 0} bytes`);
+}
+await page.screenshot({ path: join(shots, 'desktop-dashboard.png') }).catch(() => undefined);
+
 // ---------------- Mobile (Expo web build) ----------------
 const mobileContext = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
 const mobile = await mobileContext.newPage();
@@ -2141,12 +2407,10 @@ check('mobile agent answers', true);
 await mobile.screenshot({ path: join(shots, 'mobile-agent.png') });
 await mobile.getByTestId('m-commands').click();
 await mobile.getByTestId('m-command-report').click();
-await mobile.getByPlaceholder('例如：本周订单与履约情况').fill('数据概览');
-await mobile.getByTestId('m-command-run').click();
-await mobile.waitForFunction(() => document.body.innerText.includes('概览'), { timeout: 40000 });
-check('mobile command report renders', true);
+check('mobile command picker inserts a purpose token', (await mobile.getByTestId('m-chat-input').inputValue()) === '/report ');
+check('mobile command picker does not open a form', (await mobile.getByPlaceholder('例如：本周订单与履约情况').count()) === 0);
 await mobile.screenshot({ path: join(shots, 'mobile-command-report.png') });
-await mobile.getByTestId('m-command-close').click();
+await mobile.getByTestId('m-chat-input').fill('');
 
 await mobile.getByTestId('m-tab-data').click();
 await mobile.waitForSelector('[data-testid="m-table-orders"]', { timeout: 15000 });

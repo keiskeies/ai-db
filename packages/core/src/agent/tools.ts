@@ -957,6 +957,20 @@ x/y/ys/value/label are result column names, not SQL expressions.`,
     summarize: (a) => `Skill Worker ${a.skill}: ${String(a.prompt ?? '').slice(0, 80)}`,
   },
   {
+    name: 'mcp_list_servers',
+    description:
+      'List configured MCP servers (built-in and external) with their exact id, enabled state, configured paths/hosts and built-in tool names. Call this before mcp_list_tools and never guess a server name.',
+    risk: 'read',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        includeDisabled: { type: 'boolean', description: 'Include disabled servers (default false)' },
+      },
+    },
+    summarize: () => '列出 MCP Server',
+  },
+  {
     name: 'mcp_list_tools',
     description: 'List tools exposed by a configured MCP server (stdio transport). Use this before mcp_call when the tool name is unknown.',
     risk: 'read',
@@ -972,8 +986,9 @@ x/y/ys/value/label are result column names, not SQL expressions.`,
   },
   {
     name: 'mcp_call',
-    description: 'Call a tool on a configured MCP server. Arguments are passed through as JSON. Write risk: results may perform external actions; require approval.',
-    risk: 'write',
+    description:
+      'Call a tool on a configured MCP server. Arguments are passed through as JSON. Built-in read-only tools run directly; writes and external servers require approval in ask mode.',
+    risk: 'dynamic',
     inputSchema: {
       type: 'object',
       additionalProperties: false,

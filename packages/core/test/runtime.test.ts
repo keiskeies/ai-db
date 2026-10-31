@@ -162,6 +162,38 @@ test('update_plan is applied in-process and emits a plan event', async () => {
   assert.ok(planEvent && planEvent.type === 'plan' && planEvent.items.length === 2);
 });
 
+test('runtime nudges the model when a plan is not updated after tools run', async () => {
+  const query = (id: string): ToolCall => ({ id, name: 'run_sql', args: { connectionId: 'c1', sql: 'SELECT 1' } });
+  const provider = new ScriptedProvider([
+    [
+      {
+        type: 'tool_call',
+        call: { id: 'plan_1', name: 'update_plan', args: { items: [{ text: 'first', status: 'doing' }, { text: 'second', status: 'todo' }] } },
+      },
+      { type: 'done', stopReason: 'tool_use' },
+    ],
+    [
+      { type: 'tool_call', call: query('q1') },
+      { type: 'tool_call', call: query('q2') },
+      { type: 'done', stopReason: 'tool_use' },
+    ],
+    [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }],
+  ]);
+  const runtime = new AgentRuntime({
+    provider,
+    buildSystem: () => 'system',
+    executeTool: async () => result(),
+    requestApproval: async () => ({ decision: 'allow', scope: 'once' }),
+    emit: () => undefined,
+    generateId: () => `id_${Math.random().toString(36).slice(2, 8)}`,
+    now: () => Date.now(),
+  });
+  await runtime.run({ ...baseInput, sessionAllowed: new Set(), alwaysAllowed: new Set() });
+  // 第三个请求（最终回答前）应能看到附着在工具结果上的计划提醒
+  const toolMessages = provider.requests[2].messages.filter((message) => message.role === 'tool');
+  assert.ok(toolMessages.some((message) => message.content.includes('[plan reminder]')));
+});
+
 test('runtime rescues a tool call the model wrote as XML text', async () => {
   const provider = new ScriptedProvider([
     [

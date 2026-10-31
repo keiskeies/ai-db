@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
+  ChevronDown,
+  ChevronRight,
   Database,
   Download,
   Info,
   KeyRound,
-  ListChecks,
   BookOpen,
   Bell,
   Plug,
@@ -20,13 +21,12 @@ import {
   SlidersHorizontal,
   Trash2,
 } from 'lucide-react';
-import type { AppSettings, AuditEntry, BackupInfo, ModelInfo, ModelInputModality, ModelProfile, ModelReasoningTier, ProviderKind, ProviderPreset } from '@aidb/core';
+import type { AgentModelConfig, AgentModelEntry, AppSettings, AuditEntry, BackupInfo, ModelInputModality, ModelProfile, ModelReasoningTier, ProviderKind, ProviderPreset } from '@aidb/core';
 import {
   DEFAULT_REASONING_TIERS,
   TIER_LEVELS,
   formatTokenSize,
   matchPreset,
-  getModelProfile,
   parseTokenSize,
   presetById,
   presetsByGroup,
@@ -36,16 +36,22 @@ import {
 } from '@aidb/core';
 import { api, TOKEN } from '../lib/api';
 import { formatBytes, formatRelative } from '../lib/format';
-import { useApp } from '../store';
+import { useApp, type SettingsTab } from '../store';
 import { RiskBadge } from './ui';
 import { SkillsTool } from './tools/SkillsTool';
+import { WebSearchTool } from './tools/WebSearchTool';
 import { McpTool } from './tools/McpTool';
 import { NotificationsTool } from './tools/NotificationsTool';
 
-type TabKey = 'appearance' | 'query' | 'agent' | 'skills' | 'mcp' | 'notify' | 'bridge' | 'data' | 'about';
+type TabKey = SettingsTab;
+
+/** 编辑中的模型行：orig 记录服务端原来的模型 id，提交时才把能力档案迁到新 id。 */
+type DraftModel = AgentModelEntry & { orig?: string };
+type ModelDraft = Omit<AgentModelConfig, 'models'> & { models: DraftModel[] };
 
 export function SettingsModal() {
   const open = useApp((s) => s.settingsOpen);
+  const settingsTab = useApp((s) => s.settingsTab);
   const settings = useApp((s) => s.settings);
   const t = useApp((s) => s.t);
   const setOpen = useApp((s) => s.setSettingsOpen);
@@ -60,28 +66,40 @@ export function SettingsModal() {
   const [tab, setTab] = useState<TabKey>('appearance');
   const [navQuery, setNavQuery] = useState('');
   const [form, setForm] = useState<AppSettings>(settings);
-  const [apiKey, setApiKey] = useState('');
+  const [draft, setDraft] = useState<ModelDraft | null>(null);
+  const [draftNew, setDraftNew] = useState(false);
+  const [draftKey, setDraftKey] = useState('');
+  const [draftKeyDirty, setDraftKeyDirty] = useState(false);
+  const [draftShowAdvanced, setDraftShowAdvanced] = useState(true);
+  const [expandedModel, setExpandedModel] = useState('');
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [dataLoading, setDataLoading] = useState(false);
-  const [modelList, setModelList] = useState<string[]>([]);
-  const [modelInfos, setModelInfos] = useState<ModelInfo[]>([]);
   const [modelSource, setModelSource] = useState('');
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState('');
-  const [modelQuery, setModelQuery] = useState('');
+  /** 只在真正打开弹窗时重置草稿/页签；设置重启刷新时保留当前页。 */
+  const openedRef = useRef(false);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      openedRef.current = false;
+      return;
+    }
+    if (!openedRef.current) {
+      openedRef.current = true;
+      setDraft(null);
+      setDraftNew(false);
+      setDraftKey('');
+      setDraftKeyDirty(false);
+      setDraftShowAdvanced(true);
+      setExpandedModel('');
+      setTab(settingsTab ?? 'appearance');
+      setModelSource('');
+      setModelsError('');
+      void loadDevices();
+    }
     setForm(settings);
-    setApiKey('');
-    setTab('appearance');
-    setModelList([]);
-    setModelInfos([]);
-    setModelSource('');
-    setModelsError('');
-    setModelQuery('');
-    void loadDevices();
   }, [open, settings, loadDevices]);
 
   useEffect(() => {
@@ -96,12 +114,18 @@ export function SettingsModal() {
       .finally(() => setDataLoading(false));
   }, [open, tab]);
 
-  const activePreset = useMemo(
+  const modelConfigs = form.agent.modelConfigs ?? [];
+  const activeModelId = form.agent.activeModelId ?? modelConfigs[0]?.id ?? '';
+  const apiKeyStatus = form.agent.modelApiKeyStatus ?? {};
+
+  const draftPreset = useMemo(
     () =>
-      presetById(form.agent.preset) ??
-      matchPreset(form.agent.provider as ProviderKind, form.agent.baseUrl) ??
-      presetById(form.agent.provider === 'local' ? 'local' : 'custom'),
-    [form.agent.preset, form.agent.provider, form.agent.baseUrl],
+      draft
+        ? presetById(draft.preset) ??
+          matchPreset(draft.provider as ProviderKind, draft.baseUrl) ??
+          presetById(draft.provider === 'local' ? 'local' : 'custom')
+        : undefined,
+    [draft?.preset, draft?.provider, draft?.baseUrl],
   );
 
   if (!open) return null;
@@ -110,85 +134,279 @@ export function SettingsModal() {
   const setEmbedding = (patch: Partial<AppSettings['embedding']>) =>
     setForm((prev) => ({ ...prev, embedding: { ...prev.embedding, ...patch } }));
 
-  /** 当前模型的能力档案；未配置时为 undefined，编辑器按空值渲染。 */
-  const profile = getModelProfile(form.agent);
-
-  const patchProfile = (patch: Partial<ModelProfile>) => {
-    if (!form.agent.model) return;
-    setForm((prev) => ({ ...prev, agent: withModelProfile(prev.agent, prev.agent.model, { ...(getModelProfile(prev.agent) ?? {}), ...patch }) }));
+  const clearModels = () => {
+    setModelSource('');
+    setModelsError('');
   };
 
-  /** 选中模型：没有档案但探测到能力时立刻预填，并把档位选择收敛到新模型支持的档位。 */
-  const pickModel = (model: string) => {
+  const patchDraft = (patch: Partial<AgentModelConfig>) => setDraft((prev) => (prev ? { ...prev, ...patch } : prev));
+
+  const resetDraftState = () => {
+    setDraft(null);
+    setDraftNew(false);
+    setDraftKey('');
+    setDraftKeyDirty(false);
+    setDraftShowAdvanced(true);
+    setExpandedModel('');
+    clearModels();
+  };
+
+  const startAddModel = () => {
+    const base = presetById('custom');
+    setDraft({
+      id: `m_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+      provider: base?.kind ?? form.agent.provider,
+      preset: base?.id,
+      baseUrl: base?.baseUrl ?? '',
+      models: [],
+    });
+    setDraftNew(true);
+    setDraftKey('');
+    setDraftKeyDirty(false);
+    setDraftShowAdvanced(true);
+    setExpandedModel('');
+    clearModels();
+  };
+
+  const startEditModel = (config: AgentModelConfig) => {
+    setDraft({ ...config, models: config.models.map((item) => ({ id: item.id, name: item.name, orig: item.id })) });
+    setDraftNew(false);
+    setDraftKey('');
+    setDraftKeyDirty(false);
+    setDraftShowAdvanced(true);
+    setExpandedModel('');
+    clearModels();
+  };
+
+  const cancelDraft = () => resetDraftState();
+
+  /** 加/改模型行：id 改名不在编辑期迁移档案，避免取消编辑后档案被改坏。 */
+  const updateDraftModel = (index: number, patch: Partial<DraftModel>) => {
+    const current = draft?.models[index];
+    if (!current) return;
+    const oldId = current.id;
+    setDraft((prev) => (prev ? { ...prev, models: prev.models.map((item, i) => (i === index ? { ...item, ...patch } : item)) } : prev));
+    if (patch.id === undefined || patch.id === oldId) return;
+    setExpandedModel((prev) => (prev === oldId ? patch.id! : prev));
+    // 新加的模型还没落库，改名时直接把档案跟着走；已有模型留到提交时迁移。
+    if (current.orig) return;
+    const newId = patch.id.trim();
     setForm((prev) => {
-      const stored = prev.agent.modelProfiles?.[model];
-      const info = modelInfos.find((item) => item.id === model);
-      const detected = !stored && info ? profileFromModelInfo(info) : undefined;
-      let agent: AppSettings['agent'] = { ...prev.agent, model };
-      if (detected) agent = withModelProfile(agent, model, detected);
-      const tiers = (stored ?? detected)?.reasoningTiers ?? [];
-      if (tiers.length && !tiers.some((tier) => tier.level === agent.reasoningTier)) agent = { ...agent, reasoningTier: undefined };
-      return { ...prev, agent };
+      const profiles = { ...(prev.agent.modelProfiles ?? {}) };
+      if (!oldId || !profiles[oldId]) return prev;
+      const profile = profiles[oldId];
+      delete profiles[oldId];
+      if (newId) profiles[newId] = profile;
+      return { ...prev, agent: { ...prev.agent, modelProfiles: profiles } };
     });
   };
 
-  const clearModels = () => {
-    setModelList([]);
-    setModelInfos([]);
-    setModelSource('');
-    setModelsError('');
-    setModelQuery('');
+  const addDraftModelRow = () => setDraft((prev) => (prev ? { ...prev, models: [...prev.models, { id: '' }] } : prev));
+
+  const removeDraftModelAt = (index: number) => {
+    const removed = draft?.models[index];
+    setDraft((prev) => (prev ? { ...prev, models: prev.models.filter((_, i) => i !== index) } : prev));
+    if (removed && expandedModel === removed.id) setExpandedModel('');
   };
 
-  const applyPreset = (preset: ProviderPreset) => {
-    setAgent({ provider: preset.kind, preset: preset.id, baseUrl: preset.baseUrl, model: preset.defaultModel });
+  const mergeDraftModels = (ids: string[]) => {
+    const incoming = ids.map((id) => id.trim()).filter(Boolean);
+    if (!incoming.length) return;
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const have = new Set(prev.models.map((item) => item.id.trim()).filter(Boolean));
+      const extra = incoming.filter((id) => !have.has(id)).map((id) => ({ id }));
+      return { ...prev, models: [...prev.models.filter((item) => item.id.trim()), ...extra] };
+    });
+  };
+
+  const presetModelIds = (preset?: ProviderPreset) =>
+    preset?.models?.length ? preset.models : preset?.defaultModel ? [preset.defaultModel] : [];
+
+  const applyDraftPreset = (preset: ProviderPreset) => {
+    const fallback = presetModelIds(preset).map((id) => ({ id }));
+    setDraft((prev) =>
+      prev
+        ? {
+            ...prev,
+            provider: preset.kind,
+            preset: preset.id,
+            baseUrl: preset.baseUrl,
+            models: prev.models.some((item) => item.id.trim()) ? prev.models : fallback,
+          }
+        : prev,
+    );
+    setExpandedModel('');
     clearModels();
   };
 
-  const changeKind = (kind: ProviderKind) => {
+  const changeDraftKind = (kind: ProviderKind) => {
     const preset = presetsByGroup()
       .flatMap((group) => group.presets)
       .find((item) => item.kind === kind && item.id !== 'custom');
-    setAgent(
-      preset && preset.kind === kind
-        ? { provider: kind, preset: preset.id, baseUrl: preset.baseUrl, model: preset.defaultModel }
-        : { provider: kind, preset: kind === 'local' ? 'local' : 'custom' },
-    );
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const next = preset && preset.kind === kind
+        ? { ...prev, provider: kind, preset: preset.id, baseUrl: preset.baseUrl }
+        : { ...prev, provider: kind, preset: kind === 'local' ? 'local' : 'custom' };
+      if (preset && !prev.models.some((item) => item.id.trim())) next.models = presetModelIds(preset).map((id) => ({ id }));
+      return next;
+    });
+    setExpandedModel('');
     clearModels();
   };
 
+  const restoreDefaultModels = () => {
+    if (!draft) return;
+    const ids = presetModelIds(draftPreset);
+    if (!ids.length) {
+      notify('warning', '模型目录', '该服务商没有默认模型，请用“获取可用模型”或手动添加。');
+      return;
+    }
+    setDraft({ ...draft, models: ids.map((id) => ({ id })) });
+    setExpandedModel('');
+  };
+
+  const commitDraft = () => {
+    if (!draft) return;
+    const seen = new Set<string>();
+    const drafted = draft.models
+      .map((item) => ({ id: item.id.trim(), name: item.name?.trim() || undefined, orig: item.orig }))
+      .filter((item) => item.id && !seen.has(item.id) && (seen.add(item.id), true));
+    if (!drafted.length) {
+      notify('warning', '模型配置', '至少给这个服务商添加一个模型');
+      return;
+    }
+    const renames = drafted.filter((item) => item.orig && item.orig !== item.id);
+    const config: AgentModelConfig = {
+      id: draft.id,
+      name: draft.name?.trim() || undefined,
+      provider: draft.provider,
+      preset: draft.preset,
+      baseUrl: draft.baseUrl.trim(),
+      models: drafted.map(({ id, name }) => ({ id, name })),
+    };
+    const keyPatch = draftKeyDirty ? draftKey.trim() || '__CLEAR__' : undefined;
+    const list = form.agent.modelConfigs ?? [];
+    const exists = list.some((item) => item.id === config.id);
+    const modelConfigs = exists ? list.map((item) => (item.id === config.id ? config : item)) : [...list, config];
+    const activeId = form.agent.activeModelId ?? list[0]?.id ?? config.id;
+    let agent: AppSettings['agent'] = {
+      ...form.agent,
+      modelConfigs,
+      activeModelId: activeId,
+      ...(keyPatch ? { modelKeys: { ...(form.agent.modelKeys ?? {}), [config.id]: keyPatch } } : {}),
+    };
+    if (keyPatch) {
+      agent = { ...agent, modelApiKeyStatus: { ...(form.agent.modelApiKeyStatus ?? {}), [config.id]: keyPatch !== '__CLEAR__' } };
+    }
+    if (renames.length) {
+      const profiles = { ...(agent.modelProfiles ?? {}) };
+      let changed = false;
+      for (const item of renames) {
+        const profile = profiles[item.orig!];
+        if (!profile) continue;
+        delete profiles[item.orig!];
+        profiles[item.id] = { ...profile, ...(profiles[item.id] ?? {}) };
+        changed = true;
+      }
+      if (changed) agent = { ...agent, modelProfiles: profiles };
+    }
+    if (activeId === config.id) {
+      const renamedActive = renames.find((item) => item.orig === agent.model)?.id;
+      const model = renamedActive && config.models.some((entry) => entry.id === renamedActive)
+        ? renamedActive
+        : config.models.some((entry) => entry.id === agent.model) ? agent.model : config.models[0].id;
+      agent = { ...agent, provider: config.provider, preset: config.preset, baseUrl: config.baseUrl, model };
+      const tiers = agent.modelProfiles?.[model]?.reasoningTiers ?? [];
+      if (agent.reasoningTier && !tiers.some((tier) => tier.level === agent.reasoningTier)) agent.reasoningTier = undefined;
+    }
+    const nextForm: AppSettings = { ...form, agent };
+    setForm(nextForm);
+    // 编辑器里的“保存”即写 Bridge，避免用户以为已保存后又关闭弹窗导致丢失。
+    void saveSettings({ ...nextForm } as unknown as Record<string, unknown>);
+    resetDraftState();
+  };
+
+  const removeModelConfig = (config: AgentModelConfig) => {
+    const list = form.agent.modelConfigs ?? [];
+    if (list.length <= 1) return;
+    const modelConfigs = list.filter((item) => item.id !== config.id);
+    const wasActive = (form.agent.activeModelId ?? list[0]?.id) === config.id;
+    const fallback = modelConfigs[0];
+    const fallbackModel = fallback.models[0]?.id ?? '';
+    const status = { ...(form.agent.modelApiKeyStatus ?? {}) };
+    delete status[config.id];
+    let agent: AppSettings['agent'] = {
+      ...form.agent,
+      modelConfigs,
+      activeModelId: wasActive ? fallback.id : form.agent.activeModelId,
+      modelKeys: { ...(form.agent.modelKeys ?? {}), [config.id]: '__CLEAR__' },
+      modelApiKeyStatus: status,
+    };
+    if (wasActive) {
+      agent = { ...agent, provider: fallback.provider, preset: fallback.preset, baseUrl: fallback.baseUrl, model: fallbackModel };
+      const tiers = agent.modelProfiles?.[fallbackModel]?.reasoningTiers ?? [];
+      if (agent.reasoningTier && !tiers.some((tier) => tier.level === agent.reasoningTier)) agent.reasoningTier = undefined;
+    }
+    const nextForm: AppSettings = { ...form, agent };
+    setForm(nextForm);
+    void saveSettings({ ...nextForm } as unknown as Record<string, unknown>);
+    if (draft?.id === config.id) resetDraftState();
+  };
+
+  const patchDraftProfile = (model: string, patch: Partial<ModelProfile>) => {
+    const key = model.trim();
+    if (!key) return;
+    setForm((prev) => ({
+      ...prev,
+      agent: withModelProfile(prev.agent, key, { ...(prev.agent.modelProfiles?.[key] ?? {}), ...patch }),
+    }));
+  };
+
   const fetchModels = async () => {
+    if (!draft) return;
     setModelsLoading(true);
     setModelsError('');
+    const typedKey = draftKeyDirty && draftKey.trim() && draftKey !== '__CLEAR__' ? draftKey.trim() : undefined;
     try {
       const { models, infos, endpoint } = await api.agentModels({
-        kind: form.agent.provider,
-        baseUrl: form.agent.baseUrl || activePreset?.baseUrl || '',
-        apiKey: apiKey.trim() || undefined,
+        kind: draft.provider,
+        baseUrl: draft.baseUrl || draftPreset?.baseUrl || '',
+        apiKey: typedKey,
+        modelConfigId: draftNew ? undefined : draft.id,
       });
-      setModelList(models);
-      setModelInfos(infos ?? []);
       setModelSource(endpoint);
-      if (!models.length) setModelsError('接口没有返回模型名，可直接在模型框手动填写。');
-      else notify('success', '模型列表', `${models.length} 个模型 · ${infos?.length ? `${infos.filter((i) => i.contextWindow || i.reasoning || i.inputs?.length).length} 个带能力信息 · ` : ''}${endpoint}`);
+      if (!models.length) {
+        setModelsError('接口没有返回模型名，可手动添加。');
+        return;
+      }
+      mergeDraftModels(models);
+      const detectedInfos = infos ?? [];
+      setForm((prev) => {
+        let agent = prev.agent;
+        for (const info of detectedInfos) {
+          if (agent.modelProfiles?.[info.id]) continue;
+          const detected = profileFromModelInfo(info);
+          if (detected) agent = withModelProfile(agent, info.id, detected);
+        }
+        return { ...prev, agent };
+      });
+      notify(
+        'success',
+        '模型目录',
+        `拉到 ${models.length} 个模型，已合并到目录${detectedInfos.length ? '，能力信息已自动预填' : ''} · ${endpoint}`,
+      );
     } catch (err: any) {
-      setModelList([]);
-      setModelInfos([]);
       setModelSource('');
-      setModelsError(`${err?.message ?? '获取模型列表失败'}；也可直接手动填写模型名。`);
+      setModelsError(`${err?.message ?? '获取模型列表失败'}；也可手动添加模型名。`);
     } finally {
       setModelsLoading(false);
     }
   };
 
   const save = async () => {
-    await saveSettings({
-      ...form,
-      agent: {
-        ...form.agent,
-        ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
-      },
-    });
+    await saveSettings({ ...form });
     setOpen(false);
   };
 
@@ -224,7 +442,8 @@ export function SettingsModal() {
       label: '能力扩展',
       items: [
         { key: 'skills', label: 'Agent Skills', icon: <BookOpen size={14} />, keywords: '技能 技能包 PPT Master 内置' },
-        { key: 'mcp', label: 'MCP 与工具', icon: <Plug size={14} />, keywords: 'MCP 工具 外部 Server' },
+        { key: 'mcp', label: 'MCP 与工具', icon: <Plug size={14} />, keywords: 'MCP 工具 外部 Server 文件系统 Git' },
+        { key: 'search', label: '网络搜索', icon: <Search size={14} />, keywords: '搜索 Exa Parallel DuckDuckGo SearXNG Brave Tavily Serper Mojeek DeepSeek Anthropic OpenAI' },
       ],
     },
     {
@@ -243,6 +462,200 @@ export function SettingsModal() {
 
   const savable = tab === 'appearance' || tab === 'query' || tab === 'agent';
 
+  const activeEntry = modelConfigs.find((config) => config.id === activeModelId)?.models.find((entry) => entry.id === form.agent.model);
+  const activeLabel = activeEntry?.name || activeEntry?.id || form.agent.model;
+
+  const modelEditor = draft ? (
+    <div className="provider-editor" data-testid="model-config-editor">
+      <div className="field">
+        <label>
+          API 密钥 {apiKeyStatus[draft.id] ? <span className="badge read">已配置</span> : null}
+        </label>
+        <input
+          className="input mono"
+          type="password"
+          value={draftKey === '__CLEAR__' ? '' : draftKey}
+          placeholder={apiKeyStatus[draft.id] ? t('apiKeyHint') : draftPreset?.keyRequired ? 'sk-...' : '本地服务可留空'}
+          autoComplete="new-password"
+          onChange={(e) => {
+            setDraftKey(e.target.value);
+            setDraftKeyDirty(true);
+          }}
+          data-testid="settings-api-key"
+        />
+        <span className="hint">密钥按服务商加密保存在 Bridge 本地，不会下发到移动端；留空保持不变。</span>
+        {apiKeyStatus[draft.id] ? (
+          <span className="hint">
+            <button
+              className="link-btn"
+              onClick={() => {
+                setDraftKey(draftKey === '__CLEAR__' ? '' : '__CLEAR__');
+                setDraftKeyDirty(true);
+              }}
+            >
+              {draftKey === '__CLEAR__' ? '保存后将清除，点击撤销' : '清除已保存的密钥'}
+            </button>
+          </span>
+        ) : null}
+      </div>
+
+      <button className="provider-advanced-toggle" type="button" onClick={() => setDraftShowAdvanced((value) => !value)} data-testid="settings-toggle-advanced">
+        {draftShowAdvanced ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        自定义设置
+      </button>
+      {draftShowAdvanced ? (
+        <div className="form-grid">
+          <div className="field">
+            <label>显示名称</label>
+            <input
+              className="input"
+              value={draft.name ?? ''}
+              onChange={(e) => patchDraft({ name: e.target.value })}
+              placeholder={draft.models[0]?.name || draft.models[0]?.id || '例如 DeepSeek'}
+              data-testid="settings-model-name"
+            />
+          </div>
+          <div className="field">
+            <label>API 协议</label>
+            <select
+              className="select"
+              value={draft.provider}
+              onChange={(e) => changeDraftKind(e.target.value as ProviderKind)}
+              data-testid="settings-provider"
+            >
+              <option value="openai">OpenAI Chat Completions</option>
+              <option value="anthropic">Anthropic Messages</option>
+              <option value="ollama">Ollama</option>
+              <option value="local">{t('providerLocal')}</option>
+            </select>
+          </div>
+          {draft.provider !== 'local' ? (
+            <div className="field full">
+              <label>API 地址</label>
+              <input
+                className="input mono"
+                value={draft.baseUrl}
+                onChange={(e) => patchDraft({ baseUrl: e.target.value })}
+                placeholder={draftPreset?.baseUrl || 'https://api.example.com/v1'}
+                data-testid="settings-base-url"
+              />
+            </div>
+          ) : null}
+          <div className="field full">
+            <label>服务商预设</label>
+            <div className="preset-groups">
+              {presetsByGroup().map((group) => (
+                <div key={group.group} className="preset-group">
+                  <div className="preset-group-label">{group.group}</div>
+                  <div className="preset-chips">
+                    {group.presets.map((preset) => (
+                      <button
+                        key={preset.id}
+                        className={`preset-chip ${draftPreset?.id === preset.id ? 'active' : ''}`}
+                        onClick={() => applyDraftPreset(preset)}
+                        title={[preset.baseUrl, preset.note].filter(Boolean).join(' · ')}
+                        data-testid={`preset-${preset.id}`}
+                      >
+                        <span className="preset-dot" style={{ background: preset.color }} />
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {draftPreset?.note ? <span className="hint">{draftPreset.note}</span> : null}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="model-directory">
+        <div className="model-directory-head">
+          <strong>模型目录</strong>
+          <span className="muted">{modelSource ? `来自 ${modelSource}` : '已自定义模型目录'}</span>
+          <div className="spacer" />
+          <button className="link-btn" onClick={restoreDefaultModels} data-testid="settings-restore-models">
+            恢复默认模型
+          </button>
+          <button className="link-btn" onClick={() => void fetchModels()} disabled={modelsLoading || draft.provider === 'local'} data-testid="settings-fetch-models">
+            {modelsLoading ? <Loader2 size={11} className="spin" /> : null} 获取可用模型
+          </button>
+          <button className="link-btn" onClick={addDraftModelRow} data-testid="settings-model-add">
+            + 添加模型
+          </button>
+        </div>
+        <div className="model-rows" data-testid="settings-model-rows">
+          {draft.models.map((entry, index) => {
+            const modelId = entry.id.trim();
+            const profileKey = (entry.orig ?? modelId).trim();
+            const isExpanded = Boolean(modelId) && expandedModel === modelId;
+            return (
+              <div className="model-row-wrap" key={`${index}-${entry.id}`}>
+                <div className="model-row">
+                  <input
+                    className="input mono"
+                    value={entry.id}
+                    onChange={(e) => updateDraftModel(index, { id: e.target.value })}
+                    placeholder="模型 ID（如 deepseek-chat）"
+                    data-testid="settings-model-id"
+                  />
+                  <input
+                    className="input"
+                    value={entry.name ?? ''}
+                    onChange={(e) => updateDraftModel(index, { name: e.target.value })}
+                    placeholder="显示名称（可选）"
+                    data-testid="settings-model-display"
+                  />
+                  <button
+                    className="icon-btn"
+                    title="模型能力"
+                    disabled={!modelId}
+                    onClick={() => setExpandedModel(isExpanded ? '' : modelId)}
+                    data-testid="settings-model-expand"
+                  >
+                    {isExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                  </button>
+                  <button className="icon-btn" title="删除" onClick={() => removeDraftModelAt(index)} data-testid="settings-model-remove">
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+                {isExpanded ? (
+                  <ModelProfileEditor
+                    model={modelId}
+                    profile={profileKey ? form.agent.modelProfiles?.[profileKey] : undefined}
+                    onPatch={(patch) => patchDraftProfile(profileKey, patch)}
+                    onClear={() => {
+                      if (!profileKey) return;
+                      setForm((prev) => ({ ...prev, agent: withoutModelProfile(prev.agent, profileKey) }));
+                    }}
+                    hideHead
+                  />
+                ) : null}
+              </div>
+            );
+          })}
+          {!draft.models.length ? <div className="muted" style={{ fontSize: 10.5 }}>还没有模型：点“添加模型”手动填，或“获取可用模型”自动拉取。</div> : null}
+        </div>
+        {modelsError ? <div className="risk-banner">{modelsError}</div> : null}
+        {draftPreset?.docs ? (
+          <span className="hint">
+            文档：<span className="mono">{draftPreset.docs}</span>
+          </span>
+        ) : null}
+      </div>
+
+      <div className="provider-actions">
+        <span className="hint" style={{ marginRight: 'auto' }}>保存会立即写入 Bridge</span>
+        <button className="btn small" onClick={cancelDraft}>
+          取消
+        </button>
+        <button className="btn small primary" onClick={commitDraft} data-testid="model-config-commit">
+          {draftNew ? '添加' : '保存'}
+        </button>
+      </div>
+    </div>
+  ) : null;
+
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}>
       <div className="modal wide settings-modal" role="dialog" aria-modal="true" style={{ height: 'min(740px, 90vh)' }}>
@@ -259,7 +672,21 @@ export function SettingsModal() {
             <button className="settings-back" onClick={() => setOpen(false)}>← 返回工作区</button>
             <div className="settings-nav-search">
               <Search size={12} />
-              <input value={navQuery} onChange={(e) => setNavQuery(e.target.value)} placeholder="搜索设置…" />
+              <input
+                value={navQuery}
+                onChange={(e) => setNavQuery(e.target.value)}
+                placeholder="搜索设置…"
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                data-testid="settings-nav-search"
+              />
+              {navQuery ? (
+                <button className="nav-search-clear" title="清除搜索" onClick={() => setNavQuery('')} data-testid="settings-nav-clear">
+                  ×
+                </button>
+              ) : null}
             </div>
             {visibleNavGroups.map((group) => (
               <div className="settings-nav-group" key={group.label}>
@@ -272,7 +699,14 @@ export function SettingsModal() {
                 ))}
               </div>
             ))}
-            {!visibleNavGroups.length ? <div className="dash-empty">没有匹配的设置。</div> : null}
+            {!visibleNavGroups.length ? (
+              <div className="dash-empty">
+                没有匹配的设置。
+                <button className="link-btn" onClick={() => setNavQuery('')}>
+                  清除搜索
+                </button>
+              </div>
+            ) : null}
           </nav>
           <div className="settings-content">
             {tab === 'appearance' ? (
@@ -361,159 +795,60 @@ export function SettingsModal() {
             {tab === 'agent' ? (
               <>
                 <div className="settings-section settings-section-wide">
-                <h3>模型</h3>
-                <div className="field">
-                  <label>服务商快捷配置</label>
-                  <div className="preset-groups">
-                    {presetsByGroup().map((group) => (
-                      <div key={group.group} className="preset-group">
-                        <div className="preset-group-label">{group.group}</div>
-                        <div className="preset-chips">
-                          {group.presets.map((preset) => (
-                            <button
-                              key={preset.id}
-                              className={`preset-chip ${activePreset?.id === preset.id ? 'active' : ''}`}
-                              onClick={() => applyPreset(preset)}
-                              title={[preset.baseUrl, preset.note].filter(Boolean).join(' · ')}
-                              data-testid={`preset-${preset.id}`}
-                            >
-                              <span className="preset-dot" style={{ background: preset.color }} />
-                              {preset.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  {activePreset?.note ? <span className="hint">{activePreset.note}</span> : null}
+                <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
+                  <h3 style={{ margin: 0 }}>模型</h3>
+                  <button className="btn small primary" onClick={startAddModel} data-testid="settings-add-model">
+                    <Plus size={12} /> 添加服务商
+                  </button>
                 </div>
-                <div className="form-grid">
-                  <div className="field">
-                    <label>{t('provider')}</label>
-                    <select
-                      className="select"
-                      value={form.agent.provider}
-                      onChange={(e) => changeKind(e.target.value as ProviderKind)}
-                      data-testid="settings-provider"
-                    >
-                      <option value="local">{t('providerLocal')}</option>
-                      <option value="openai">OpenAI 兼容</option>
-                      <option value="ollama">Ollama</option>
-                      <option value="anthropic">{t('providerAnthropic')}</option>
-                    </select>
-                  </div>
-                  <div className="field">
-                    <label>{t('model')}</label>
-                    <div className="model-picker">
-                      <input
-                        className="input mono"
-                        value={form.agent.model}
-                        onChange={(e) => setAgent({ model: e.target.value })}
-                        placeholder={form.agent.provider === 'local' ? 'local' : '自动获取或直接手动填写'}
-                        disabled={form.agent.provider === 'local'}
-                        data-testid="settings-model"
-                      />
-                      <button
-                        className="btn small"
-                        onClick={() => void fetchModels()}
-                        disabled={modelsLoading || form.agent.provider === 'local'}
-                        title="调用服务商的模型列表接口"
-                        data-testid="settings-fetch-models"
+                <p className="desc">每个服务商配置一次 API 地址与密钥，下面可以挂多个模型；当前用哪个模型，在 AI 助手输入框底部的下拉里切换。</p>
+                <div className="model-config-list" data-testid="settings-model-configs">
+                  {modelConfigs.map((config) => {
+                    const isActive = config.id === activeModelId;
+                    const preset = presetById(config.preset);
+                    const editing = draft?.id === config.id;
+                    const hasKey = config.provider === 'local' || Boolean(apiKeyStatus[config.id]);
+                    const modelText = config.models.length > 1
+                      ? `${config.models.length} 个模型 · ${config.models.map((entry) => entry.name || entry.id).join(' / ')}`
+                      : config.models[0]?.name || config.models[0]?.id || '';
+                    return (
+                      <div
+                        key={config.id}
+                        className={`provider-card ${isActive ? 'active' : ''} ${editing ? 'editing' : ''}`}
+                        data-testid={`model-config-${config.id}`}
                       >
-                        {modelsLoading ? <Loader2 size={12} className="spin" /> : <ListChecks size={12} />} 获取模型
-                      </button>
-                    </div>
-                  </div>
-                  {form.agent.provider !== 'local' ? (
-                    <>
-                      <div className="field full">
-                        <label>{t('baseUrl')}</label>
-                        <input
-                          className="input mono"
-                          value={form.agent.baseUrl}
-                          onChange={(e) => setAgent({ baseUrl: e.target.value })}
-                          placeholder={activePreset?.baseUrl || 'https://api.example.com/v1'}
-                          data-testid="settings-base-url"
-                        />
-                        <span className="hint">
-                          {modelSource ? `模型列表来自 ${modelSource}（${modelList.length} 个）` : '切换服务商会自动填入官方端点，也可改成自建网关地址'}
-                        </span>
-                      </div>
-                      {modelList.length ? (
-                        <div className="field full">
-                          <div className="row gap-6" style={{ alignItems: 'center', marginBottom: 6 }}>
-                            <label style={{ margin: 0 }}>可用模型</label>
-                            <input className="input" style={{ height: 26, maxWidth: 260 }} value={modelQuery} onChange={(e) => setModelQuery(e.target.value)} placeholder="过滤模型名…" />
-                            <span className="muted" style={{ fontSize: 10.5 }}>点击填入，仍可自行编辑</span>
+                        <div className="provider-head">
+                          <span className={`provider-status ${hasKey ? 'on' : 'off'}`} title={hasKey ? '已配置密钥' : '未配置密钥'} />
+                          <div className="provider-main">
+                            <div className="provider-name">{config.name || config.models[0]?.name || config.models[0]?.id || '未命名服务商'}</div>
+                            <div className="provider-meta" title={`${modelText} ${config.baseUrl}`}>
+                              <span className="badge">{preset?.label ?? (config.provider === 'local' ? '本地' : '自定义')}</span>
+                              <span>{modelText}</span>
+                              {config.provider !== 'local' && config.baseUrl ? <span className="mono">{config.baseUrl}</span> : null}
+                            </div>
                           </div>
-                          <div className="model-list" data-testid="settings-model-list">
-                            {modelList
-                              .filter((model) => !modelQuery || model.toLowerCase().includes(modelQuery.toLowerCase()))
-                              .map((model) => {
-                                const info = modelInfos.find((item) => item.id === model);
-                                const caps = [
-                                  info?.contextWindow ? formatTokenSize(info.contextWindow) : '',
-                                  info?.reasoning ? '推理' : '',
-                                  info?.inputs?.includes('image') ? '图片' : '',
-                                ].filter(Boolean);
-                                return (
-                                  <button key={model} className={`model-item ${model === form.agent.model ? 'active' : ''}`} onClick={() => pickModel(model)} data-testid={`model-item-${model}`}>
-                                    <span className="mono">{model}</span>
-                                    {caps.length ? <span className="model-caps">{caps.join(' · ')}</span> : null}
-                                    {form.agent.modelProfiles?.[model] ? <span className="badge read">已配置</span> : null}
-                                  </button>
-                                );
-                              })}
-                          </div>
+                          {isActive ? <span className="badge agent">当前 · {activeLabel}</span> : null}
+                          <div className="spacer" />
+                          <button className="btn small" onClick={() => (editing ? cancelDraft() : startEditModel(config))} data-testid={`model-config-edit-${config.id}`}>
+                            {editing ? '收起' : '编辑'}
+                          </button>
+                          <button
+                            className="link-btn danger"
+                            disabled={modelConfigs.length <= 1}
+                            onClick={() => removeModelConfig(config)}
+                            data-testid={`model-config-delete-${config.id}`}
+                          >
+                            删除
+                          </button>
                         </div>
-                      ) : null}
-                      {modelsError ? <div className="field full"><div className="risk-banner">{modelsError}</div></div> : null}
-                      <div className="field full">
-                        <label>
-                          {t('apiKey')} {form.agent.hasApiKey ? <span className="badge read">已配置</span> : null}
-                        </label>
-                        <input
-                          className="input mono"
-                          type="password"
-                          value={apiKey}
-                          placeholder={form.agent.hasApiKey ? t('apiKeyHint') : activePreset?.keyRequired ? 'sk-...' : '本地服务可留空'}
-                          onChange={(e) => setApiKey(e.target.value)}
-                          data-testid="settings-api-key"
-                        />
-                        <span className="hint">
-                          密钥只存在 Bridge 本地，不会下发到移动端。切换服务商后请更新对应的 Key。
-                          {activePreset?.docs ? (
-                            <>
-                              {' '}
-                              文档：<span className="mono">{activePreset.docs}</span>
-                            </>
-                          ) : null}
-                        </span>
-                        {apiKey.trim() ? (
-                          <span className="hint">
-                            <button className="link-btn" onClick={() => setApiKey('__CLEAR__')}>
-                              清除已保存的密钥
-                            </button>
-                          </span>
-                        ) : null}
+                        {editing ? modelEditor : null}
                       </div>
-                    </>
-                  ) : (
-                    <div className="field full">
-                      <div className="setting-card" style={{ fontSize: 11.5, lineHeight: 1.7 }}>
-                        <strong>Local Reasoner（离线）</strong>
-                        <div className="muted">无需 API Key，支持：查看表/结构/样例、计数与分组、创建表、建索引、删除、生成示例数据、备份、导出、记忆检索。复杂推理请配置云端模型。</div>
-                      </div>
-                    </div>
-                  )}
-                  {form.agent.provider !== 'local' && form.agent.model ? (
-                    <ModelProfileEditor
-                      model={form.agent.model}
-                      profile={profile}
-                      onPatch={patchProfile}
-                      onClear={() => setForm((prev) => ({ ...prev, agent: withoutModelProfile(prev.agent, prev.agent.model) }))}
-                    />
-                  ) : null}
+                    );
+                  })}
+                  {draftNew && draft ? <div className="provider-card editing">{modelEditor}</div> : null}
+                </div>
+
+                <div className="form-grid">
                   <div className="field">
                     <label>{t('maxSteps')}</label>
                     <input className="input" type="number" min={1} max={40} value={form.agent.maxSteps} onChange={(e) => setAgent({ maxSteps: Number(e.target.value) })} />
@@ -591,6 +926,7 @@ export function SettingsModal() {
                         className="input mono"
                         type="password"
                         value={form.embedding.apiKey ?? ''}
+                        autoComplete="new-password"
                         onChange={(e) => setEmbedding({ apiKey: e.target.value })}
                         placeholder={form.embedding.hasApiKey ? '已保存，留空保持不变' : form.embedding.provider === 'ollama' ? '本地 Ollama 可留空' : 'sk-...'}
                         disabled={form.embedding.provider === 'none'}
@@ -643,6 +979,7 @@ export function SettingsModal() {
               </div>
             ) : null}
             {tab === 'notify' ? <div className="settings-embed"><NotificationsTool /></div> : null}
+            {tab === 'search' ? <div className="settings-embed"><WebSearchTool /></div> : null}
 
             {tab === 'bridge' ? (
               <div className="settings-section">
@@ -827,11 +1164,13 @@ function ModelProfileEditor({
   profile,
   onPatch,
   onClear,
+  hideHead = false,
 }: {
   model: string;
   profile?: ModelProfile;
   onPatch: (patch: Partial<ModelProfile>) => void;
   onClear: () => void;
+  hideHead?: boolean;
 }) {
   const inputs = profile?.inputs ?? [];
   const tiers = profile?.reasoningTiers ?? [];
@@ -857,16 +1196,18 @@ function ModelProfileEditor({
 
   return (
     <div className="field full model-profile" data-testid="model-profile">
-      <div className="model-profile-head">
-        <label>模型能力</label>
-        <span className="mono muted">{model}</span>
-        <div className="spacer" />
-        {profile ? (
-          <button className="link-btn" onClick={onClear} data-testid="model-profile-clear">
-            清除该模型的档案
-          </button>
-        ) : null}
-      </div>
+      {hideHead ? null : (
+        <div className="model-profile-head">
+          <label>模型能力</label>
+          <span className="mono muted">{model}</span>
+          <div className="spacer" />
+          {profile ? (
+            <button className="link-btn" onClick={onClear} data-testid="model-profile-clear">
+              清除该模型的档案
+            </button>
+          ) : null}
+        </div>
+      )}
       <div className="model-profile-grid">
         <div className="field">
           <label>上下文窗口</label>
@@ -964,6 +1305,13 @@ function ModelProfileEditor({
             <Plus size={12} /> 添加档位
           </button>
           <span className="hint">值留空表示该档不下发任何推理参数。</span>
+        </div>
+      ) : null}
+      {hideHead && profile ? (
+        <div className="row" style={{ justifyContent: 'flex-end' }}>
+          <button className="link-btn" onClick={onClear}>
+            清除该模型的档案
+          </button>
         </div>
       ) : null}
     </div>

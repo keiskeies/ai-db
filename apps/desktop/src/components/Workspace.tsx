@@ -1,7 +1,8 @@
-import { FileCode2, Network, Plus, Table2, TerminalSquare, Wrench, X } from 'lucide-react';
+import { FileCode2, LayoutDashboard, Network, Plus, Table2, TerminalSquare, Wrench, X } from 'lucide-react';
 import { useApp } from '../store';
 import { PaneSplitter } from './PaneSplitter';
 import { AgentPanel } from './AgentPanel';
+import { DashboardView } from './DashboardView';
 import { DataView } from './DataView';
 import { DesignView } from './DesignView';
 import { QueryView } from './QueryView';
@@ -13,6 +14,7 @@ function TabIcon({ kind }: { kind: string }) {
   if (kind === 'data') return <Table2 size={12} />;
   if (kind === 'design') return <Wrench size={12} />;
   if (kind === 'relations') return <Network size={12} />;
+  if (kind === 'dashboard') return <LayoutDashboard size={12} />;
   return <FileCode2 size={12} />;
 }
 
@@ -76,6 +78,7 @@ export function Workspace() {
         {active?.kind === 'query' ? <QueryView tab={active} /> : null}
         {active?.kind === 'design' ? <DesignView tab={active} /> : null}
         {active?.kind === 'relations' ? <RelationsView tab={active} /> : null}
+        {active?.kind === 'dashboard' ? <DashboardView tab={active} /> : null}
       </main>
       {agentOpen ? (
         <>

@@ -2,7 +2,7 @@
 
 AI 原生、全平台数据库工作台。Navicat 式的完整数据库操作 + Claude Code 式的 AI 搭档。
 
-支持 **Windows · macOS · Linux · Android · iOS**。内置一个可全权操作数据库的 AI Agent：51 个工具、四级权限、四层记忆、工具轨迹可视化、审批与审计；外加 15 个模块的 Navicat 级工具箱。
+支持 **Windows · macOS · Linux · Android · iOS**。内置一个可全权操作数据库的 AI Agent：52 个工具、四级权限、四层记忆、工具轨迹可视化、审批与审计；外加 15 个模块的 Navicat 级工具箱。
 
 ![Desktop](docs/screenshots/desktop-welcome.png)
 ![Toolbox](docs/screenshots/desktop-toolbox.png)
@@ -63,7 +63,9 @@ AI 原生、全平台数据库工作台。Navicat 式的完整数据库操作 + 
 
 ### AI Agent（核心差异）
 - **Claude Code 式对话**：`❯` 输入、`⏺` 工具卡、参数 / 结果 / SQL 可折叠、Todo 计划、结束统计、思考过程、`@table` 引用、斜杠命令、中断。
-- **51 个数据库工具**：结构检查、搜索、SQL / MQL / Cypher / AQL / Redis 命令 / 向量检索 / 搜索 DSL / 向量与文档写入删除、时序行协议写入、执行计划、样例、列画像、**数据库体检**、**数据质量检查**、**图表生成**、建表、改表、删表、索引、集合/索引建删、导入、导出、备份、历史、计划、记忆写入 / 检索。
+- **命令即目的**：`/compare`、`/diff`、`/recon`、`/fix`、`/report` 全部在 Agent 内联执行，不弹参数表单；Agent 从语义和上下文推断对象，自己选工具、出对比表/双柱图、结构差异清单或对账差异行。
+- **52 个 Agent 工具**：结构检查、搜索、SQL / MQL / Cypher / AQL / Redis 命令 / 向量检索 / 搜索 DSL / 向量与文档写入删除、时序行协议写入、执行计划、样例、列画像、**数据库体检**、**数据质量检查**、**图表生成**、建表、改表、删表、索引、集合/索引建删、导入、导出、备份、历史、计划、记忆写入 / 检索；内置 MCP（文件系统、Git 只读、网页抓取）把本地代码与文档纳入上下文；`grep_files` 优先走 ripgrep，缺失时回退 JS。
+- **聚合网络搜索**：11 个后端并发 fan-out — Exa / Parallel (MCP)、DuckDuckGo (HTML)、SearXNG 免密钥开箱即用，Brave / Tavily / Serper / Mojeek / DeepSeek / Anthropic / OpenAI 填 Key 即用；URL 去重合并、相关性重排、单后端失败隔离、每后端健康遥测与一键探测；Key 走加密凭证库，界面只显示是否已配置。
 - **`/init` 数据库交接文档**：扫描当前库生成 `AI_DB.md`（引擎/规模、业务地图、核心表手册、Join 路径、指标口径、性能与坑、全量清单），后续对话自动加载；全量清单确定性生成，模型只加注，结构变化用 hash 提示重跑；每次 `/init` 全量刷新自动段落，只有数据流与人工补充段落保留。
 - **SQL Copilot**：编辑器内一键“AI 解释 / AI 优化”，自动把选中 SQL 送入 Agent，输出改写 SQL、精确索引 DDL 与验证查询。
 - **审计闭环**：体检/质量发现的每条问题都附带可执行 SQL，可一键打开到编辑器；写操作前自动备份，审批结果全部落审计。
@@ -234,6 +236,7 @@ API Key 加密存储；也可用环境变量 `AIDB_API_KEY`（Bridge）覆盖。
 - [命令化 Agent 工作流](docs/11-command-workflows.md)
 - [机器人与 MCP 插件](docs/12-bots-and-mcp.md)
 - [Skill Host 设计](docs/13-skill-host-plan.md)
+- [仪表板设计](docs/14-dashboard-design.md)
 
 ## License
 

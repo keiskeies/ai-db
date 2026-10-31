@@ -136,6 +136,8 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
   args_json TEXT, env_secret TEXT, enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+-- 内置 MCP 使用稳定 id（builtin-filesystem / builtin-git / builtin-web），command 为 builtin:<kind>；
+-- args_json 保存授权目录（filesystem/git）或允许域名（web），由启动时的 seed 写入且不覆盖用户配置。
 CREATE TABLE IF NOT EXISTS artifacts (
   id TEXT PRIMARY KEY,
   type TEXT NOT NULL CHECK (type IN ('report','compare','diff','recon','fix')),
@@ -165,6 +167,29 @@ CREATE TABLE IF NOT EXISTS artifact_schedules (
 );
 
 ```
+
+### 1.1 仪表板卡片（v0.4）
+
+```sql
+CREATE TABLE IF NOT EXISTS dashboard_cards (
+  id TEXT PRIMARY KEY,
+  scope_key TEXT NOT NULL,              -- `${connectionId}/${database ?? ''}`，与 database_briefs 同约定
+  connection_id TEXT NOT NULL, database_name TEXT,
+  title TEXT NOT NULL, sql TEXT NOT NULL,
+  chart_type TEXT NOT NULL,             -- ChartType 七种之一
+  series_x TEXT, series_y TEXT,         -- 列名提示，缺省时前端按结果推断
+  time_column TEXT,                     -- 参与板级时间筛选；NULL = 不参与
+  span INTEGER NOT NULL DEFAULT 1, position INTEGER NOT NULL DEFAULT 0,
+  source TEXT NOT NULL CHECK (source IN ('ai','favorite','manual')),
+  pinned INTEGER NOT NULL DEFAULT 0,    -- 0 草稿（可整批替换）/ 1 用户固定（生成不动）
+  last_result_json TEXT, last_run_at TEXT, last_status TEXT, last_error TEXT,
+  schema_hash TEXT,                     -- 结构漂移提示
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_dash_cards ON dashboard_cards(scope_key, position);
+```
+
+卡片只存 SQL 与上次结果快照（快照落库前行数截到 200），刷新即重新执行；仪表板元数据永远只进本机 `aidb.db`，不写目标库。
 
 ## 2. 领域 DTO（`@aidb/core`）
 
@@ -227,6 +252,7 @@ export interface QueryResult {
 | POST | `/schema/sync` | 执行结构同步语句 |
 | POST | `/data/compare` | 行数 + 主键指纹对比 |
 | POST | `/transfer` | 跨连接复制表结构与数据 |
+| POST | `/transfer/stream` | **SSE** 同一传输，实时推送逐表阶段、写入行数与耗时；客户端断开即停止后续批次 |
 | POST | `/generate` | 生成测试数据（dryRun 预览） |
 | GET | `/monitor` | 服务器指标与会话 |
 | POST | `/monitor/kill` | 终止会话 |
@@ -289,6 +315,9 @@ export interface QueryResult {
 | DELETE | `/agent/context/entry/:id` · DELETE `/agent/context` | 删除单条 / 清空该连接（可带 database） |
 | GET | `/agent/suggest` | `?connectionId&database&limit=6` → `{suggestions}` 猜你想问；纯本地规则，不查数据、不调模型，离线模式同样可用 |
 | GET/PUT | `/settings` | 设置（密钥只写不读） |
+| GET | `/search/backends` | 11 个搜索后端目录 + 健康遥测 + `keyStatus`（只返回是否已配置） |
+| POST | `/search/query` | `{query, numResults?}` → 聚合结果（并发 fan-out、URL 去重、逐后端报告） |
+| POST | `/search/backends/:id/probe` | 用固定查询探测单个后端，返回最新健康状态 |
 | POST | `/pair/start` | 桌面发起配对：`{code, expiresIn, qrPayload}` |
 | POST | `/pair/claim` | 移动端兑换：`{code, deviceName, platform}` → `{token, bridgeId}` |
 | GET | `/devices` · DELETE `/devices/:id` | 设备管理 |
@@ -297,6 +326,22 @@ export interface QueryResult {
 - 桌面/浏览器：Bridge 启动时生成一次性 token（`AIDB_TOKEN` 或 Electron 注入），`Authorization: Bearer`。
 - 移动：配对得到的设备 token（数据库仅存 SHA-256）；桥重启仍有效；可吊销。
 - 所有请求写审计（读操作仅记录 query 类）。
+
+### 3.1 仪表板接口（v0.4）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/dashboards/cards?connectionId&database` | `{ supported, limit, cards }`，含上次结果快照 |
+| POST | `/dashboards/cards` | 新增（无 `id`）或更新（带 `id`）；非只读语句 400 `DASHBOARD_NOT_READ_ONLY`，引用已禁用表 403 `TABLE_DISABLED`，超 12 张 400 `DASHBOARD_LIMIT` |
+| DELETE | `/dashboards/cards/:id` | 删除单卡 |
+| POST | `/dashboards/cards/reorder` | `{ ids }` 按数组顺序重写 `position` |
+| POST | `/dashboards/refresh` | `{ connectionId, database, cardIds?, range? }` → `{ results, cards }`；并发 2，行上限 2000，时间范围用外层包裹生效，失败的卡保留旧快照 |
+| POST | `/dashboards/preview` | `{ connectionId, database, sql }` → `{ preview }`；只读 + 禁用表 + 200 行试跑，错误放在 `preview.error` 内联返回 |
+| POST | `/dashboards/compose` | `{ connectionId, database, prompt }` → 点击需求生成单卡：聚焦 schema + brief/术语/示例 SQL → 模型单条只读聚合 SQL → 试跑与一次自纠；离线退回 brief/指标模板 |
+| POST | `/dashboards/generate` | AI 草稿：候选来自 `AI_DB.md` §4/§7 口径 + 收藏 SQL + 表结构推断，逐条试跑通过才入板；只替换 `pinned = 0` |
+| DELETE | `/dashboards/drafts` | 丢弃当前库全部草稿，固定卡片不动 |
+
+非 SQL 系引擎（`engineMeta(engine).languages` 不含 `sql`）返回 `supported: false`，前端不出入口。
 
 ## 4. 流式事件（SSE / WebSocket 共用）
 
@@ -322,6 +367,24 @@ type AgentEvent =
 ```
 
 SSE 帧：具名事件 `event: <type>`，`data: <json>\n\n`；每 15s 心跳注释 `: ping`。
+
+### 4.1 数据传输进度（`POST /transfer/stream`）
+
+```ts
+type TransferEvent =
+  | { type: 'start'; mode: 'append'|'replace'; tables: string[] }
+  | { type: 'table-start'; table: string; index: number; total: number }
+  | { type: 'phase-start'; table: string; phase: 'create'|'read'|'truncate'|'write' }
+  | { type: 'phase-done'; table: string; phase: 'create'|'read'|'truncate'|'write'; durationMs: number;
+      rows?: number; columns?: number; skippedColumns?: number; batches?: number; limitReached?: boolean; ddl?: string }
+  | { type: 'progress'; table: string; rows: number; totalRows: number }
+  | { type: 'table-done'; table: string; result: TransferTableResult; durationMs: number; columns: number; skippedColumns: number; batches: number; limitReached: boolean }
+  | { type: 'table-error'; table: string; error: string; phase: 'create'|'read'|'truncate'|'write'; durationMs: number; rows: number }
+  | { type: 'error'; code: string; message: string }
+  | { type: 'done'; result: { results: TransferTableResult[]; totalRows: number; createdTables: number }; durationMs: number };
+```
+
+逐表顺序执行，单表失败不阻断后续表；`progress` 每批 200 行且节流到约 80ms。读取阶段最多 100,000 行，命中上限时以 `limitReached` 标记。断开连接会中止尚未发送的批次，审计仍记录已执行部分。
 
 ## 5. 权限与审批的持久化
 - 会话级 Allow 规则保存在 Bridge 内存（会话结束清除），并镜像到 `settings` 中的 `agent.sessionRules.<sessionId>`（进程重启可恢复 24h）。

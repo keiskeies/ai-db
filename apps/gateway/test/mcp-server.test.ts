@@ -77,6 +77,19 @@ test('stdio MCP server exposes and calls AiDB read tools', async () => {
     assert.ok(names.includes('inspect_schema'));
     assert.ok(names.includes('run_sql'));
     assert.ok(!names.includes('create_table'));
+    assert.ok(!names.includes('mcp_list_servers'));
+    assert.ok(!names.includes('mcp_list_tools'));
+    assert.ok(!names.includes('mcp_call'));
+    const bridged = (await fetch(`http://127.0.0.1:${port}/api/agent/tools?for=mcp`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    }).then((response) => response.json())) as { tools: Array<{ name: string }> };
+    assert.ok(!bridged.tools.some((tool: any) => ['mcp_list_servers', 'mcp_list_tools', 'mcp_call'].includes(tool.name)));
+    const proxyCall = await fetch(`http://127.0.0.1:${port}/api/agent/tools/mcp_call`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ args: { server: 'builtin-filesystem', tool: 'read_file', arguments: { path: 'C:/Windows/win.ini' } } }),
+    });
+    assert.equal(proxyCall.status, 403);
     const called = await call(3, 'tools/call', { name: 'list_connections', arguments: {} });
     assert.equal(called.result.isError, undefined);
     assert.match(called.result.content[0].text, /Demo/);

@@ -6,7 +6,9 @@ import cors from 'cors';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { AgentEvent, PermissionMode } from '@aidb/core';
 import { AgentHost } from './agentHost';
+import { seedBuiltinMcpServers, bindSearchStore } from './builtinMcp';
 import { CommandRunner } from './commands/runner';
+import { refreshDashboardCards } from './features/dashboards';
 import { shutdownMcpClients } from './mcp';
 import { SkillStore } from './skills';
 import { SkillRunner } from './skillRunner';
@@ -39,6 +41,8 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
   const config = loadConfig(overrides);
   const store = new Store(config.dbPath, config.secret);
   ensureDemoDatabase(config, store);
+  seedBuiltinMcpServers(store);
+  bindSearchStore(store);
   const manager = new ConnectionManager(store, config, () => store.getSettings());
   const skills = new SkillStore(config.home);
   skills.seedBuiltins();
@@ -59,6 +63,16 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
     }
   });
   scheduler.start();
+  scheduler.setDashboardRunner(async (connectionId, database) => {
+    const cards = store.listDashboardCards(connectionId, database);
+    if (!cards.length) return { ok: true, message: '没有卡片' };
+    const results = await refreshDashboardCards({ store, manager, settings: store.getSettings(), cards });
+    const failed = results.filter((result) => result.status === 'error');
+    return {
+      ok: failed.length === 0,
+      message: `${cards.length - failed.length}/${cards.length} 张卡片已刷新${failed.length ? `；失败：${failed[0].error}` : ''}`,
+    };
+  });
 
   const app = express();
   app.disable('x-powered-by');
@@ -159,6 +173,8 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
               mode: msg.mode as PermissionMode | undefined,
               attachments: Array.isArray(msg.attachments) ? (msg.attachments as string[]) : undefined,
               connectionId: typeof msg.connectionId === 'string' ? msg.connectionId : undefined,
+              // WebSocket 回合来自移动端/外部设备，本机 MCP（文件系统/网页）不应跨设备暴露。
+              disableMcp: true,
             },
             (event: AgentEvent) => send(event),
           );

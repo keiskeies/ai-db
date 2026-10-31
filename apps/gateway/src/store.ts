@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import {
   DEFAULT_SETTINGS,
+  DASHBOARD_CARD_LIMIT,
   bundleAgentContext,
+  builtinMcpKindOf,
   emptyBundle,
   isDuplicateMemory,
   looksLikeSecret,
@@ -12,6 +14,8 @@ import {
   type AgentContextEntry,
   type AgentMessage,
   type AgentMessageBlock,
+  type AgentModelConfig,
+  type AgentModelEntry,
   type AgentSessionMeta,
   type AppSettings,
   type ArtifactInfo,
@@ -24,6 +28,11 @@ import {
   type ConnectionColor,
   type ConnectionConfig,
   type ConnectionSecret,
+  type DashboardCard,
+  type DashboardCardInput,
+  type DashboardCardSource,
+  type DashboardChartType,
+  type DashboardScheduleInfo,
   type DeviceInfo,
   type Engine,
   type Environment,
@@ -204,7 +213,68 @@ CREATE TABLE IF NOT EXISTS skill_secrets (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (skill_id, name)
 );
+CREATE TABLE IF NOT EXISTS dashboard_cards (
+  id TEXT PRIMARY KEY,
+  scope_key TEXT NOT NULL,
+  connection_id TEXT NOT NULL,
+  database_name TEXT,
+  title TEXT NOT NULL,
+  sql TEXT NOT NULL,
+  chart_type TEXT NOT NULL,
+  series_x TEXT,
+  series_y TEXT,
+  time_column TEXT,
+  span INTEGER NOT NULL DEFAULT 1,
+  position INTEGER NOT NULL DEFAULT 0,
+  source TEXT NOT NULL CHECK (source IN ('ai','favorite','manual')),
+  pinned INTEGER NOT NULL DEFAULT 0,
+  last_result_json TEXT,
+  last_run_at TEXT,
+  last_status TEXT,
+  last_error TEXT,
+  schema_hash TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dash_cards ON dashboard_cards(scope_key, position);
+CREATE TABLE IF NOT EXISTS dashboard_schedules (
+  scope_key TEXT PRIMARY KEY,
+  connection_id TEXT NOT NULL,
+  database_name TEXT,
+  interval_seconds INTEGER NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  notify_channels TEXT,
+  last_run_at TEXT,
+  last_status TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 `;
+
+interface DashboardCardRow {
+  id: string;
+  scope_key: string;
+  connection_id: string;
+  database_name: string | null;
+  title: string;
+  sql: string;
+  chart_type: string;
+  series_x: string | null;
+  series_y: string | null;
+  time_column: string | null;
+  span: number;
+  position: number;
+  source: string;
+  pinned: number;
+  last_result_json: string | null;
+  last_run_at: string | null;
+  last_status: string | null;
+  last_error: string | null;
+  schema_hash: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 interface ConnectionRow {
   id: string;
@@ -327,6 +397,12 @@ export interface ConnectionInput {
 
 const iso = () => new Date().toISOString();
 
+/** 快照只为「打开即见图」服务，行数必须封顶，否则 App 存储会被大结果集撑爆。 */
+function trimDashboardResult(result: { columns: Array<{ name: string }>; rows: unknown[][] } | undefined) {
+  if (!result) return { columns: [], rows: [] };
+  return { columns: result.columns.slice(0, 64), rows: result.rows.slice(0, 200).map((row) => row.slice(0, 64)) };
+}
+
 /** 业务语义类记忆：召回时走独立配额，不挤占情景记忆的 6 条名额。 */
 const BUSINESS_KINDS: MemoryKind[] = ['glossary', 'sql_example'];
 
@@ -417,6 +493,54 @@ export interface DatabaseBriefRecord {
   schemaHash?: string;
   generatedAt: string;
   updatedAt: string;
+}
+
+const PROVIDER_KINDS = ['local', 'anthropic', 'openai', 'ollama'] as const;
+
+/** 清洗模型来源列表；空列表时用旧版单模型字段合成一个默认连接，保证升级后行为不变。 */
+function normalizeModelConfigs(
+  raw: unknown,
+  legacy: Pick<AgentModelConfig, 'provider' | 'preset' | 'baseUrl'> & { model: string },
+): AgentModelConfig[] {
+  const seen = new Set<string>();
+  const list: AgentModelConfig[] = [];
+  for (const entry of Array.isArray(raw) ? raw : []) {
+    const item = entry as { id?: unknown; name?: unknown; provider?: unknown; preset?: unknown; baseUrl?: unknown; models?: unknown; model?: unknown };
+    const id = typeof item?.id === 'string' ? item.id.trim() : '';
+    const provider = PROVIDER_KINDS.find((kind) => kind === item?.provider);
+    if (!id || !provider || seen.has(id)) continue;
+    // 兼容早期「一条配置一个模型」的存档：没有 models 数组时读单个 model。
+    const source: unknown[] = Array.isArray(item.models) ? item.models : typeof item.model === 'string' ? [item.model] : [];
+    const models: AgentModelEntry[] = [];
+    const seenModels = new Set<string>();
+    for (const value of source) {
+      const id = typeof value === 'string' ? value.trim() : typeof (value as AgentModelEntry | null)?.id === 'string' ? (value as AgentModelEntry).id.trim() : '';
+      if (!id || seenModels.has(id)) continue;
+      const rawName = typeof value === 'object' && value ? (value as { name?: unknown }).name : undefined;
+      seenModels.add(id);
+      models.push({ id, name: typeof rawName === 'string' && rawName.trim() ? rawName.trim() : undefined });
+    }
+    if (!models.length) continue;
+    seen.add(id);
+    list.push({
+      id,
+      name: typeof item.name === 'string' && item.name.trim() ? item.name.trim() : undefined,
+      provider,
+      preset: typeof item.preset === 'string' && item.preset ? item.preset : undefined,
+      baseUrl: typeof item.baseUrl === 'string' ? item.baseUrl : '',
+      models,
+    });
+  }
+  if (!list.length) {
+    list.push({
+      id: 'default',
+      provider: legacy.provider,
+      preset: legacy.preset,
+      baseUrl: legacy.baseUrl,
+      models: [{ id: legacy.model?.trim() || 'local' }],
+    });
+  }
+  return list;
 }
 
 export class Store {
@@ -655,6 +779,8 @@ export class Store {
 
   deleteConnection(id: string): void {
     this.exec('DELETE FROM connections WHERE id = ?', [id]);
+    // 仪表板卡片是我们自己的元数据：连接没了还留着，就是指向不存在库的死配置
+    this.exec('DELETE FROM dashboard_cards WHERE connection_id = ?', [id]);
   }
 
   touchConnection(id: string): void {
@@ -713,12 +839,29 @@ export class Store {
       agent: { ...DEFAULT_SETTINGS.agent, ...(stored.agent ?? {}) },
       embedding: { ...DEFAULT_SETTINGS.embedding, ...(stored.embedding ?? {}) },
       features: { ...DEFAULT_SETTINGS.features, ...(stored.features ?? {}) },
+      search: { ...DEFAULT_SETTINGS.search, ...(stored.search ?? {}) },
     };
     merged.historyLimit = round(merged.historyLimit, 10, 100_000, DEFAULT_SETTINGS.historyLimit);
     merged.historyRetentionDays = round(merged.historyRetentionDays, 0, 3650, DEFAULT_SETTINGS.historyRetentionDays);
     const enc = this.getSetting('agentApiKey');
     const decrypted = this.box.decrypt<{ apiKey: string }>(enc);
-    if (decrypted?.apiKey) merged.agent.apiKey = decrypted.apiKey;
+    const legacyKey = decrypted?.apiKey;
+    // 多模型配置：列表与当前项在读取时物化成 agent 上的 provider/baseUrl/model/apiKey，
+    // 让运行时（provider 创建、能力档案、会话记录）继续只认单模型字段。
+    const modelConfigs = normalizeModelConfigs(merged.agent.modelConfigs, merged.agent);
+    const active = modelConfigs.find((item) => item.id === merged.agent.activeModelId) ?? modelConfigs[0];
+    const activeModel = active.models.some((entry) => entry.id === merged.agent.model) ? merged.agent.model : active.models[0].id;
+    const modelKeys = this.readModelKeys();
+    const keyOf = (id: string) => modelKeys[id] ?? (id === 'default' ? legacyKey : undefined);
+    merged.agent.modelConfigs = modelConfigs;
+    merged.agent.activeModelId = active.id;
+    merged.agent.provider = active.provider;
+    merged.agent.preset = active.preset;
+    merged.agent.baseUrl = active.baseUrl;
+    merged.agent.model = activeModel;
+    merged.agent.apiKey = keyOf(active.id);
+    delete merged.agent.modelKeys;
+    merged.agent.modelApiKeyStatus = Object.fromEntries(modelConfigs.map((item) => [item.id, Boolean(keyOf(item.id))]));
     if (process.env.AIDB_API_KEY) merged.agent.apiKey = process.env.AIDB_API_KEY;
     merged.agent.hasApiKey = Boolean(merged.agent.apiKey);
     const embeddingEnc = this.getSetting('embeddingApiKey');
@@ -733,9 +876,50 @@ export class Store {
     const settings = this.getSettings();
     return {
       ...settings,
-      agent: { ...settings.agent, apiKey: undefined, hasApiKey: Boolean(settings.agent.apiKey) },
+      agent: { ...settings.agent, apiKey: undefined, modelKeys: undefined, hasApiKey: Boolean(settings.agent.apiKey) },
       embedding: { ...settings.embedding, apiKey: undefined, hasApiKey: Boolean(settings.embedding.apiKey) },
+      search: { ...settings.search, keyStatus: this.searchKeyStatus(), searchKeys: undefined },
     };
+  }
+
+  private readSearchKeys(): Record<string, string> {
+    const decrypted = this.box.decrypt<{ keys?: Record<string, string> }>(this.getSetting('searchApiKeys'));
+    return decrypted?.keys && typeof decrypted.keys === 'object' ? decrypted.keys : {};
+  }
+
+  private writeSearchKeys(keys: Record<string, string>): void {
+    const entries = Object.entries(keys).filter(([, value]) => typeof value === 'string' && value.length > 0);
+    if (entries.length) this.setSetting('searchApiKeys', this.box.encrypt({ keys: Object.fromEntries(entries) }));
+    else this.exec("DELETE FROM settings WHERE key = 'searchApiKeys'");
+  }
+
+  getSearchApiKey(id: string): string | undefined {
+    return this.readSearchKeys()[id];
+  }
+
+  searchKeyStatus(): Record<string, boolean> {
+    const keys = this.readSearchKeys();
+    return Object.fromEntries(['brave', 'tavily', 'serper', 'mojeek', 'deepseek', 'anthropic', 'openai', 'searxng'].map((id) => [id, Boolean(keys[id])]));
+  }
+
+  saveSearchKeys(input: Record<string, unknown> | undefined): void {
+    if (!input || typeof input !== 'object') return;
+    const keys = this.readSearchKeys();
+    let changed = false;
+    for (const [id, value] of Object.entries(input)) {
+      if (!['brave', 'tavily', 'serper', 'mojeek', 'deepseek', 'anthropic', 'openai', 'searxng'].includes(id)) continue;
+      if (typeof value !== 'string') continue;
+      if (value === '__CLEAR__') {
+        if (keys[id]) {
+          delete keys[id];
+          changed = true;
+        }
+      } else if (value.trim()) {
+        keys[id] = value.trim();
+        changed = true;
+      }
+    }
+    if (changed) this.writeSearchKeys(keys);
   }
 
   saveSettings(next: AppSettings): AppSettings {
@@ -760,19 +944,67 @@ export class Store {
       embeddingKey = incomingEmbeddingKey;
       embeddingKeyChanged = true;
     }
+    const incomingKeys = next.agent.modelKeys ?? {};
+    const modelKeys = this.readModelKeys();
+    let modelKeysChanged = false;
+    for (const [id, value] of Object.entries(incomingKeys)) {
+      if (!id || typeof value !== 'string') continue;
+      if (value === '__CLEAR__') {
+        if (modelKeys[id]) {
+          delete modelKeys[id];
+          modelKeysChanged = true;
+        }
+      } else if (value.trim()) {
+        modelKeys[id] = value.trim();
+        modelKeysChanged = true;
+      }
+    }
+    const modelConfigs = normalizeModelConfigs(next.agent.modelConfigs, current.agent);
+    const activeModelId = modelConfigs.some((item) => item.id === next.agent.activeModelId) ? next.agent.activeModelId : modelConfigs[0].id;
+    // 兼容旧调用：没有切换连接时，直接改 agent.provider/baseUrl/model 视为修改当前连接；
+    // 新模型名（例如旧版单模型输入框）补进当前连接的模型列表。
+    const syncedConfigs =
+      activeModelId === current.agent.activeModelId
+        ? modelConfigs.map((item) => {
+            if (item.id !== activeModelId) return item;
+            const model = next.agent.model?.trim();
+            return {
+              ...item,
+              provider: next.agent.provider,
+              preset: next.agent.preset,
+              baseUrl: next.agent.baseUrl,
+              models: model && !item.models.some((entry) => entry.id === model) ? [...item.models, { id: model }] : item.models,
+            };
+          })
+        : modelConfigs;
     const sanitized: AppSettings = {
       ...next,
       historyLimit: round(next.historyLimit, 10, 100_000, DEFAULT_SETTINGS.historyLimit),
       historyRetentionDays: round(next.historyRetentionDays, 0, 3650, DEFAULT_SETTINGS.historyRetentionDays),
-      agent: { ...next.agent, apiKey: undefined, hasApiKey: Boolean(apiKey ?? process.env.AIDB_API_KEY) },
+      agent: {
+        ...next.agent,
+        apiKey: undefined,
+        hasApiKey: Boolean(apiKey ?? process.env.AIDB_API_KEY),
+        modelConfigs: syncedConfigs,
+        activeModelId,
+        modelKeys: undefined,
+        modelApiKeyStatus: undefined,
+      },
       embedding: {
         ...next.embedding,
         apiKey: undefined,
         hasApiKey: Boolean(embeddingKey ?? process.env.AIDB_EMBEDDING_API_KEY),
       },
+      search: {
+        ...next.search,
+        keyStatus: undefined,
+        searchKeys: undefined,
+      },
     };
     this.setSetting('app', JSON.stringify(sanitized));
+    this.saveSearchKeys(next.search?.searchKeys);
     if (keyChanged) this.setAgentApiKey(apiKey);
+    if (modelKeysChanged) this.setModelKeys(modelKeys);
     if (embeddingKeyChanged) this.setEmbeddingApiKey(embeddingKey);
     return this.getSettings();
   }
@@ -1372,6 +1604,271 @@ export class Store {
     return bundle;
   }
 
+  // ---------- dashboards ----------
+
+  private scopeKey(connectionId: string, database?: string): string {
+    return `${connectionId}/${database ?? ''}`;
+  }
+
+  private rowToDashboardCard(row: DashboardCardRow): DashboardCard {
+    let lastResult: DashboardCard['lastResult'] | undefined;
+    if (row.last_result_json) {
+      try {
+        lastResult = JSON.parse(row.last_result_json) as DashboardCard['lastResult'];
+      } catch {
+        lastResult = undefined;
+      }
+    }
+    return {
+      id: row.id,
+      connectionId: row.connection_id,
+      database: row.database_name ?? undefined,
+      title: row.title,
+      sql: row.sql,
+      chartType: row.chart_type as DashboardChartType,
+      x: row.series_x ?? undefined,
+      y: row.series_y ?? undefined,
+      timeColumn: row.time_column ?? undefined,
+      span: row.span === 2 ? 2 : 1,
+      position: row.position,
+      source: row.source as DashboardCardSource,
+      pinned: Boolean(row.pinned),
+      lastRunAt: row.last_run_at ?? undefined,
+      lastStatus: row.last_status === 'ok' || row.last_status === 'error' ? row.last_status : undefined,
+      lastError: row.last_error ?? undefined,
+      lastResult,
+      schemaHash: row.schema_hash ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  listDashboardCards(connectionId: string, database?: string): DashboardCard[] {
+    const rows = this.all<DashboardCardRow>(
+      'SELECT * FROM dashboard_cards WHERE scope_key = ? ORDER BY position, created_at',
+      [this.scopeKey(connectionId, database)],
+    );
+    return rows.map((row) => this.rowToDashboardCard(row));
+  }
+
+  dashboardCard(id: string): DashboardCard | undefined {
+    const row = this.one<DashboardCardRow>('SELECT * FROM dashboard_cards WHERE id = ?', [id]);
+    return row ? this.rowToDashboardCard(row) : undefined;
+  }
+
+  insertDashboardCard(input: DashboardCardInput): DashboardCard {
+    const now = iso();
+    const id = randomUUID();
+    const position = input.position ?? this.listDashboardCards(input.connectionId, input.database).length + 1;
+    this.exec(
+      `INSERT INTO dashboard_cards
+       (id,scope_key,connection_id,database_name,title,sql,chart_type,series_x,series_y,time_column,span,position,source,pinned,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [
+        id,
+        this.scopeKey(input.connectionId, input.database),
+        input.connectionId,
+        input.database ?? null,
+        input.title.trim(),
+        input.sql.trim(),
+        input.chartType,
+        input.x ?? null,
+        input.y ?? null,
+        input.timeColumn ?? null,
+        input.span === 2 ? 2 : 1,
+        position,
+        input.source ?? 'manual',
+        input.pinned === false ? 0 : 1,
+        now,
+        now,
+      ],
+    );
+    return this.dashboardCard(id)!;
+  }
+
+  /** 逐字段更新：undefined 表示不改，null 表示清空该字段。 */
+  updateDashboardCard(
+    id: string,
+    patch: Omit<Partial<DashboardCardInput>, 'timeColumn'> & {
+      timeColumn?: string | null;
+      lastResult?: DashboardCard['lastResult'];
+      lastStatus?: 'ok' | 'error';
+      lastError?: string;
+      schemaHash?: string | null;
+    },
+  ): DashboardCard | undefined {
+    const existing = this.one<DashboardCardRow>('SELECT * FROM dashboard_cards WHERE id = ?', [id]);
+    if (!existing) return undefined;
+    const next = [
+      patch.title?.trim() || existing.title,
+      patch.sql?.trim() || existing.sql,
+      patch.chartType ?? existing.chart_type,
+      patch.x === undefined ? existing.series_x : patch.x ?? null,
+      patch.y === undefined ? existing.series_y : patch.y ?? null,
+      patch.timeColumn === undefined ? existing.time_column : patch.timeColumn ?? null,
+      patch.span === undefined ? existing.span : patch.span === 2 ? 2 : 1,
+      patch.position === undefined ? existing.position : patch.position,
+      patch.pinned === undefined ? existing.pinned : patch.pinned ? 1 : 0,
+      patch.source ?? existing.source,
+      patch.lastResult === undefined ? existing.last_result_json : JSON.stringify(trimDashboardResult(patch.lastResult)),
+      patch.lastStatus === undefined ? existing.last_status : patch.lastStatus,
+      patch.lastError === undefined ? existing.last_error : patch.lastError,
+      patch.schemaHash === undefined ? existing.schema_hash : patch.schemaHash,
+      iso(),
+      id,
+    ];
+    this.exec(
+      `UPDATE dashboard_cards SET title=?, sql=?, chart_type=?, series_x=?, series_y=?, time_column=?, span=?, position=?, pinned=?,
+       source=?, last_result_json=?, last_status=?, last_error=?, schema_hash=?, updated_at=? WHERE id=?`,
+      next,
+    );
+    return this.dashboardCard(id);
+  }
+
+  deleteDashboardCard(id: string): void {
+    this.exec('DELETE FROM dashboard_cards WHERE id = ?', [id]);
+  }
+
+  /**
+   * 整批替换草稿卡片：只删 pinned = 0 的行，用户固定的卡片不受影响。
+   * 生成器因此永远无法「重设」掉用户攒下的看板。
+   */
+  setDraftCards(connectionId: string, database: string | undefined, cards: DashboardCardInput[]): DashboardCard[] {
+    const scope = this.scopeKey(connectionId, database);
+    this.db.exec('BEGIN');
+    try {
+      this.exec('DELETE FROM dashboard_cards WHERE scope_key = ? AND pinned = 0', [scope]);
+      const kept = Number(this.one<{ n: number }>('SELECT COUNT(*) AS n FROM dashboard_cards WHERE scope_key = ?', [scope])?.n ?? 0);
+      const slots = Math.max(0, DASHBOARD_CARD_LIMIT - kept);
+      cards.slice(0, slots).forEach((card, index) => {
+        const inserted = this.insertDashboardCard({
+          ...card,
+          connectionId,
+          database,
+          source: card.source ?? 'ai',
+          pinned: false,
+          position: kept + index + 1,
+        });
+        // 生成器试跑带回来的结果直接当快照存，卡片入板就能画出来
+        if (card.lastResult) this.updateDashboardCard(inserted.id, { lastResult: card.lastResult, lastStatus: 'ok' });
+      });
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+    return this.listDashboardCards(connectionId, database);
+  }
+
+  /** 丢弃当前作用域的全部草稿，保留固定卡片。 */
+  discardDashboardDrafts(connectionId: string, database?: string): number {
+    const result = this.exec('DELETE FROM dashboard_cards WHERE scope_key = ? AND pinned = 0', [
+      this.scopeKey(connectionId, database),
+    ]);
+    return result.changes;
+  }
+
+  reorderDashboardCards(ids: string[]): DashboardCard[] {
+    if (!ids.length) return [];
+    const first = this.one<DashboardCardRow>('SELECT * FROM dashboard_cards WHERE id = ?', [ids[0]]);
+    if (!first) return [];
+    this.db.exec('BEGIN');
+    try {
+      ids.forEach((id, index) => {
+        this.exec('UPDATE dashboard_cards SET position = ?, updated_at = ? WHERE id = ?', [index + 1, iso(), id]);
+      });
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+    return this.listDashboardCards(first.connection_id, first.database_name ?? undefined);
+  }
+
+  removeDashboardScope(connectionId: string, database?: string): number {
+    const scope = this.scopeKey(connectionId, database);
+    const result = database
+      ? this.exec('DELETE FROM dashboard_cards WHERE scope_key = ?', [scope])
+      : this.exec('DELETE FROM dashboard_cards WHERE connection_id = ?', [connectionId]);
+    this.exec('DELETE FROM dashboard_schedules WHERE scope_key = ?', [scope]);
+    return result.changes;
+  }
+
+  private rowToDashboardSchedule(row: Record<string, any>): DashboardScheduleInfo {
+    let channels: string[] = [];
+    try {
+      channels = Array.isArray(JSON.parse(row.notify_channels ?? '[]')) ? JSON.parse(row.notify_channels ?? '[]') : [];
+    } catch {
+      channels = [];
+    }
+    return {
+      connectionId: row.connection_id,
+      database: row.database_name ?? undefined,
+      intervalSeconds: Number(row.interval_seconds),
+      enabled: Boolean(row.enabled),
+      notifyChannels: channels,
+      lastRunAt: row.last_run_at ?? undefined,
+      lastStatus: row.last_status === 'ok' || row.last_status === 'error' ? row.last_status : undefined,
+      lastError: row.last_error ?? undefined,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  getDashboardSchedule(connectionId: string, database?: string): DashboardScheduleInfo | undefined {
+    const row = this.one<Record<string, any>>('SELECT * FROM dashboard_schedules WHERE scope_key = ?', [
+      this.scopeKey(connectionId, database),
+    ]);
+    return row ? this.rowToDashboardSchedule(row) : undefined;
+  }
+
+  /** 只列出启用中的定时，供调度器轮询。 */
+  listDashboardSchedules(): DashboardScheduleInfo[] {
+    return this.all<Record<string, any>>('SELECT * FROM dashboard_schedules WHERE enabled = 1 ORDER BY last_run_at')
+      .map((row) => this.rowToDashboardSchedule(row));
+  }
+
+  setDashboardSchedule(input: {
+    connectionId: string;
+    database?: string;
+    intervalSeconds: number;
+    enabled: boolean;
+    notifyChannels?: string[];
+  }): DashboardScheduleInfo | undefined {
+    const now = iso();
+    const scope = this.scopeKey(input.connectionId, input.database);
+    this.exec(
+      `INSERT INTO dashboard_schedules (scope_key,connection_id,database_name,interval_seconds,enabled,notify_channels,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?)
+       ON CONFLICT(scope_key) DO UPDATE SET interval_seconds = excluded.interval_seconds, enabled = excluded.enabled,
+         notify_channels = excluded.notify_channels, updated_at = excluded.updated_at`,
+      [
+        scope,
+        input.connectionId,
+        input.database ?? null,
+        Math.max(60, Math.floor(input.intervalSeconds)),
+        input.enabled ? 1 : 0,
+        JSON.stringify(input.notifyChannels ?? []),
+        now,
+        now,
+      ],
+    );
+    return this.getDashboardSchedule(input.connectionId, input.database);
+  }
+
+  markDashboardScheduleRun(connectionId: string, database: string | undefined, status: 'ok' | 'error', error?: string): void {
+    this.exec('UPDATE dashboard_schedules SET last_run_at = ?, last_status = ?, last_error = ?, updated_at = ? WHERE scope_key = ?', [
+      iso(),
+      status,
+      error ?? null,
+      iso(),
+      this.scopeKey(connectionId, database),
+    ]);
+  }
+
+  removeDashboardSchedule(connectionId: string, database?: string): void {
+    this.exec('DELETE FROM dashboard_schedules WHERE scope_key = ?', [this.scopeKey(connectionId, database)]);
+  }
+
   private invalidateAgentContextCache(): void {
     this.contextCache.clear();
   }
@@ -1635,6 +2132,7 @@ export class Store {
       command: row.command,
       args,
       enabled: Boolean(row.enabled),
+      builtin: builtinMcpKindOf(row.command),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -1672,6 +2170,16 @@ export class Store {
       ],
     );
     return this.getMcpServer(id)!;
+  }
+
+  /** Seed a first-party built-in without overwriting the user's toggles or paths. */
+  seedMcpServer(input: { id: string; name: string; command: string; args?: string[]; enabled?: boolean }): void {
+    const now = iso();
+    this.exec(
+      `INSERT OR IGNORE INTO mcp_servers (id,name,command,args_json,env_secret,enabled,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [input.id, input.name, input.command, JSON.stringify(input.args ?? []), null, input.enabled === false ? 0 : 1, now, now],
+    );
   }
 
   updateMcpServer(
@@ -2031,6 +2539,25 @@ export class Store {
   private setAgentApiKey(apiKey: string | undefined): void {
     if (apiKey) this.setSetting('agentApiKey', this.box.encrypt({ apiKey }));
     else this.exec("DELETE FROM settings WHERE key = 'agentApiKey'");
+  }
+
+  private readModelKeys(): Record<string, string> {
+    const decrypted = this.box.decrypt<{ keys?: Record<string, string> }>(this.getSetting('agentModelKeys'));
+    return decrypted?.keys && typeof decrypted.keys === 'object' ? decrypted.keys : {};
+  }
+
+  private setModelKeys(keys: Record<string, string>): void {
+    const entries = Object.entries(keys).filter(([id, value]) => id && value);
+    if (entries.length) this.setSetting('agentModelKeys', this.box.encrypt({ keys: Object.fromEntries(entries) }));
+    else this.exec("DELETE FROM settings WHERE key = 'agentModelKeys'");
+  }
+
+  /** 取某个模型配置已保存的密钥；默认配置回退到旧版单模型密钥。 */
+  getModelApiKey(id: string): string | undefined {
+    const key = this.readModelKeys()[id];
+    if (key) return key;
+    if (id !== 'default') return undefined;
+    return this.box.decrypt<{ apiKey: string }>(this.getSetting('agentApiKey'))?.apiKey;
   }
 
   private setEmbeddingApiKey(apiKey: string | undefined): void {

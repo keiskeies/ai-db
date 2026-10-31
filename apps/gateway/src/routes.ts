@@ -3,6 +3,8 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import {
   COMMANDS,
   TOOLS,
+  DASHBOARD_CARD_LIMIT,
+  DASHBOARD_CHART_TYPES,
   engineDefaultPort,
   engineMeta,
   engineUsesSchema,
@@ -31,6 +33,8 @@ import {
   type ArtifactType,
   type ColumnDef,
   type ConnectionConfig,
+  type DashboardCardSource,
+  type DashboardChartType,
   type ForeignKeyInfo,
   type IndexDef,
   type MemoryCandidate,
@@ -40,6 +44,7 @@ import {
   type ReportSpec,
 } from '@aidb/core';
 import { pairingCode, hashToken, randomToken, safeEqual } from './crypto';
+import { validateBuiltinMcpArgs } from './builtinMcp';
 import { readAttachment, saveAttachment } from './attachments';
 import type { GatewayConfig } from './config';
 import type { ConnectionManager } from './manager';
@@ -53,13 +58,20 @@ import type { SkillStore } from './skills';
 import type { SkillWorker } from './skillWorker';
 import type { SkillRunner } from './skillRunner';
 import { runReportDeck } from './features/reportDeckRun';
+import { assertDashboardSql, buildDashboardReportSpec, dashboardSupported, disabledTablesTouched, refreshDashboardCards } from './features/dashboards';
+import { generateDashboardDrafts } from './features/dashboardGenerate';
+import { composeDashboardCard, previewDashboardSql } from './features/dashboardCompose';
 import { listMcpTools } from './mcp';
+import { probeSearchBackend, resetSearchHealth, runSearch, SEARCH_BACKENDS, searchHealth } from './search';
 import { channelSummary, sendNotification, validateNotificationChannel } from './notifications';
 import { executeFixPlan } from './commands/fixExecute';
 import { executeReconRepair } from './commands/reconExecute';
 import type { CommandRunner } from './commands/runner';
 import type { JobScheduler } from './scheduler';
 import { createFeatureRouter } from './features/routes';
+
+/** The outbound MCP bridge is for database reads; never expose the local MCP proxy (filesystem/web). */
+const MCP_BRIDGE_EXCLUDED = new Set(['mcp_list_servers', 'mcp_list_tools', 'mcp_call']);
 
 export interface ApiDeps {
   config: GatewayConfig;
@@ -408,6 +420,251 @@ export function createApiRouter(deps: ApiDeps): Router {
         });
         throw err;
       }
+    }),
+  );
+
+  // ---------- dashboards ----------
+  const dashboardChartType = (value: unknown): DashboardChartType =>
+    DASHBOARD_CHART_TYPES.includes(value as DashboardChartType) ? (value as DashboardChartType) : 'bar';
+
+  const dashboardScopeOf = (body: Record<string, unknown>) => {
+    const connectionId = str(body.connectionId);
+    const conn = connectionId ? store.getConnection(connectionId) : undefined;
+    if (!conn) throw Object.assign(new Error('连接不存在'), { code: 'CONNECTION_NOT_FOUND', status: 404 });
+    if (!dashboardSupported(conn.engine)) {
+      throw Object.assign(new Error(`${engineMeta(conn.engine).label} 不支持仪表板`), { code: 'DASHBOARD_UNSUPPORTED', status: 400 });
+    }
+    return { conn, database: str(body.database) ?? conn.database };
+  };
+
+  router.get(
+    '/dashboards/cards',
+    ah(async (req, res) => {
+      const connectionId = str(req.query.connectionId);
+      if (!connectionId) throw Object.assign(new Error('connectionId 必填'), { code: 'INVALID_INPUT', status: 400 });
+      const conn = store.getConnection(connectionId);
+      if (!conn) throw Object.assign(new Error('连接不存在'), { code: 'CONNECTION_NOT_FOUND', status: 404 });
+      const database = str(req.query.database) ?? conn.database;
+      const supported = dashboardSupported(conn.engine);
+      res.json({
+        supported,
+        limit: DASHBOARD_CARD_LIMIT,
+        cards: supported ? store.listDashboardCards(conn.id, database) : [],
+      });
+    }),
+  );
+
+  router.post(
+    '/dashboards/cards',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const { conn, database } = dashboardScopeOf(body);
+      const sql = str(body.sql) ?? '';
+      const guard = assertDashboardSql(sql);
+      if (guard) throw Object.assign(new Error(guard), { code: 'DASHBOARD_NOT_READ_ONLY', status: 400 });
+      const blocked = disabledTablesTouched(sql, store.agentContextBundle(conn.id, database).disabledTables);
+      if (blocked.length) {
+        throw Object.assign(new Error(`这些表已在 Agent 上下文中禁用：${blocked.join('、')}`), { code: 'TABLE_DISABLED', status: 403 });
+      }
+      const patch = {
+        title: (str(body.title) ?? '').trim() || '未命名卡片',
+        sql,
+        chartType: dashboardChartType(body.chartType),
+        x: str(body.x),
+        y: str(body.y),
+        timeColumn: body.timeColumn === '' ? undefined : str(body.timeColumn),
+        span: Number(body.span) === 2 ? (2 as const) : (1 as const),
+        pinned: body.pinned === undefined ? undefined : Boolean(body.pinned),
+      };
+      const id = str(body.id);
+      if (id) {
+        const card = store.updateDashboardCard(id, patch);
+        if (!card) throw Object.assign(new Error('卡片不存在'), { code: 'NOT_FOUND', status: 404 });
+        res.json({ card, cards: store.listDashboardCards(conn.id, database) });
+        return;
+      }
+      const existing = store.listDashboardCards(conn.id, database);
+      if (existing.length >= DASHBOARD_CARD_LIMIT) {
+        throw Object.assign(new Error(`一块仪表板最多 ${DASHBOARD_CARD_LIMIT} 张卡片`), { code: 'DASHBOARD_LIMIT', status: 400 });
+      }
+      const card = store.insertDashboardCard({
+        connectionId: conn.id,
+        database,
+        source: (str(body.source) as DashboardCardSource) ?? 'manual',
+        ...patch,
+        timeColumn: patch.timeColumn ?? undefined,
+      });
+      res.json({ card, cards: store.listDashboardCards(conn.id, database) });
+    }),
+  );
+
+  router.delete(
+    '/dashboards/cards/:id',
+    ah(async (req, res) => {
+      const card = store.dashboardCard(req.params.id);
+      if (!card) throw Object.assign(new Error('卡片不存在'), { code: 'NOT_FOUND', status: 404 });
+      store.deleteDashboardCard(card.id);
+      res.json({ cards: store.listDashboardCards(card.connectionId, card.database) });
+    }),
+  );
+
+  router.post(
+    '/dashboards/cards/reorder',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const ids = Array.isArray(body.ids) ? body.ids.map((id) => String(id)) : [];
+      if (!ids.length) throw Object.assign(new Error('ids 必填'), { code: 'INVALID_INPUT', status: 400 });
+      res.json({ cards: store.reorderDashboardCards(ids) });
+    }),
+  );
+
+  router.post(
+    '/dashboards/refresh',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const { conn, database } = dashboardScopeOf(body);
+      const cardIds = Array.isArray(body.cardIds) ? new Set(body.cardIds.map((id) => String(id))) : undefined;
+      const cards = store.listDashboardCards(conn.id, database).filter((card) => !cardIds || cardIds.has(card.id));
+      const rawRange = body.range && typeof body.range === 'object' && !Array.isArray(body.range) ? (body.range as Record<string, unknown>) : undefined;
+      const range = rawRange ? { from: str(rawRange.from), to: str(rawRange.to) } : undefined;
+      const results = await refreshDashboardCards({ store, manager, settings: store.getSettings(), cards, range });
+      res.json({ results, cards: store.listDashboardCards(conn.id, database) });
+    }),
+  );
+
+  router.get(
+    '/dashboards/schedule',
+    ah(async (req, res) => {
+      const { conn, database } = dashboardScopeOf({ connectionId: str(req.query.connectionId), database: str(req.query.database) });
+      res.json({ schedule: store.getDashboardSchedule(conn.id, database) ?? null });
+    }),
+  );
+
+  router.put(
+    '/dashboards/schedule',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const { conn, database } = dashboardScopeOf(body);
+      const intervalSeconds = num(body.intervalSeconds, 0, 0, 86_400);
+      if (!intervalSeconds) {
+        store.removeDashboardSchedule(conn.id, database);
+        res.json({ schedule: null });
+        return;
+      }
+      const channels = Array.isArray(body.notifyChannels) ? body.notifyChannels.map((id) => String(id)).slice(0, 4) : [];
+      const schedule = store.setDashboardSchedule({
+        connectionId: conn.id,
+        database,
+        intervalSeconds,
+        enabled: body.enabled === undefined ? true : Boolean(body.enabled),
+        notifyChannels: channels,
+      });
+      res.json({ schedule });
+    }),
+  );
+
+  router.post(
+    '/dashboards/report',
+    ah(async (req, res) => {
+      const body = obj(req.body ?? {}, 'body');
+      const { conn, database } = dashboardScopeOf(body);
+      const cards = store.listDashboardCards(conn.id, database);
+      const spec = buildDashboardReportSpec({ conn, database, cards });
+      if (!spec) throw Object.assign(new Error('没有带结果的卡片，先刷新再导出'), { code: 'DASHBOARD_EMPTY', status: 400 });
+      const artifactSpec = { ...spec, type: 'report' as const };
+      const artifact = store.createArtifact({ type: 'report', title: spec.title, spec: artifactSpec, status: 'ready' });
+      // 报告导出读的是「最近一次 run 的快照」，所以这里直接把这次仪表板结果记成一次成功的 run
+      store.addArtifactRun({ artifactId: artifact.id, status: 'succeeded', result: artifactSpec, durationMs: 0 });
+      res.json({ artifact });
+    }),
+  );
+
+  router.post(
+    '/dashboards/preview',
+    ah(async (req, res) => {
+      const body = obj(req.body ?? {}, 'body');
+      const { conn, database } = dashboardScopeOf(body);
+      const sql = str(body.sql) ?? '';
+      if (!sql.trim()) throw Object.assign(new Error('sql 必填'), { code: 'INVALID_INPUT', status: 400 });
+      const started = Date.now();
+      const preview = await previewDashboardSql({ store, manager, connectionId: conn.id, database, sql });
+      store.addAudit({
+        actor: 'user',
+        connectionId: conn.id,
+        database,
+        tool: 'dashboard_preview',
+        sql,
+        risk: classifyForAudit(sql),
+        approval: 'manual',
+        status: preview.error ? 'error' : 'ok',
+        durationMs: Date.now() - started,
+        meta: preview.error ? { error: preview.error } : { rows: preview.rowCount },
+      });
+      res.json({ preview });
+    }),
+  );
+
+  router.post(
+    '/dashboards/compose',
+    ah(async (req, res) => {
+      const body = obj(req.body ?? {}, 'body');
+      const { conn, database } = dashboardScopeOf(body);
+      const prompt = (str(body.prompt) ?? '').trim();
+      if (prompt.length < 2) throw Object.assign(new Error('请用一句话描述想看的指标'), { code: 'INVALID_INPUT', status: 400 });
+      if (prompt.length > 500) throw Object.assign(new Error('需求最多 500 字，写清指标、维度和时间范围即可'), { code: 'INVALID_INPUT', status: 400 });
+      const started = Date.now();
+      const result = await composeDashboardCard({ store, manager, connectionId: conn.id, database, prompt });
+      store.addAudit({
+        actor: 'user',
+        connectionId: conn.id,
+        database,
+        tool: 'dashboard_compose',
+        sql: result.sql,
+        risk: 'read',
+        approval: 'manual',
+        status: result.preview.error ? 'error' : 'ok',
+        durationMs: Date.now() - started,
+        meta: { usedModel: result.usedModel, prompt, notes: result.notes.slice(0, 4) },
+      });
+      res.json(result);
+    }),
+  );
+
+  router.post(
+    '/dashboards/generate',
+    ah(async (req, res) => {
+      const body = obj(req.body ?? {}, 'body');
+      const { conn, database } = dashboardScopeOf(body);
+      const result = await generateDashboardDrafts({
+        store,
+        manager,
+        connectionId: conn.id,
+        database,
+        limit: num(body.limit, 8, 1, DASHBOARD_CARD_LIMIT),
+      });
+      const cards = store.setDraftCards(conn.id, database, result.cards);
+      store.addAudit({
+        actor: 'user',
+        connectionId: conn.id,
+        database,
+        tool: 'dashboard_generate',
+        sql: result.cards.map((card) => card.sql).join('\n'),
+        risk: 'read',
+        approval: 'manual',
+        status: 'ok',
+        durationMs: 0,
+        meta: { created: result.cards.length, usedModel: result.usedModel },
+      });
+      res.json({ created: result.cards.length, usedModel: result.usedModel, notes: result.notes, cards });
+    }),
+  );
+
+  router.delete(
+    '/dashboards/drafts',
+    ah(async (req, res) => {
+      const body = obj(req.body ?? {}, 'body');
+      const { conn, database } = dashboardScopeOf(body);
+      res.json({ discarded: store.discardDashboardDrafts(conn.id, database), cards: store.listDashboardCards(conn.id, database) });
     }),
   );
 
@@ -1807,6 +2064,36 @@ export function createApiRouter(deps: ApiDeps): Router {
   });
 
   // ---------- settings ----------
+  router.get('/search/backends', (_req, res) => {
+    res.json({ backends: SEARCH_BACKENDS, health: searchHealth(), keyStatus: store.searchKeyStatus() });
+  });
+
+  router.post(
+    '/search/query',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const query = String(body.query ?? '').trim();
+      if (!query) throw Object.assign(new Error('query 必填'), { code: 'INVALID_INPUT', status: 400 });
+      const overrides: Record<string, unknown> = {};
+      if (typeof body.numResults === 'number') overrides.numResults = Math.min(20, Math.max(1, Math.trunc(body.numResults)));
+      res.json(await runSearch(query, store, overrides as any));
+    }),
+  );
+
+  router.post('/search/backends/reset', (_req, res) => {
+    resetSearchHealth();
+    res.json({ health: searchHealth() });
+  });
+
+  router.post(
+    '/search/backends/:id/probe',
+    ah(async (req, res) => {
+      const id = SEARCH_BACKENDS.find((backend) => backend.id === req.params.id);
+      if (!id) throw Object.assign(new Error('搜索后端不存在'), { code: 'NOT_FOUND', status: 404 });
+      res.json({ health: await probeSearchBackend(id.id, store) });
+    }),
+  );
+
   router.get('/settings', (_req, res) => res.json({ settings: store.publicSettings() }));
   router.put(
     '/settings',
@@ -1815,6 +2102,7 @@ export function createApiRouter(deps: ApiDeps): Router {
       const current = store.getSettings();
       const agentBody = (body.agent ?? {}) as Partial<AppSettings['agent']>;
       const embeddingBody = (body.embedding ?? {}) as Partial<AppSettings['embedding']>;
+      const searchBody = (body.search ?? {}) as Partial<AppSettings['search']>;
       const merged: AppSettings = {
         ...current,
         ...body,
@@ -1828,6 +2116,7 @@ export function createApiRouter(deps: ApiDeps): Router {
           ...embeddingBody,
           apiKey: embeddingBody.apiKey,
         },
+        search: { ...current.search, ...searchBody },
       };
       store.saveSettings(merged);
       res.json({ settings: store.publicSettings() });
@@ -1840,7 +2129,8 @@ export function createApiRouter(deps: ApiDeps): Router {
       res.status(403).json({ error: { code: 'FEATURE_DISABLED', message: 'MCP 已在设置中关闭' } });
       return;
     }
-    res.json({ tools: TOOLS });
+    const tools = str(req.query.for) === 'mcp' ? TOOLS.filter((tool) => !MCP_BRIDGE_EXCLUDED.has(tool.name)) : TOOLS;
+    res.json({ tools });
   });
 
   router.post(
@@ -1851,6 +2141,10 @@ export function createApiRouter(deps: ApiDeps): Router {
         return;
       }
       const name = req.params.name;
+      if (MCP_BRIDGE_EXCLUDED.has(name)) {
+        res.status(403).json({ error: { code: 'TOOL_NOT_EXPOSED', message: `出站 MCP 桥不暴露 ${name}；本地 MCP 工具只能在 AiDB 内使用` } });
+        return;
+      }
       const tool = getTool(name);
       if (!tool) {
         res.status(404).json({ error: { code: 'TOOL_NOT_FOUND', message: `工具不存在：${name}` } });
@@ -1882,7 +2176,11 @@ export function createApiRouter(deps: ApiDeps): Router {
         throw Object.assign(new Error('未知的模型协议'), { code: 'INVALID_INPUT', status: 400 });
       }
       const stored = store.getSettings().agent;
-      const apiKey = str(body.apiKey) ?? (kind === stored.provider ? stored.apiKey : undefined);
+      const configId = str(body.modelConfigId);
+      const config = configId ? stored.modelConfigs?.find((item) => item.id === configId) : undefined;
+      const apiKey =
+        str(body.apiKey) ??
+        (config ? store.getModelApiKey(config.id) : kind === stored.provider ? stored.apiKey : undefined);
       try {
         res.json(await listProviderModels({ kind, baseUrl: String(body.baseUrl ?? ''), apiKey }));
       } catch (err: any) {
@@ -1952,6 +2250,7 @@ export function createApiRouter(deps: ApiDeps): Router {
   );
 
   router.delete('/agent/sessions/:id', (req, res) => {
+    host.forgetSessionApprovals(req.params.id);
     store.deleteSession(req.params.id);
     res.status(204).end();
   });
@@ -2625,6 +2924,12 @@ export function createApiRouter(deps: ApiDeps): Router {
       const name = String(body.name ?? '').trim();
       const command = String(body.command ?? '').trim();
       if (!name || !command) throw Object.assign(new Error('name 与 command 必填'), { code: 'INVALID_INPUT', status: 400 });
+      if (/^builtin[:-]/i.test(name) || ['filesystem', 'git', 'web'].includes(name.toLowerCase())) {
+        throw Object.assign(new Error('该名称保留给内置 MCP（filesystem / git / web），请换一个名称'), { code: 'INVALID_INPUT', status: 400 });
+      }
+      if (command.startsWith('builtin:')) {
+        throw Object.assign(new Error('内置 MCP 由系统预置，不能手动创建'), { code: 'INVALID_INPUT', status: 400 });
+      }
       if (store.listMcpServers().some((server) => server.name === name)) {
         throw Object.assign(new Error('MCP Server 名称已存在'), { code: 'INVALID_INPUT', status: 400 });
       }
@@ -2637,13 +2942,23 @@ export function createApiRouter(deps: ApiDeps): Router {
   router.put(
     '/mcp/servers/:id',
     ah(async (req, res) => {
-      if (!store.getMcpServer(req.params.id)) throw Object.assign(new Error('MCP Server 不存在'), { code: 'MCP_SERVER_NOT_FOUND', status: 404 });
+      const current = store.getMcpServer(req.params.id);
+      if (!current) throw Object.assign(new Error('MCP Server 不存在'), { code: 'MCP_SERVER_NOT_FOUND', status: 404 });
       const body = obj(req.body, 'body');
+      if (current.builtin) {
+        if (typeof body.command === 'string' && body.command.trim() !== current.command) {
+          throw Object.assign(new Error('内置 MCP 的命令不可修改'), { code: 'INVALID_INPUT', status: 400 });
+        }
+        if (typeof body.name === 'string' && body.name.trim() !== current.name) {
+          throw Object.assign(new Error('内置 MCP 的名称不可修改'), { code: 'INVALID_INPUT', status: 400 });
+        }
+      }
+      const args = Array.isArray(body.args) ? body.args.map(String) : undefined;
       res.json({
         server: store.updateMcpServer(req.params.id, {
           name: typeof body.name === 'string' ? body.name : undefined,
           command: typeof body.command === 'string' ? body.command : undefined,
-          args: Array.isArray(body.args) ? body.args.map(String) : undefined,
+          args: current.builtin && args ? validateBuiltinMcpArgs(current.builtin, args) : args,
           env: body.env && typeof body.env === 'object' ? Object.fromEntries(Object.entries(body.env as Record<string, unknown>).map(([key, value]) => [key, String(value)])) : undefined,
           enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
         }),
@@ -2652,6 +2967,11 @@ export function createApiRouter(deps: ApiDeps): Router {
   );
 
   router.delete('/mcp/servers/:id', (req, res) => {
+    const current = store.getMcpServer(req.params.id);
+    if (current?.builtin) {
+      res.status(400).json({ error: { code: 'INVALID_INPUT', message: '内置 MCP 不能删除，请在列表中停用' } });
+      return;
+    }
     store.deleteMcpServer(req.params.id);
     res.status(204).end();
   });

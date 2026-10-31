@@ -11,21 +11,22 @@
 
 ## 0. 摘要
 
-把 Agent 从“会调 51 个工具的聊天框”升级为“命令工作台”：用户输入 `/` 唤出命令面板，支持 ↑↓ 选择、Tab 补全、Enter 执行；`/report <文字>` 直接在 Agent 对话内执行并展示工具步骤与回答，回答下方提供复制与导出 PDF（含图表，浅色版式并强制保留饼图/图例配色），不再弹独立弹窗；裸 `/report` 只保留命令 token，等待补主题；命令表单仅保留在命令面板手动打开；选择功能，只填最少的参数，命令以确定性内核执行，模型只负责补歧义、写解释；结果落为可保存、可重跑、可定时、可导出的产物。
+命令是 Agent 的“目的信号”，不是 shell 子命令。用户在 Agent 输入 `/` 唤出命令列表，支持 ↑↓、Tab、Enter；选中或输入命令后，**所有命令都在当前对话内联执行，不打开参数表单**。`/compare` 表达“我要对比”，Agent 自己从话术、当前连接/库、schema 和会话历史推断对比对象、选工具、跑数、出对比表与双柱图；`/diff` 表达“我要看结构差异”，`/recon` 表达“我要查两个源是否一致”，`/fix` 表达“帮我体检并给修复方案”。小白不需要懂 SQL，也不要填连接、表、字段参数。
 
-首批 5 个命令：
-
-| 命令 | 一句话 | 是否依赖模型 |
+| 命令 | Agent 要达成的目的 | 典型交付 |
 |---|---|---|
-| `/report` | 把数据变成可保存、可刷新、可导出的报告 | 生成时依赖；重跑不依赖 |
-| `/compare` | 两个时间段 / 分组 / 查询 / 数据源的同口径分析对比 | 依赖 |
-| `/diff` | 两个库的结构差异与目标方言 DDL | 不依赖 |
-| `/recon` | 两个源的行级数据对账与差异归因（含 MySQL ↔ Redis 等异构源） | 不依赖 |
-| `/fix` | 体检 → 修复计划 → 备份 / dry-run / 事务 / 验证 | 计划依赖；检查不依赖 |
+| `/report` | 围绕当前库/主题生成报告 | 结论摘要 + 指标/表格 + 图表 |
+| `/compare` | 找出两组数据的差异 | 对比表（A/B/Δ/Δ%）+ 双柱图 + 差异结论 |
+| `/diff` | 两个库/表的对象结构差异 | 新增/删除/变更清单 + 破坏性提示 + 目标方言 DDL |
+| `/recon` | 两个源的数据一致性 | matched/different/missing 计数 + 不一致键与字段清单 |
+| `/fix` | 体检并给出修复方案 | findings + 证据 + 可执行修复 SQL + 验证 SQL |
+| `/init` | 生成数据库交接文档 | `AI_DB.md`（全量清单 + 核心表/Join + 口径 + 坑） |
+
+> 2026-10-30 变更：斜杠命令与全局命令面板不再打开参数表单；桌面/移动端 `CommandSheet` 已移除，命令执行统一走 `AgentHost` + `commandIntents`。数据库命令 runner 仍可用于 API、定时产物与确定性导出，但 UI 用户路径是 Agent 语义执行。
 
 核心决策：
 
-1. **命令即功能**：斜线命令不是 prompt 快捷方式，而是带参数表单、独立执行路径和产物的任务入口。
+1. **命令即目的**：命令只告诉 Agent“我要做什么”，不要求用户补参数、写 SQL 或选工具；Agent 负责语义理解、工具选择与结果表达。
 2. **确定性优先**：对比、对账、行数、差值、合计全部在网关算；模型只决定结构、措辞和下一步。
 3. **报告布局由语义决定**：分源章节、并排对比、合并总表、混合布局都是模型的运行时输出，但必须落在受限 DSL 上。
 4. **跨库 / 跨连接是命令参数**：由表单声明 `sources` 数量与选择器，不是让模型猜连接。跨源指不同服务器上的连接，可以是异构引擎（如 MySQL ↔ Redis）；移动端只是客户端，不参与源模型。
@@ -38,7 +39,7 @@
 
 | 里程碑 | 状态 | 已交付 | 未完成 |
 |---|---|---|---|
-| M0 命令框架 | 完成 | core 注册表 / 校验；gateway CommandRunner / SSE / 取消；artifacts / artifact_runs / artifact_schedules；桌面包结构命令表单与运行卡 | — |
+| M0 命令框架 | 完成 | core 注册表 / 校验；gateway CommandRunner / SSE / 取消；artifacts / artifact_runs / artifact_schedules；桌面命令运行卡（早期表单已在 M7 移除） | — |
 | M1 `/diff` | 完成 | 结构差异产物；差异页；同步到 B（确认 + 只读校验 + `/schema/sync` 审计） | 目标库强制备份尚未在命令内自动执行 |
 | M2 `/recon` | 完成（首版） | SQL↔SQL、SQL↔Redis、Mongo/ES 文档对账；Redis 类型校验；映射表单；差异分类；Redis 修复快照 + 写回 + 复检 | 向量库适配器 |
 | M3 `/report` | 完成（首版） | 确定性报告；Agent 查数 + `compose_report`（数字来源校验）；AI 解读；语义布局；保存 / 重跑 / 定时；XLSX 与中性 PPTX 导出 | 模板库；Agent 失败时的质量调优 |
@@ -47,13 +48,13 @@
 | M6 硬化 | 完成（首版） | 产物定时 + tick 集成测试；3 个全局对比工具 + 2 个 MCP 工具（工具数 45）；全局命令面板与工具箱入口；移动端命令面；通知渠道与 inbound/MCP 插件已落到 [机器人与 MCP 插件](./12-bots-and-mcp.md)；文档契约同步；E2E 报告/移动端/通知/MCP 冒烟 | 企业微信 inbound、个人微信、移动端异构 Redis 对账 |
 | M7 `/init` | 完成（首版） | Agent 内联执行；AI_DB.md 交接文档（业务说明/核心表手册/Join/口径/性能/坑/全量清单）；模型可选注解；schema hash + 逐表指纹漂移；每次执行全量刷新自动段落；数据流/人工补充段落保留；后续回合自动注入摘要 | 模型注解质量评估；超大库的分段检索 |
 
-当前验证：docs 契约 329/329；core 149/149；gateway 152 pass / 65 skipped（共 217 个用例）；commands 集成测试 18/18；Mongo/ES 文档适配器契约测试 1/1；Redis 写回实机测试 1/1；resultRef 校验测试 1/1；构建全绿；E2E 150/150 全通过（含七种图表类型切换、`/init` 文档落盘与 Electron 回答 PDF 真实导出校验）。`npm run verify` 全绿。
+当前验证：docs 契约 335/335；core 150/150；gateway 187 pass / 65 skipped（共 252 个用例）；commands 集成测试 18/18；Mongo/ES 文档适配器契约测试 1/1；Redis 写回实机测试 1/1；resultRef 校验测试 1/1；构建全绿；E2E 196/196 全通过（含桌面/移动端命令内联无表单、七种图表类型切换、`/init` 文档落盘与 Electron 回答 PDF 真实导出校验）。`npm run verify` 全绿。
 
 实现与本文的已知偏差：Agent 报告/对比依赖已配置模型，模型不可用时回退确定性统计；`compose_report` 当前用“数字必须出现在工具结果中”的来源校验，尚未把每个块绑定到 `resultRef`；`/fix` 已有步骤勾选 + 备份 + 确认执行 + 自动复检，但尚未提供事务回滚；移动端命令面已提供基础表单，异构 Redis 对账仍需桌面端。上述偏差作为后续迭代项（v2 / 模板库 / 通知机器人），不影响首版交付。
 
 ## 0.2 `/init`：数据库交接文档（AI_DB.md）
 
-`/init` 是 Agent 内联命令，不经过 CommandSheet：`/init` 使用当前连接与库，`/init <目录>`（或直接给 `.md` 文件）指定写入位置。未指定时写到 `<home>/context/<connectionId>/<database>/AI_DB.md`；自定义路径按 `${connectionId}/${database}` 记录，后续重跑沿用。
+`/init` 是 Agent 内联命令，不经过任何表单：`/init` 使用当前连接与库，`/init <目录>`（或直接给 `.md` 文件）指定写入位置。未指定时写到 `<home>/context/<connectionId>/<database>/AI_DB.md`；自定义路径按 `${connectionId}/${database}` 记录，后续重跑沿用。
 
 文档按“新入职 DBA 的交接手册”组织，而不是数据字典：
 
@@ -86,7 +87,7 @@
 ### 1.1 现状
 
 - 斜线命令目前只是把一段固定文本填进输入框（`apps/desktop/src/components/AgentPanel.tsx` 的 `SLASH`），没有参数、没有独立执行，也没有产物。
-- Agent 的工具是 51 个静态定义（`packages/core/src/agent/tools.ts`），执行集中在 `apps/gateway/src/executor.ts`，风险分级与审批绑定在这份清单上。
+- Agent 的工具是 52 个静态定义（`packages/core/src/agent/tools.ts`），执行集中在 `apps/gateway/src/executor.ts`，风险分级与审批绑定在这份清单上。
 - Agent 上下文只带一个连接（`AgentRunInput.connection`、`AgentContextData.connection`），系统提示里只有一行 `Connection:`（`packages/core/src/agent/prompt.ts`）。
 - 工具箱里已经有一套确定性能力：结构对比 `apps/gateway/src/features/schemaCompare.ts`、数据对比 `apps/gateway/src/features/compareData.ts`、跨连接传输 `apps/gateway/src/features/transfer.ts`，以及定时查询 / 备份调度器 `apps/gateway/src/scheduler.ts`。但它们与 Agent、会话、产物是割裂的。
 - 定时任务只有 `query` 与 `backup` 两种类型，不能保存和刷新一份报告。
@@ -117,7 +118,7 @@
 - 不做后台自动写库。所有写操作必须由用户显式发起并经过审批。
 - 不在 v1 执行任意 JavaScript / Python / Shell。命令内只允许声明式工具与 SQL。
 - 不在 v1 做 MCP 客户端或插件市场；命令注册表为它们预留扩展位。
-- 不改变现有 51 个 Agent 工具的语义与风险等级；命令私有工具独立管理（§4.6）。
+- 不改变现有 52 个 Agent 工具的语义与风险等级；命令私有工具独立管理（§4.6）。
 
 ### 1.5 设计原则
 
@@ -189,12 +190,12 @@
 
 四处入口共享同一个命令注册表：
 
-1. **输入框 `/`**：按分组展示命令；选中后展开参数表单，不直接发送。
-2. **全局命令面板**：与现有 `CommandPalette` 合并；搜索命令名、别名、描述。
+1. **输入框 `/`**：按分组展示命令；选中后只补全命令 token，不展开表单，可直接执行或补一句目的。
+2. **全局命令面板**：与现有 `CommandPalette` 合并；选中命令后打开 Agent 并回填 token。
 3. **工具箱**：现有确定性工具（结构对比、数据对比、传输）保留，同时提供“在 Agent 中以命令打开”。
-4. **移动端**：底部弹层表单；同一套定义经 `GET /commands` 下发。
+4. **移动端**：命令选择器只回填 token 到对话输入框；与桌面同一套 Agent 语义执行。
 
-“单独使用”的判定标准：命令可以在没有会话历史、没有当前选中表、甚至没有配置模型的情况下启动（确定性命令）；执行结果有独立产物，不依赖聊天上下文。
+“独立产物”的判定标准：API/定时任务仍可在没有会话历史的情况下启动确定性命令并生成独立产物；Agent UI 路径不要求用户事先提供参数，目标由语义和上下文推断。
 
 ### 2.4 交互状态机
 
@@ -362,10 +363,11 @@ export interface CommandDefinition {
 
 ### 3.5 UI 渲染
 
-- 不再为每个命令写独立弹窗；`CommandSheet` 根据 `slots` 通用渲染。
-- 槽位控件映射：`source` → 连接选择器；`sources` → 可增删的源卡片；`database` → `DatabaseSelect`；`tables` → 带搜索的多选；`period` → 时间范围；`enum` → 分段控件；`number` → 数字输入；`boolean` → 开关。
-- 命令执行视图也由注册表驱动：`artifact` 类型决定结果渲染器（report / diff / recon / fix / compare）。
-- 注册表新增字段必须同时更新本表与契约脚本，避免 UI 与执行器漂移。
+- 斜杠菜单与全局命令面板只负责补全命令 token；**不渲染参数表单，不打开 CommandSheet**。
+- 命令语义由 `apps/gateway/src/commandIntents.ts` 注入系统提示：目标、可用工具、输出形态、禁止事项（不让用户写 SQL/填参数、不编数字、不自动改库）。
+- AgentHost 把裸命令映射为默认任务（如 `/compare` = 对比当前库最值得关注的两组数据），用户补充的话术作为具体目标；目标无法从上下文推断时，Agent 在对话里问一个简短问题。
+- 结果直接出现在对话：对比表 + 双柱图、结构差异清单 + DDL、对账差异行、体检 findings + 修复 SQL；用户可继续追问。
+- 命令注册表仍保留 `slots` / `sources` / `artifact` 供 API、定时任务与历史产物使用，但不再是 Agent UI 的必填表单。
 
 ### 3.6 与未来 skill 的关系
 
@@ -595,12 +597,11 @@ export interface AgentContextData {
 
 ### 5.6 本地推理器限制
 
-`LocalProvider` 只支持单源。使用本地推理器时：
+`LocalProvider` 是规则推理器，不具备多步语义规划能力。命令改为 Agent 内联后：
 
-- `/diff`、`/recon` 正常（不经过模型）；
-- `/report` 走确定性模板，不生成 AI 叙述；
-- `/compare` 只做确定性差值，不生成解读；
-- UI 在命令表单上提示“本地推理器仅支持单源，报告叙述已降级”。
+- 配置模型时，`/compare`、`/diff`、`/recon`、`/fix`、`/report` 由 `commandIntents` 驱动完整执行；
+- 本地模式下仍可做基础查询/图表，但不要指望它自动完成跨源对账或多步结构对比；命令会明确说明限制，不伪造结果；
+- 确定性命令 runner 仍可通过 API / 定时产物使用；UI 命令入口不再回退到表单。`/init` 的确定性文档生成在本地模式照常可用。
 
 ## 6. 产物模型
 
@@ -1351,21 +1352,18 @@ interface FixPlan {
 
 ### 12.1 斜线菜单
 
-- 分组：分析（`/report`、`/compare`）、对比（`/diff`、`/recon`）、运维（`/fix`）、通用（`/ask`）。
-- 每项显示：图标、名称、一句话描述、源数量提示（如“2 个源”）、是否确定性（“无需模型”徽标）。
+- 分组：分析（`/report`、`/compare`）、对比（`/diff`、`/recon`）、运维（`/fix`）、初始化（`/init`）、通用（`/ask`）。
+- 每项显示：图标、名称、一句话描述。
 - 搜索匹配 id、英文别名、中文别名、描述。
-- 键盘：`↑` / `↓` 选择，`Enter` 展开表单，`Esc` 关闭；不直接发送。
-- 输入 `/` 时保留当前输入的前缀，选中命令后清除命令文本，参数进表单。
+- 键盘：`↑` / `↓` 选择；`Tab` / `Enter` 补全命令 token；对无必填参数的命令（`/init`、`/compare`、`/diff`、`/recon`、`/fix`），输入完整 token 后 `Enter` 直接执行。
+- 选中命令后不打开表单，只把 token 放进输入框，用户可以跟一句话说明目的；不写也可以，Agent 会按当前上下文给默认任务。
 
-### 12.2 命令表单
+### 12.2 Agent 内联命令
 
-- 桌面端：输入框上方的内联卡片（`CommandSheet`），不遮挡对话；源选择器横向排列，高级选项折叠。
-- 移动端：底部弹层，全屏高度可拖拽；源卡片纵向排列。
-- 表单顶部显示命令名、说明、风险徽标；底部“运行”按钮根据校验状态禁用。
-- 源卡片：连接选择 + 数据库选择 + 显示名（可选）；支持“添加源”，数量受 `sources.max` 限制。
-- `tables` 多选带搜索、全选、按 schema 分组；选中数量显示在按钮上。
-- 执行前展示“将要做什么”摘要：源、对象、只读 / 写、是否需要模型、预计步骤。
-- 表单值持久化到本地（按命令），不保存连接凭据。
+- 所有命令统一在 Agent 对话内执行：无参数表单、无连接/表/字段选择弹窗。
+- Agent 从用户话术、当前连接与库、已加载 schema、记忆和最近对话推断对象；只有无法推断时才在对话里问一个简短问题。
+- 交付形态：对比类给对比表 + 双柱图/差异结论；结构类给变更清单 + DDL；对账类给一致/不一致计数 + 具体差异行；体检类给 findings + 修复 SQL；报告类给摘要 + 指标/表格 + 图表。
+- `CommandSheet` 已从桌面与移动端移除；API/定时产物仍走 `CommandRunner`，但不占用 Agent 命令入口。
 
 ### 12.3 运行卡片
 
@@ -1781,7 +1779,6 @@ npm run e2e
 | `apps/gateway/src/features/reconcile.ts` | 对账编排、规范化、差异分类、修复方案 |
 | `apps/gateway/src/features/reconAdapters.ts` | 源适配器：TableAdapter / RedisAdapter（v2 扩展 Mongo / ES） |
 | `apps/gateway/src/features/artifactStore.ts` | 产物读写（或并入 store.ts） |
-| `apps/desktop/src/components/CommandSheet.tsx` | 通用命令表单 |
 | `apps/desktop/src/components/ReconForm.tsx` | 异构对账的键 / 字段映射表单 |
 | `apps/desktop/src/components/CommandRunCard.tsx` | 运行进度 / 审批 / 取消 |
 | `apps/desktop/src/components/ArtifactView.tsx` | 产物容器与操作 |
@@ -1806,7 +1803,7 @@ npm run e2e
 | `apps/desktop/src/components/tools/DataCompareTool.tsx` | 异构对账入口 / 与 `/recon` 共用结果视图 |
 | `apps/desktop/src/lib/api.ts` | 命令 / 产物 API 客户端 |
 | `apps/desktop/src/i18n.ts` | 命令文案 |
-| `apps/desktop/src/store.ts` | 命令表单 / 产物标签页状态 |
+| `apps/desktop/src/store.ts` | Agent 会话 / 产物标签页状态（无命令表单） |
 | `apps/mobile` 对应页面 | 命令菜单、表单、产物、审批 |
 | `scripts/verify-docs.mjs` | `required` 增加本文 |
 | `README.md` | 文档索引增加本文 |

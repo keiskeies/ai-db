@@ -32,30 +32,39 @@ export interface ChartToolbarProps {
   onExportPng?: () => void;
   onZoom?: () => void;
   exporting?: boolean;
+  /** AI 图表的数据适配结果；不适配的类型禁用并在 title 里说明原因 */
+  suitability?: Partial<Record<ChartType, { ok: boolean; reason?: string }>>;
 }
 
 /**
  * 图表工具条：QueryView 与 Agent 的图表卡共用同一套入口。
  * 类型 / X / Y 三个下拉原本只存在于 QueryView，这里把它们吸收进来，避免出现两个功能相同的控件。
  */
-export function ChartToolbar({ type, onType, columns, x, y, onX, onY, sql, onExportCsv, onExportPng, onZoom, exporting }: ChartToolbarProps) {
+export function ChartToolbar({ type, onType, columns, x, y, onX, onY, sql, onExportCsv, onExportPng, onZoom, exporting, suitability }: ChartToolbarProps) {
   const showAxes = Boolean(columns?.length && onX && onY);
   return (
     <div className="chart-toolbar" data-testid="chart-toolbar">
       <div className="chart-types" role="group" aria-label="图表类型">
-        {TYPES.map((item) => (
-          <button
-            key={item.value}
-            type="button"
-            className={`chart-type${type === item.value ? ' active' : ''}`}
-            title={item.label}
-            aria-pressed={type === item.value}
-            data-testid={`chart-type-${item.value}`}
-            onClick={() => onType(item.value)}
-          >
-            <item.icon size={12} />
-          </button>
-        ))}
+        {TYPES.map((item) => {
+          const fit = suitability?.[item.value];
+          // 当前正在显示的类型即使被判为不适配也保持可点，避免出现一个禁用的 active 按钮
+          const blocked = fit?.ok === false && item.value !== type;
+          return (
+            <button
+              key={item.value}
+              type="button"
+              className={`chart-type${type === item.value ? ' active' : ''}${blocked ? ' unsuitable' : ''}`}
+              title={blocked ? `${item.label}：${fit.reason ?? '当前数据不适合'}` : item.label}
+              aria-pressed={type === item.value}
+              aria-disabled={blocked || undefined}
+              disabled={blocked}
+              data-testid={`chart-type-${item.value}`}
+              onClick={() => onType(item.value)}
+            >
+              <item.icon size={12} />
+            </button>
+          );
+        })}
       </div>
 
       {showAxes ? (
