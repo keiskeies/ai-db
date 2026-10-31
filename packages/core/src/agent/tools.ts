@@ -72,7 +72,7 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'run_sql',
-    description: 'Execute SQL on a connection. SELECT is read-only; writes/DDL are classified and may require approval. Keep result sets small and add LIMIT to exploratory SELECTs.',
+    description: 'Execute SQL on a connection. SELECT is read-only; writes/DDL are classified and may require approval. Multiple read-only statements may be sent as one script; writes and DDL must be one statement per call unless the user enabled multi-statement. Keep result sets small and add LIMIT to exploratory SELECTs.',
     risk: 'dynamic',
     inputSchema: {
       type: 'object',
@@ -987,19 +987,19 @@ x/y/ys/value/label are result column names, not SQL expressions.`,
   {
     name: 'mcp_call',
     description:
-      'Call a tool on a configured MCP server. Arguments are passed through as JSON. Built-in read-only tools run directly; writes and external servers require approval in ask mode.',
+      'Call a tool on a configured MCP server. Arguments are passed through as JSON. For built-in tools the server is inferred from the tool name, so server may be omitted. Built-in read-only tools run directly; writes and external servers require approval in ask mode.',
     risk: 'dynamic',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
-      required: ['server', 'tool'],
+      required: ['tool'],
       properties: {
-        server: { type: 'string', description: 'MCP server id or configured name' },
+        server: { type: 'string', description: 'MCP server id or configured name; optional for built-in tools (inferred from tool)' },
         tool: { type: 'string', description: 'Tool name from mcp_list_tools' },
         arguments: { type: 'object', additionalProperties: true, description: 'Tool arguments' },
       },
     },
-    summarize: (a) => `MCP ${a.server}.${a.tool}`,
+    summarize: (a) => (a.server ? `MCP ${a.server}.${a.tool}` : `MCP ${a.tool}`),
   },
   {
     name: 'transfer_data',

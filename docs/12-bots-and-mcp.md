@@ -127,7 +127,7 @@ CREATE TABLE mcp_servers (
 | `mcp_list_tools` | read | 列出一个 MCP Server 的工具与 JSON Schema |
 | `mcp_call` | 动态* | 调用指定工具，参数透传；内置只读工具直接执行，写工具与外部 Server 默认需要审批 |
 
-Agent 的调用路径：先 `mcp_list_servers` 拿到真实 id，再 `mcp_list_tools` 发现工具，最后 `mcp_call`；系统提示注入已配置服务器目录，禁止猜名字。`mcp_call` 在 `ask` 模式对写工具触发审批，`readonly` 模式拒绝；内置只读工具（如 `read_file`、`git_status`、`fetch_url`）按 read 风险直接执行。结果文本作为工具摘要返回，完整结果保留在 `data`。
+Agent 的调用路径：先 `mcp_list_servers` 拿到真实 id，再 `mcp_list_tools` 发现工具，最后 `mcp_call`；系统提示注入已配置服务器目录，禁止猜名字。`server` 可省略：内置工具由唯一工具名反推出所属内置 Server；外部 Server 不反推。`mcp_call` 在 `ask` 模式对写工具触发审批，`readonly` 模式拒绝；内置只读工具（如 `read_file`、`git_status`、`fetch_url`）按 read 风险直接执行。结果文本作为工具摘要返回，完整结果保留在 `data`。
 
 `*` 仅当调用的是内置 Server 的固定 id（`builtin-filesystem` 等）或保留名称（`filesystem` / `git` / `web`）且工具声明为 `read` 时按 read 处理；其他情况一律按 write 审批，避免用户自建的服务器继承免审批。**「本会话允许」跨回合保留到会话删除；「始终允许」在本次 AiDB 运行内有效，重启后重新询问；MCP 写审批的签名包含路径/URL，不会因批准一个文件而放行同工具的其他路径。**
 
@@ -137,7 +137,7 @@ Agent 的调用路径：先 `mcp_list_servers` 拿到真实 id，再 `mcp_list_t
 
 | Server | 默认 | 配置项 | 工具 | 安全边界 |
 |---|---|---|---|---|
-| `builtin-filesystem` | 启用 | 允许目录（绝对路径） | `list_directory` / `read_file` / `read_multiple_files` / `search_files` / `grep_files` / `file_info` / `write_file` / `edit_file` / `move_file` / `delete_file` | 目录白名单 + realpath 校验；拒绝 `..` 与符号链接逃逸；读/写上限 2 MB；`grep_files` 支持 `context` / `outputMode`，优先调用 ripgrep（可用 `AIDB_RG_PATH` 指定二进制，缺失或正则不兼容时回退 JS）；`delete_file` 仅限单文件、需 confirm、destructive 审批；写/移动需审批 |
+| `builtin-filesystem` | 启用 | 允许目录（绝对路径） | `list_directory` / `read_file` / `read_multiple_files` / `search_files` / `grep_files` / `file_info` / `write_file` / `edit_file` / `move_file` / `delete_file` | 目录白名单 + realpath 校验；拒绝 `..` 与符号链接逃逸；读/写上限 2 MB；`list_directory` 支持 `recursive`（等价 depth=8）并跳过依赖/构建目录；`grep_files` 支持 `context` / `outputMode`，优先调用 ripgrep（可用 `AIDB_RG_PATH` 指定二进制，缺失或正则不兼容时回退 JS）；`delete_file` 仅限单文件、需 confirm、destructive 审批；写/移动需审批 |
 | `builtin-git` | 启用 | 仓库目录 | `git_status` / `git_log` / `git_diff` / `git_show` | 只读子命令；固定参数白名单；ref 与路径校验 |
 | `builtin-web` | 关闭 | 域名限制（可选；留空=所有公网） | `fetch_url` / `web_search` | 仅 HTTP(S)；拦截 loopback/内网/链路本地/云元数据地址；重定向逐跳复检；正文上限 1 MB；`web_search` 聚合 Exa / Parallel / DuckDuckGo / SearXNG + Brave / Tavily / Serper / Mojeek / DeepSeek / Anthropic / OpenAI，并发、去重、单后端失败隔离 |
 
@@ -207,10 +207,11 @@ Agent 的调用路径：先 `mcp_list_servers` 拿到真实 id，再 `mcp_list_t
 - `notifications.test.ts`：飞书/企微/OneBot/钉钉/Slack/Discord/Telegram payload、签名、定时报告投递、飞书 challenge、飞书 inbound、OneBot inbound（4 个测试）。
 - `notification-migration.test.ts`：旧版 `CHECK(type IN ...)` 表结构迁移后可写入新平台类型（1 个测试）。
 - `mcp.test.ts`：stdio MCP Server 配置、工具发现、`mcp_list_tools` / `mcp_call` 执行（1 个测试）。
-- `builtin-mcp.test.ts`：内置 filesystem/git/web 的目录白名单、ripgrep、SSRF 拦截与工具发现。
+- `builtin-mcp.test.ts`：内置 filesystem/git/web 的目录白名单、递归列举、server 省略时按工具名反推、ripgrep、SSRF 拦截与工具发现。
+- `multi-statement.test.ts`：只读多语句脚本放行，含写脚本在未开启多语句时以 `MULTI_STATEMENT_DISABLED` + 拆分提示拒绝。
 - `search.test.ts`：11 个后端目录与默认启用 4 个免密钥后端、Key 加密保存且不回显、聚合去重与单后端失败隔离、本地 SearXNG 兼容端点跑通 JSON 路径、`web_search` 复用同一套设置（3 个测试）。
 - `mcp-server.test.ts`：AiDB 作为 stdio MCP Server 的 initialize / tools/list / 只读 tools/call（1 个测试）。
-- `npm run verify` 全绿：docs 335/335、core 150/150、gateway 187/252、E2E 196/196。
+- `npm run verify` 全绿：docs 335/335、core 150/150、gateway 188/253、E2E 196/196。
 - E2E 覆盖：设置内通知渠道/MCP/Skills 面板、数据库工具箱不含 Agent 能力、工具数 52、报告命令、AI PPT 面板、移动端命令。
 
 ## 8. 暂不支持

@@ -122,7 +122,7 @@ function mcpPromptBlock(store: Store): string {
       : '';
     return `- ${server.id} — built-in ${definition.kind} (name: ${server.name}); ${args}. Tools: ${tools}.${searchNote}`;
   });
-  return `## MCP servers\nUse the exact server id for mcp_list_tools / mcp_call; never guess a server name. Built-in read tools run directly; writes need approval in ask mode.\n${lines.join('\n')}`;
+  return `## MCP servers\nUse the exact server id for mcp_list_tools / mcp_call; never guess a server name. For built-in tools you may omit \`server\` — it is inferred from the tool name. Built-in read tools run directly; writes need approval in ask mode.\n${lines.join('\n')}`;
 }
 
 /** Tools visible to a turn; remote (bot/mobile/external WS) turns must not reach local MCP. */

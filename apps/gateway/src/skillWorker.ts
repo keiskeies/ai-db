@@ -3,6 +3,7 @@ import { relative } from 'node:path';
 import {
   AgentRuntime,
   builtinMcpServer,
+  builtinMcpServerForTool,
   builtinMcpToolRisk,
   createProvider,
   getTool,
@@ -345,13 +346,21 @@ ${(skill.body ?? '').slice(0, 20000)}`;
           }
         }
         const mcpCall = call.name === 'mcp_list_tools' || call.name === 'mcp_call';
+        let resolvedMcpServer = '';
         if (mcpCall) {
-          const server = String(call.args.server ?? '');
+          const requested = String(call.args.server ?? '');
+          // A built-in tool name alone resolves to its server; authorize the resolved ref,
+          // otherwise omitting `server` would bypass a skill's server allowlist.
+          const inferred = call.name === 'mcp_call' && !requested.trim()
+            ? this.store.listMcpServers().find((item) => item.enabled && item.builtin && builtinMcpServerForTool(String(call.args.tool ?? ''))?.kind === item.builtin)
+            : undefined;
+          const server = requested || inferred?.id || '';
+          resolvedMcpServer = server;
           if (!mcpServers.includes('*') && !declaredMcp.some((item) => item.id === server || item.name === server)) {
             return {
               ok: false,
               summary: 'MCP Server 未授权',
-              error: { code: 'SKILL_MCP_DENIED', message: `Skill 未授权 MCP Server：${server}` },
+              error: { code: 'SKILL_MCP_DENIED', message: `Skill 未授权 MCP Server：${server || '(未指定)'}` },
               meta: { durationMs: 0 },
             };
           }
@@ -372,7 +381,10 @@ ${(skill.body ?? '').slice(0, 20000)}`;
             meta: { durationMs: 0 },
           };
         }
-        const boundCall = { ...call, args: { ...call.args, runId: state.runId } };
+        const boundCall = {
+          ...call,
+          args: { ...call.args, ...(resolvedMcpServer && !String(call.args.server ?? '').trim() ? { server: resolvedMcpServer } : {}), runId: state.runId },
+        };
         return this.executor.execute(boundCall, { sessionId: `skill:${state.runId}`, signal });
       },
     });

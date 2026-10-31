@@ -369,4 +369,4 @@ Expo Web 构建在 390×844 视口通过：配对页、配对码真实兑换、A
 | 健康遥测与探测 | `POST /search/backends/:id/probe` 用固定查询探测；行内显示耗时或失败原因 | ✅ |
 | 截图 | E2E 输出 `desktop-search-settings.png` | ✅ |
 
-回归：docs 335/335、core 150/150、gateway 187 pass / 65 skip（共 252）、E2E 196/196，控制台错误 0。
+回归：docs 335/335、core 150/150、gateway 188 pass / 65 skip（共 253）、E2E 196/196，控制台错误 0。

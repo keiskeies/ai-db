@@ -32,7 +32,7 @@ const filesystemTools: BuiltinMcpToolDefinition[] = [
   {
     name: 'list_directory',
     description:
-      'List files and folders under a granted directory. Skips .git, node_modules, dist, build, target and other dependency/build directories.',
+      'List files and folders under a granted directory. Pass recursive=true to walk the whole tree. Skips .git, node_modules, dist, build, target and other dependency/build directories.',
     risk: 'read',
     inputSchema: {
       type: 'object',
@@ -40,8 +40,9 @@ const filesystemTools: BuiltinMcpToolDefinition[] = [
       properties: {
         path: pathProp,
         file_path: { type: 'string', description: 'Alias for path (Claude-style)' },
-        depth: { type: 'integer', minimum: 1, maximum: 3, description: 'Recursion depth, default 1' },
-        maxEntries: { type: 'integer', minimum: 1, maximum: 1000, description: 'Default 400' },
+        recursive: { type: 'boolean', description: 'Walk the whole tree (same as depth=8); dependency/build dirs are always skipped' },
+        depth: { type: 'integer', minimum: 1, maximum: 8, description: 'Recursion depth, default 1 (8 when recursive)' },
+        maxEntries: { type: 'integer', minimum: 1, maximum: 3000, description: 'Default 400' },
       },
     },
   },
@@ -373,9 +374,23 @@ export function builtinMcpServer(kind: BuiltinMcpKind): BuiltinMcpServerDefiniti
   return SERVER_BY_KIND.get(kind);
 }
 
+/** The single built-in server that declares a tool; used to fill in a missing `server`. */
+export function builtinMcpServerForTool(toolName: string): BuiltinMcpServerDefinition | undefined {
+  const name = toolName.trim();
+  if (!name) return undefined;
+  const matches = BUILTIN_MCP_SERVERS.filter((server) => server.tools.some((tool) => tool.name === name));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 export function builtinMcpToolRisk(serverRef: string, toolName: string): Extract<Risk, 'read' | 'write' | 'destructive'> | undefined {
   const kind = riskKindFromRef(serverRef);
   if (!kind) return undefined;
   const tool = SERVER_BY_KIND.get(kind)?.tools.find((item) => item.name === toolName.trim());
   return tool?.risk;
+}
+
+/** Risk of a built-in tool resolved by name alone, for calls that omit `server`. */
+export function builtinMcpToolRiskByName(toolName: string): Extract<Risk, 'read' | 'write' | 'destructive'> | undefined {
+  const definition = builtinMcpServerForTool(toolName);
+  return definition?.tools.find((tool) => tool.name === toolName.trim())?.risk;
 }

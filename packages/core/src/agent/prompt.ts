@@ -364,7 +364,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
     : '(no active connection selected)';
   const business = formatBusinessContext({ context, glossary, sqlExamples });
   const queryRule = isSql
-    ? '- Prefer read-only SQL. Add LIMIT to exploratory SELECTs. Use maxRows to bound results.'
+    ? '- Prefer read-only SQL. Add LIMIT to exploratory SELECTs. Use maxRows to bound results. One write or DDL statement per run_sql call; several read-only SELECTs may go in one call.'
     : language === 'mql'
       ? '- Use run_mql with structured JSON (find/aggregate/count/distinct). Never emit SQL for this connection; filters and pipelines are JSON objects. Fields in ## Schema are inferred from a sample and may be missing in some documents. Use create_collection to add a collection and delete_collection (confirm must repeat the name) to drop one — dropping destroys every document inside. manage_index also works here: table = collection, index.columns = fields, plus unique / sparse / expireAfterSeconds; the _id_ index cannot be dropped.'
       : language === 'cypher'

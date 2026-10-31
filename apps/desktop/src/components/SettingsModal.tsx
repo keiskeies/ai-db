@@ -788,7 +788,7 @@ export function SettingsModal() {
                 <label className="checkbox">
                   <input type="checkbox" checked={form.allowMultiStatement} onChange={(e) => setForm({ ...form, allowMultiStatement: e.target.checked })} /> {t('allowMulti')}
                 </label>
-                <p className="desc">多语句默认关闭；关闭时服务端会拒绝一次执行多条 SQL，避免误操作。收藏的历史不会被条数或天数裁剪；天数填 0 表示不按时间清理。</p>
+                <p className="desc">多语句默认关闭；关闭时只读脚本（多条 SELECT/SHOW）仍可整段执行，含写或 DDL 的脚本会要求逐条执行，避免误操作。收藏的历史不会被条数或天数裁剪；天数填 0 表示不按时间清理。</p>
               </div>
             ) : null}
 

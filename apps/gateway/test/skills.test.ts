@@ -436,6 +436,16 @@ test('Skill Worker 不执行破坏性 MCP 工具', async () => {
             args: { server: 'filesystem', tool: 'delete_file', arguments: { path: 'C:/server/kbook/backend/delete-me.txt', confirm: 'delete-me.txt' } },
           },
         };
+        // Omitting `server` must not slip past the destructive check: the built-in
+        // tool name resolves to builtin-filesystem before authorization.
+        yield {
+          type: 'tool_call',
+          call: {
+            id: 'd2',
+            name: 'mcp_call',
+            args: { tool: 'delete_file', arguments: { path: 'C:/server/kbook/backend/delete-me.txt', confirm: 'delete-me.txt' } },
+          },
+        };
         yield { type: 'done', stopReason: 'tool_use' };
         return;
       }
@@ -458,15 +468,10 @@ test('Skill Worker 不执行破坏性 MCP 工具', async () => {
   }
   const state = worker.get(started.runId)!;
   assert.equal(state.status, 'succeeded', state.error);
-  assert.ok(
-    state.events.some(
-      (event) =>
-        event.type === 'tool_result' &&
-        event.tool === 'mcp_call' &&
-        !event.result.ok &&
-        event.result.error?.code === 'SKILL_MCP_DESTRUCTIVE_DENIED',
-    ),
+  const denied = state.events.filter(
+    (event) => event.type === 'tool_result' && event.tool === 'mcp_call' && !event.result.ok && event.result.error?.code === 'SKILL_MCP_DESTRUCTIVE_DENIED',
   );
+  assert.equal(denied.length, 2, '两种写法（显式 server 与按工具名反推）都必须被拒绝');
 });
 
 test('Skill 升级保留旧版本备份且新版本生效', () => {

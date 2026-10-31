@@ -183,8 +183,10 @@ function buildRepairHint(
   return {
     attempt,
     instruction:
-      (suggestions.length ? '优先使用 suggestions 中的真实标识符；' : '') +
-      '上一条 SQL 执行失败。请根据错误与下面的真实列定义修正 SQL，然后重新调用 run_sql；不要重复原 SQL。仍不确定列名时先调用 inspect_schema。',
+      error?.code === 'MULTI_STATEMENT_DISABLED'
+        ? '这条 SQL 含多条写语句，用户没有开启「允许多语句」。请拆成单条语句，逐次调用 run_sql 执行；只读的多条 SELECT 可以一次执行。'
+        : (suggestions.length ? '优先使用 suggestions 中的真实标识符；' : '') +
+          '上一条 SQL 执行失败。请根据错误与下面的真实列定义修正 SQL，然后重新调用 run_sql；不要重复原 SQL。仍不确定列名时先调用 inspect_schema。',
     ...(error ? { error: `${error.code}: ${error.message}` } : {}),
     ...(suggestions.length ? { suggestions } : {}),
     ...(tables.length ? { referenced: tables } : {}),

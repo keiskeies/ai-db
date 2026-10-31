@@ -1,7 +1,7 @@
 import type { Environment, PermissionMode, Risk } from '../types';
 import { classifySql, extractTableRef } from '../sql/classify';
 import { classifyAql, classifyCql, classifyCypher, classifyMql, classifyRedis, aqlQueryFromArgs, cqlQueryFromArgs, cypherQueryFromArgs, formatStructuredQuery, mqlQueryFromArgs, redisQueryFromArgs } from '../query';
-import { builtinMcpToolRisk } from './builtinMcp';
+import { builtinMcpToolRisk, builtinMcpToolRiskByName } from './builtinMcp';
 import type { ToolCall, ToolDefinition } from './types';
 
 export type PermissionVerdict = 'allow' | 'ask' | 'deny';
@@ -19,7 +19,11 @@ export function resolveRisk(call: ToolCall, tool: ToolDefinition): Risk {
   if (tool.risk === 'dynamic') {
     if (call.name === 'mcp_call') {
       // Only namespaced built-in ids inherit read auto-approval; external servers stay write.
-      return builtinMcpToolRisk(String(call.args.server ?? ''), String(call.args.tool ?? '')) ?? 'write';
+      // With `server` omitted, a built-in tool name resolves to its first-party server;
+      // an explicit non-built-in ref never falls back to name inference.
+      const tool = String(call.args.tool ?? '');
+      const ref = String(call.args.server ?? '').trim();
+      return (ref ? builtinMcpToolRisk(ref, tool) : builtinMcpToolRiskByName(tool)) ?? 'write';
     }
     if (call.name === 'run_sql') {
       const sql = String(call.args.sql ?? '');
@@ -66,7 +70,7 @@ export function toolSignature(call: ToolCall): string {
         : typeof mcpArgs?.source === 'string'
           ? `${mcpArgs.source}>${String(mcpArgs.destination ?? '')}`
           : '';
-    target = `${String(call.args.server ?? '')}.${String(call.args.tool ?? '')}${detail ? `:${detail.slice(0, 200)}` : ''}`;
+    target = `${String(call.args.server ?? 'builtin')}.${String(call.args.tool ?? '')}${detail ? `:${detail.slice(0, 200)}` : ''}`;
   }
   else if (call.args.index && typeof call.args.index === 'object') {
     const idx = call.args.index as Record<string, unknown>;
@@ -127,7 +131,7 @@ export function describeCall(call: ToolCall): { summary: string; sql?: string } 
     case 'mcp_list_tools':
       return { summary: `列出 MCP 工具 ${String(a.server ?? '')}` };
     case 'mcp_call': {
-      const target = `${String(a.server ?? '')}.${String(a.tool ?? '')}`;
+      const target = `${String(a.server ?? '') || '内置'}.${String(a.tool ?? '')}`;
       const args = a.arguments && typeof a.arguments === 'object' ? (a.arguments as Record<string, unknown>) : undefined;
       const detail = typeof args?.path === 'string'
         ? args.path

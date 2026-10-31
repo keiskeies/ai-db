@@ -191,11 +191,11 @@ AiDB 预置 3 个第一方 MCP Server（进程内运行，不需要 npx、不下
 
 | Server | 默认 | 配置 | 工具 | 边界 |
 |---|---|---|---|---|
-| `builtin-filesystem` | 启用 | 允许目录（绝对路径） | `list_directory` / `read_file` / `read_multiple_files` / `search_files` / `grep_files` / `file_info` / `write_file` / `edit_file` / `move_file` / `delete_file` | 未配置目录时不可访问任何文件；路径必须落在授权目录内，符号链接逃逸与 `..` 越界均拒绝；读写上限 2 MB；`grep_files` 支持上下文/文件/计数模式并优先用 ripgrep；`delete_file` 仅限文件且需 confirm，按 destructive 审批，目录不可删 |
+| `builtin-filesystem` | 启用 | 允许目录（绝对路径） | `list_directory` / `read_file` / `read_multiple_files` / `search_files` / `grep_files` / `file_info` / `write_file` / `edit_file` / `move_file` / `delete_file` | 未配置目录时不可访问任何文件；路径必须落在授权目录内，符号链接逃逸与 `..` 越界均拒绝；读写上限 2 MB；`list_directory` 支持 `recursive`（等价 depth=8）并始终跳过依赖/构建目录；`grep_files` 支持上下文/文件/计数模式并优先用 ripgrep；`delete_file` 仅限文件且需 confirm，按 destructive 审批，目录不可删 |
 | `builtin-git` | 启用 | 仓库目录 | `git_status` / `git_log` / `git_diff` / `git_show` | 只读子命令，固定参数白名单；`ref` / 路径校验，不执行任意 git 参数 |
 | `builtin-web` | 关闭 | 域名限制（可选；留空=所有公网） | `fetch_url` / `web_search` | 仅 HTTP(S)；默认拦截 loopback、内网、链路本地与云元数据地址，重定向逐跳复检；正文上限 1 MB；`web_search` 聚合 Exa / Parallel / DuckDuckGo / SearXNG 与可选 Key 后端（Brave / Tavily / Serper / Mojeek / DeepSeek / Anthropic / OpenAI），并发 fan-out、URL 去重、单后端失败不影响整体 |
 
-Agent 通过 `mcp_list_servers` 获取真实 id（`builtin-filesystem` 等）与已配置目录，再用 `mcp_list_tools` / `mcp_call` 调用；系统提示同时注入这份目录，禁止猜服务器名。内置只读工具按 `read` 风险直接执行，`write_file` / `edit_file` / `move_file` 在询问模式逐次审批，`delete_file` 按 destructive 审批且只允许单文件。外部 stdio MCP Server 仍按用户配置启动，风险默认 `write`。**工具审批中的「始终允许」只放行调用，不等于目录白名单；文件系统仍须在设置里显式授权目录。** 不内置 shell：任意命令执行由 Skill Host 的声明式入口 + 白名单负责。
+Agent 通过 `mcp_list_servers` 获取真实 id（`builtin-filesystem` 等）与已配置目录，再用 `mcp_list_tools` / `mcp_call` 调用；系统提示同时注入这份目录，禁止猜服务器名。`mcp_call` 的 `server` 可以省略：内置工具按唯一工具名反推所属内置 Server（`read_file` → `builtin-filesystem`），外部 Server 不做反推、风险仍为 `write`；写错或漏传时错误信息会列出可用的 server id 与工具。内置只读工具按 `read` 风险直接执行，`write_file` / `edit_file` / `move_file` 在询问模式逐次审批，`delete_file` 按 destructive 审批且只允许单文件。外部 stdio MCP Server 仍按用户配置启动，风险默认 `write`。**工具审批中的「始终允许」只放行调用，不等于目录白名单；文件系统仍须在设置里显式授权目录。** 不内置 shell：任意命令执行由 Skill Host 的声明式入口 + 白名单负责。
 
 #### 图表类型选择（`render_chart`）
 
@@ -265,7 +265,7 @@ type ToolResult = {
 - 读取：`SELECT`、`WITH…SELECT`、`EXPLAIN`、`SHOW`、`DESCRIBE`、`PRAGMA`（只读 pragma 白名单）。
 - 写入：`INSERT/UPDATE/DELETE/REPLACE/MERGE`；`UPDATE/DELETE` 无 `WHERE` → destructive。
 - DDL：`CREATE/ALTER/RENAME`；其中 `ALTER … DROP COLUMN`、`DROP`、`TRUNCATE` → destructive。
-- 多语句：默认拒绝（设置可开），开启时逐条分类并合并风险。
+- 多语句：只读脚本（多条 SELECT/SHOW）一次执行；含写/DDL 的脚本默认拒绝（设置可开），开启时逐条分类并合并风险。Agent 收到 `MULTI_STATEMENT_DISABLED` 后会收到「拆成单条」的修复提示，而不是重复原 SQL。
 - 只读模式：仅允许读取类；带 `FOR UPDATE` 视为写；`SELECT … INTO` / `INSERT … SELECT`（有写目标）按写处理。
 
 ## 6. 计划（Todo）

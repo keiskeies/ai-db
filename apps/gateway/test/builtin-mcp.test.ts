@@ -22,6 +22,8 @@ writeFileSync(
 );
 writeFileSync(join(workspace, 'Sample.java'), 'alpha\nbeta\n@Table(name = "sample")\ngamma\ndelta\n');
 writeFileSync(join(workspace, 'move-me.txt'), 'move\n');
+mkdirSync(join(workspace, 'nested', 'deep'), { recursive: true });
+writeFileSync(join(workspace, 'nested', 'deep', 'Deep.java'), 'package demo;\n');
 
 const TOKEN = 'builtin-mcp-token';
 const gateway = await createGateway({
@@ -132,10 +134,10 @@ test('filesystem 只在授权目录内读写，并拦截路径逃逸', async () 
     arguments: { path: '.', pattern: '**/*.java' },
   });
   assert.equal(globSearch.ok, true, globSearch.error?.message);
-  assert.equal((globSearch.data as any).files.length, 2);
+  assert.equal((globSearch.data as any).files.length, 3);
   assert.deepEqual(
     (globSearch.data as any).files.map((file: any) => file.relative).sort(),
-    ['OrderService.java', 'Sample.java'],
+    ['OrderService.java', 'Sample.java', 'nested/deep/Deep.java'],
   );
 
   const batch = await run('mcp_call', {
@@ -218,6 +220,22 @@ test('filesystem 只在授权目录内读写，并拦截路径逃逸', async () 
   assert.ok((listed.data as any).entries.some((entry: any) => entry.path.endsWith('OrderService.java')));
   const aliasList = await run('mcp_call', { server: fsId, tool: 'list_directory', arguments: { file_path: '.' } });
   assert.equal(aliasList.ok, true, aliasList.error?.message);
+
+  const recursive = await run('mcp_call', { server: fsId, tool: 'list_directory', arguments: { path: '.', recursive: true } });
+  assert.equal(recursive.ok, true, recursive.error?.message);
+  assert.ok((recursive.data as any).entries.some((entry: any) => entry.path.endsWith('OrderService.java')));
+  assert.ok(
+    (recursive.data as any).entries.some((entry: any) => entry.path.endsWith('Deep.java') && entry.type === 'file'),
+    'recursive listing should reach nested files',
+  );
+
+  // The model often omits `server` for built-in tools; the name alone must resolve.
+  const inferred = await run('mcp_call', { tool: 'list_directory', arguments: { path: '.' } });
+  assert.equal(inferred.ok, true, inferred.error?.message);
+  assert.ok((inferred.data as any).entries.some((entry: any) => entry.path.endsWith('Sample.java')));
+  const unknownServer = await run('mcp_call', { tool: 'nope_file', arguments: {} });
+  assert.equal(unknownServer.ok, false);
+  assert.match(String(unknownServer.error?.message), /缺少 server|不存在/);
 
   const aliasWrite = await run('mcp_call', {
     server: fsId,
@@ -368,6 +386,10 @@ test('mcp_call 风险：内置读工具免审批，写工具与外部服务器�
   assert.equal(resolveRisk({ id: '5', name: 'mcp_call', args: { server: 'external', tool: 'read_file' } }, tool), 'write');
   assert.equal(resolveRisk({ id: '6', name: 'mcp_call', args: { server: 'builtin-evil', tool: 'read_file' } }, tool), 'write');
   assert.equal(resolveRisk({ id: '7', name: 'mcp_call', args: { server: 'filesystem', tool: 'delete_file' } }, tool), 'destructive');
+  // server omitted: infer from the built-in tool name; an unknown tool stays write.
+  assert.equal(resolveRisk({ id: '8', name: 'mcp_call', args: { tool: 'read_file' } }, tool), 'read');
+  assert.equal(resolveRisk({ id: '9', name: 'mcp_call', args: { tool: 'delete_file' } }, tool), 'destructive');
+  assert.equal(resolveRisk({ id: '10', name: 'mcp_call', args: { tool: 'custom_tool' } }, tool), 'write');
   assert.notEqual(
     toolSignature({ id: 'a', name: 'mcp_call', args: { server: 'builtin-filesystem', tool: 'write_file', arguments: { path: 'C:/a.txt' } } }),
     toolSignature({ id: 'b', name: 'mcp_call', args: { server: 'builtin-filesystem', tool: 'write_file', arguments: { path: 'C:/b.txt' } } }),

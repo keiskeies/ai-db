@@ -7,6 +7,7 @@ import {
   classifyMql,
   classifyRedis,
   classifySearch,
+  classifySql,
   classifyVector,
   editsRecords,
   engineMeta,
@@ -1077,7 +1078,14 @@ export class ConnectionManager {
     const statements = splitStatements(sql);
     if (!statements.length) throw new DbError('SQL 为空', { code: 'EMPTY_SQL' });
     if (statements.length > 1 && !opts.allowMulti) {
-      throw new DbError('默认不允许一次执行多条语句，请在设置中开启或在编辑器中逐条执行', { code: 'MULTI_STATEMENT_DISABLED' });
+      // 只读脚本（多条 SELECT/SHOW）没有副作用，直接放行；写/DDL 仍受开关约束。
+      const scriptRisk = classifySql(sql).risk;
+      if (scriptRisk !== 'read') {
+        throw new DbError(`检测到 ${statements.length} 条语句且包含写操作，默认不一次执行多条`, {
+          code: 'MULTI_STATEMENT_DISABLED',
+          hint: '拆成单条依次执行；或在 设置 → 查询 打开「允许多语句」后整段执行',
+        });
+      }
     }
     if (conn.readonly) {
       for (const statement of statements) {

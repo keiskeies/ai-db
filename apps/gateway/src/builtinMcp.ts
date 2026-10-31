@@ -497,8 +497,8 @@ async function runFilesystemTool(
     const dir = target();
     const stat = statSync(dir);
     if (!stat.isDirectory()) failure(`不是目录：${dir}`, 'MCP_INVALID_ARGS');
-    const depth = argInt(input, 'depth', 1, 1, 3);
-    const maxEntries = argInt(input, 'maxEntries', 400, 1, 1000);
+    const depth = argBool(input, 'recursive', false) ? 8 : argInt(input, 'depth', 1, 1, 8);
+    const maxEntries = argInt(input, 'maxEntries', 400, 1, 3000);
     const entries: Array<{ path: string; type: 'file' | 'dir'; size?: number; mtime?: string }> = [];
     const queue: Array<{ dir: string; depth: number }> = [{ dir, depth: 1 }];
     let truncated = false;

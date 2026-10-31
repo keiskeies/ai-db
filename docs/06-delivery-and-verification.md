@@ -86,7 +86,7 @@ npm --workspace apps/mobile run start
 | 文档契约 | `npm run verify:docs` | 335/335 通过 |
 | 类型检查 | `npm run typecheck`（core / gateway / desktop / mobile） | 全部通过 |
 | 单元测试 | `npm test` → core | 150/150 通过 |
-| 集成测试 | gateway（HTTP / SSE / WebSocket / 审批 / 配对 / 引擎方言 / 工具箱 / 表与数据操作 / 跨请求事务 / SSH 隧道 / Skill Host / 图表类型 / `/init` / 内置 MCP / 聚合搜索） | 252 个用例 · 187 通过 · 65 跳过（跳过项是需要 `AIDB_TEST_*_PORT` 的联机引擎，未配置即跳过） |
+| 集成测试 | gateway（HTTP / SSE / WebSocket / 审批 / 配对 / 引擎方言 / 工具箱 / 表与数据操作 / 跨请求事务 / SSH 隧道 / Skill Host / 图表类型 / `/init` / 内置 MCP / 聚合搜索 / 多语句策略） | 253 个用例 · 188 通过 · 65 跳过（跳过项是需要 `AIDB_TEST_*_PORT` 的联机引擎，未配置即跳过） |
 | 构建 | core、gateway（esbuild）、desktop（Vite）、mobile web（2.07MB） | 成功 |
 | E2E | `npm run e2e`（桌面 Web + 移动 Web + Electron Shell + Navicat 布局 / 表与数据操作 / 工具箱 / 搜索 / 网络搜索设置 / 柱/堆叠/折线/饼/散点/热力/雷达 / `/init` 文档生成 / 命令内联 / 体检 / SSH 隧道 / 回答导出 PDF / 新建卡片 AI 生成与预览） | 196/196 通过（无联机引擎环境变量时的基线；联机引擎检查按环境追加） |
 | Windows 打包 | `electron-builder --dir --win --x64` + 启动 `win-unpacked/AiDB Studio.exe` | 成功；内置 Bridge、1 个连接、Agent 面板可见、无异常 |

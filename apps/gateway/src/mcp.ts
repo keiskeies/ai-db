@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { builtinMcpKindOf, type JsonSchema, type McpServerInfo, type ToolResult } from '@aidb/core';
+import { builtinMcpKindOf, builtinMcpServerForTool, type JsonSchema, type McpServerInfo, type ToolResult } from '@aidb/core';
 import type { Store } from './store';
 import { BuiltinMcpClient } from './builtinMcp';
 
@@ -163,10 +163,26 @@ const clients = new Map<string, McpClientLike>();
 
 function resolveServer(store: Store, ref: string): McpServerInfo {
   const servers = store.listMcpServers();
-  const server = servers.find((item) => item.id === ref || item.name === ref);
-  if (!server) throw Object.assign(new Error(`MCP Server 不存在：${ref}`), { code: 'MCP_SERVER_NOT_FOUND', status: 404 });
+  const wanted = ref.trim();
+  if (!wanted) {
+    const enabled = servers.filter((server) => server.enabled);
+    const ids = enabled.map((server) => server.id).join(', ') || '(none enabled)';
+    throw Object.assign(new Error(`缺少 server：请传入 MCP Server id，可用：${ids}`), { code: 'MCP_SERVER_REQUIRED', status: 400 });
+  }
+  const server = servers.find((item) => item.id === wanted || item.name === wanted);
+  if (!server) {
+    const ids = servers.map((item) => `${item.id}${item.enabled ? '' : '(disabled)'}`).join(', ') || '(none configured)';
+    throw Object.assign(new Error(`MCP Server 不存在：${ref}。可用：${ids}`), { code: 'MCP_SERVER_NOT_FOUND', status: 404 });
+  }
   if (!server.enabled) throw Object.assign(new Error(`MCP Server 已禁用：${server.name}`), { code: 'MCP_SERVER_DISABLED', status: 400 });
   return server;
+}
+
+/** A built-in tool name identifies its server; use it when the model omits `server`. */
+function inferServerForTool(store: Store, tool: string): McpServerInfo | undefined {
+  const definition = builtinMcpServerForTool(tool);
+  if (!definition) return undefined;
+  return store.listMcpServers().find((server) => server.builtin === definition.kind || builtinMcpKindOf(server.command) === definition.kind);
 }
 
 function clientFor(store: Store, server: McpServerInfo): McpClientLike {
@@ -194,10 +210,15 @@ export async function callMcpTool(
   tool: string,
   args: Record<string, unknown> = {},
 ): Promise<{ server: McpServerInfo; result: ToolResult }> {
-  const server = resolveServer(store, ref);
-  if (!tool.trim()) throw Object.assign(new Error('tool 必填'), { code: 'INVALID_INPUT', status: 400 });
-  const result = await clientFor(store, server).call(tool.trim(), args);
-  return { server, result };
+  const name = tool.trim();
+  if (!name) throw Object.assign(new Error('tool 必填：先调用 mcp_list_tools 查看工具名'), { code: 'INVALID_INPUT', status: 400 });
+  const inferred = ref.trim() ? undefined : inferServerForTool(store, name);
+  if (inferred && !inferred.enabled) {
+    throw Object.assign(new Error(`MCP Server 已禁用：${inferred.name}。请在 设置 → MCP 与工具 启用`), { code: 'MCP_SERVER_DISABLED', status: 400 });
+  }
+  const resolved = ref.trim() ? resolveServer(store, ref) : inferred ?? resolveServer(store, ref);
+  const result = await clientFor(store, resolved).call(name, args);
+  return { server: resolved, result };
 }
 
 export function shutdownMcpClients(): void {
