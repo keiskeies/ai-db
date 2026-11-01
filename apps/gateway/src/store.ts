@@ -854,6 +854,10 @@ export class Store {
     };
     merged.historyLimit = round(merged.historyLimit, 10, 100_000, DEFAULT_SETTINGS.historyLimit);
     merged.historyRetentionDays = round(merged.historyRetentionDays, 0, 3650, DEFAULT_SETTINGS.historyRetentionDays);
+    // 旧默认把 DuckDuckGo/SearXNG 一起开着，而这台网络里两者都连不上（DNS 污染 / 公共实例禁用 JSON）。
+    // 没被用户手动改过的搜索设置迁移到新默认，改过的原样保留。
+    if (merged.search.enabled.join(',') === 'exa,parallel,duckduckgo,searxng') merged.search.enabled = [...DEFAULT_SETTINGS.search.enabled];
+    if (merged.search.searxngBaseUrl === 'https://searx.be') merged.search.searxngBaseUrl = DEFAULT_SETTINGS.search.searxngBaseUrl;
     const enc = this.getSetting('agentApiKey');
     const decrypted = this.box.decrypt<{ apiKey: string }>(enc);
     const legacyKey = decrypted?.apiKey;
