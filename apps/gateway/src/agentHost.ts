@@ -631,6 +631,14 @@ export class AgentHost {
         summary,
         tokensIn: (previous?.tokensIn ?? 0) + result.usage.tokensIn,
         tokensOut: (previous?.tokensOut ?? 0) + result.usage.tokensOut,
+        // 轮次 = 用户发起的对话轮数：中止/出错的回合也是用户真问过一次，同样计入。
+        // 只统计跑完的回合会出现「0 轮却跑了 30 步」这种读不通的状态条。
+        turns: (previous?.turns ?? 0) + 1,
+        steps: (previous?.steps ?? 0) + result.steps,
+        cacheHitTokens: (previous?.cacheHitTokens ?? 0) + (result.usage.cacheHitTokens ?? 0),
+        cacheMissTokens: (previous?.cacheMissTokens ?? 0) + (result.usage.cacheMissTokens ?? 0),
+        // 上下文占用取最近一次调用的输入，重开会话时状态条才有可显示的值
+        contextTokens: result.contextTokens,
         model: settings.agent.provider === 'local' ? 'local' : settings.agent.model,
       });
       if (result.status === 'done' && settings.agent.followUpSuggestions) {
