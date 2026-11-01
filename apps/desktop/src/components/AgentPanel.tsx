@@ -1967,7 +1967,13 @@ export function AgentPanel() {
                 </div>
               ))
             ) : (
-              <div className="muted" style={{ padding: 16, fontSize: 11.5 }}>还没有会话</div>
+              <div className="muted" style={{ padding: 16, fontSize: 11.5 }} data-testid="session-empty">
+                {sessionQuery.trim()
+                  ? '没有匹配的会话'
+                  : agentDatabase
+                    ? `这个库（${agentDatabase}）还没有会话`
+                    : '还没有会话'}
+              </div>
             )}
           </div>
         </div>
