@@ -258,7 +258,7 @@ interface AppStore {
   setAgentDatabase: (database: string) => Promise<void>;
   restoreSessionForScope: () => Promise<void>;
   /** 返回 false 表示被运行态拒绝（已弹提示）。 */
-  requestAgentTask: (prompt: string) => boolean;
+  requestAgentTask: (prompt: string) => Promise<boolean>;
   setSessionsOpen: (open: boolean) => void;
   newAgentSession: () => Promise<void>;
   /** keepMode=true 时不采用会话里存的权限档位，保留用户当前的选择（自动恢复走这条）。 */
@@ -781,14 +781,16 @@ export const useApp = create<AppStore>((set, get) => ({
    * 先判运行态：正在回答时直接拒绝，连库都不切 —— 否则会出现
    * 「目标库变了但会话没换」的半截状态，下一次提问就落到错库上。
    */
-  requestAgentTask: (prompt) => {
+  requestAgentTask: async (prompt) => {
     const live = get().live;
     if (live && (live.status === 'streaming' || live.status === 'awaiting')) {
       get().notify('warning', 'Agent 正在回答，请等这一轮结束再操作');
       return false;
     }
+    // 先把目标库对齐、等会话真的换过去，再填词：否则用户可能在旧会话里
+    // 敲下回车，而库已经是新的，这一问就落到错库上。
     const target = get().homeDatabase;
-    if (target && target !== get().agentDatabase) void get().setAgentDatabase(target);
+    if (target && target !== get().agentDatabase) await get().setAgentDatabase(target);
     set({ agentOpen: true });
     get().prefillAgent(prompt);
     return true;

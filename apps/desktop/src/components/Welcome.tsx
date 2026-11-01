@@ -150,7 +150,7 @@ export function Welcome() {
 
   /** 首页所有 AI 入口都走这里：运行态由 store 的守卫统一裁决。 */
   const askAi = (prompt: string) => {
-    requestAgentTask(prompt);
+    void requestAgentTask(prompt);
   };
 
   const healthPrompt = `对当前数据库做一次体检：缺少主键、外键缺索引、重复索引与空表，并给出修复 SQL。`;
