@@ -2105,6 +2105,11 @@ export function createApiRouter(deps: ApiDeps): Router {
       const agentBody = (body.agent ?? {}) as Partial<AppSettings['agent']>;
       const embeddingBody = (body.embedding ?? {}) as Partial<AppSettings['embedding']>;
       const searchBody = (body.search ?? {}) as Partial<AppSettings['search']>;
+      // reasoningTier 显式传 null 表示「回到跟随服务商」：浅合并会把 null 留下，
+      // 这里归一成未设置，避免库里存一个既不是档位也不是缺省的中间态。
+      // 不传该字段时保持原值，不能被其它设置项的保存顺带清掉。
+      const clearsTier = 'reasoningTier' in agentBody && agentBody.reasoningTier === null;
+      if (clearsTier) delete (agentBody as Record<string, unknown>).reasoningTier;
       const merged: AppSettings = {
         ...current,
         ...body,
@@ -2112,6 +2117,7 @@ export function createApiRouter(deps: ApiDeps): Router {
           ...current.agent,
           ...agentBody,
           apiKey: agentBody.apiKey,
+          ...(clearsTier ? { reasoningTier: undefined } : {}),
         },
         embedding: {
           ...current.embedding,
