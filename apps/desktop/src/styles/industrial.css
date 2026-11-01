@@ -223,15 +223,22 @@ body {
 .plan-item { font-size: 10.5px; padding: 2px 0; }
 .memory-pill { font-size: 9px; }
 .turn-end { font-size: 9px; gap: 6px; }
+/* 输入卡在工业密度下保持同样形态，只是尺寸收紧：圆角与浮动层级沿用 app.css，不再回退成方盒 */
 .composer { padding: 7px 8px 6px; }
-.composer-box { border-radius: 8px; background: var(--bg-elevated); }
-.composer textarea { padding: 8px 9px 3px; min-height: 34px; font-size: 11.8px; }
-.composer-tools { padding: 3px 5px 5px; }
-.composer-foot { padding: 4px 6px 6px; }
-.composer-hint { font-size: 8.5px; }
+.composer-box { border-radius: 16px; background: var(--bg-elevated); }
+.composer textarea { padding: 10px 12px 2px; min-height: 38px; font-size: 12px; }
+.composer-tools { padding: 3px 7px 7px; gap: 5px; }
+.composer-pill { height: 25px; padding: 0 8px; font-size: 10.8px; }
+.composer-pill-add { width: 25px; height: 25px; padding: 0; }
+.composer-pill-add svg { width: 13px; height: 13px; }
+.composer-stats { font-size: 9.5px; gap: 6px; padding-top: 6px; }
+.composer-stats .stat-groups { gap: 6px; }
+.composer-stats .stat-note { font-size: 9px; }
+.pill-menu { min-width: 140px; max-width: 260px; font-size: 11px; }
+.pill-menu-item { padding: 5px 8px; font-size: 11.2px; }
 .mode-select { font-size: 9.5px; height: 22px; background: var(--bg-panel); }
 .send-btn {
-  width: 27px; height: 27px; border-radius: 7px;
+  width: 28px; height: 28px; border-radius: 50%; flex-basis: 28px;
   background: var(--agent);
   color: var(--on-solid);
   box-shadow: 0 2px 12px var(--glow-violet);
@@ -240,25 +247,8 @@ body {
 .popover-item { font-size: 10.8px; padding: 6px 9px; }
 .agent-transcript .prose table { font-size: 10px; }
 
-/* Dense welcome dashboard */
-.welcome { padding: 26px 26px 34px; }
-.welcome-inner { max-width: 960px; }
-.welcome-hero { gap: 12px; margin-bottom: 16px; align-items: flex-start; }
-.welcome-mark {
-  width: 40px; height: 40px; border-radius: 11px;
-  background: linear-gradient(140deg, var(--brand-a), var(--brand-b));
-  box-shadow: 0 0 16px var(--glow-accent);
-}
-.welcome h1 { font-size: 21px; margin-bottom: 4px; letter-spacing: -0.4px; }
-.welcome .lead { font-size: 12px; line-height: 1.55; }
-.welcome-grid { grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 16px 0; }
-.welcome-card { padding: 11px; min-height: 96px; gap: 6px; border-radius: var(--radius-lg); background: var(--bg-elevated); }
-.welcome-card:hover { border-color: color-mix(in srgb, var(--accent) 45%, transparent); box-shadow: 0 8px 24px rgba(0,0,0,.18); }
-.welcome-card .wc-icon { width: 25px; height: 25px; border-radius: 7px; background: var(--accent-soft); }
-.welcome-card h3 { font-size: 11.5px; }
-.welcome-card p { font-size: 10px; line-height: 1.45; }
-.welcome-section { margin-top: 16px; }
-.welcome-section h2 { font-size: 9.5px; letter-spacing: 1px; margin-bottom: 7px; }
+/* Dense welcome dashboard —— 旧的欢迎页已改为「当前库的家」，样式见 home.css。
+   这里只保留仍被其它视图复用的表格 chip / 行样式。 */
 .table-chips { gap: 5px; }
 .table-chip { height: 23px; padding: 0 8px; font-size: 10.5px; }
 .recent-item { padding: 5px 7px; font-size: 10.8px; }

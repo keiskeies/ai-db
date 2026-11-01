@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowDown,
+  ArrowUp,
   ArrowUpRight,
   AtSign,
   BarChart3,
@@ -965,7 +966,28 @@ export function AgentPanel() {
   const [sessionQuery, setSessionQuery] = useState('');
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
+  /** 输入卡左下角的胶囊菜单：权限 / 推理档位 / 模型都走同一个弹层。 */
+  const [pillMenu, setPillMenu] = useState<'none' | 'permission' | 'reasoning' | 'model' | 'more'>('none');
+  const pillBarRef = useRef<HTMLDivElement>(null);
   const renameSession = useApp((s) => s.renameAgentSession);
+
+  // 点卡片外面或按 Esc 收起胶囊弹层；模型选择仍沿用原生的切换与设置跳转逻辑
+  useEffect(() => {
+    if (pillMenu === 'none') return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (pillBarRef.current?.contains(event.target as Node)) return;
+      setPillMenu('none');
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPillMenu('none');
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [pillMenu]);
 
   const startRename = (id: string, title: string) => {
     setRenamingId(id);
@@ -1367,7 +1389,7 @@ export function AgentPanel() {
         <DatabaseSelect
           connectionId={activeConnectionId}
           value={agentDatabase}
-          onChange={setAgentDatabase}
+          onChange={(db) => void setAgentDatabase(db)}
           testId="agent-db"
           className="mode-select"
           style={{ border: 'none', background: 'transparent', maxWidth: 130 }}
@@ -1658,27 +1680,7 @@ export function AgentPanel() {
               ) : null}
             </div>
           ) : null}
-          <div className="composer-tools">
-            <button
-              className="icon-btn"
-              title={t('attachTable')}
-              onClick={() => {
-                setInput((prev) => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}@`);
-                setPopover('mention');
-                textareaRef.current?.focus();
-              }}
-            >
-              <AtSign size={13} />
-            </button>
-            <button
-              className="icon-btn"
-              title={canAttachImage ? `添加图片（最多 ${MAX_IMAGES} 张，也可直接粘贴或拖入）` : '当前模型未开启图片输入，请到 设置 → 模型能力 勾选'}
-              onClick={() => fileInputRef.current?.click()}
-              disabled={!canAttachImage || uploading || pending.length >= MAX_IMAGES}
-              data-testid="agent-attach-image"
-            >
-              <ImagePlus size={13} />
-            </button>
+          <div className="composer-tools" ref={pillBarRef}>
             <input
               ref={fileInputRef}
               type="file"
@@ -1692,98 +1694,195 @@ export function AgentPanel() {
               data-testid="agent-image-input"
             />
             <button
-              className="icon-btn"
-              title={t('slashCommands')}
-              onClick={() => {
-                setInput('/');
-                setPopover('slash');
-                textareaRef.current?.focus();
-              }}
+              className={`composer-pill composer-pill-add ${pillMenu === 'more' ? 'open' : ''}`}
+              title="更多输入方式：引用表 / 图片 / 指令 / 记忆"
+              data-testid="agent-add"
+              onClick={() => setPillMenu(pillMenu === 'more' ? 'none' : 'more')}
             >
-              <Zap size={13} />
+              <Plus size={14} />
             </button>
-            <button className="icon-btn" title={t('memory')} onClick={openMemory}>
-              <Brain size={13} />
-            </button>
-            <span className="composer-hint">Enter 发送 · Shift+Enter 换行</span>
-          </div>
-          <div className="composer-foot">
-            <span className="composer-perm-label">权限</span>
-            <select
-              className="mode-select"
-              value={agentMode}
-              onChange={(e) => setAgentMode(e.target.value as PermissionMode)}
+            <button
+              className={`composer-pill ${pillMenu === 'permission' ? 'open' : ''}`}
               title={t('permission')}
               data-testid="agent-mode"
+              onClick={() => setPillMenu(pillMenu === 'permission' ? 'none' : 'permission')}
             >
-              {MODE_OPTIONS.map((m) => (
-                <option key={m.value} value={m.value}>{settings.locale === 'en' ? m.en : m.zh}</option>
-              ))}
-            </select>
-            {tierLevels.length ? (
-              <>
-                <span className="composer-perm-label">推理</span>
-                <select
-                  className="mode-select"
-                  value={settings.agent.reasoningTier ?? 'default'}
-                  onChange={(e) =>
-                    void saveSettings({
-                      ...settings,
-                      agent: { ...settings.agent, reasoningTier: e.target.value === 'default' ? undefined : e.target.value },
-                    })
-                  }
-                  title="思考档位：按模型档案里的映射下发给服务商"
-                  data-testid="agent-reasoning-tier"
-                >
-                  <option value="default">跟随服务商</option>
-                  {tierLevels.map((level) => (
-                    <option key={level} value={level}>{level}</option>
-                  ))}
-                </select>
-              </>
-            ) : null}
+              <ShieldAlert size={12} />
+              <span>{modeLabel ? (settings.locale === 'en' ? modeLabel.en : modeLabel.zh) : agentMode}</span>
+              <ChevronDown size={10} className="pill-caret" />
+            </button>
             <div className="spacer" />
-            {modelOptions.length ? (
-              <select
-                className="mode-select model-select"
-                value={activeModelIndex >= 0 ? String(activeModelIndex) : ''}
-                onChange={(e) => {
-                  if (e.target.value === '__manage') {
-                    setSettingsOpen(true, 'agent');
-                    return;
-                  }
-                  switchModel(Number(e.target.value));
-                }}
-                title="切换模型（在 设置 → 模型 里管理模型源和模型）"
-                data-testid="agent-model-select"
+            <button
+              className={`composer-pill composer-model ${pillMenu === 'model' ? 'open' : ''}`}
+              title="切换模型（在 设置 → 模型 里管理模型源和模型）"
+              data-testid="agent-model-select"
+              onClick={() => setPillMenu(pillMenu === 'model' ? 'none' : 'model')}
+            >
+              <span className="truncate">{modelOptions.length ? activeModelLabel : '配置模型'}</span>
+              <ChevronDown size={10} className="pill-caret" />
+            </button>
+            {tierLevels.length ? (
+              <button
+                className={`composer-pill ${pillMenu === 'reasoning' ? 'open' : ''}`}
+                title="思考档位：按模型档案里的映射下发给服务商"
+                data-testid="agent-reasoning-tier"
+                onClick={() => setPillMenu(pillMenu === 'reasoning' ? 'none' : 'reasoning')}
               >
-                {activeModelIndex < 0 ? <option value="">选择模型…</option> : null}
-                {modelOptions.map((item, index) => (
-                  <option key={`${item.configId}::${item.model}`} value={index}>
-                    {item.label}
-                  </option>
-                ))}
-                <option value="__manage">管理模型…</option>
-              </select>
-            ) : (
-              <button className="mode-select model-manage-btn" onClick={() => setSettingsOpen(true, 'agent')} title="去设置里添加模型" data-testid="agent-model-manage">
-                配置模型
+                <Brain size={12} />
+                <span>{settings.agent.reasoningTier ?? '跟随'}</span>
+                <ChevronDown size={10} className="pill-caret" />
               </button>
-            )}
+            ) : null}
             {busy ? (
               <button className="send-btn stop" onClick={() => void abortAgent()} title={t('stop')} data-testid="agent-stop">
                 <Square size={12} />
               </button>
             ) : (
               <button className="send-btn" onClick={send} disabled={!input.trim()} title={t('send')} data-testid="agent-send">
-                <Sparkles size={13} />
+                <ArrowUp size={14} />
               </button>
             )}
+
+            {pillMenu === 'permission' ? (
+              <div className="pill-menu" role="menu" data-testid="agent-mode-menu">
+                {MODE_OPTIONS.map((m) => (
+                  <button
+                    key={m.value}
+                    role="menuitemradio"
+                    aria-checked={agentMode === m.value}
+                    className={`pill-menu-item ${agentMode === m.value ? 'active' : ''}`}
+                    onClick={() => {
+                      setAgentMode(m.value);
+                      setPillMenu('none');
+                      textareaRef.current?.focus();
+                    }}
+                  >
+                    <span>{settings.locale === 'en' ? m.en : m.zh}</span>
+                    {agentMode === m.value ? <Check size={11} /> : null}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
+            {pillMenu === 'reasoning' ? (
+              <div className="pill-menu pill-menu-right" role="menu" data-testid="agent-reasoning-menu">
+                <button
+                  role="menuitemradio"
+                  aria-checked={!settings.agent.reasoningTier}
+                  className={`pill-menu-item ${!settings.agent.reasoningTier ? 'active' : ''}`}
+                  onClick={() => {
+                    // 传 null 而不是 undefined：undefined 会在 JSON 里整个消失，
+                    // 服务端是浅合并，会把旧档位原样留下来，导致「跟随服务商」清不掉。
+                    void saveSettings({ ...settings, agent: { ...settings.agent, reasoningTier: null } });
+                    setPillMenu('none');
+                    textareaRef.current?.focus();
+                  }}
+                >
+                  <span>跟随服务商</span>
+                  {!settings.agent.reasoningTier ? <Check size={11} /> : null}
+                </button>
+                {tierLevels.map((level) => (
+                  <button
+                    key={level}
+                    role="menuitemradio"
+                    aria-checked={settings.agent.reasoningTier === level}
+                    className={`pill-menu-item ${settings.agent.reasoningTier === level ? 'active' : ''}`}
+                    onClick={() => {
+                      void saveSettings({ ...settings, agent: { ...settings.agent, reasoningTier: level } });
+                      setPillMenu('none');
+                      textareaRef.current?.focus();
+                    }}
+                  >
+                    <span>{level}</span>
+                    {settings.agent.reasoningTier === level ? <Check size={11} /> : null}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
+            {pillMenu === 'model' ? (
+              <div className="pill-menu pill-menu-model" role="menu" data-testid="agent-model-menu">
+                {modelOptions.length ? (
+                  modelOptions.map((item, index) => (
+                    <button
+                      key={`${item.configId}::${item.model}`}
+                      role="menuitemradio"
+                      aria-checked={index === activeModelIndex}
+                      className={`pill-menu-item ${index === activeModelIndex ? 'active' : ''}`}
+                      title={`${item.label} · ${item.provider}`}
+                      onClick={() => {
+                        switchModel(index);
+                        setPillMenu('none');
+                        // 选完模型接着就能打字，不用再点一次输入框
+                        textareaRef.current?.focus();
+                      }}
+                    >
+                      <span className="truncate">{item.label}</span>
+                      {index === activeModelIndex ? <Check size={11} /> : null}
+                    </button>
+                  ))
+                ) : (
+                  <button className="pill-menu-item" onClick={() => { setSettingsOpen(true, 'agent'); setPillMenu('none'); }} data-testid="agent-model-manage">
+                    <span>去设置里添加模型</span>
+                  </button>
+                )}
+                <div className="pill-menu-sep" aria-hidden="true" />
+                <button className="pill-menu-item" onClick={() => { setSettingsOpen(true, 'agent'); setPillMenu('none'); }}>
+                  <span>管理模型…</span>
+                </button>
+              </div>
+            ) : null}
+
+            {pillMenu === 'more' ? (
+              <div className="pill-menu pill-menu-more" role="menu" data-testid="agent-more-menu">
+                <button
+                  className="pill-menu-item"
+                  onClick={() => {
+                    setPillMenu('none');
+                    setInput((prev) => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}@`);
+                    setPopover('mention');
+                    textareaRef.current?.focus();
+                  }}
+                >
+                  <AtSign size={12} />
+                  <span>{t('attachTable')}</span>
+                </button>
+                <button
+                  className="pill-menu-item"
+                  disabled={!canAttachImage || uploading || pending.length >= MAX_IMAGES}
+                  title={canAttachImage ? `添加图片（最多 ${MAX_IMAGES} 张，也可直接粘贴或拖入）` : '当前模型未开启图片输入，请到 设置 → 模型能力 勾选'}
+                  onClick={() => {
+                    setPillMenu('none');
+                    fileInputRef.current?.click();
+                  }}
+                  data-testid="agent-attach-image"
+                >
+                  <ImagePlus size={12} />
+                  <span>添加图片</span>
+                </button>
+                <button
+                  className="pill-menu-item"
+                  onClick={() => {
+                    setPillMenu('none');
+                    setInput('/');
+                    setPopover('slash');
+                    textareaRef.current?.focus();
+                  }}
+                >
+                  <Zap size={12} />
+                  <span>{t('slashCommands')}</span>
+                </button>
+                <button className="pill-menu-item" onClick={() => { setPillMenu('none'); openMemory(); }}>
+                  <Brain size={12} />
+                  <span>{t('memory')}</span>
+                </button>
+                <div className="pill-menu-sep" aria-hidden="true" />
+                <div className="pill-menu-hint">Enter 发送 · Shift+Enter 换行</div>
+              </div>
+            ) : null}
           </div>
         </div>
-        <div className="composer-hint">
-          <ShieldAlert size={9} /> {t('transactionNote')}
-        </div>
+        <ComposerStats live={live} session={sessionMeta} contextWindow={profile?.contextWindow} disclaimer={t('aiDisclaimer')} />
       </div>
 
       {sessionsOpen ? (
