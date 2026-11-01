@@ -48,8 +48,9 @@ const KEYED = Object.keys(KEY_LABEL).filter((id) => id !== 'searxng');
 const FALLBACK_BACKENDS: BackendInfo[] = [
   { id: 'exa', label: 'Exa (MCP, 免费)', needsKey: false, group: 'free' },
   { id: 'parallel', label: 'Parallel (MCP, 免费)', needsKey: false, group: 'free' },
-  { id: 'duckduckgo', label: 'DuckDuckGo (HTML)', needsKey: false, group: 'free' },
-  { id: 'searxng', label: 'SearXNG (元搜索)', needsKey: false, group: 'free' },
+  { id: 'bing', label: 'Bing (RSS, 免密钥)', needsKey: false, group: 'free' },
+  { id: 'duckduckgo', label: 'DuckDuckGo (HTML, 需代理)', needsKey: false, group: 'free' },
+  { id: 'searxng', label: 'SearXNG (需自建)', needsKey: false, group: 'free' },
   { id: 'brave', label: 'Brave Search', needsKey: true, group: 'key' },
   { id: 'tavily', label: 'Tavily (AI)', needsKey: true, group: 'key' },
   { id: 'serper', label: 'Serper.dev', needsKey: true, group: 'key' },
@@ -236,19 +237,20 @@ export function WebSearchTool() {
       <div className="tool-scroll">
         <div className="search-settings">
           <div className="search-summary">
-            <strong>已启用后端：{enabledCount}/{backends.length || 11}</strong>
-            <strong>已配置密钥：{keyCount}/7</strong>
+            <strong>已启用后端：{enabledCount}/{directory.length}</strong>
+            <strong>已配置密钥：{keyCount}/{KEYED.length}</strong>
             <div className="spacer" />
             <button className="btn ghost small" onClick={() => void loadBackends()} title="刷新后端与健康状态">
               <RefreshCw size={11} /> 刷新状态
             </button>
           </div>
           <div className="search-desc">
-            聚合网络搜索：{backends.length || 11} 个后端并发 fan-out、URL 去重合并。开关后端、填 API Key、调参数，保存即生效。
+            聚合网络搜索：{directory.length} 个后端并发 fan-out、URL 去重合并。开关后端、填 API Key、调参数，保存即生效。
           </div>
 
           <div className="search-section">
             <div className="search-section-title">免密钥（开箱即用）</div>
+            <div className="search-key-hint">Exa / Parallel 走 MCP 接口，Bing 走 RSS 输出，三者国内直连可用；DuckDuckGo 即使配了出站代理也常被人机校验拦回 0 条，SearXNG 必须自建。</div>
             <div className="search-backend-grid">{free.map(backendRow)}</div>
           </div>
 
@@ -266,11 +268,16 @@ export function WebSearchTool() {
               </div>
               <div className="field">
                 <label>concurrency</label>
-                <input className="input" type="number" min={1} max={11} value={form.concurrency} onChange={(e) => setForm({ ...form, concurrency: Number(e.target.value) })} />
+                <input className="input" type="number" min={1} max={directory.length} value={form.concurrency} onChange={(e) => setForm({ ...form, concurrency: Number(e.target.value) })} />
               </div>
               <div className="field">
                 <label>backendTimeoutMs</label>
                 <input className="input" type="number" min={1000} max={120000} value={form.timeoutMs} onChange={(e) => setForm({ ...form, timeoutMs: Number(e.target.value) })} />
+              </div>
+              <div className="field" style={{ gridColumn: '1 / -1' }}>
+                <label>出站代理</label>
+                <input className="input" type="text" placeholder="如 http://127.0.0.1:7890，留空表示直连" value={form.proxyUrl ?? ''} onChange={(e) => setForm({ ...form, proxyUrl: e.target.value })} />
+                <div className="search-key-hint">保存后搜索请求即经该 HTTP/HTTPS 代理发出，本机地址仍走直连；填 Clash 的 HTTP 混合端口，SOCKS 端口不支持。</div>
               </div>
             </div>
           </div>
@@ -328,7 +335,8 @@ export function WebSearchTool() {
             <div className="search-section-title">私有实例可选 Key</div>
             <div className="field" style={{ maxWidth: 420 }}>
               <label>SearXNG 实例地址</label>
-              <input className="input" value={form.searxngBaseUrl} onChange={(e) => setForm({ ...form, searxngBaseUrl: e.target.value })} placeholder="https://searx.be" />
+              <input className="input" value={form.searxngBaseUrl} onChange={(e) => setForm({ ...form, searxngBaseUrl: e.target.value })} placeholder="http://127.0.0.1:8080" />
+              <div className="search-key-hint">公共实例（含 searx.be）一律禁用 format=json，只回 HTML，必须自建：docker run -d -p 8080:8080 searxng/searxng，并在 settings.yml 里启用 search.formats: [json]。本机实例直接填 http://127.0.0.1:8888 这类地址即可。</div>
             </div>
             <div className="search-key-grid">{keyField('searxng')}</div>
           </div>

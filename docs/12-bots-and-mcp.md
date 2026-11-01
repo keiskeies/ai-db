@@ -137,9 +137,9 @@ Agent 的调用路径：先 `mcp_list_servers` 拿到真实 id，再 `mcp_list_t
 
 | Server | 默认 | 配置项 | 工具 | 安全边界 |
 |---|---|---|---|---|
-| `builtin-filesystem` | 启用 | 允许目录（绝对路径） | `list_directory` / `read_file` / `read_multiple_files` / `search_files` / `grep_files` / `file_info` / `write_file` / `edit_file` / `move_file` / `delete_file` | 目录白名单 + realpath 校验；拒绝 `..` 与符号链接逃逸；读/写上限 2 MB；`list_directory` 支持 `recursive`（等价 depth=8）并跳过依赖/构建目录；`grep_files` 支持 `context` / `outputMode`，优先调用 ripgrep（可用 `AIDB_RG_PATH` 指定二进制，缺失或正则不兼容时回退 JS）；`delete_file` 仅限单文件、需 confirm、destructive 审批；写/移动需审批 |
+| `builtin-filesystem` | 启用 | 允许目录（绝对路径） | `list_directory` / `read_file` / `read_multiple_files` / `search_files` / `grep_files` / `file_info` / `write_file` / `edit_file` / `move_file` / `delete_file` | 目录白名单 + realpath 校验；拒绝 `..` 与符号链接逃逸；读/写上限 2 MB；`list_directory` 支持 `recursive`（等价 depth=8）并跳过依赖/构建目录；`grep_files` 支持 `context` / `outputMode`，优先调用 ripgrep（可用 `AIDB_RG_PATH` 指定二进制，缺失或正则不兼容时回退 JS）；其 `pattern` 是 JavaScript 正则而非 glob，编译失败且形如文件名通配符时改按文件名列出，其余情况报错并提示改用 `include`；`delete_file` 仅限单文件、需 confirm、destructive 审批；写/移动需审批 |
 | `builtin-git` | 启用 | 仓库目录 | `git_status` / `git_log` / `git_diff` / `git_show` | 只读子命令；固定参数白名单；ref 与路径校验 |
-| `builtin-web` | 关闭 | 域名限制（可选；留空=所有公网） | `fetch_url` / `web_search` | 仅 HTTP(S)；拦截 loopback/内网/链路本地/云元数据地址；重定向逐跳复检；正文上限 1 MB；`web_search` 聚合 Exa / Parallel / DuckDuckGo / SearXNG + Brave / Tavily / Serper / Mojeek / DeepSeek / Anthropic / OpenAI，并发、去重、单后端失败隔离 |
+| `builtin-web` | 关闭 | 域名限制（可选；留空=所有公网） | `fetch_url` / `web_search` | 仅 HTTP(S)；拦截 loopback/内网/链路本地/云元数据地址；重定向逐跳复检；正文上限 1 MB；`web_search` 聚合 Exa / Parallel / Bing + 可选 DuckDuckGo（需代理）/ SearXNG（需自建）+ Brave / Tavily / Serper / Mojeek / DeepSeek / Anthropic / OpenAI，并发、去重、单后端失败隔离 |
 
 未配置目录时 filesystem 不暴露任何文件；web 默认关闭。内置 Server 不可删除、不可改名或改命令，只能启停与修改目录/域名。**不内置 shell**：任意命令执行不在 MCP 层开放，统一走 Skill Host 的声明式入口与命令白名单。
 
@@ -215,8 +215,8 @@ MCP 工具与第一方 Agent 工具是两套东西：`run_sql`、`inspect_schema
 - `mcp.test.ts`：stdio MCP Server 配置、工具发现、`mcp_list_tools` / `mcp_call` 执行（1 个测试）。
 - `builtin-mcp.test.ts`：内置 filesystem/git/web 的目录白名单、递归列举、server 省略时按工具名反推、ripgrep、SSRF 拦截与工具发现。
 - `tool-catalog.test.ts`（core）：Agent 工具目录分组与 52 个工具一一对应（不遗漏、不重复），且每项都有风险与可用条件说明。
-- `multi-statement.test.ts`：只读多语句脚本放行，含写脚本在未开启多语句时以 `MULTI_STATEMENT_DISABLED` + 拆分提示拒绝。
-- `search.test.ts`：11 个后端目录与默认启用 4 个免密钥后端、Key 加密保存且不回显、聚合去重与单后端失败隔离、本地 SearXNG 兼容端点跑通 JSON 路径、`web_search` 复用同一套设置（3 个测试）。
+- `multi-statement.test.ts` / `multi-statement-cap.test.ts`：上限内（200 条）的多语句脚本缺省即一次执行；超过上限才以 `SCRIPT_TOO_LARGE` + 分批提示拒绝。
+- `search.test.ts`：12 个后端目录与默认启用 3 个免密钥后端、Key 加密保存且不回显、聚合去重与单后端失败隔离、本地 SearXNG 兼容端点跑通 JSON 路径、Exa/DuckDuckGo/Bing RSS 解析（含中文 pubDate）、旧默认后端列表迁移、`web_search` 复用同一套设置。
 - `mcp-server.test.ts`：AiDB 作为 stdio MCP Server 的 initialize / tools/list / 只读 tools/call（1 个测试）。
 - `npm run verify` 全绿：docs 335/335、core 153/153、gateway 188/253、E2E 201/201。
 - E2E 覆盖：设置内通知渠道/MCP/Skills 面板、数据库工具箱不含 Agent 能力、工具数 52、报告命令、AI PPT 面板、移动端命令。

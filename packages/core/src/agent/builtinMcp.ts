@@ -284,7 +284,7 @@ const webTools: BuiltinMcpToolDefinition[] = [
   {
     name: 'web_search',
     description:
-      'Search the public web through the configured search backends (Exa, Parallel, DuckDuckGo, SearXNG and optional keyed providers). Returns title, URL and snippet, with per-backend status.',
+      'Search the public web through the configured search backends (Exa, Parallel, Bing and, when reachable, DuckDuckGo/SearXNG plus optional keyed providers). Returns title, URL and snippet, with per-backend status.',
     risk: 'read',
     inputSchema: {
       type: 'object',
