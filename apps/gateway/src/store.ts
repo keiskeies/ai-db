@@ -1261,7 +1261,10 @@ export class Store {
       write(input.id);
     } catch (err: any) {
       if (!/UNIQUE constraint failed|SQLITE_CONSTRAINT/i.test(String(err?.message ?? ''))) throw err;
-      write(`${input.id}#${Date.now().toString(36)}`);
+      // 后缀要在同一毫秒内也唯一：两个并发工具调用可能撞在同一 ms，
+      // 那样第二次仍旧冲突，等于没兜住。
+      // 后缀用随机串而不是时间戳：同一毫秒内也可能再次冲突。
+      write(`${input.id}#${randomUUID().slice(0, 8)}`);
     }
   }
 
