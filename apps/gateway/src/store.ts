@@ -308,6 +308,11 @@ interface SessionRow {
   status: AgentSessionMeta['status'];
   tokens_in: number;
   tokens_out: number;
+  turns: number | null;
+  steps: number | null;
+  cache_hit_tokens: number | null;
+  cache_miss_tokens: number | null;
+  context_tokens: number | null;
   created_at: string;
   updated_at: string;
   archived: number;
@@ -580,6 +585,12 @@ export class Store {
     }
     // 连接不再要求填库名之后，会话必须自己记住选中的库，否则重开会话会悄悄跑回默认库
     this.ensureColumn('agent_sessions', 'database', 'TEXT');
+    // 会话累计用量：轮次/步数/缓存命中都要跨会话保留，否则重开会话状态条就空了
+    this.ensureColumn('agent_sessions', 'turns', 'INTEGER DEFAULT 0');
+    this.ensureColumn('agent_sessions', 'steps', 'INTEGER DEFAULT 0');
+    this.ensureColumn('agent_sessions', 'cache_hit_tokens', 'INTEGER DEFAULT 0');
+    this.ensureColumn('agent_sessions', 'cache_miss_tokens', 'INTEGER DEFAULT 0');
+    this.ensureColumn('agent_sessions', 'context_tokens', 'INTEGER DEFAULT 0');
     this.ensureColumn('query_history', 'favorite', 'INTEGER DEFAULT 0');
     this.ensureColumn('artifact_schedules', 'notify_channels', 'TEXT');
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_history_recent ON query_history(favorite, created_at DESC)');
@@ -1092,6 +1103,11 @@ export class Store {
       status: row.status,
       tokensIn: row.tokens_in ?? 0,
       tokensOut: row.tokens_out ?? 0,
+      turns: row.turns ?? 0,
+      steps: row.steps ?? 0,
+      cacheHitTokens: row.cache_hit_tokens ?? 0,
+      cacheMissTokens: row.cache_miss_tokens ?? 0,
+      contextTokens: row.context_tokens ?? 0,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -1152,6 +1168,11 @@ export class Store {
       status: 'status',
       tokensIn: 'tokens_in',
       tokensOut: 'tokens_out',
+      turns: 'turns',
+      steps: 'steps',
+      cacheHitTokens: 'cache_hit_tokens',
+      cacheMissTokens: 'cache_miss_tokens',
+      contextTokens: 'context_tokens',
       archived: 'archived',
     };
     const sets: string[] = ['updated_at = ?'];
