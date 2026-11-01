@@ -1,0 +1,94 @@
+{
+  "id": "schema-sync",
+  "route": {
+    "method": "POST",
+    "path": "/schema/sync"
+  },
+  "title": {
+    "zh": "结构对比同步",
+    "en": "Schema diff & sync"
+  },
+  "description": "对比两个连接的对象结构，生成目标方言 DDL，确认后执行同步",
+  "whenToUse": "用户要「看看两个库结构差在哪」「把 A 库的结构同步到 B 库」时",
+  "flow": [
+    "用 schema_diff 得到两侧结构差异与目标方言 DDL",
+    "向用户展示新增 / 删除 / 变更清单，明确标注破坏性变更",
+    "用户确认后，把 DDL 语句提交到目标连接执行",
+    "执行前确认目标连接不是只读"
+  ],
+  "fields": [
+    {
+      "key": "connectionId",
+      "type": "connection",
+      "label": {
+        "zh": "目标连接",
+        "en": "Target"
+      },
+      "required": true,
+      "hint": "只读连接会被拒绝"
+    },
+    {
+      "key": "database",
+      "type": "database",
+      "label": {
+        "zh": "目标库",
+        "en": "Target database"
+      }
+    },
+    {
+      "key": "statements",
+      "type": "code",
+      "language": "sql",
+      "label": {
+        "zh": "同步语句",
+        "en": "Statements"
+      },
+      "required": true,
+      "signature": {
+        "input": "对比得到的 DDL",
+        "output": "按分号拆分后依次执行"
+      },
+      "hint": "只应来自结构对比的产物；手写 DDL 请改用 run_sql 并自行承担风险"
+    }
+  ],
+  "states": [
+    {
+      "id": "pending",
+      "label": {
+        "zh": "待确认",
+        "en": "Pending"
+      },
+      "phrase": "有 {count} 条待执行的 DDL"
+    },
+    {
+      "id": "ok",
+      "label": {
+        "zh": "成功",
+        "en": "Succeeded"
+      },
+      "terminal": true,
+      "phrase": "同步已执行：{message}"
+    },
+    {
+      "id": "failed",
+      "label": {
+        "zh": "失败",
+        "en": "Failed"
+      },
+      "terminal": true,
+      "phrase": "同步失败：{error}"
+    }
+  ],
+  "progress": {
+    "supported": false
+  },
+  "tools": [
+    "schema_diff"
+  ],
+  "maxRisk": "ddl",
+  "constraints": [
+    "目标连接为只读时拒绝执行",
+    "接受任意 DDL（含 DROP），执行前必须向用户展示语句并取得确认",
+    "当前只有对比工具（schema_diff），没有执行同步的 Agent 工具"
+  ]
+}

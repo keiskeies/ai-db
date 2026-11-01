@@ -1,0 +1,160 @@
+{
+  "id": "jobs",
+  "route": {
+    "method": "POST",
+    "path": "/jobs"
+  },
+  "title": {
+    "zh": "自动化任务",
+    "en": "Automation jobs"
+  },
+  "description": "按固定间隔执行 SQL 或备份，由调度器独立运行",
+  "whenToUse": "用户说「每天 / 每隔 N 分钟执行某段 SQL」「定时备份」时",
+  "flow": [
+    "确认连接与库",
+    "确认要执行的 SQL，或选择备份类型",
+    "确认间隔秒数（最小 30 秒）",
+    "保存；之后由调度器独立运行，与本次对话无关"
+  ],
+  "fields": [
+    {
+      "key": "name",
+      "type": "text",
+      "label": {
+        "zh": "任务名",
+        "en": "Name"
+      },
+      "required": true
+    },
+    {
+      "key": "connectionId",
+      "type": "connection",
+      "label": {
+        "zh": "连接",
+        "en": "Connection"
+      },
+      "required": true
+    },
+    {
+      "key": "database",
+      "type": "database",
+      "label": {
+        "zh": "库",
+        "en": "Database"
+      }
+    },
+    {
+      "key": "type",
+      "type": "enum",
+      "label": {
+        "zh": "类型",
+        "en": "Type"
+      },
+      "required": true,
+      "default": "query",
+      "options": [
+        {
+          "value": "query",
+          "label": {
+            "zh": "执行 SQL",
+            "en": "SQL"
+          }
+        },
+        {
+          "value": "backup",
+          "label": {
+            "zh": "备份",
+            "en": "Backup"
+          }
+        }
+      ]
+    },
+    {
+      "key": "sql",
+      "type": "code",
+      "language": "sql",
+      "label": {
+        "zh": "SQL",
+        "en": "SQL"
+      },
+      "required": true,
+      "showWhen": {
+        "field": "type",
+        "equals": "query"
+      },
+      "signature": {
+        "input": "连接与库",
+        "output": "结果集行数写入审计"
+      },
+      "hint": "任务在无人值守时执行；请确保语句可重复执行且不会误伤数据"
+    },
+    {
+      "key": "intervalSeconds",
+      "type": "number",
+      "label": {
+        "zh": "间隔秒数",
+        "en": "Interval"
+      },
+      "min": 30,
+      "default": 3600,
+      "hint": "最小 30 秒；调度器每 15 秒检查一次"
+    },
+    {
+      "key": "enabled",
+      "type": "boolean",
+      "label": {
+        "zh": "启用",
+        "en": "Enabled"
+      },
+      "default": true,
+      "advanced": true
+    }
+  ],
+  "states": [
+    {
+      "id": "pending",
+      "label": {
+        "zh": "待运行",
+        "en": "Pending"
+      },
+      "phrase": "任务已保存，间隔 {intervalSeconds} 秒"
+    },
+    {
+      "id": "running",
+      "label": {
+        "zh": "运行中",
+        "en": "Running"
+      },
+      "phrase": "任务正在运行"
+    },
+    {
+      "id": "ok",
+      "label": {
+        "zh": "成功",
+        "en": "Succeeded"
+      },
+      "terminal": true,
+      "phrase": "任务执行成功：{message}"
+    },
+    {
+      "id": "failed",
+      "label": {
+        "zh": "失败",
+        "en": "Failed"
+      },
+      "terminal": true,
+      "phrase": "任务执行失败：{error}"
+    }
+  ],
+  "progress": {
+    "supported": false
+  },
+  "tools": [],
+  "maxRisk": "write",
+  "constraints": [
+    "任务保存后由调度器独立运行，与创建它的对话无关",
+    "最小间隔 30 秒",
+    "任务执行的 SQL 写入审计，approval 标记为 scheduled",
+    "当前没有对应的 Agent 工具：需要创建时引导用户到 工具箱 → 自动化任务"
+  ]
+}

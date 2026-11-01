@@ -1,0 +1,103 @@
+{
+  "id": "agent-context",
+  "route": {
+    "method": "PUT",
+    "path": "/agent/context/entry"
+  },
+  "title": {
+    "zh": "Agent 上下文",
+    "en": "Agent context"
+  },
+  "description": "配置表与列的启用状态、业务别名、描述、手工关联与术语",
+  "whenToUse": "用户说「这张表先别让 AI 看」「这个字段叫订单状态」时",
+  "flow": [
+    "确认连接与库",
+    "选择表或列",
+    "设置启用状态 / 别名 / 描述",
+    "保存后下一回合生效"
+  ],
+  "fields": [
+    {
+      "key": "connectionId",
+      "type": "connection",
+      "label": {
+        "zh": "连接",
+        "en": "Connection"
+      },
+      "required": true
+    },
+    {
+      "key": "database",
+      "type": "database",
+      "label": {
+        "zh": "库",
+        "en": "Database"
+      }
+    },
+    {
+      "key": "table",
+      "type": "table",
+      "label": {
+        "zh": "表",
+        "en": "Table"
+      },
+      "required": true
+    },
+    {
+      "key": "enabled",
+      "type": "boolean",
+      "label": {
+        "zh": "启用",
+        "en": "Enabled"
+      },
+      "default": true,
+      "hint": "关闭后该表对所有 Agent 工具不可见"
+    },
+    {
+      "key": "alias",
+      "type": "text",
+      "label": {
+        "zh": "业务别名",
+        "en": "Alias"
+      }
+    },
+    {
+      "key": "description",
+      "type": "text",
+      "label": {
+        "zh": "业务描述",
+        "en": "Description"
+      },
+      "hint": "会进入系统提示，优先于数据库原生注释"
+    }
+  ],
+  "states": [
+    {
+      "id": "ok",
+      "label": {
+        "zh": "已保存",
+        "en": "Saved"
+      },
+      "terminal": true,
+      "phrase": "上下文已更新，下一回合生效"
+    },
+    {
+      "id": "failed",
+      "label": {
+        "zh": "失败",
+        "en": "Failed"
+      },
+      "terminal": true,
+      "phrase": "保存失败：{error}"
+    }
+  ],
+  "progress": {
+    "supported": false
+  },
+  "tools": [],
+  "maxRisk": "write",
+  "constraints": [
+    "禁用表会被 agentContextGuard 强制拦截，Agent 无法通过任何工具访问",
+    "刻意不给 Agent 写入工具：让它自己解除禁用等于拆掉自己的护栏"
+  ]
+}

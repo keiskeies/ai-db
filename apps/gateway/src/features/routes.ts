@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { encodeSse, engineMeta, isSqlEngine, sseHeaders, type TableMaintenanceAction } from '@aidb/core';
+import { getCapability, validateCapabilityInput, type CapabilityId } from '@aidb/core';
 import type { GatewayConfig } from '../config';
 import type { ConnectionManager } from '../manager';
 import type { Store } from '../store';
@@ -31,6 +32,26 @@ const ah =
   (req: Request, res: Response, next: NextFunction): void => {
     fn(req, res, next).catch(next);
   };
+
+/**
+ * 用能力契约校验请求体，把失败统一成 `{ code:'INVALID_INPUT', status:400, field }`。
+ *
+ * 契约是字段知识的唯一来源（`packages/core/src/capabilities/<id>.json`）；
+ * 端点只负责把归一化后的值转给执行函数。未迁移的端点仍走手写 `str()` 校验。
+ */
+function capabilityBody(id: CapabilityId, body: unknown): Record<string, unknown> {
+  const capability = getCapability(id);
+  if (!capability) throw Object.assign(new Error(`能力契约不存在：${id}`), { code: 'CAPABILITY_NOT_FOUND', status: 500 });
+  const result = validateCapabilityInput(capability, body);
+  if (result.ok) return result.value ?? {};
+  const first = result.errors?.[0];
+  throw Object.assign(new Error(first?.message ?? '参数不合法'), {
+    code: 'INVALID_INPUT',
+    status: 400,
+    field: first?.field,
+    hint: result.errors?.map((item) => `${item.field}: ${item.message}`).join('；'),
+  });
+}
 
 function obj(value: unknown, name: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${name} 必须是对象`);
@@ -157,16 +178,15 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
   router.post(
     '/search',
     ah(async (req, res) => {
-      const body = obj(req.body, 'body');
-      const connectionId = str(body.connectionId);
-      if (!connectionId) throw Object.assign(new Error('connectionId 必填'), { code: 'INVALID_INPUT', status: 400 });
+      const input = capabilityBody('search', req.body);
+      const scope = input.scope === 'objects' || input.scope === 'data' ? input.scope : 'all';
       const result = await searchDatabase(
         store,
         manager,
-        connectionId,
-        str(body.database),
-        String(body.query ?? ''),
-        body.scope === 'objects' || body.scope === 'data' ? body.scope : 'all',
+        String(input.connectionId),
+        input.database as string | undefined,
+        String(input.query ?? ''),
+        scope,
       );
       res.json(result);
     }),
@@ -186,18 +206,25 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
   router.post(
     '/schema/sync',
     ah(async (req, res) => {
-      const body = obj(req.body, 'body');
-      const connectionId = str(body.connectionId);
-      if (!connectionId) throw Object.assign(new Error('connectionId 必填'), { code: 'INVALID_INPUT', status: 400 });
+      // 契约把 statements 声明为 `code`（一段 DDL 文本，对 Agent 最自然），
+      // 但历史 UI 传的是 string[]。这里在进契约前归一化成文本，校验后再拆回语句数组。
+      const raw = obj(req.body, 'body');
+      const normalized = Array.isArray(raw.statements) ? { ...raw, statements: (raw.statements as unknown[]).filter((item): item is string => typeof item === 'string').join(';\n') } : raw;
+      const input = capabilityBody('schema-sync', normalized);
+      const connectionId = String(input.connectionId);
       const conn = store.getConnection(connectionId);
       if (!conn) throw Object.assign(new Error('连接不存在'), { code: 'CONNECTION_NOT_FOUND', status: 404 });
       if (conn.readonly) throw Object.assign(new Error('目标连接为只读'), { code: 'READONLY', status: 403 });
-      const statements = Array.isArray(body.statements) ? (body.statements as string[]) : [];
+      const text = String(input.statements ?? '').trim();
+      const statements = text
+        .split(/;\s*\n|;\s*(?=CREATE|ALTER|DROP|RENAME|COMMENT)/i)
+        .map((item) => item.trim())
+        .filter(Boolean);
       const sql = statements.join(';\n');
       if (!sql.trim()) throw Object.assign(new Error('没有同步语句'), { code: 'INVALID_INPUT', status: 400 });
       const started = Date.now();
       const batch = await manager.query(connectionId, sql, {
-        database: str(body.database),
+        database: input.database as string | undefined,
         allowMulti: true,
         autoLimit: false,
         timeoutMs: store.getSettings().queryTimeoutMs,
@@ -207,7 +234,7 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
       store.addAudit({
         actor: 'user',
         connectionId,
-        database: str(body.database),
+        database: input.database as string | undefined,
         tool: 'schema.sync',
         sql,
         risk: 'ddl',
@@ -223,26 +250,25 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
   router.post(
     '/transfer',
     ah(async (req, res) => {
-      const body = obj(req.body, 'body');
-      const sourceId = str(body.sourceId);
-      const targetId = str(body.targetId);
-      if (!sourceId || !targetId) throw Object.assign(new Error('sourceId 与 targetId 必填'), { code: 'INVALID_INPUT', status: 400 });
+      const input = capabilityBody('transfer', req.body);
+      const sourceId = String(input.sourceConnectionId);
+      const targetId = String(input.targetConnectionId);
       const started = Date.now();
       const result = await transferData(store, manager, {
         sourceId,
-        sourceDatabase: str(body.sourceDatabase),
+        sourceDatabase: input.sourceDatabase as string | undefined,
         targetId,
-        targetDatabase: str(body.targetDatabase),
-        tables: Array.isArray(body.tables) ? (body.tables as string[]) : undefined,
-        mode: body.mode === 'replace' ? 'replace' : 'append',
-        createMissing: body.createMissing !== false,
-        limit: Number(body.limit) || undefined,
+        targetDatabase: input.targetDatabase as string | undefined,
+        tables: input.tables as string[] | undefined,
+        mode: input.mode === 'replace' ? 'replace' : 'append',
+        createMissing: input.createMissing !== false,
+        limit: typeof input.limit === 'number' ? input.limit : undefined,
       });
       manager.invalidate(targetId);
       store.addAudit({
         actor: 'user',
         connectionId: targetId,
-        database: str(body.targetDatabase),
+        database: input.targetDatabase as string | undefined,
         tool: 'data.transfer',
         risk: 'write',
         approval: 'manual',
@@ -257,10 +283,11 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
   router.post(
     '/transfer/stream',
     ah(async (req, res) => {
-      const body = obj(req.body, 'body');
-      const sourceId = str(body.sourceId);
-      const targetId = str(body.targetId);
-      if (!sourceId || !targetId) throw Object.assign(new Error('sourceId 与 targetId 必填'), { code: 'INVALID_INPUT', status: 400 });
+      // 与 /transfer 共用同一份契约：两者入参相同，手写校验会漂（limit 的归一化就曾经不一致）。
+      // 必须在 writeHead 之前校验——校验失败要返回 400 JSON，而不是塞进 SSE 流里的错误事件。
+      const input = capabilityBody('transfer', req.body);
+      const sourceId = String(input.sourceConnectionId);
+      const targetId = String(input.targetConnectionId);
       const started = Date.now();
       res.writeHead(200, sseHeaders());
       res.flushHeaders?.();
@@ -281,13 +308,13 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
       try {
         result = await transferData(store, manager, {
           sourceId,
-          sourceDatabase: str(body.sourceDatabase),
+          sourceDatabase: input.sourceDatabase as string | undefined,
           targetId,
-          targetDatabase: str(body.targetDatabase),
-          tables: Array.isArray(body.tables) ? (body.tables as string[]) : undefined,
-          mode: body.mode === 'replace' ? 'replace' : 'append',
-          createMissing: body.createMissing !== false,
-          limit: Number(body.limit) || undefined,
+          targetDatabase: input.targetDatabase as string | undefined,
+          tables: input.tables as string[] | undefined,
+          mode: input.mode === 'replace' ? 'replace' : 'append',
+          createMissing: input.createMissing !== false,
+          limit: typeof input.limit === 'number' ? input.limit : undefined,
           onEvent: send,
           shouldAbort: () => closed,
         });
@@ -303,7 +330,7 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
         store.addAudit({
           actor: 'user',
           connectionId: targetId,
-          database: str(body.targetDatabase),
+          database: input.targetDatabase as string | undefined,
           tool: 'data.transfer',
           risk: 'write',
           approval: 'manual',
@@ -311,7 +338,7 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
           durationMs: Date.now() - started,
           meta: {
             sourceId,
-            tables: result?.results.length ?? (Array.isArray(body.tables) ? body.tables.length : 0),
+            tables: result?.results.length ?? (Array.isArray(input.tables) ? input.tables.length : 0),
             rows: result?.totalRows ?? 0,
             failed: result?.results.filter((item) => item.status === 'error').length ?? 0,
             aborted: closed,
@@ -326,21 +353,20 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
   router.post(
     '/generate',
     ah(async (req, res) => {
-      const body = obj(req.body, 'body');
-      const connectionId = str(body.connectionId);
-      if (!connectionId) throw Object.assign(new Error('connectionId 必填'), { code: 'INVALID_INPUT', status: 400 });
+      const input = capabilityBody('generate', req.body);
+      const connectionId = String(input.connectionId);
       const started = Date.now();
       const result = await generateData(store, manager, {
         connectionId,
-        database: str(body.database),
-        table: String(body.table ?? ''),
-        rows: Number(body.rows) || 10,
-        dryRun: body.dryRun === true,
+        database: input.database as string | undefined,
+        table: String(input.table ?? ''),
+        rows: Number(input.rows) || 10,
+        dryRun: input.dryRun === true,
       });
       store.addAudit({
         actor: 'user',
         connectionId,
-        database: str(body.database),
+        database: input.database as string | undefined,
         tool: 'data.generate',
         sql: result.sqlPreview,
         risk: 'write',
@@ -356,9 +382,8 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
   router.get(
     '/monitor',
     ah(async (req, res) => {
-      const connectionId = str(req.query.connectionId);
-      if (!connectionId) throw Object.assign(new Error('connectionId 必填'), { code: 'INVALID_INPUT', status: 400 });
-      res.json({ monitor: await monitorConnection(store, manager, connectionId) });
+      const input = capabilityBody('monitor', req.query);
+      res.json({ monitor: await monitorConnection(store, manager, String(input.connectionId)) });
     }),
   );
 
@@ -385,17 +410,20 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
   router.post(
     '/users/action',
     ah(async (req, res) => {
-      const body = obj(req.body, 'body');
-      const connectionId = str(body.connectionId);
-      if (!connectionId) throw Object.assign(new Error('connectionId 必填'), { code: 'INVALID_INPUT', status: 400 });
-      const action = body.action === 'drop' || body.action === 'grant' ? body.action : 'create';
-      const result = await manageUser(store, manager, connectionId, action, {
-        name: str(body.name),
-        host: str(body.host),
-        password: str(body.password),
-        privileges: str(body.privileges),
-        scope: str(body.scope),
-        role: str(body.role),
+      const input = capabilityBody('users', req.body);
+      const action = input.action === 'drop' || input.action === 'grant' ? input.action : input.action === 'list' ? 'list' : 'create';
+      // list 复用 /users 的只读实现：契约把四个动作合在一张表单里，端点保持单一入口
+      if (action === 'list') {
+        res.json({ result: await listUsers(store, manager, String(input.connectionId)) });
+        return;
+      }
+      const result = await manageUser(store, manager, String(input.connectionId), action, {
+        name: input.name as string | undefined,
+        host: input.host as string | undefined,
+        password: input.password as string | undefined,
+        privileges: input.privileges as string | undefined,
+        scope: input.scope as string | undefined,
+        role: input.role as string | undefined,
       });
       res.json({ result });
     }),
@@ -404,18 +432,17 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
   router.get(
     '/dictionary',
     ah(async (req, res) => {
-      const connectionId = str(req.query.connectionId);
-      if (!connectionId) throw Object.assign(new Error('connectionId 必填'), { code: 'INVALID_INPUT', status: 400 });
-      res.json({ dictionary: await buildDictionary(store, manager, connectionId, str(req.query.database)) });
+      const input = capabilityBody('dictionary', req.query);
+      const connectionId = String(input.connectionId);
+      res.json({ dictionary: await buildDictionary(store, manager, connectionId, input.database as string | undefined) });
     }),
   );
 
   router.get(
     '/objects',
     ah(async (req, res) => {
-      const connectionId = str(req.query.connectionId);
-      if (!connectionId) throw Object.assign(new Error('connectionId 必填'), { code: 'INVALID_INPUT', status: 400 });
-      res.json({ objects: await listAdvancedObjects(store, manager, connectionId, str(req.query.database)) });
+      const input = capabilityBody('advanced-objects', req.query);
+      res.json({ objects: await listAdvancedObjects(store, manager, String(input.connectionId), input.database as string | undefined) });
     }),
   );
 
@@ -433,17 +460,14 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
   router.post(
     '/data/compare',
     ah(async (req, res) => {
-      const body = obj(req.body, 'body');
-      const sourceId = str(body.sourceId);
-      const targetId = str(body.targetId);
-      if (!sourceId || !targetId) throw Object.assign(new Error('sourceId 与 targetId 必填'), { code: 'INVALID_INPUT', status: 400 });
+      const input = capabilityBody('compare-data', req.body);
       res.json({
         result: await compareData(store, manager, {
-          sourceId,
-          sourceDatabase: str(body.sourceDatabase),
-          targetId,
-          targetDatabase: str(body.targetDatabase),
-          tables: Array.isArray(body.tables) ? (body.tables as string[]) : undefined,
+          sourceId: String(input.sourceId),
+          sourceDatabase: input.sourceDatabase as string | undefined,
+          targetId: String(input.targetId),
+          targetDatabase: input.targetDatabase as string | undefined,
+          tables: input.tables as string[] | undefined,
         }),
       });
     }),
@@ -454,19 +478,18 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
   router.post(
     '/jobs',
     ah(async (req, res) => {
-      const body = obj(req.body, 'body');
-      const connectionId = str(body.connectionId);
-      if (!connectionId || !store.getConnection(connectionId)) throw Object.assign(new Error('连接不存在'), { code: 'CONNECTION_NOT_FOUND', status: 404 });
-      const type = body.type === 'backup' ? 'backup' : 'query';
-      if (type === 'query' && !str(body.sql)) throw Object.assign(new Error('查询任务需要 SQL'), { code: 'INVALID_INPUT', status: 400 });
+      const input = capabilityBody('jobs', req.body);
+      const connectionId = String(input.connectionId);
+      if (!store.getConnection(connectionId)) throw Object.assign(new Error('连接不存在'), { code: 'CONNECTION_NOT_FOUND', status: 404 });
+      const type = input.type === 'backup' ? 'backup' : 'query';
       const job = store.createJob({
-        name: String(body.name ?? '未命名任务'),
+        name: String(input.name),
         connectionId,
-        database: str(body.database),
+        database: input.database as string | undefined,
         type,
-        sql: str(body.sql),
-        intervalSeconds: Math.max(30, Number(body.intervalSeconds) || 3600),
-        enabled: body.enabled !== false,
+        sql: input.sql as string | undefined,
+        intervalSeconds: Math.max(30, Number(input.intervalSeconds) || 3600),
+        enabled: input.enabled !== false,
       });
       res.status(201).json({ job });
     }),

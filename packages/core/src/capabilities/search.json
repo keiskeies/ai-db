@@ -1,0 +1,112 @@
+{
+  "id": "search",
+  "route": {
+    "method": "POST",
+    "path": "/search"
+  },
+  "title": {
+    "zh": "数据库搜索",
+    "en": "Database search"
+  },
+  "description": "按对象名 / 注释搜索，或对文本列做数据全文查找",
+  "whenToUse": "用户说「哪里用到了这个字段」「哪个表里有这个值」时",
+  "flow": [
+    "确认连接与库",
+    "确认搜索范围：objects 只搜对象名与注释，data 搜文本列内容，all 两者都搜",
+    "输入关键词",
+    "结果可点击打开对应表"
+  ],
+  "fields": [
+    {
+      "key": "connectionId",
+      "type": "connection",
+      "label": {
+        "zh": "连接",
+        "en": "Connection"
+      },
+      "required": true
+    },
+    {
+      "key": "database",
+      "type": "database",
+      "allowAll": true,
+      "label": {
+        "zh": "库",
+        "en": "Database"
+      }
+    },
+    {
+      "key": "query",
+      "type": "text",
+      "label": {
+        "zh": "关键词",
+        "en": "Query"
+      },
+      "required": true
+    },
+    {
+      "key": "scope",
+      "type": "enum",
+      "label": {
+        "zh": "范围",
+        "en": "Scope"
+      },
+      "default": "all",
+      "options": [
+        {
+          "value": "objects",
+          "label": {
+            "zh": "对象名与注释",
+            "en": "Objects"
+          }
+        },
+        {
+          "value": "data",
+          "label": {
+            "zh": "数据内容",
+            "en": "Data"
+          }
+        },
+        {
+          "value": "all",
+          "label": {
+            "zh": "两者",
+            "en": "Both"
+          }
+        }
+      ]
+    }
+  ],
+  "states": [
+    {
+      "id": "ok",
+      "label": {
+        "zh": "完成",
+        "en": "Done"
+      },
+      "terminal": true,
+      "phrase": "命中 {matches} 处"
+    },
+    {
+      "id": "failed",
+      "label": {
+        "zh": "失败",
+        "en": "Failed"
+      },
+      "terminal": true,
+      "phrase": "搜索失败：{error}"
+    }
+  ],
+  "progress": {
+    "supported": false
+  },
+  "tools": [
+    "search_objects"
+  ],
+  "maxRisk": "read",
+  "constraints": [
+    "数据全文搜索有成本上限：最多扫描 25 张表 × 6 个文本列 × 5 行，单次 15 秒超时",
+    "数据全文搜索会跳过 业务上下文 中禁用的表",
+    "Agent 侧的 search_objects 只覆盖对象名与注释，不覆盖数据内容"
+  ]
+}

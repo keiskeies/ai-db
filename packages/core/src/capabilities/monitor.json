@@ -1,0 +1,58 @@
+{
+  "id": "monitor",
+  "route": {
+    "method": "GET",
+    "path": "/monitor"
+  },
+  "title": {
+    "zh": "服务器监控",
+    "en": "Server monitor"
+  },
+  "description": "查看引擎指标与当前会话列表",
+  "whenToUse": "用户问「数据库现在压力大不大」「有哪些连接在跑」时",
+  "flow": [
+    "确认连接",
+    "拉取引擎指标与会话列表",
+    "需要终止会话时，让用户在工具箱里操作并确认"
+  ],
+  "fields": [
+    {
+      "key": "connectionId",
+      "type": "connection",
+      "label": {
+        "zh": "连接",
+        "en": "Connection"
+      },
+      "required": true
+    }
+  ],
+  "states": [
+    {
+      "id": "ok",
+      "label": {
+        "zh": "完成",
+        "en": "Done"
+      },
+      "terminal": true,
+      "phrase": "已读取 {sections} 组指标、{sessions} 个会话"
+    },
+    {
+      "id": "failed",
+      "label": {
+        "zh": "失败",
+        "en": "Failed"
+      },
+      "terminal": true,
+      "phrase": "监控读取失败：{error}"
+    }
+  ],
+  "progress": {
+    "supported": false
+  },
+  "tools": [],
+  "maxRisk": "read",
+  "constraints": [
+    "部分引擎返回「暂不支持」",
+    "终止会话属于破坏性操作，当前没有 Agent 工具，需用户到 工具箱 → 服务器监控 手动确认"
+  ]
+}

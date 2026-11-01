@@ -1,0 +1,181 @@
+{
+  "id": "users",
+  "route": {
+    "method": "POST",
+    "path": "/users/action"
+  },
+  "title": {
+    "zh": "用户与权限",
+    "en": "Users & privileges"
+  },
+  "description": "列出数据库账户与角色，创建 / 删除账户、授权",
+  "whenToUse": "用户问「这个库有哪些账号」「给 x 开一个只读账号」时",
+  "flow": [
+    "确认连接",
+    "选择动作：列出 / 创建 / 删除 / 授权",
+    "填写账号信息",
+    "执行并返回生成的 SQL"
+  ],
+  "fields": [
+    {
+      "key": "connectionId",
+      "type": "connection",
+      "label": {
+        "zh": "连接",
+        "en": "Connection"
+      },
+      "required": true
+    },
+    {
+      "key": "action",
+      "type": "enum",
+      "label": {
+        "zh": "动作",
+        "en": "Action"
+      },
+      "required": true,
+      "default": "list",
+      "options": [
+        {
+          "value": "list",
+          "label": {
+            "zh": "列出账户",
+            "en": "List"
+          }
+        },
+        {
+          "value": "create",
+          "label": {
+            "zh": "创建账户",
+            "en": "Create"
+          },
+          "risk": "ddl"
+        },
+        {
+          "value": "drop",
+          "label": {
+            "zh": "删除账户",
+            "en": "Drop"
+          },
+          "risk": "destructive"
+        },
+        {
+          "value": "grant",
+          "label": {
+            "zh": "授权",
+            "en": "Grant"
+          },
+          "risk": "ddl"
+        }
+      ]
+    },
+    {
+      "key": "name",
+      "type": "text",
+      "label": {
+        "zh": "账号名",
+        "en": "Account"
+      },
+      "required": true,
+      "showWhen": {
+        "field": "action",
+        "equals": "create"
+      },
+      "hint": "创建 / 删除 / 授权时必填"
+    },
+    {
+      "key": "host",
+      "type": "text",
+      "label": {
+        "zh": "主机",
+        "en": "Host"
+      },
+      "showWhen": {
+        "field": "action",
+        "equals": "create"
+      },
+      "hint": "仅 MySQL 系需要，默认 %"
+    },
+    {
+      "key": "password",
+      "type": "text",
+      "label": {
+        "zh": "密码",
+        "en": "Password"
+      },
+      "showWhen": {
+        "field": "action",
+        "equals": "create"
+      }
+    },
+    {
+      "key": "privileges",
+      "type": "text",
+      "label": {
+        "zh": "权限表达式",
+        "en": "Privileges"
+      },
+      "showWhen": {
+        "field": "action",
+        "equals": "grant"
+      },
+      "hint": "如 SELECT 或 SELECT,INSERT"
+    },
+    {
+      "key": "scope",
+      "type": "text",
+      "label": {
+        "zh": "权限范围",
+        "en": "Scope"
+      },
+      "showWhen": {
+        "field": "action",
+        "equals": "grant"
+      },
+      "hint": "如 db.* 或 *.*"
+    },
+    {
+      "key": "role",
+      "type": "text",
+      "label": {
+        "zh": "角色",
+        "en": "Role"
+      },
+      "showWhen": {
+        "field": "action",
+        "equals": "grant"
+      },
+      "hint": "PostgreSQL / SQL Server 等按角色授权"
+    }
+  ],
+  "states": [
+    {
+      "id": "ok",
+      "label": {
+        "zh": "成功",
+        "en": "Succeeded"
+      },
+      "terminal": true,
+      "phrase": "已执行：{message}"
+    },
+    {
+      "id": "failed",
+      "label": {
+        "zh": "失败",
+        "en": "Failed"
+      },
+      "terminal": true,
+      "phrase": "执行失败：{error}"
+    }
+  ],
+  "progress": {
+    "supported": false
+  },
+  "tools": [],
+  "maxRisk": "destructive",
+  "constraints": [
+    "SQLite 与部分引擎不支持用户管理，会返回 supported:false",
+    "密码会进入工具参数与审计，提醒用户谨慎",
+    "当前没有对应的 Agent 工具：需要执行时引导用户到 工具箱 → 用户与权限"
+  ]
+}

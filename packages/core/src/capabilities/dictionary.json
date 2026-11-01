@@ -1,0 +1,67 @@
+{
+  "id": "dictionary",
+  "route": {
+    "method": "GET",
+    "path": "/dictionary"
+  },
+  "title": {
+    "zh": "数据字典",
+    "en": "Data dictionary"
+  },
+  "description": "导出库结构为 Markdown / DDL / JSON，含列类型、默认值与注释",
+  "whenToUse": "用户要「导出一份数据字典」「给这个库生成文档」时",
+  "flow": [
+    "确认连接与库",
+    "生成字典内容",
+    "导出为 Markdown / DDL / JSON"
+  ],
+  "fields": [
+    {
+      "key": "connectionId",
+      "type": "connection",
+      "label": {
+        "zh": "连接",
+        "en": "Connection"
+      },
+      "required": true
+    },
+    {
+      "key": "database",
+      "type": "database",
+      "label": {
+        "zh": "库",
+        "en": "Database"
+      }
+    }
+  ],
+  "states": [
+    {
+      "id": "ok",
+      "label": {
+        "zh": "完成",
+        "en": "Done"
+      },
+      "terminal": true,
+      "phrase": "已生成 {tables} 张表的字典"
+    },
+    {
+      "id": "failed",
+      "label": {
+        "zh": "失败",
+        "en": "Failed"
+      },
+      "terminal": true,
+      "phrase": "生成失败：{error}"
+    }
+  ],
+  "progress": {
+    "supported": false
+  },
+  "tools": [],
+  "maxRisk": "read",
+  "constraints": [
+    "只读",
+    "与 /init 生成的 AI_DB.md 不同：字典是结构快照，AI_DB.md 是业务交接文档",
+    "当前没有对应的 Agent 工具"
+  ]
+}

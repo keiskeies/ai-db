@@ -1,0 +1,89 @@
+{
+  "id": "query-builder",
+  "title": {
+    "zh": "查询构建器",
+    "en": "Query builder"
+  },
+  "description": "可视化选表、连接、条件、排序，生成 SQL 送入编辑器（只生成不执行）",
+  "whenToUse": "用户要「帮我拼一条查询」且希望自己再改时",
+  "flow": [
+    "选表",
+    "选列与连接条件",
+    "填 WHERE / 排序 / 行数",
+    "生成 SQL 送入编辑器"
+  ],
+  "fields": [
+    {
+      "key": "connectionId",
+      "type": "connection",
+      "label": {
+        "zh": "连接",
+        "en": "Connection"
+      },
+      "required": true
+    },
+    {
+      "key": "database",
+      "type": "database",
+      "label": {
+        "zh": "库",
+        "en": "Database"
+      }
+    },
+    {
+      "key": "tables",
+      "type": "tables",
+      "label": {
+        "zh": "表",
+        "en": "Tables"
+      },
+      "required": true
+    },
+    {
+      "key": "where",
+      "type": "text",
+      "label": {
+        "zh": "条件",
+        "en": "Where"
+      },
+      "hint": "手写 WHERE 片段"
+    },
+    {
+      "key": "orderBy",
+      "type": "text",
+      "label": {
+        "zh": "排序",
+        "en": "Order by"
+      }
+    },
+    {
+      "key": "limit",
+      "type": "number",
+      "label": {
+        "zh": "行数",
+        "en": "Limit"
+      },
+      "min": 1
+    }
+  ],
+  "states": [
+    {
+      "id": "ok",
+      "label": {
+        "zh": "完成",
+        "en": "Done"
+      },
+      "terminal": true,
+      "phrase": "已生成 SQL"
+    }
+  ],
+  "progress": {
+    "supported": false
+  },
+  "tools": [],
+  "maxRisk": "read",
+  "constraints": [
+    "纯前端功能，不发请求、不执行",
+    "Agent 不需要它：直接写 run_sql 即可，等价且更直接"
+  ]
+}

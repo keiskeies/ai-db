@@ -9,6 +9,7 @@ import {
   KeyRound,
   BookOpen,
   Bell,
+  Boxes,
   Plug,
   Loader2,
   Network,
@@ -41,6 +42,7 @@ import { RiskBadge } from './ui';
 import { SkillsTool } from './tools/SkillsTool';
 import { WebSearchTool } from './tools/WebSearchTool';
 import { McpTool } from './tools/McpTool';
+import { CapabilitiesTool } from './tools/CapabilitiesTool';
 import { NotificationsTool } from './tools/NotificationsTool';
 
 type TabKey = SettingsTab;
@@ -443,7 +445,8 @@ export function SettingsModal() {
       items: [
         { key: 'skills', label: 'Agent Skills', icon: <BookOpen size={14} />, keywords: '技能 技能包 PPT Master 内置' },
         { key: 'mcp', label: 'MCP 与工具', icon: <Plug size={14} />, keywords: 'MCP 工具 外部 Server 文件系统 Git' },
-        { key: 'search', label: '网络搜索', icon: <Search size={14} />, keywords: '搜索 Exa Parallel DuckDuckGo SearXNG Brave Tavily Serper Mojeek DeepSeek Anthropic OpenAI' },
+        { key: 'capabilities', label: '功能能力', icon: <Boxes size={14} />, keywords: '能力 契约 工具箱 表单 字段 功能 capability' },
+        { key: 'search', label: '网络搜索', icon: <Search size={14} />, keywords: '搜索 Exa Parallel Bing DuckDuckGo SearXNG Brave Tavily Serper Mojeek DeepSeek Anthropic OpenAI 代理' },
       ],
     },
     {
@@ -978,6 +981,7 @@ export function SettingsModal() {
                 <div className="settings-embed"><McpTool /></div>
               </div>
             ) : null}
+            {tab === 'capabilities' ? <div className="settings-embed"><CapabilitiesTool /></div> : null}
             {tab === 'notify' ? <div className="settings-embed"><NotificationsTool /></div> : null}
             {tab === 'search' ? <div className="settings-embed"><WebSearchTool /></div> : null}
 

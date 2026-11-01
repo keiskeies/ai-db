@@ -1,0 +1,99 @@
+{
+  "id": "generate",
+  "route": {
+    "method": "POST",
+    "path": "/generate"
+  },
+  "title": {
+    "zh": "数据生成",
+    "en": "Data generator"
+  },
+  "description": "按列语义、类型与外键生成测试数据，可先预览再插入",
+  "whenToUse": "用户要「造点测试数据」「给这张表插 100 行样例」时",
+  "flow": [
+    "确认目标表",
+    "确认生成行数（1–5000）",
+    "先 dryRun 预览生成的 SQL",
+    "确认后插入；写入需要审批"
+  ],
+  "fields": [
+    {
+      "key": "connectionId",
+      "type": "connection",
+      "label": {
+        "zh": "连接",
+        "en": "Connection"
+      },
+      "required": true
+    },
+    {
+      "key": "database",
+      "type": "database",
+      "label": {
+        "zh": "库",
+        "en": "Database"
+      }
+    },
+    {
+      "key": "table",
+      "type": "table",
+      "label": {
+        "zh": "表",
+        "en": "Table"
+      },
+      "required": true
+    },
+    {
+      "key": "rows",
+      "type": "number",
+      "label": {
+        "zh": "行数",
+        "en": "Rows"
+      },
+      "min": 1,
+      "max": 5000,
+      "default": 10
+    },
+    {
+      "key": "dryRun",
+      "type": "boolean",
+      "label": {
+        "zh": "仅预览",
+        "en": "Preview only"
+      },
+      "default": false
+    }
+  ],
+  "states": [
+    {
+      "id": "ok",
+      "label": {
+        "zh": "成功",
+        "en": "Succeeded"
+      },
+      "terminal": true,
+      "phrase": "已生成并插入 {rows} 行"
+    },
+    {
+      "id": "failed",
+      "label": {
+        "zh": "失败",
+        "en": "Failed"
+      },
+      "terminal": true,
+      "phrase": "生成失败：{error}"
+    }
+  ],
+  "progress": {
+    "supported": false
+  },
+  "tools": [
+    "generate_data"
+  ],
+  "maxRisk": "write",
+  "constraints": [
+    "最多 5000 行",
+    "外键列会从被引用表已有值中取样",
+    "写入需要审批"
+  ]
+}

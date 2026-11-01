@@ -1,0 +1,67 @@
+{
+  "id": "advanced-objects",
+  "route": {
+    "method": "GET",
+    "path": "/objects"
+  },
+  "title": {
+    "zh": "高级对象",
+    "en": "Advanced objects"
+  },
+  "description": "列出触发器、函数、存储过程、序列与事件，并查看定义",
+  "whenToUse": "用户问「这个库有哪些触发器 / 存储过程」时",
+  "flow": [
+    "确认连接与库",
+    "按类型拉取对象与定义",
+    "需要修改时让用户在查询窗口执行 DDL"
+  ],
+  "fields": [
+    {
+      "key": "connectionId",
+      "type": "connection",
+      "label": {
+        "zh": "连接",
+        "en": "Connection"
+      },
+      "required": true
+    },
+    {
+      "key": "database",
+      "type": "database",
+      "label": {
+        "zh": "库",
+        "en": "Database"
+      }
+    }
+  ],
+  "states": [
+    {
+      "id": "ok",
+      "label": {
+        "zh": "完成",
+        "en": "Done"
+      },
+      "terminal": true,
+      "phrase": "已读取对象定义"
+    },
+    {
+      "id": "failed",
+      "label": {
+        "zh": "失败",
+        "en": "Failed"
+      },
+      "terminal": true,
+      "phrase": "读取失败：{error}"
+    }
+  ],
+  "progress": {
+    "supported": false
+  },
+  "tools": [],
+  "maxRisk": "read",
+  "constraints": [
+    "只读",
+    "部分引擎不支持全部对象类型，返回空列表",
+    "当前没有对应的 Agent 工具"
+  ]
+}

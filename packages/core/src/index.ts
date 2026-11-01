@@ -28,3 +28,6 @@ export * from './agent/providers/anthropic';
 export * from './agent/providers/openai';
 export * from './agent/providers/local';
 export * from './agent/providers';
+export * from './capabilities/types';
+export * from './capabilities/validate';
+export * from './capabilities';

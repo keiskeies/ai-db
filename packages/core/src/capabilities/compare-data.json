@@ -1,0 +1,104 @@
+{
+  "id": "compare-data",
+  "route": {
+    "method": "POST",
+    "path": "/data/compare"
+  },
+  "title": {
+    "zh": "数据对比",
+    "en": "Data compare"
+  },
+  "description": "比较两个源的行数与主键指纹差异，可按表替换同步",
+  "whenToUse": "用户问「两个库的这张表数据一致吗」「有多少行对不上」时",
+  "flow": [
+    "确认源与目标连接（可以是同一连接的两个库）",
+    "可选限定表；不限定则对比全部表",
+    "执行对比，得到每张表的行数与指纹差异",
+    "需要修复时再走「替换同步」，该步骤会覆盖目标表"
+  ],
+  "fields": [
+    {
+      "key": "sourceId",
+      "legacyKey": "sourceConnectionId",
+      "type": "connection",
+      "label": {
+        "zh": "源连接",
+        "en": "Source"
+      },
+      "required": true
+    },
+    {
+      "key": "sourceDatabase",
+      "type": "database",
+      "label": {
+        "zh": "源库",
+        "en": "Source database"
+      }
+    },
+    {
+      "key": "targetId",
+      "legacyKey": "targetConnectionId",
+      "type": "connection",
+      "label": {
+        "zh": "目标连接",
+        "en": "Target"
+      },
+      "required": true
+    },
+    {
+      "key": "targetDatabase",
+      "type": "database",
+      "label": {
+        "zh": "目标库",
+        "en": "Target database"
+      }
+    },
+    {
+      "key": "tables",
+      "type": "tables",
+      "label": {
+        "zh": "限定表",
+        "en": "Tables"
+      }
+    }
+  ],
+  "states": [
+    {
+      "id": "running",
+      "label": {
+        "zh": "进行中",
+        "en": "Running"
+      },
+      "phrase": "正在对比 {current}/{total} 张表"
+    },
+    {
+      "id": "ok",
+      "label": {
+        "zh": "完成",
+        "en": "Done"
+      },
+      "terminal": true,
+      "phrase": "对比完成：{tables} 张表"
+    },
+    {
+      "id": "failed",
+      "label": {
+        "zh": "失败",
+        "en": "Failed"
+      },
+      "terminal": true,
+      "phrase": "对比失败：{error}"
+    }
+  ],
+  "progress": {
+    "supported": true,
+    "unit": "table"
+  },
+  "tools": [],
+  "maxRisk": "read",
+  "constraints": [
+    "行数 + 主键 DISTINCT/MIN/MAX 指纹，不做逐行内容校验",
+    "修复同步为整表替换，属于破坏性操作，需单独确认",
+    "当前没有对应的 Agent 工具：需要执行时引导用户到 工具箱 → 数据对比"
+  ]
+}

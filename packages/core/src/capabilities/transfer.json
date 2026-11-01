@@ -1,0 +1,164 @@
+{
+  "id": "transfer",
+  "route": {
+    "method": "POST",
+    "path": "/transfer"
+  },
+  "title": {
+    "zh": "数据传输",
+    "en": "Data transfer"
+  },
+  "description": "跨连接复制表结构与数据，目标缺失表自动创建",
+  "whenToUse": "用户要把一批表从 A 库搬到 B 库，或定期同步两张表时",
+  "flow": [
+    "确认源连接与目标连接（必须是两个不同的连接 id）",
+    "确认要传的表；不传则传全部表",
+    "确认 mode：append 追加（保留目标已有数据）或 replace 先清空",
+    "确认 createMissing：目标缺表时是否自动建表",
+    "执行并逐表汇报结果"
+  ],
+  "fields": [
+    {
+      "key": "sourceConnectionId",
+      "legacyKey": "sourceId",
+      "type": "connection",
+      "label": {
+        "zh": "源连接",
+        "en": "Source"
+      },
+      "required": true
+    },
+    {
+      "key": "sourceDatabase",
+      "type": "database",
+      "label": {
+        "zh": "源库",
+        "en": "Source database"
+      }
+    },
+    {
+      "key": "targetConnectionId",
+      "legacyKey": "targetId",
+      "type": "connection",
+      "label": {
+        "zh": "目标连接",
+        "en": "Target"
+      },
+      "required": true,
+      "hint": "目标为只读连接时会被拒绝"
+    },
+    {
+      "key": "targetDatabase",
+      "type": "database",
+      "label": {
+        "zh": "目标库",
+        "en": "Target database"
+      }
+    },
+    {
+      "key": "tables",
+      "type": "tables",
+      "label": {
+        "zh": "限定表",
+        "en": "Tables"
+      },
+      "hint": "留空表示全部表；表多时建议限定以避免长时间运行"
+    },
+    {
+      "key": "mode",
+      "type": "enum",
+      "label": {
+        "zh": "写入方式",
+        "en": "Mode"
+      },
+      "default": "append",
+      "options": [
+        {
+          "value": "append",
+          "label": {
+            "zh": "追加",
+            "en": "Append"
+          }
+        },
+        {
+          "value": "replace",
+          "label": {
+            "zh": "清空后写入",
+            "en": "Replace"
+          },
+          "risk": "destructive"
+        }
+      ]
+    },
+    {
+      "key": "createMissing",
+      "type": "boolean",
+      "label": {
+        "zh": "自动建表",
+        "en": "Create missing"
+      },
+      "default": true
+    },
+    {
+      "key": "limit",
+      "type": "number",
+      "label": {
+        "zh": "每表行数上限",
+        "en": "Row limit"
+      },
+      "min": 1,
+      "advanced": true,
+      "hint": "用于试跑；不填表示全量"
+    }
+  ],
+  "states": [
+    {
+      "id": "running",
+      "label": {
+        "zh": "进行中",
+        "en": "Running"
+      },
+      "phrase": "正在传输 {current}/{total} 张表"
+    },
+    {
+      "id": "ok",
+      "label": {
+        "zh": "成功",
+        "en": "Succeeded"
+      },
+      "terminal": true,
+      "phrase": "已传输 {tables} 张表、{rows} 行"
+    },
+    {
+      "id": "partial",
+      "label": {
+        "zh": "部分成功",
+        "en": "Partial"
+      },
+      "terminal": true,
+      "phrase": "部分表失败：{error}"
+    },
+    {
+      "id": "failed",
+      "label": {
+        "zh": "失败",
+        "en": "Failed"
+      },
+      "terminal": true,
+      "phrase": "传输失败：{error}"
+    }
+  ],
+  "progress": {
+    "supported": true,
+    "unit": "table"
+  },
+  "tools": [
+    "transfer_data"
+  ],
+  "maxRisk": "write",
+  "constraints": [
+    "目标连接为只读时拒绝执行",
+    "replace 模式会先清空目标表，属于破坏性操作",
+    "非 SQL 引擎的表不支持结构复制"
+  ]
+}
