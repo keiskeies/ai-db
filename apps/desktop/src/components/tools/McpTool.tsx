@@ -175,7 +175,36 @@ export function McpTool() {
             <strong>文件系统未配置允许目录</strong> — Agent 目前无法读取任何文件。请在下方「文件系统」卡片添加目录（例如 C:\server\kbook\backend），再让 Agent 重试。
           </div>
         ) : null}
-        <div className="panel">
+        <details className="panel" style={{ padding: 10 }} open data-testid="mcp-add-server">
+          <summary className="panel-head" style={{ paddingLeft: 0, cursor: 'pointer' }}>
+            新增 MCP Server <span className="muted" style={{ fontWeight: 400 }}>（外部 stdio）</span>
+          </summary>
+          <div className="tool-row" style={{ padding: 0, border: 0 }}>
+            <div className="field" style={{ width: 150 }}>
+              <label>名称</label>
+              <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="feishu" />
+            </div>
+            <div className="field" style={{ width: 130 }}>
+              <label>命令</label>
+              <input className="input" value={command} onChange={(e) => setCommand(e.target.value)} placeholder="npx" />
+            </div>
+            <div className="field" style={{ flex: 1, minWidth: 260 }}>
+              <label>参数（空格分隔）</label>
+              <input className="input" value={args} onChange={(e) => setArgs(e.target.value)} placeholder="-y @larksuiteoapi/lark-mcp ..." />
+            </div>
+          </div>
+          <div className="field" style={{ marginTop: 8 }}>
+            <label>环境变量 JSON（可选，加密存储）</label>
+            <textarea className="textarea" rows={2} value={env} onChange={(e) => setEnv(e.target.value)} placeholder='{"APP_ID":"…","APP_SECRET":"…"}' />
+          </div>
+          <div className="muted" style={{ fontSize: 10, marginTop: 6 }}>
+            飞书 / 企微 / QQ 群机器人请用「设置 → 通知」，不需要 MCP；这里只用于接入外部 MCP 工具。命令会在本机执行，只添加可信的 MCP Server。
+          </div>
+          <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
+            <button className="btn primary" onClick={() => void create()}><Plus size={12} /> 保存</button>
+          </div>
+        </details>
+        <div className="panel" style={{ marginTop: 10 }}>
           <div className="panel-head">已配置 <span className="badge">{servers.length}</span></div>
           {loading ? <div className="dash-empty"><Loader2 size={14} className="spin" /> 读取中…</div> : null}
           {!loading && !servers.length ? <div className="dash-empty">还没有 MCP Server。可以配置飞书 lark-openapi-mcp、文件系统等 stdio server。</div> : null}
@@ -275,36 +304,7 @@ export function McpTool() {
             );
           })}
         </div>
-        <details className="panel" style={{ padding: 10, marginTop: 10 }}>
-          <summary className="panel-head" style={{ paddingLeft: 0, cursor: 'pointer' }}>
-            新增 MCP Server <span className="muted" style={{ fontWeight: 400 }}>（外部 stdio）</span>
-          </summary>
-          <div className="tool-row" style={{ padding: 0, border: 0 }}>
-            <div className="field" style={{ width: 150 }}>
-              <label>名称</label>
-              <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="feishu" />
-            </div>
-            <div className="field" style={{ width: 130 }}>
-              <label>命令</label>
-              <input className="input" value={command} onChange={(e) => setCommand(e.target.value)} placeholder="npx" />
-            </div>
-            <div className="field" style={{ flex: 1, minWidth: 260 }}>
-              <label>参数（空格分隔）</label>
-              <input className="input" value={args} onChange={(e) => setArgs(e.target.value)} placeholder="-y @larksuiteoapi/lark-mcp ..." />
-            </div>
-          </div>
-          <div className="field" style={{ marginTop: 8 }}>
-            <label>环境变量 JSON（可选，加密存储）</label>
-            <textarea className="textarea" rows={2} value={env} onChange={(e) => setEnv(e.target.value)} placeholder='{"APP_ID":"…","APP_SECRET":"…"}' />
-          </div>
-          <div className="muted" style={{ fontSize: 10, marginTop: 6 }}>
-            飞书 / 企微 / QQ 群机器人请用「设置 → 通知」，不需要 MCP；这里只用于接入外部 MCP 工具。命令会在本机执行，只添加可信的 MCP Server。
-          </div>
-          <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
-            <button className="btn primary" onClick={() => void create()}><Plus size={12} /> 保存</button>
-          </div>
-        </details>
-        <details className="panel agent-catalog" data-testid="agent-tool-catalog">
+        <details className="panel agent-catalog" data-testid="agent-tool-catalog" open>
           <summary className="panel-head">
             Agent 工具目录 <span className="muted">（只读 · {catalog.length} 个）</span>
           </summary>
@@ -346,6 +346,7 @@ export function McpTool() {
             </div>
           </div>
         </details>
+
       </div>
     </div>
   );

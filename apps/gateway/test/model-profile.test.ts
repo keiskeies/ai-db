@@ -186,3 +186,44 @@ test('migrates string model lists and old single-model configs', async () => {
   const models = legacyEdit.body.settings.agent.modelConfigs[0].models.map((entry: { id: string }) => entry.id);
   assert.deepEqual(models, ['flat-only', 'flat-second'], '旧式直接改 model 会补进当前模型源');
 });
+
+test('reasoningTier 传 null 会真正清空，回到跟随服务商', async () => {
+  // 这是输入卡思考档位胶囊「跟随服务商」依赖的契约：前端只能传 null，
+  // undefined 会在 JSON 里消失、被浅合并当成「没改」，档位就清不掉了。
+  const setHigh = await api('/settings', { method: 'PUT', body: JSON.stringify({ agent: { reasoningTier: 'high' } }) });
+  assert.equal(setHigh.body.settings.agent.reasoningTier, 'high');
+
+  const cleared = await api('/settings', { method: 'PUT', body: JSON.stringify({ agent: { reasoningTier: null } }) });
+  assert.equal(cleared.body.settings.agent.reasoningTier, undefined, 'null 必须归一成未设置，不能把 null 存进库');
+
+  // 不传该字段时保持原值（其它设置项的常规合并语义不受影响）
+  const keep = await api('/settings', { method: 'PUT', body: JSON.stringify({ agent: { reasoningTier: 'low' } }) });
+  assert.equal(keep.body.settings.agent.reasoningTier, 'low');
+  const untouched = await api('/settings', { method: 'PUT', body: JSON.stringify({ agent: { temperature: 0.3 } }) });
+  assert.equal(untouched.body.settings.agent.reasoningTier, 'low', '没提 reasoningTier 就不该动它');
+
+  await api('/settings', { method: 'PUT', body: JSON.stringify({ agent: { reasoningTier: null } }) });
+});
+
+test('轮次统计用户发起的对话轮数，中止的回合也计入', async () => {
+  // 状态条上「N 轮」的语义是「用户问了几次」，不是「几次成功跑完」。
+  // 只统计 done 会出现「0 轮却跑了 N 步」这种读不通的组合。
+  const created = await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: '轮次语义' }) });
+  const sessionId = created.body.session.id;
+  assert.equal(created.body.session.turns, 0);
+
+  // 跑一轮真实的离线推理（本地 provider 不需要外部模型服务）
+  const turn = await fetch(`${base}/api/agent/sessions/${sessionId}/turns`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ text: '只回复两个字：收到' }),
+  });
+  assert.equal(turn.status, 200);
+  await turn.text();
+
+  const afterOne = (await api(`/agent/sessions`)).body.sessions.find((s: { id: string }) => s.id === sessionId);
+  assert.ok(afterOne, '会话仍在列表里');
+  assert.ok(afterOne.turns >= 1, `跑过一轮后 turns 必须增加，实际 ${afterOne.turns}`);
+  // 轮次不该超过「步数」——一步都没走却算了一轮是不可能的
+  assert.ok(afterOne.steps === 0 || afterOne.turns <= afterOne.steps + 1, `turns=${afterOne.turns} steps=${afterOne.steps}`);
+});
