@@ -72,7 +72,13 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'run_sql',
-    description: 'Execute SQL on a connection. SELECT is read-only; writes/DDL are classified and may require approval. Multiple read-only statements may be sent as one script; writes and DDL must be one statement per call unless the user enabled multi-statement. Keep result sets small and add LIMIT to exploratory SELECTs.',
+    // 为什么把单条多列 ALTER 写进 description：本次事故里模型逐列改 741 个字段，
+    // 462 秒里只有 0.7 秒在执行、其余全在等模型往返。语法示例直接给全（含 COMMENT），
+    // 模型才会一次调用改完整张表，而不是自己猜写法或退回逐列。
+    description: `Execute SQL on a connection. SELECT is read-only; writes/DDL are classified by the highest risk in the script and may require approval. Multiple read-only statements may be sent as one script.
+To change many columns of one table, prefer ONE statement — MySQL accepts multiple clauses in a single ALTER, so the whole table costs one round trip instead of one per column:
+  ALTER TABLE \`t\` MODIFY COLUMN \`a\` int NOT NULL COMMENT '甲', MODIFY COLUMN \`b\` varchar(10) NULL COMMENT '乙';
+For a script that must run several write/DDL statements in order, pass allowMulti: true. It is OR-ed with the user's 「允许多语句」 setting. Such a script is NOT atomic: if a later statement fails, earlier ones are already applied — order the script accordingly. Read-only connections still reject write scripts. Keep result sets small and add LIMIT to exploratory SELECTs.`,
     risk: 'dynamic',
     inputSchema: {
       type: 'object',
@@ -84,6 +90,11 @@ export const TOOLS: ToolDefinition[] = [
         sql: { type: 'string' },
         maxRows: { type: 'integer', minimum: 1, maximum: 5000 },
         dryRun: { type: 'boolean', description: 'Return the SQL that would run without executing' },
+        allowMulti: {
+          type: 'boolean',
+          description:
+            'Explicitly declare that `sql` is a script to run statement by statement. Needed only when the script contains more than one write/DDL statement; read-only scripts never need it. The script is not atomic, and destructive statements still require approval.',
+        },
       },
     },
     summarize: (a) => String(a.sql ?? '').replace(/\s+/g, ' ').slice(0, 80),
@@ -1017,6 +1028,7 @@ x/y/ys/value/label are result column names, not SQL expressions.`,
         tables: { type: 'array', items: { type: 'string' } },
         mode: { type: 'string', enum: ['append', 'replace'], description: 'Default append' },
         createMissing: { type: 'boolean', description: 'Default true' },
+        limit: { type: 'integer', minimum: 1, description: 'Rows per table; omit for full copy. Useful for a trial run.' },
       },
     },
     summarize: (a) => `传输数据 ${a.sourceConnectionId} → ${a.targetConnectionId}`,
