@@ -23,6 +23,7 @@ const required = [
   'docs/11-command-workflows.md',
   'docs/12-bots-and-mcp.md',
   'docs/13-skill-host-plan.md',
+  'docs/16-capability-contract.md',
 ];
 for (const f of required) existsSync(join(root, f)) ? ok(`exists ${f}`) : fail(`exists ${f}`, 'missing');
 
@@ -46,6 +47,7 @@ const requiredSections = {
   'docs/04-ai-agent-design.md': ['运行时循环', '工具目录', '权限模型', '记忆架构', '上下文组装', 'Provider', '安全与防护', '评估场景'],
   'docs/05-data-and-api.md': ['本地元数据库', 'HTTP API', '流式事件', '移动端本地存储'],
   'docs/06-delivery-and-verification.md': ['里程碑', '测试策略', '文档二次验证', '定义完成'],
+  'docs/16-capability-contract.md': ['能力契约', '字段类型', '状态汇报', '开发计划'],
 };
 for (const [f, sections] of Object.entries(requiredSections)) {
   const text = read(f);
@@ -162,6 +164,97 @@ if (existsSync(executorFile)) {
   JSON.stringify(docList) === JSON.stringify(codeTransports)
     ? ok('transport matrix matches code')
     : fail('transport matrix matches code', `docs=[${docList.join(',')}] code=[${codeTransports.join(',')}]`);
+}
+
+// 10. 能力契约：12 个工具箱模块必须各有契约文件，且契约本身能通过自检。
+//     契约是 Agent 认识「软件自带功能」的唯一来源，缺一个就等于该功能对模型隐身。
+{
+  const capabilitiesDir = join(root, 'packages/core/src/capabilities');
+  const capabilityFiles = existsSync(capabilitiesDir)
+    ? readdirSync(capabilitiesDir).filter((f) => f.endsWith('.json')).map((f) => f.replace(/\.json$/, '')).sort()
+    : [];
+  const hub = read('apps/desktop/src/components/tools/ToolsHub.tsx');
+  const hubIds = [...hub.matchAll(/\{ id: '([a-z-]+)', label:/g)].map((m) => m[1]);
+  if (!hubIds.length) {
+    fail('capability modules', 'ToolsHub.tsx 的 TOOL_LIST 解析不到模块 id');
+  } else {
+    const expected = new Set(
+      hubIds.map((id) => ({ builder: 'query-builder', compare: 'schema-sync', datacompare: 'compare-data', objects: 'advanced-objects', agentcontext: 'agent-context' })[id] ?? id),
+    );
+    const actual = new Set(capabilityFiles);
+    for (const id of expected) actual.has(id) ? ok(`capability ${id}`) : fail(`capability ${id}`, '缺少契约 JSON');
+    for (const id of actual) expected.has(id) ? null : fail(`capability ${id}`, '契约没有对应的工具箱模块');
+    capabilityFiles.length === expected.size
+      ? ok('capability count matches toolbox')
+      : fail('capability count matches toolbox', `contracts=${capabilityFiles.length} modules=${expected.size}`);
+  }
+  if (capabilityFiles.length) {
+    const { CAPABILITIES } = await import('../packages/core/src/capabilities/index.ts');
+    const { assertCapabilities } = await import('../packages/core/src/capabilities/validate.ts');
+    const { TOOLS } = await import('../packages/core/src/agent/tools.ts');
+    try {
+      assertCapabilities(CAPABILITIES, TOOLS);
+      ok('capability contracts pass self-check');
+    } catch (err) {
+      fail('capability contracts pass self-check', err?.message ?? String(err));
+    }
+    for (const capability of CAPABILITIES) {
+      read('docs/16-capability-contract.md').includes(capability.id)
+        ? ok(`capability ${capability.id} documented`)
+        : fail(`capability ${capability.id} documented`, '未出现在 docs/16');
+    }
+  }
+
+  // 10b. 端点字段漂移守卫：已接契约的端点，它实际读取的 `input.*` 字段必须与契约声明一致。
+  //      契约是校验的唯一来源，端点若读了契约里没有的字段，那个字段永远不会被校验（默认 undefined）；
+  //      契约若声明了端点不读的字段，则是白声明、且会误导 Agent 去填。两种都是静默失败。
+  const routesSource = read('apps/gateway/src/features/routes.ts');
+  const routeLines = routesSource.split('\n');
+  const routeCalls = [];
+  routeLines.forEach((line, index) => {
+    const matched = line.match(/const input = capabilityBody\('([a-z-]+)',/);
+    if (matched) routeCalls.push({ id: matched[1], start: index });
+  });
+  if (!routeCalls.length) {
+    fail('migrated endpoints match their contracts', 'routes.ts 里找不到任何 capabilityBody 调用');
+  } else {
+    const { getCapability } = await import('../packages/core/src/capabilities/index.ts');
+    // 按端点（router. 开头）切块，避免 /transfer 与 /transfer/stream 共用契约时互相污染
+    const blockStarts = routeLines.map((line, index) => (line.trimStart().startsWith('router.') ? index : -1)).filter((i) => i >= 0);
+    const blockOf = (line) => {
+      let best = -1;
+      for (const start of blockStarts) if (start <= line) best = start;
+      return best;
+    };
+    const readByCapability = new Map();
+    for (const call of routeCalls) {
+      const blockStart = blockOf(call.start);
+      const nextBlock = blockStarts.find((start) => start > blockStart) ?? routeLines.length;
+      const block = routeLines.slice(blockStart, nextBlock).join('\n');
+      const keys = new Set([...block.matchAll(/input\.([a-zA-Z][a-zA-Z0-9]*)/g)].map((m) => m[1]));
+      const existing = readByCapability.get(call.id) ?? new Set();
+      for (const key of keys) existing.add(key);
+      readByCapability.set(call.id, existing);
+    }
+    for (const [id, readKeys] of readByCapability) {
+      const capability = getCapability(id);
+      if (!capability) {
+        fail(`endpoint ${id} field drift`, `引用了不存在的契约 ${id}`);
+        continue;
+      }
+      const declared = new Set(capability.fields.map((field) => field.key));
+      const undeclared = [...readKeys].filter((key) => !declared.has(key)).sort();
+      const unread = [...declared].filter((key) => !readKeys.has(key)).sort();
+      undeclared.length === 0 && unread.length === 0
+        ? ok(`endpoint ${id} fields match its contract`)
+        : fail(
+            `endpoint ${id} fields match its contract`,
+            [undeclared.length ? `端点读了未声明字段: ${undeclared.join(',')}` : '', unread.length ? `契约声明但端点未读: ${unread.join(',')}` : '']
+              .filter(Boolean)
+              .join('；'),
+          );
+    }
+  }
 }
 
 // report
