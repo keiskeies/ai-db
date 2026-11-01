@@ -512,8 +512,7 @@ export class AgentHost {
     this.sessionAllowed.set(sessionId, sessionAllowed);
     const runtime = new AgentRuntime({
       provider,
-      // 语义命令通常要「看结构 → 多次查数 → 出图」，给足步数；普通提问保持用户设置。
-      maxSteps: intent ? Math.min(40, Math.max(16, (settings.agent.maxSteps || 12) * 2)) : settings.agent.maxSteps,
+      maxSteps,
       temperature: settings.agent.temperature,
       maxTokens: maxOutputTokensOf(settings.agent, profile),
       reasoning: activeReasoningTier(settings.agent, profile),
