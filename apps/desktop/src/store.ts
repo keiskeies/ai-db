@@ -294,10 +294,14 @@ interface AppStore {
 }
 
 /**
- * 用户在抽屉里手动点会话时，loadAgentSession 会把该会话的库写回 agentDatabase。
- * 若不抑制，"库变了"会再次触发自动恢复，把用户刚点的会话换成"最近一条"。
+ * 自动恢复的代次号。restoreSessionForScope 有 await，用户可能在它跑完之前
+ * 又切了一次库：先发的那次不能覆盖后发的，否则界面会停在用户已经离开的库上。
+ * 每发起一次自增，回来时只有代次仍是自己才落地。
+ *
+ * 注：loadAgentSession 用的是原始 set()，不会回调 setAgentDatabase，
+ * 所以「手动点会话 → 再次触发恢复」这条路径本就不存在，不需要另设抑制标记。
  */
-let suppressAutoRestore = false;
+let restoreSeq = 0;
 
 const WELCOME: Tab = { id: 'welcome', kind: 'welcome', title: '欢迎' };
 let tabSeq = 1;
@@ -768,7 +772,6 @@ export const useApp = create<AppStore>((set, get) => ({
     // 选完就落库：否则重开会话会退回连接默认库，历史对话和实际执行对不上
     const id = get().agentSessionId;
     if (id) void api.updateSession(id, { database }).catch(() => undefined);
-    if (suppressAutoRestore) return;
     // 换库 → 自动接上该库最近的那条会话
     await get().restoreSessionForScope();
   },
@@ -798,8 +801,11 @@ export const useApp = create<AppStore>((set, get) => ({
   restoreSessionForScope: async () => {
     const live = get().live;
     if (live && (live.status === 'streaming' || live.status === 'awaiting')) return;
+    const seq = ++restoreSeq;
     const { activeConnectionId, agentDatabase } = get();
     await get().refreshSessions();
+    // 期间用户又切了库：这次结果已经过期，丢弃
+    if (seq !== restoreSeq) return;
     const recent = get().sessionsForScope(activeConnectionId, agentDatabase || undefined)[0];
     if (recent) {
       await get().loadAgentSession(recent.id, { keepMode: true });
@@ -882,7 +888,6 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 
   loadAgentSession: async (id, opts) => {
-    suppressAutoRestore = true;
     try {
       if (get().live && (get().live!.status === 'streaming' || get().live!.status === 'awaiting')) await get().abortAgent();
       const detail = await api.getSession(id);
@@ -905,8 +910,6 @@ export const useApp = create<AppStore>((set, get) => ({
       if (detail.session.connectionId && !get().schemas[detail.session.connectionId]) void get().loadSchema(detail.session.connectionId);
     } catch (err) {
       get().notify('error', get().t('error'), errorText(err));
-    } finally {
-      suppressAutoRestore = false;
     }
   },
 
