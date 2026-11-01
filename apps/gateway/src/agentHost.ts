@@ -537,6 +537,8 @@ export class AgentHost {
         if (sessionForAudit.summary) extra.push(`## Earlier session summary\n${sessionForAudit.summary}`);
         if (schemaError) extra.push(`## Schema loading warning\n${schemaError}`);
         if (settings.features.mcp && allowMcp) extra.push(mcpPromptBlock(this.opts.store));
+        // 能力目录是常量开销（12 条约 1.4k token），本地推理器用不到，跳过。
+        if (settings.agent.provider !== 'local') extra.push(capabilityPromptBlock());
         if (settings.agent.provider === 'local') {
           extra.push('## Runtime\nYou are running with the offline Local Reasoner. Keep to clear, rule-parsable instructions; if a request is ambiguous, explain what you can do.');
         }
