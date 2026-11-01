@@ -1,42 +1,5 @@
-.welcome-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 6px;
-  margin: 10px 0 12px;
-}
-.metric {
-  position: relative;
-  border: 1px solid var(--border-subtle);
-  background: color-mix(in srgb, var(--bg-panel) 90%, transparent);
-  border-radius: var(--radius-md);
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  overflow: hidden;
-}
-.metric::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  height: 1px;
-  background: linear-gradient(90deg, var(--accent-2), transparent);
-  opacity: .5;
-}
-.metric.accent::after { background: linear-gradient(90deg, var(--agent), transparent); }
-.metric-label { font-size: 8.5px; text-transform: uppercase; letter-spacing: 0.9px; color: var(--text-muted); }
-.metric strong { font-family: var(--font-mono); font-size: 18px; font-weight: 600; color: var(--text-primary); line-height: 1.2; }
-.metric.accent strong { color: var(--agent); }
-.metric em { font-style: normal; font-size: 8.5px; color: var(--text-muted); }
-
-.welcome-dashboard {
-  display: grid;
-  grid-template-columns: 1.15fr .85fr;
-  gap: 8px;
-  margin-top: 8px;
-}
+/* 注意：欢迎页的指标条 / 双栏面板已移除（改为「当前库的家」，见 home.css）。
+   下面只保留仪表板卡片视图仍然复用的行与状态样式。 */
 .dash-list { display: flex; flex-direction: column; padding: 4px; }
 .dash-row {
   display: flex;
@@ -109,7 +72,6 @@
 .skill-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .skill-text strong { font-size: 10.5px; font-weight: 600; color: var(--text-primary); }
 .skill-text em { font-style: normal; font-size: 9px; color: var(--text-muted); line-height: 1.4; }
-.welcome-footnote { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; margin-top: 12px; font-size: 9.5px; }
 .composer-perm-label { font-size: 9px; color: var(--text-muted); letter-spacing: 0.3px; }
 
 .toasts { left: 300px; right: auto; bottom: 32px; }
