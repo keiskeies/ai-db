@@ -1236,22 +1236,33 @@ export class Store {
   }
 
   addToolRun(input: { id: string; sessionId: string; messageId?: string; tool: string; args?: unknown; result?: unknown; status: string; risk?: string; approval?: string; durationMs?: number }): void {
-    this.exec(
-      'INSERT INTO tool_runs (id,session_id,message_id,tool,args_json,result_json,status,risk,approval,duration_ms,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-      [
-        input.id,
-        input.sessionId,
-        input.messageId ?? null,
-        input.tool,
-        input.args === undefined ? null : JSON.stringify(input.args),
-        input.result === undefined ? null : JSON.stringify(input.result),
-        input.status,
-        input.risk ?? null,
-        input.approval ?? null,
-        input.durationMs ?? null,
-        iso(),
-      ],
-    );
+    const write = (id: string) =>
+      this.exec(
+        'INSERT INTO tool_runs (id,session_id,message_id,tool,args_json,result_json,status,risk,approval,duration_ms,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+        [
+          id,
+          input.sessionId,
+          input.messageId ?? null,
+          input.tool,
+          input.args === undefined ? null : JSON.stringify(input.args),
+          input.result === undefined ? null : JSON.stringify(input.result),
+          input.status,
+          input.risk ?? null,
+          input.approval ?? null,
+          input.durationMs ?? null,
+          iso(),
+        ],
+      );
+    // tool_runs.id 直接用了模型给的 tool call id，而它只在单次响应内唯一：
+    // 有的服务商/代理会复用固定 id（复跑、重放、离线桩都会），主键一冲突就会把
+    // 整轮 agent 抛成 ERR_SQLITE_ERROR。审计写入绝不该毁掉回合，更不该丢掉已有记录，
+    // 因此退让成「加后缀再写一条」——两条调用各自留痕。
+    try {
+      write(input.id);
+    } catch (err: any) {
+      if (!/UNIQUE constraint failed|SQLITE_CONSTRAINT/i.test(String(err?.message ?? ''))) throw err;
+      write(`${input.id}#${Date.now().toString(36)}`);
+    }
   }
 
   listToolRuns(sessionId: string): Array<Record<string, unknown>> {
