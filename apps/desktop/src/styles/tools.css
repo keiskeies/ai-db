@@ -263,3 +263,35 @@
 .skill-card-main { flex: 1; min-width: 0; cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
 .skill-card-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .skill-card-actions { display: flex; align-items: center; gap: 6px; padding-top: 2px; }
+
+/* 能力契约驱动的表单容器。
+   用 display:contents 让每个 .field 直接成为外层 .tool-row 的 flex 子项——
+   如果这里自己再开一层 flex，会形成嵌套 flex，原有面板的横向排布会被打乱。 */
+.capability-form { display: contents; }
+.capability-form > .field { min-width: 120px; }
+
+/* ---------- 设置 → 功能能力（Capability Contract 目录） ---------- */
+.capability-catalog-pane { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.capability-list { display: flex; flex-direction: column; gap: 6px; padding: 2px 12px 12px; overflow: auto; }
+.capability-card { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-panel); }
+.capability-card-head { display: flex; align-items: center; gap: 7px; width: 100%; padding: 8px 10px; background: transparent; border: 0; cursor: pointer; text-align: left; font-size: 12px; color: var(--text-primary); }
+.capability-card-head:hover { background: var(--bg-hover); }
+.capability-id { font-size: 11px; color: var(--text-secondary); }
+.capability-card-body { padding: 0 10px 10px 30px; display: flex; flex-direction: column; gap: 6px; }
+.capability-desc { margin: 0; font-size: 11.5px; }
+.capability-when { margin: 0; font-size: 11px; }
+.capability-meta-row { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; font-size: 11px; }
+.capability-flow { font-size: 11px; }
+.capability-flow ol { margin: 3px 0 0; padding-left: 18px; }
+.capability-flow li { line-height: 1.6; }
+.capability-field-table { display: flex; flex-direction: column; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); overflow: hidden; margin-top: 2px; }
+.capability-field-head,
+.capability-field-row { display: grid; grid-template-columns: minmax(110px, 160px) 72px 40px minmax(140px, 1.1fr) minmax(140px, 1.4fr); gap: 8px; align-items: center; padding: 5px 8px; font-size: 10.5px; }
+.capability-field-head { background: var(--bg-subtle, var(--bg-hover)); font-weight: 600; color: var(--text-secondary); border-bottom: 1px solid var(--border-subtle); }
+.capability-field-row { border-bottom: 1px solid var(--border-subtle); }
+.capability-field-row:last-child { border-bottom: 0; }
+.capability-states { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; font-size: 11px; }
+.capability-constraints { font-size: 11px; }
+.capability-constraints ul { margin: 3px 0 0; padding-left: 18px; }
+.capability-constraints li { line-height: 1.6; }
+.capability-foot { padding: 8px 12px; border-top: 1px solid var(--border-subtle); font-size: 10px; }

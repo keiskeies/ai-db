@@ -1,16 +1,31 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Activity, Loader2, RefreshCw, Skull } from 'lucide-react';
+import { applyCapabilityDefaults, CAPABILITIES, getCapability, type Capability } from '@aidb/core';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
+import { CapabilityForm } from './CapabilityForm';
 
+/**
+ * 服务器监控 —— 表单迁移到能力契约（`capabilities/monitor.json`）。
+ *
+ * 契约里只有 `connectionId` 一个字段，所以这里走的是 **可编辑 connection 字段**路径
+ * （不传 `connectionId` prop，由 `CapabilityForm` 渲染连接选择器）。
+ * 「每 10s 自动刷新」「终止会话」是 UI 行为，不属于表单字段，保持手写。
+ */
 export function MonitorTool() {
-  const connections = useApp((s) => s.connections);
   const activeConnectionId = useApp((s) => s.activeConnectionId);
+  const connections = useApp((s) => s.connections);
   const notify = useApp((s) => s.notify);
-  const [connectionId, setConnectionId] = useState(activeConnectionId ?? connections[0]?.id ?? '');
+  const capability = useMemo<Capability>(() => getCapability('monitor') ?? CAPABILITIES[0], []);
+
+  const [values, setValues] = useState<Record<string, unknown>>(() =>
+    applyCapabilityDefaults(capability, { connectionId: activeConnectionId ?? connections[0]?.id ?? '' }),
+  );
   const [monitor, setMonitor] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [auto, setAuto] = useState(true);
+
+  const connectionId = String(values.connectionId ?? '');
 
   const load = useCallback(async () => {
     if (!connectionId) return;
@@ -50,12 +65,21 @@ export function MonitorTool() {
     <div className="tool-pane">
       <div className="tool-pane-head">
         <Activity size={15} /> 服务器监控
-        <span className="muted">指标 / 会话 / 终止</span>
+        <span className="muted">{capability.title.en} · 指标 / 会话 / 终止</span>
       </div>
-      <div className="tool-row">
-        <select className="select" value={connectionId} onChange={(e) => setConnectionId(e.target.value)} style={{ width: 240 }}>
-          {connections.map((conn) => <option key={conn.id} value={conn.id}>{conn.name} · {conn.engine}</option>)}
-        </select>
+      <div className="tool-row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <div style={{ width: 240 }}>
+          <CapabilityForm
+            capability={capability}
+            values={values}
+            onChange={(key, value) => {
+              setValues((current) => ({ ...current, [key]: value }));
+              if (key === 'connectionId') setMonitor(null);
+            }}
+            disabled={loading}
+            testIdPrefix="monitor"
+          />
+        </div>
         <button className="btn" onClick={() => void load()} disabled={loading}>
           {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <RefreshCw size={12} />} 刷新
         </button>

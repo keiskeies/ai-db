@@ -1,15 +1,20 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Code2, Loader2, RefreshCw } from 'lucide-react';
+import { applyCapabilityDefaults, CAPABILITIES, getCapability, type Capability } from '@aidb/core';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
-import { DatabaseSelect } from '../DatabaseSelect';
+import { CapabilityForm } from './CapabilityForm';
 
 export function AdvancedObjectsTool() {
   const connections = useApp((s) => s.connections);
   const activeConnectionId = useApp((s) => s.activeConnectionId);
   const notify = useApp((s) => s.notify);
-  const [connectionId, setConnectionId] = useState(activeConnectionId ?? connections[0]?.id ?? '');
-  const [database, setDatabase] = useState('');
+  const capability = useMemo<Capability>(() => getCapability('advanced-objects') ?? CAPABILITIES[0], []);
+  const [values, setValues] = useState<Record<string, unknown>>(() =>
+    applyCapabilityDefaults(capability, { connectionId: activeConnectionId ?? connections[0]?.id ?? '' }),
+  );
+  const connectionId = String(values.connectionId ?? '');
+  const database = String(values.database ?? '');
   const [data, setData] = useState<any>(null);
   const [tab, setTab] = useState<'triggers' | 'routines' | 'sequences' | 'events'>('triggers');
   const [selected, setSelected] = useState<any>(null);
@@ -43,10 +48,16 @@ export function AdvancedObjectsTool() {
         <span className="muted">触发器 / 函数 / 序列 / 事件</span>
       </div>
       <div className="tool-row">
-        <select className="select" value={connectionId} onChange={(e) => setConnectionId(e.target.value)} style={{ width: 260 }}>
-          {connections.map((conn) => <option key={conn.id} value={conn.id}>{conn.name} · {conn.engine}</option>)}
-        </select>
-        <DatabaseSelect connectionId={connectionId} value={database} onChange={setDatabase} testId="objects-db" />
+        <CapabilityForm
+          capability={capability}
+          values={values}
+          onChange={(key, value) => {
+            setValues((current) => ({ ...current, [key]: value }));
+            if (key === 'connectionId' || key === 'database') setData(null);
+          }}
+          disabled={loading}
+          testIdPrefix="objects"
+        />
         <button className="btn" onClick={() => void load()} disabled={loading}>
           {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <RefreshCw size={12} />} 刷新
         </button>

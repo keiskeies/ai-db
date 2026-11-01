@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { FileSearch, Loader2, Search } from 'lucide-react';
+import { applyCapabilityDefaults, CAPABILITIES, getCapability, type Capability } from '@aidb/core';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
-import { DatabaseSelect } from '../DatabaseSelect';
+import { CapabilityForm } from './CapabilityForm';
 
 interface ObjectMatch {
   kind: string;
@@ -22,9 +23,10 @@ export function SearchTool() {
   const openData = useApp((s) => s.openData);
   const closeTools = useApp((s) => s.closeTools);
   const notify = useApp((s) => s.notify);
-  const [query, setQuery] = useState('');
-  const [database, setDatabase] = useState('');
-  const [scope, setScope] = useState<'all' | 'objects' | 'data'>('all');
+  const capability = useMemo<Capability>(() => getCapability('search') ?? CAPABILITIES[0], []);
+  const [values, setValues] = useState<Record<string, unknown>>(() => applyCapabilityDefaults(capability));
+  const query = String(values.query ?? '');
+  const database = String(values.database ?? '');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ objects: ObjectMatch[]; data: DataMatch[]; scannedTables: number } | null>(null);
   const conn = connections.find((c) => c.id === activeConnectionId);
@@ -37,7 +39,12 @@ export function SearchTool() {
     if (!query.trim()) return;
     setLoading(true);
     try {
-      const res = await api.searchDatabase({ connectionId: activeConnectionId, database: database || undefined, query, scope });
+      const res = await api.searchDatabase({
+        connectionId: activeConnectionId,
+        database: database || undefined,
+        query,
+        scope: (values.scope as 'all' | 'objects' | 'data') ?? 'all',
+      });
       setResult(res);
     } catch (err: any) {
       notify('error', '搜索失败', err?.message);
@@ -55,14 +62,18 @@ export function SearchTool() {
       <div className="tool-row">
         <div className="search-box" style={{ flex: 1 }}>
           <Search size={13} />
-          <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void run()} placeholder="表名、列名或任意文本…" autoFocus />
+          <input value={query} onChange={(e) => setValues((current) => ({ ...current, query: e.target.value }))} onKeyDown={(e) => e.key === 'Enter' && void run()} placeholder="表名、列名或任意文本…" autoFocus />
         </div>
-        <DatabaseSelect allowAll connectionId={activeConnectionId} value={database} onChange={setDatabase} testId="search-db" />
-        <select className="select" value={scope} onChange={(e) => setScope(e.target.value as typeof scope)} style={{ width: 130 }}>
-          <option value="all">对象 + 数据</option>
-          <option value="objects">仅对象</option>
-          <option value="data">仅数据</option>
-        </select>
+        <CapabilityForm
+          capability={capability}
+          values={values}
+          onChange={(key, value) => setValues((current) => ({ ...current, [key]: value }))}
+          connectionId={activeConnectionId ?? undefined}
+          disabled={loading}
+          testIdPrefix="search"
+          // 关键词由上面的 search-box 承载，这里只渲染「库 / 范围」两个下拉
+          omit={['query']}
+        />
         <button className="btn primary" onClick={() => void run()} disabled={loading}>
           {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <Search size={12} />} 搜索
         </button>

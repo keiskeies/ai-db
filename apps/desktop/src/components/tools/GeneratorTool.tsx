@@ -1,39 +1,70 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Loader2, Sparkles, Wand2 } from 'lucide-react';
+import { applyCapabilityDefaults, CAPABILITIES, getCapability, type Capability } from '@aidb/core';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
-import { DatabaseSelect, useDatabaseTables } from '../DatabaseSelect';
+import { useDatabaseTables } from '../DatabaseSelect';
+import { CapabilityForm } from './CapabilityForm';
 
+/**
+ * 数据生成 —— 表单向能力契约（`capabilities/generate.json`）迁移后的实现。
+ *
+ * 字段、默认值、必填与可见性全部来自契约；本组件只保留「选表 → 预览 / 插入」
+ * 这条业务动线。渲染器见 `../CapabilityForm.tsx`。
+ */
 export function GeneratorTool() {
   const activeConnectionId = useApp((s) => s.activeConnectionId);
   const connections = useApp((s) => s.connections);
   const loadSchema = useApp((s) => s.loadSchema);
   const notify = useApp((s) => s.notify);
   const conn = connections.find((c) => c.id === activeConnectionId);
-  const [database, setDatabase] = useState('');
-  const tables = useDatabaseTables(activeConnectionId, database);
-  const [table, setTable] = useState('');
-  const [rows, setRows] = useState(20);
+
+  const capability = useMemo<Capability>(() => getCapability('generate') ?? CAPABILITIES[0], []);
+  const [values, setValues] = useState<Record<string, unknown>>(() => applyCapabilityDefaults(capability));
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
 
+  const table = String(values.table ?? '');
+  const rows = Number(values.rows ?? 10);
+
+  // 契约里有 table 字段但没有「默认选中第一张表」的语义——这是 UI 便利，必须在组件里补回。
+  // 缺了它，用户打开面板时下拉显示「（未选择）」，按钮一直是禁用的。
+  const tables = useDatabaseTables(activeConnectionId ?? undefined, String(values.database ?? ''));
   useEffect(() => {
     if (!tables.length) {
-      setTable('');
+      setValues((current) => (current.table ? { ...current, table: '' } : current));
       return;
     }
-    if (!tables.some((item) => item.name === table)) setTable(tables[0].name);
-  }, [tables, table]);
+    setValues((current) => {
+      const currentTable = String(current.table ?? '');
+      if (tables.some((item) => item.name === currentTable)) return current;
+      return { ...current, table: tables[0].name };
+    });
+  }, [tables]);
+
+  const onChange = (key: string, value: unknown) => {
+    setValues((current) => {
+      const next = { ...current, [key]: value };
+      if (key === 'table') setResult(null);
+      return next;
+    });
+  };
 
   const generate = async (dryRun: boolean) => {
     if (!activeConnectionId || !table) return;
     setLoading(true);
     try {
-      const { result: generated } = await api.generateData({ connectionId: activeConnectionId, database: database || undefined, table, rows, dryRun });
+      const { result: generated } = await api.generateData({
+        connectionId: activeConnectionId,
+        database: values.database || undefined,
+        table,
+        rows,
+        dryRun,
+      });
       setResult(generated);
       if (!dryRun) {
         notify('success', '示例数据已生成', `${generated.inserted} 行 → ${table}`);
-        await loadSchema(activeConnectionId, true, database || undefined);
+        await loadSchema(activeConnectionId, true, (values.database as string) || undefined);
       }
     } catch (err: any) {
       notify('error', '生成失败', err?.message);
@@ -50,26 +81,20 @@ export function GeneratorTool() {
         <Sparkles size={15} /> 数据生成
         <span className="muted">按列名/类型生成贴近业务的测试数据，自动处理外键</span>
       </div>
-      <div className="tool-row" style={{ flexWrap: 'wrap' }}>
-        <div className="field" style={{ flex: 1, minWidth: 200 }}>
-          <label>数据库 / 目标表</label>
-          <div className="row gap-6">
-            <DatabaseSelect connectionId={activeConnectionId} value={database} onChange={setDatabase} testId="generate-db" />
-            <select className="select" style={{ flex: 1 }} value={table} onChange={(e) => { setTable(e.target.value); setResult(null); }}>
-              {tables.map((item) => <option key={item.name} value={item.name}>{item.name} · {item.columns?.length ?? 0} 列</option>)}
-            </select>
-          </div>
-        </div>
-        <div className="field" style={{ width: 120 }}>
-          <label>行数</label>
-          <input className="input" type="number" min={1} max={5000} value={rows} onChange={(e) => setRows(Number(e.target.value))} />
-        </div>
-        <button className="btn" style={{ alignSelf: 'flex-end' }} onClick={() => void generate(true)} disabled={loading || !table}>
+      <div className="tool-row" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <CapabilityForm
+          capability={capability}
+          values={values}
+          onChange={onChange}
+          connectionId={activeConnectionId ?? undefined}
+          disabled={loading}
+          testIdPrefix="generate"
+        />
+        <button className="btn" onClick={() => void generate(true)} disabled={loading || !table}>
           {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <Wand2 size={12} />} 预览
         </button>
         <button
           className="btn primary"
-          style={{ alignSelf: 'flex-end' }}
           onClick={() => {
             if (!window.confirm(`向 ${table} 插入 ${rows} 行生成数据？`)) return;
             void generate(false);
@@ -82,7 +107,9 @@ export function GeneratorTool() {
 
       <div className="tool-scroll">
         {!result ? (
-          <div className="dash-empty">生成器会跳过自增主键，按 name/email/status/amount/date 等语义与类型填充；外键会从被引用表中取现有值。</div>
+          <div className="dash-empty">
+            生成器会跳过自增主键，按 name/email/status/amount/date 等语义与类型填充；外键会从被引用表中取现有值。
+          </div>
         ) : (
           <>
             <div className="tool-summary">

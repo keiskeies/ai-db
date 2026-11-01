@@ -1,16 +1,31 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { BookOpen, Download, Loader2 } from 'lucide-react';
+import { applyCapabilityDefaults, CAPABILITIES, getCapability, type Capability } from '@aidb/core';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
-import { DatabaseSelect } from '../DatabaseSelect';
+import { CapabilityForm } from './CapabilityForm';
 
+/**
+ * 数据字典 —— 表单向能力契约（`capabilities/dictionary.json`）迁移后的实现。
+ *
+ * 只有「库」一个字段，但迁移后它与其它模块共享同一套字段渲染与默认值语义，
+ * 后续加「导出格式」「是否包含索引」等字段时只改 JSON。
+ */
 export function DictionaryTool() {
   const activeConnectionId = useApp((s) => s.activeConnectionId);
   const notify = useApp((s) => s.notify);
+  const capability = useMemo<Capability>(() => getCapability('dictionary') ?? CAPABILITIES[0], []);
+  const [values, setValues] = useState<Record<string, unknown>>(() => applyCapabilityDefaults(capability));
   const [data, setData] = useState<any>(null);
-  const [database, setDatabase] = useState('');
   const [tab, setTab] = useState<'markdown' | 'sql'>('markdown');
   const [loading, setLoading] = useState(false);
+
+  // 连接从全局取；契约里的 connectionId 字段固定绑定到当前连接，不渲染选择器
+  useEffect(() => {
+    setData(null);
+  }, [activeConnectionId]);
+
+  const database = String(values.database ?? '');
 
   const load = async () => {
     if (!activeConnectionId) return;
@@ -41,8 +56,18 @@ export function DictionaryTool() {
         <BookOpen size={15} /> 数据字典
         <span className="muted">Markdown / DDL / JSON</span>
       </div>
-      <div className="tool-row">
-        <DatabaseSelect connectionId={activeConnectionId} value={database} onChange={(value) => { setDatabase(value); setData(null); }} testId="dictionary-db" />
+      <div className="tool-row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <CapabilityForm
+          capability={capability}
+          values={values}
+          onChange={(key, value) => {
+            setValues((current) => ({ ...current, [key]: value }));
+            if (key === 'database') setData(null);
+          }}
+          connectionId={activeConnectionId ?? undefined}
+          disabled={loading}
+          testIdPrefix="dictionary"
+        />
         <button className="btn primary" onClick={() => void load()} disabled={loading || !activeConnectionId}>
           {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <BookOpen size={12} />} 生成字典
         </button>
