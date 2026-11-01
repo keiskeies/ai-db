@@ -261,7 +261,8 @@ interface AppStore {
   requestAgentTask: (prompt: string) => boolean;
   setSessionsOpen: (open: boolean) => void;
   newAgentSession: () => Promise<void>;
-  loadAgentSession: (id: string) => Promise<void>;
+  /** keepMode=true 时不采用会话里存的权限档位，保留用户当前的选择（自动恢复走这条）。 */
+  loadAgentSession: (id: string, opts?: { keepMode?: boolean }) => Promise<void>;
   deleteAgentSession: (id: string) => Promise<void>;
   refreshSessions: () => Promise<void>;
   sessionsForScope: (connectionId?: string, database?: string) => AgentSessionMeta[];
@@ -801,7 +802,7 @@ export const useApp = create<AppStore>((set, get) => ({
     await get().refreshSessions();
     const recent = get().sessionsForScope(activeConnectionId, agentDatabase || undefined)[0];
     if (recent) {
-      await get().loadAgentSession(recent.id);
+      await get().loadAgentSession(recent.id, { keepMode: true });
       return;
     }
     // 该库还没有会话：清成空白，但不建后端会话（首条消息时才创建，
@@ -880,7 +881,7 @@ export const useApp = create<AppStore>((set, get) => ({
     }
   },
 
-  loadAgentSession: async (id) => {
+  loadAgentSession: async (id, opts) => {
     suppressAutoRestore = true;
     try {
       if (get().live && (get().live!.status === 'streaming' || get().live!.status === 'awaiting')) await get().abortAgent();
@@ -894,7 +895,10 @@ export const useApp = create<AppStore>((set, get) => ({
         approval: undefined,
         agentOpen: true,
         sessionsOpen: false,
-        agentMode: detail.session.permissionMode,
+        // 权限档位是「当前的安全意图」，不是会话的内容属性。
+        // 自动恢复换会话时不能连档位一起搬 —— 否则用户没做任何操作，
+        // 权限就被一条历史 full 会话悄悄提到了全自动写入。
+        ...(opts?.keepMode ? {} : { agentMode: detail.session.permissionMode }),
         agentDatabase: detail.session.database ?? '',
         activeConnectionId: detail.session.connectionId ?? get().activeConnectionId,
       });
