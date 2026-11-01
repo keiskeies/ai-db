@@ -238,6 +238,69 @@ function globToRegExp(pattern: string, flags = 'i'): RegExp {
   return new RegExp(`^${escaped}$`, flags);
 }
 
+/**
+ * 判定 grep_files 的 pattern 是不是「被当成了 glob 的文件名通配符」，是则原样返回。
+ *
+ * 只会在 pattern 编译成正则失败时才被调用，所以顺序上先保正则语义：只要 pattern 本身
+ * 是合法正则（@Table\(name、alpha|beta、al.*ce 等）就永远走内容检索，判定根本不参与。
+ * 编译不过时，只有同时满足这两条才认定为文件名 glob：
+ *   1. 含 * 或 ?——否则没有任何通配意图（`[`、`+foo` 这类直接报错）；
+ *   2. 不含 ( ) [ ] { } | ^ $ + \ ——这些字符只会是写坏的正则，宁可报错也不要猜。
+ * 于是 *.java / *foo* 被接住，而 `[` 未闭合、(?! 这类仍然报 MCP_INVALID_REGEX。
+ * 代价是 glob 的字符类 [abc] 不被支持，但这与本文件 globToRegExp 的既有语义一致
+ * （它把方括号转义成字面量），不会产生「看着像生效其实没生效」的错觉。
+ */
+function globLiteralOf(pattern: string): string | undefined {
+  if (!/[*?]/.test(pattern)) return undefined;
+  if (/[()[\]{}|^$+\\]/.test(pattern)) return undefined;
+  return pattern;
+}
+
+/**
+ * pattern 落成文件名 glob 时的执行路径：等价于「include 过滤 + 匹配全部内容」里的
+ * 文件名那一半——直接按 glob 列出文件，不做逐行内容检索，也不编造匹配处数。
+ *
+ * 为什么用文件名筛选而不是把它翻译成正则再检索内容：用户传 "*.java" 的意图是
+ * 「有哪些 .java 文件」，翻译成正则去扫内容只会把每一行都命中，产出毫无信息量。
+ * pattern 与 include 同时存在时两者都表达「文件范围」，叠加会互相收窄到 0 结果，
+ * 所以只按 include 过滤（include 是更明确的那一个），pattern 的 glob 不再二次筛选。
+ */
+function listFilesByGlob(
+  root: string,
+  pattern: string,
+  include: string,
+  maxMatches: number,
+): { summary: string; data: unknown } {
+  const patternMatches = globFilePredicate(pattern);
+  // include 的语义必须和正则路径（下面 walkFiles 的 filter）一模一样：有通配符按 glob，
+  // 没通配符按文件名子串。两条路径对同一个参数给出不同文件集是最难查的那类不一致。
+  const includeMatcher = include ? (/[*?]/.test(include) ? globFilePredicate(include) : undefined) : undefined;
+  const includeLower = include.toLowerCase();
+  const includeMatches = include
+    ? includeMatcher
+      ? includeMatcher
+      : (_rel: string, name: string) => name.toLowerCase().includes(includeLower)
+    : undefined;
+  const { files, truncated } = walkFiles(root, { maxFiles: 20_000, maxDepth: 20 });
+  const matched = files.filter((file) => {
+    const rel = relative(root, file).split(sep).join('/');
+    const name = basename(file);
+    if (includeMatches) return includeMatches(rel, name);
+    return patternMatches(rel, name);
+  });
+  const sliced = matched.slice(0, maxMatches);
+  return {
+    summary: `按文件名 glob 命中 ${sliced.length} 个文件${truncated || matched.length > sliced.length ? '（已截断）' : ''}`,
+    data: {
+      root,
+      pattern,
+      mode: 'glob',
+      files: sliced.map((file) => ({ path: file, relative: relative(root, file).split(sep).join('/'), size: statSync(file).size })),
+      truncated: truncated || matched.length > sliced.length,
+    },
+  };
+}
+
 function walkFiles(
   root: string,
   options: { maxFiles?: number; maxDepth?: number; filter?: (name: string) => boolean } = {},
@@ -345,6 +408,17 @@ function globToPathRegExp(pattern: string): RegExp {
 
 function globMatchers(pattern: string): RegExp[] {
   return expandBraces(pattern).map(globToPathRegExp);
+}
+
+/**
+ * 文件名 glob 的匹配器：先按 basename 匹配（*.java 在任意层级都应命中），
+ * 再按相对路径匹配（覆盖 **\/*.java 这类带目录的通配）。
+ */
+function globFilePredicate(pattern: string): (relativePath: string, name: string) => boolean {
+  const nameMatcher = /[*?]/.test(pattern) ? globToRegExp(pattern) : undefined;
+  const pathMatchers = globMatchers(pattern);
+  return (relativePath, name) =>
+    Boolean(nameMatcher && nameMatcher.test(name)) || pathMatchers.some((matcher) => matcher.test(relativePath));
 }
 
 type GrepOutputMode = 'content' | 'files' | 'count';
@@ -631,12 +705,6 @@ async function runFilesystemTool(
           : typeof input['-i'] === 'boolean'
             ? !input['-i']
             : false;
-    let re: RegExp;
-    try {
-      re = new RegExp(pattern, caseSensitive ? '' : 'i');
-    } catch (err: any) {
-      failure(`正则无效：${err?.message ?? pattern}`, 'MCP_INVALID_REGEX');
-    }
     const base = target();
     const root = statSync(base).isDirectory() ? base : dirname(base);
     const include = argStringAny(input, ['include', 'glob']) || (typeof input.type === 'string' && input.type.trim() ? `*.${input.type.trim().replace(/^\./, '')}` : '');
@@ -653,6 +721,22 @@ async function runFilesystemTool(
         : requestedMode === 'count'
           ? 'count'
           : 'content';
+    let re: RegExp;
+    try {
+      re = new RegExp(pattern, caseSensitive ? '' : 'i');
+    } catch (err: any) {
+      // pattern 是「JavaScript 正则」而不是 glob，模型常按工具名直觉传 *.java。
+      // 编译不过时先给它一次按文件名筛选的机会：这正是用户那句 `pattern:"*.java"`
+      // 的真实意图（列出所有 .java 文件），而按内容检索一个文件名通配符永远匹配不到。
+      const globLiteral = globLiteralOf(pattern);
+      if (globLiteral) return listFilesByGlob(root, globLiteral, include, maxMatches);
+      failure(
+        `pattern 是 JavaScript 正则，不是 glob，当前写法无法编译：${err?.message ?? pattern}。` +
+          `若要按文件名筛选，请改用 include 参数（例如 include="*.java"）；` +
+          `若要按内容检索，请给出合法正则（例如 @Table\\\\(name）。`,
+        'MCP_INVALID_REGEX',
+      );
+    }
     const viaRipgrep = await runRipgrepGrep(root, pattern, { include, caseSensitive, maxMatches, context, outputMode });
     if (viaRipgrep) return viaRipgrep;
 
