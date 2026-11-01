@@ -5,6 +5,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import cors from 'cors';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { AgentEvent, PermissionMode } from '@aidb/core';
+import { CAPABILITIES, TOOLS, assertCapabilities, assertCommandDefinitions } from '@aidb/core';
 import { AgentHost } from './agentHost';
 import { seedBuiltinMcpServers, bindSearchStore } from './builtinMcp';
 import { CommandRunner } from './commands/runner';
@@ -39,6 +40,10 @@ export interface GatewayInstance {
 
 export async function createGateway(overrides: Partial<GatewayConfig> = {}): Promise<GatewayInstance> {
   const config = loadConfig(overrides);
+  // 契约与命令注册表在启动时自检：声明了不存在的工具、风险写错、章节缺失都当场失败，
+  // 而不是等到某个功能被调用时才暴露。
+  assertCapabilities(CAPABILITIES, TOOLS);
+  assertCommandDefinitions();
   const store = new Store(config.dbPath, config.secret);
   ensureDemoDatabase(config, store);
   seedBuiltinMcpServers(store);
