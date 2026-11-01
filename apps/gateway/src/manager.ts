@@ -7,7 +7,6 @@ import {
   classifyMql,
   classifyRedis,
   classifySearch,
-  classifySql,
   classifyVector,
   editsRecords,
   engineMeta,
@@ -53,6 +52,14 @@ interface CachedDriver {
   driver: Driver;
   close: () => Promise<void>;
 }
+
+/**
+ * 单次 run_sql 的语句条数上限。
+ *
+ * 超过这个数量才需要显式 allowMulti；正常脚本（建表序列、一张表几十条列变更）直接放行。
+ * 上限保护的是「一次误粘贴几百条语句」这类规模事故，不是权限——权限见 resolveRisk。
+ */
+export const MAX_SCRIPT_STATEMENTS = 200;
 
 export interface QueryOptions {
   database?: string;
@@ -1077,15 +1084,22 @@ export class ConnectionManager {
     }
     const statements = splitStatements(sql);
     if (!statements.length) throw new DbError('SQL 为空', { code: 'EMPTY_SQL' });
-    if (statements.length > 1 && !opts.allowMulti) {
-      // 只读脚本（多条 SELECT/SHOW）没有副作用，直接放行；写/DDL 仍受开关约束。
-      const scriptRisk = classifySql(sql).risk;
-      if (scriptRisk !== 'read') {
-        throw new DbError(`检测到 ${statements.length} 条语句且包含写操作，默认不一次执行多条`, {
-          code: 'MULTI_STATEMENT_DISABLED',
-          hint: '拆成单条依次执行；或在 设置 → 查询 打开「允许多语句」后整段执行',
-        });
-      }
+    // 这道闸拦「规模」，不拦「批量」。
+    //
+    // 旧实现在「含写/DDL 且有 2 条以上语句」时整段拒绝，本机历史里 22 段多语句脚本
+    // 被它拦下 18 段，全部是正当工作：CREATE TABLE + CREATE INDEX 的建表序列、
+    // 同一张表十几条 ALTER TABLE … COMMENT 补注释。误报率 100%，每次误报都让模型
+    // 重跑一整步。它也不是权限边界——同样的语句逐条调用本来就被允许，真正的边界是
+    // resolveRisk（取全脚本最高风险）+ evaluatePermission，与条数无关。
+    //
+    // 所以改成按条数封顶：正常脚本直接放行，规模失控的才需要显式声明。
+    if (statements.length > MAX_SCRIPT_STATEMENTS && !opts.allowMulti) {
+      throw new DbError(`脚本含 ${statements.length} 条语句，超过单次上限 ${MAX_SCRIPT_STATEMENTS} 条`, {
+        code: 'SCRIPT_TOO_LARGE',
+        hint:
+          '整段执行需显式声明：调用 run_sql 时传 allowMulti: true，或在 设置 → 查询 打开「允许多语句」。' +
+          `整段脚本非原子：中途失败时前面的语句已生效。超过 ${MAX_SCRIPT_STATEMENTS} 条时建议分批，每批之间可以确认上一批的结果。`,
+      });
     }
     if (conn.readonly) {
       for (const statement of statements) {

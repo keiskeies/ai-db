@@ -1,5 +1,5 @@
 import type { Environment, PermissionMode, Risk } from '../types';
-import { classifySql, extractTableRef } from '../sql/classify';
+import { classifySql, countStatements, extractTableRef } from '../sql/classify';
 import { classifyAql, classifyCql, classifyCypher, classifyMql, classifyRedis, aqlQueryFromArgs, cqlQueryFromArgs, cypherQueryFromArgs, formatStructuredQuery, mqlQueryFromArgs, redisQueryFromArgs } from '../query';
 import { builtinMcpToolRisk, builtinMcpToolRiskByName } from './builtinMcp';
 import type { ToolCall, ToolDefinition } from './types';
@@ -84,8 +84,14 @@ export function describeCall(call: ToolCall): { summary: string; sql?: string } 
   const a = call.args;
   const sql = typeof a.sql === 'string' ? a.sql : undefined;
   switch (call.name) {
-    case 'run_sql':
-      return { summary: sql ? sql.slice(0, 240) : '执行 SQL', sql };
+    case 'run_sql': {
+      if (!sql) return { summary: '执行 SQL', sql };
+      // 多语句脚本的规模要在审批弹窗里看得见：18 条 ALTER 和 1 条 SELECT 的后果差别很大，
+      // 只显示前 240 字会让用户以为自己批准的是「一条 SQL」。
+      const count = countStatements(sql);
+      const head = sql.replace(/\s+/g, ' ').trim().slice(0, 240);
+      return { summary: count > 1 ? `${count} 条语句：${head}` : head, sql };
+    }
     case 'run_mql': {
       const query = mqlQueryFromArgs(a);
       return { summary: `MongoDB ${query.op} ${query.collection}`.trim(), sql: formatStructuredQuery(query) };

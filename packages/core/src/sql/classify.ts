@@ -1,7 +1,7 @@
 import { dialectOf } from '../engines';
 import type { Engine, Risk } from '../types';
 
-export type SqlKind = 'read' | 'write' | 'ddl' | 'destructive' | 'unknown';
+export type SqlKind = 'read' | 'write' | 'ddl' | 'destructive' | 'session' | 'unknown';
 
 export interface StatementInfo {
   sql: string;
@@ -187,6 +187,23 @@ export function classifyStatement(sql: string): StatementInfo {
     return { sql, kind: 'ddl', verb };
   }
 
+  // 会话级语句：只改当前连接的上下文或事务边界，不动数据。
+  //
+  // 以前它们没有规则覆盖，落到下面的 unknown，而 unknown 一律当 ddl ——
+  // 结果是 `SET SESSION group_concat_max_len=65535; SELECT ...` 这种最普通的
+  // 调参查询会被判成「包含写操作」，在多语句闸门和只读连接上双双被拒。
+  // 危险子集单独处理：GLOBAL / PERSIST 改的是服务端配置，PASSWORD 改的是凭证。
+  if (/^SET\b/.test(code)) {
+    if (/\bPASSWORD\b/.test(code)) return { sql, kind: 'destructive', verb: 'SET', reason: 'SET PASSWORD 会修改凭证' };
+    if (/\b(GLOBAL|PERSIST|PERSIST_ONLY)\b/.test(code)) {
+      return { sql, kind: 'write', verb: 'SET', reason: '修改服务端全局配置，不是会话级设置' };
+    }
+    return { sql, kind: 'session', verb: 'SET' };
+  }
+  if (/^(USE|BEGIN|START|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/.test(code)) {
+    return { sql, kind: 'session', verb };
+  }
+
   return { sql, kind: 'unknown', verb: verb || 'UNKNOWN' };
 }
 
@@ -195,6 +212,8 @@ const KNOWN_RISK: Record<SqlKind, Risk> = {
   write: 'write',
   ddl: 'ddl',
   destructive: 'destructive',
+  // 会话级语句不碰数据，按只读参与风险相加：夹在写脚本里也不会抬高整体风险。
+  session: 'read',
   unknown: 'ddl',
 };
 
@@ -212,12 +231,15 @@ export function classifySql(sql: string): SqlClassification {
       ? 'ddl'
       : kinds.has('write')
         ? 'write'
-        : 'read';
+        : kinds.size === 1 && kinds.has('session')
+          ? 'session'
+          : 'read';
   return { risk, kind, statements };
 }
 
 export function isReadOnlyStatement(sql: string): boolean {
-  return classifyStatement(sql).kind === 'read';
+  const kind = classifyStatement(sql).kind;
+  return kind === 'read' || kind === 'session';
 }
 
 /** Returns a human-readable rejection reason for readonly connections, or null when allowed. */
@@ -226,7 +248,9 @@ export function readonlyViolation(sql: string, _engine?: Engine): string | null 
   if (!statements.length) return '空 SQL';
   for (const s of statements) {
     const info = classifyStatement(s);
-    if (info.kind !== 'read') {
+    // 会话级语句（SET SESSION / USE / 事务边界）不写数据，只读连接上没有理由拒绝：
+    // 它既不会改库，也不会绕开后面每条语句各自的只读判定。
+    if (info.kind !== 'read' && info.kind !== 'session') {
       return `只读连接不允许执行 ${info.verb}${info.reason ? `（${info.reason}）` : ''}`;
     }
   }

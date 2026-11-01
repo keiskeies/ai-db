@@ -45,7 +45,7 @@ function setup() {
   };
 }
 
-test('只读多语句脚本一次执行，写脚本仍受开关约束', async () => {
+test('只读多语句脚本一次执行，写脚本在缺省下也执行（上限内的批量不再拦）', async () => {
   const { manager, conn, cleanup } = setup();
   try {
     const readOnly = await manager.query(conn.id, 'SELECT 1 AS a; SELECT 2 AS b;', {
@@ -56,20 +56,16 @@ test('只读多语句脚本一次执行，写脚本仍受开关约束', async ()
     assert.equal(readOnly.sets.length, 2, '多条只读 SELECT 应一次执行');
     assert.equal(Number(readOnly.sets[1].rows[0][0]), 2);
 
-    await assert.rejects(
-      () => manager.query(conn.id, "INSERT INTO probe VALUES (2,'x'); INSERT INTO probe VALUES (3,'y');", {
-        allowMulti: false,
-        autoLimit: false,
-        actor: 'agent',
-      }),
-      (err: any) => {
-        assert.equal(err.code, 'MULTI_STATEMENT_DISABLED');
-        assert.match(String(err.hint), /允许多语句/);
-        return true;
-      },
-    );
+    // 上限以内的写脚本不再需要开关：建表序列、一张表几十条列变更都是常态。
+    // 权限边界是 resolveRisk + evaluatePermission（按整段最高风险判定），与条数无关。
+    const writes = await manager.query(conn.id, "INSERT INTO probe VALUES (2,'x'); INSERT INTO probe VALUES (3,'y');", {
+      allowMulti: false,
+      autoLimit: false,
+      actor: 'agent',
+    });
+    assert.equal(writes.sets.length, 2, '上限内的写脚本缺省即可执行');
 
-    const enabled = await manager.query(conn.id, "INSERT INTO probe VALUES (2,'x'); INSERT INTO probe VALUES (3,'y');", {
+    const enabled = await manager.query(conn.id, "INSERT INTO probe VALUES (4,'x'); INSERT INTO probe VALUES (5,'y');", {
       allowMulti: true,
       autoLimit: false,
       actor: 'agent',
@@ -77,7 +73,7 @@ test('只读多语句脚本一次执行，写脚本仍受开关约束', async ()
     assert.equal(enabled.sets.length, 2);
 
     const count = await manager.query(conn.id, 'SELECT COUNT(*) AS n FROM probe', { allowMulti: false, autoLimit: false, actor: 'agent' });
-    assert.equal(Number(count.sets[0].rows[0][0]), 3);
+    assert.equal(Number(count.sets[0].rows[0][0]), 5);
   } finally {
     await cleanup();
   }

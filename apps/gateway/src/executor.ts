@@ -412,13 +412,20 @@ export class ToolExecutor {
           database: this.databaseOf(call, conn),
           maxRows,
           timeoutMs: settings.queryTimeoutMs,
-          allowMulti: settings.allowMultiStatement,
+          // 与用户全局开关取或：参数不覆盖「允许多语句」，也不额外否决它。
+          // 放行多语句不等于放宽权限——挡破坏性操作的是 resolveRisk/evaluatePermission，
+          // 它们对整段脚本取最高风险，批量和逐条调用得到的判定完全相同。
+          allowMulti: settings.allowMultiStatement || a.allowMulti === true,
           autoLimit: settings.autoLimit,
           actor: 'agent',
           // 事务已开启时让语句走被固定的那条连接，否则提交/回滚作用不到。
           sessionId: this.manager.transactionOf(agentTxKey(ctx))?.connectionId === conn.id ? agentTxKey(ctx) : undefined,
         });
-        if (/^\s*(create|alter|drop|rename)/i.test(sql)) this.manager.invalidate(conn.id);
+        // 不能用行首正则判断 DDL：脚本以注释或空白开头是模型写 DDL 的常态，
+        // 那样会漏掉建表，导致 schema 缓存不失效、下一步 inspect_schema 看到旧结构。
+        if (classifySql(sql).statements.some((s) => s.kind === 'ddl' || s.kind === 'destructive')) {
+          this.manager.invalidate(conn.id);
+        }
         const last = batch.sets[batch.sets.length - 1];
         const summary = last
           ? last.columns.length
@@ -430,6 +437,8 @@ export class ToolExecutor {
           sets: batch.sets.length > 1 ? batch.sets : undefined,
           messages: batch.messages,
           durationMs: batch.durationMs,
+          // 让 UI 工具卡与审计能看出这是一次批量执行，而不是一条语句。
+          ...(batch.sets.length > 1 ? { multiStatement: true } : {}),
         });
       }
 
@@ -1316,6 +1325,9 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
       }
 
       case 'transfer_data': {
+        // 进度快照：只保留最后一个 table-start / phase-done，执行结束后随 meta 返回。
+        // 这不是流式——Agent 工具仍是一次调用返回一次结果。
+        let progress: ToolResult['meta']['progress'];
         const result = await transferData(this.store, this.manager, {
           sourceId: String(a.sourceConnectionId ?? ''),
           sourceDatabase: typeof a.sourceDatabase === 'string' ? a.sourceDatabase : undefined,
@@ -1324,9 +1336,26 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
           tables: Array.isArray(a.tables) ? a.tables.filter((value): value is string => typeof value === 'string') : undefined,
           mode: a.mode === 'replace' ? 'replace' : 'append',
           createMissing: a.createMissing !== false,
+          limit: typeof a.limit === 'number' ? a.limit : undefined,
+          onEvent: (event) => {
+            if (event.type === 'table-start') {
+              progress = { current: event.index, total: event.total, unit: 'table', label: event.table };
+            } else if (event.type === 'phase-done') {
+              progress = { current: progress?.current ?? 0, total: progress?.total ?? 0, unit: 'table', label: event.table };
+            }
+          },
         });
         this.manager.invalidate(String(a.targetConnectionId ?? ''));
-        return ok(started, `传输 ${result.results.length} 张表 · ${result.totalRows} 行`, result);
+        const failed = result.results.filter((item) => item.status === 'error');
+        const state = failed.length === 0 ? 'ok' : failed.length === result.results.length ? 'failed' : 'partial';
+        const summary = failed.length
+          ? `传输 ${result.results.length} 张表 · ${result.totalRows} 行 · ${failed.length} 张失败`
+          : `传输 ${result.results.length} 张表 · ${result.totalRows} 行`;
+        return ok(started, summary, result, {
+          state,
+          ...(progress ? { progress } : {}),
+          rowsAffected: result.totalRows,
+        });
       }
 
       default:

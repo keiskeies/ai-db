@@ -49,6 +49,31 @@ test('readonly violations cover all mutations', () => {
   assert.match(readonlyViolation('SELECT 1; DELETE FROM t', 'sqlite') ?? '', /只读/);
 });
 
+// 事故：`SET SESSION group_concat_max_len=65535; SELECT ...` 被当成「包含写操作」拦下。
+// 会话级设置只影响当前连接，不碰数据，必须按只读对待，否则最普通的调参查询都要走批量开关。
+test('会话级语句不改变数据，按只读处理', () => {
+  assert.equal(classifyStatement('SET SESSION group_concat_max_len = 65535').kind, 'session');
+  assert.equal(classifyStatement('SET NAMES utf8mb4').kind, 'session');
+  assert.equal(classifyStatement('SET @row := 0').kind, 'session');
+  assert.equal(classifyStatement('USE kbook').kind, 'session');
+  assert.equal(classifyStatement('BEGIN').kind, 'session');
+  assert.equal(classifyStatement('COMMIT').kind, 'session');
+  assert.equal(classifyStatement('ROLLBACK').kind, 'session');
+
+  const script = classifySql(
+    "SET SESSION group_concat_max_len = 65535;\nSELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='kbook';",
+  );
+  assert.equal(script.risk, 'read', '会话设置 + 查询不是写脚本，不该触发多语句闸门');
+  assert.equal(readonlyViolation('SET SESSION group_concat_max_len = 65535; SELECT 1'), null, '只读连接上也该放行');
+});
+
+test('会话级语句里的危险子集仍按写/破坏性处理', () => {
+  assert.equal(classifyStatement('SET GLOBAL max_connections = 500').kind, 'write', '改服务端全局配置不是会话级');
+  assert.equal(classifyStatement("SET @@GLOBAL.sql_mode = ''").kind, 'write');
+  assert.equal(classifyStatement('SET PERSIST max_connections = 500').kind, 'write');
+  assert.equal(classifyStatement("SET PASSWORD FOR 'u'@'h' = 'x'").kind, 'destructive', '改密码必须审批');
+});
+
 test('applies limits only to unbounded reads', () => {
   assert.equal(applyLimit('SELECT * FROM t', 50), 'SELECT * FROM t LIMIT 50');
   assert.equal(applyLimit('SELECT * FROM t LIMIT 5', 50), 'SELECT * FROM t LIMIT 5');
