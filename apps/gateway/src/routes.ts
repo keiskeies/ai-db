@@ -10,6 +10,8 @@ import {
   engineUsesSchema,
   isEngine,
   isSqlEngine,
+  getCapability,
+  listCapabilities,
   buildAlterTable,
   buildCount,
   buildCreateTable,
@@ -2131,6 +2133,20 @@ export function createApiRouter(deps: ApiDeps): Router {
     }
     const tools = str(req.query.for) === 'mcp' ? TOOLS.filter((tool) => !MCP_BRIDGE_EXCLUDED.has(tool.name)) : TOOLS;
     res.json({ tools });
+  });
+
+  // ---------- capabilities（功能能力契约）----------
+  router.get('/capabilities', (_req, res) => {
+    res.json({ capabilities: listCapabilities() });
+  });
+
+  router.get('/capabilities/:id', (req, res) => {
+    const capability = getCapability(req.params.id);
+    if (!capability) {
+      res.status(404).json({ error: { code: 'CAPABILITY_NOT_FOUND', message: `功能不存在：${req.params.id}` } });
+      return;
+    }
+    res.json({ capability });
   });
 
   router.post(

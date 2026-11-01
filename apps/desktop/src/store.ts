@@ -27,7 +27,7 @@ export type Tab =
   | { id: string; kind: 'dashboard'; title: string; connectionId: string; database?: string };
 
 /** 设置页签；composer 等入口可指定打开位置。 */
-export type SettingsTab = 'appearance' | 'query' | 'agent' | 'skills' | 'mcp' | 'search' | 'notify' | 'bridge' | 'data' | 'about';
+export type SettingsTab = 'appearance' | 'query' | 'agent' | 'skills' | 'mcp' | 'capabilities' | 'search' | 'notify' | 'bridge' | 'data' | 'about';
 
 export interface LiveTool {
   callId: string;

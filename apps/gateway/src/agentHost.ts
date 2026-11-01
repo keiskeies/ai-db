@@ -16,6 +16,9 @@ import {
   supportsInput,
   tablesFromSql,
   disabledTableInSql,
+  CAPABILITIES,
+  isCallable,
+  type Capability,
   type AgentContextBundle,
   type AgentEvent,
   type AgentMessageBlock,
@@ -217,11 +220,52 @@ function mcpPromptBlock(store: Store): string {
         ? '域名限制: 未设置（允许所有公网地址；内网与回环始终拦截）'
         : `${definition.argsLabel}: (未配置，需用户在 设置 → MCP 与工具 配置)`;
     const searchNote = definition.kind === 'web' && server.enabled
-      ? ' Use web_search for discovery (Exa/Parallel/DuckDuckGo/SearXNG + keyed backends); use fetch_url only for a known URL.'
+      ? ' Use web_search for discovery (Exa/Parallel/Bing + optional keyed backends); use fetch_url only for a known URL.'
       : '';
     return `- ${server.id} — built-in ${definition.kind} (name: ${server.name}); ${args}. Tools: ${tools}.${searchNote}`;
   });
   return `## MCP servers\nUse the exact server id for mcp_list_tools / mcp_call; never guess a server name. For built-in tools you may omit \`server\` — it is inferred from the tool name. Built-in read tools run directly; writes need approval in ask mode.\n${lines.join('\n')}`;
+}
+
+/**
+ * 把「软件自带功能」的目录注入系统提示。
+ *
+ * 模型必须知道：哪些功能可以直接用工具调、哪些只能引导用户去工具箱操作。
+ * 没有这一段，模型会编造参数去发 REST 请求，或者谎称已经完成。
+ *
+ * 采用两级写法控制 token：可调用的功能给完整字段与状态；不可调用的压成一行，
+ * 只留「去哪个工具箱模块操作」——它们本来就没有可填的参数。
+ */
+export function capabilityPromptBlock(capabilities: Capability[] = CAPABILITIES): string {
+  if (!capabilities.length) return '## Capabilities\n(none registered)';
+  const callable: string[] = [];
+  const guideOnly: string[] = [];
+  for (const capability of capabilities) {
+    const head = `- ${capability.id} — ${capability.title.zh}：${capability.description}`;
+    if (!isCallable(capability)) {
+      guideOnly.push(`- ${capability.title.zh}（${capability.id}）：${capability.description} → 引导用户到「工具箱 → ${capability.title.zh}」，不要假装能执行`);
+      continue;
+    }
+    const fields = capability.fields
+      .map((field) => `${field.key}:${field.type}${field.required ? '*' : ''}`)
+      .join(', ');
+    const states = capability.states.map((state) => state.id).join('/');
+    const lines = [
+      head,
+      `  Call: ${capability.tools.join(', ')}；参数 ${fields}`,
+      `  States: ${states}`,
+    ];
+    if (capability.constraints?.length) lines.push(`  Limits: ${capability.constraints.slice(0, 2).join('；')}`);
+    callable.push(lines.join('\n'));
+  }
+  return [
+    '## Capabilities（软件自带功能）',
+    '这些是产品自带的功能，不是你临时发明的能力。能用工具的直接调；「只能引导」的必须让用户去工具箱操作——**不要编造参数、不要声称已完成、不要自己拼 REST 请求**。结果按 States 里的话术汇报，不要自己编状态名。',
+    callable.join('\n'),
+    guideOnly.length ? `### 只能引导（无 Agent 工具）\n${guideOnly.join('\n')}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 /** Tools visible to a turn; remote (bot/mobile/external WS) turns must not reach local MCP. */
