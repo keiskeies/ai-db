@@ -10,6 +10,7 @@ import type {
   ArtifactScheduleInfo,
   AuditEntry,
   BackupInfo,
+  Capability,
   CommandDefinition,
   CommandRunEvent,
   CommandRunInfo,
@@ -415,6 +416,8 @@ export const api = {
   health: () => request<{ ok: boolean; version: string; demoReady: boolean }>('/health'),
   bootstrap: () => request<BootstrapData>('/bootstrap'),
   tools: () => request<{ tools: any[] }>('/agent/tools'),
+  capabilities: () => request<{ capabilities: Capability[] }>('/capabilities'),
+  capability: (id: string) => request<{ capability: Capability }>(`/capabilities/${encodeURIComponent(id)}`),
   commands: () => request<{ commands: CommandDefinition[] }>('/commands'),
   startCommand: (id: string, input: CommandRunInput, saveAs?: { title?: string }) =>
     request<{ run: CommandRunInfo }>(`/commands/${encodeURIComponent(id)}/runs`, {
@@ -679,7 +682,14 @@ export const api = {
     return request<{ entries: AuditEntry[] }>(`/audit?${q.toString()}`);
   },
 
-  sessions: () => request<{ sessions: AgentSessionMeta[] }>('/agent/sessions'),
+  // 不传参数时 URL 与旧实现完全一致；带参数才追加 query
+  sessions: (opts: { connectionId?: string; database?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (opts.connectionId) qs.set('connectionId', opts.connectionId);
+    if (opts.database) qs.set('database', opts.database);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request<{ sessions: AgentSessionMeta[] }>(`/agent/sessions${suffix}`);
+  },
   createSession: (body: { connectionId?: string; database?: string; title?: string; permissionMode?: string }) =>
     request<{ session: AgentSessionMeta }>('/agent/sessions', { method: 'POST', body: JSON.stringify(body) }),
   getSession: (id: string) => request<SessionDetail>(`/agent/sessions/${id}`),

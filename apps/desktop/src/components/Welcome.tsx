@@ -1,258 +1,464 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  Activity,
-  ArrowUpRight,
-  Brain,
+  AlertTriangle,
+  ArrowRight,
+  ChevronDown,
   Database,
+  KeyRound,
+  Loader2,
   Plus,
+  RefreshCw,
   ShieldCheck,
   Sparkles,
   Table2,
   TerminalSquare,
   TrendingUp,
-  Zap,
 } from 'lucide-react';
 import type { QueryHistoryItem } from '@aidb/core';
 import { api } from '../lib/api';
+import {
+  computeFacts,
+  engineLabel,
+  formatCount,
+  interestingHistory,
+  isRelational,
+  loadSuggestions,
+  resolveHomeDatabase,
+  scopeSchemas,
+  type HomeSuggestion,
+} from '../lib/dbHome';
 import { formatDuration, formatRelative, sqlPreview } from '../lib/format';
 import { useApp } from '../store';
 
+/** 侧栏用的连接色，头部图标复用同一套，避免又引入一种颜色语义。 */
+const CONNECTION_COLORS: Record<string, string> = {
+  blue: '#5b93ff',
+  green: '#46c46b',
+  orange: '#e0a155',
+  red: '#f16b62',
+  purple: '#a78bfa',
+  cyan: '#38bdf8',
+  gray: '#7d8b9a',
+};
+
+/** 文件型连接的「库名」就是文件路径，塞进标题旁只会变成一串没用的长字符。 */
+function isFileLike(database: string, connectionName: string): boolean {
+  if (database === connectionName) return true;
+  return /[\\/]/.test(database) || /\.(sqlite3?|duckdb|db)$/i.test(database);
+}
+
+/**
+ * 欢迎页 = 当前库的家。
+ *
+ * 结构（方案 A）：一根「当前库」头部条 → 三栏工作区（库里的表 / 接下来能做什么）
+ * → 一行「最近跑过」。整页只有「当前库」这一个作用域，不再混入全局统计。
+ */
 export function Welcome() {
   const t = useApp((s) => s.t);
   const connections = useApp((s) => s.connections);
   const schemas = useApp((s) => s.schemas);
-  const tools = useApp((s) => s.tools);
-  const sessions = useApp((s) => s.sessions);
+  const loadedDatabases = useApp((s) => s.loadedDatabases);
+  const schemaLoading = useApp((s) => s.schemaLoading);
   const activeConnectionId = useApp((s) => s.activeConnectionId);
+  const homeDatabase = useApp((s) => s.homeDatabase);
+  const setHomeDatabase = useApp((s) => s.setHomeDatabase);
+  const loadSchema = useApp((s) => s.loadSchema);
   const openConnectionEditor = useApp((s) => s.openConnectionEditor);
   const openQuery = useApp((s) => s.openQuery);
   const openData = useApp((s) => s.openData);
+  const openDashboard = useApp((s) => s.openDashboard);
   const setAgentOpen = useApp((s) => s.setAgentOpen);
   const prefillAgent = useApp((s) => s.prefillAgent);
-  const loadAgentSession = useApp((s) => s.loadAgentSession);
+  const requestAgentTask = useApp((s) => s.requestAgentTask);
   const selectConnection = useApp((s) => s.selectConnection);
   const toggleConnection = useApp((s) => s.toggleConnection);
+  const expandedConnections = useApp((s) => s.expandedConnections);
+
+  const connection = connections.find((item) => item.id === activeConnectionId) ?? connections[0];
+  const connectionSchemas = connection ? schemas[connection.id] : undefined;
+  const database = resolveHomeDatabase(connection, connectionSchemas, homeDatabase);
+  const scoped = useMemo(
+    () => scopeSchemas(connection, connectionSchemas, database),
+    [connection, connectionSchemas, database],
+  );
+  const relational = isRelational(connection);
+  const facts = useMemo(() => computeFacts(scoped, relational), [scoped, relational]);
+
+  const dbLoading = Boolean(connection && database && schemaLoading[`${connection.id}:${database}`]);
+  const dbLoaded = Boolean(
+    connection && (database ? (loadedDatabases[connection.id] ?? []).includes(database) : (connectionSchemas ?? []).length > 0),
+  );
 
   const [history, setHistory] = useState<QueryHistoryItem[]>([]);
+  const [suggestions, setSuggestions] = useState<HomeSuggestion[]>([]);
+  const [pickingDb, setPickingDb] = useState(false);
 
-  const active = connections.find((c) => c.id === activeConnectionId) ?? connections[0];
-  const activeSchemas = active ? schemas[active.id] ?? [] : [];
-  const tables = activeSchemas.flatMap((s) => s.tables);
-  const totalRows = tables.reduce((sum, table) => sum + (table.rowEstimate ?? 0), 0);
-
+  // 库名变化就重新拉这个库的历史与建议 —— 首页的一切都跟着它走
   useEffect(() => {
-    if (!active) return;
+    if (!connection) return;
     let cancelled = false;
+    setHistory([]);
     api
-      .history({ connectionId: active.id, limit: 6 })
-      .then((result) => !cancelled && setHistory(result.items as QueryHistoryItem[]))
+      .history({ connectionId: connection.id, limit: 20 })
+      .then((result) => {
+        if (cancelled) return;
+        const items = result.items as QueryHistoryItem[];
+        // 历史接口只按连接过滤：这里再按库筛一道，避免 MySQL 下看到别的库的 SQL
+        const scopedItems = database
+          ? items.filter((item) => !item.database || item.database === database)
+          : items;
+        setHistory(scopedItems);
+      })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [active?.id]);
+  }, [connection?.id, database]);
 
-  const openDemo = () => {
-    if (!active) {
-      openConnectionEditor('new');
-      return;
-    }
-    selectConnection(active.id);
-    toggleConnection(active.id);
-    const orders = tables.find((table) => table.name === 'orders') ?? tables[0];
-    if (orders) openData(active.id, orders.name, activeSchemas.find((schema) => schema.tables.includes(orders))?.name);
+  useEffect(() => {
+    if (!connection) return;
+    let cancelled = false;
+    setSuggestions([]);
+    loadSuggestions(connection.id, database, 4).then((items) => {
+      if (!cancelled) setSuggestions(items);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [connection?.id, database, facts.tableCount]);
+
+  // 打开首页时，如果这个库的表还没内省过，补一次（首页数字必须是真的）
+  useEffect(() => {
+    if (!connection) return;
+    if (dbLoaded || dbLoading) return;
+    void loadSchema(connection.id, false, database || undefined);
+  }, [connection?.id, database, dbLoaded, dbLoading, loadSchema]);
+
+  const recent = useMemo(() => interestingHistory(history, 4), [history]);
+
+  /**
+   * 从首页进数据页时，顺带把左侧连接树展开到这张表所在的位置 ——
+   * 用户从首页跳过去之后，侧栏应当已经指向同一个地方，而不是还要再找一次。
+   */
+  const openTable = (name: string, db: string) => {
+    if (!connection) return;
+    selectConnection(connection.id);
+    if (!expandedConnections[connection.id]) toggleConnection(connection.id);
+    setHomeDatabase(db || database);
+    openData(connection.id, name, db || undefined);
   };
 
-  const askAi = () => {
-    setAgentOpen(true);
-    prefillAgent('帮我快速了解这个数据库：有哪些表、数据量如何、可以做哪些分析？');
+  /** 首页所有 AI 入口都走这里：运行态由 store 的守卫统一裁决。 */
+  const askAi = (prompt: string) => {
+    requestAgentTask(prompt);
   };
 
-  const skills = [
-    { icon: <ShieldCheck size={14} />, label: '数据库体检', desc: '主键 / 外键索引 / 重复索引 / 空表', prompt: '对当前数据库做一次体检：缺少主键、外键缺索引、重复索引与空表，并给出修复 SQL。' },
-    { icon: <TrendingUp size={14} />, label: '画图分析', desc: '把聚合结果渲染成图表', prompt: tables.find((x) => x.name === 'orders') ? '按 status 统计 orders 并画柱状图。' : '按第一个分组列统计并画柱状图。' },
-    { icon: <Activity size={14} />, label: '数据质量', desc: '空值 / 空串 / 重复主键 / 基数', prompt: tables.find((x) => x.name === 'orders') ? '检查 orders 的空值、空串和重复主键，并给出排查 SQL。' : '检查当前表的空值、空串和重复主键。' },
-    { icon: <Brain size={14} />, label: '记忆沉淀', desc: '跨会话记住业务口径', prompt: '总结当前库的关键业务口径，并写入长期记忆。' },
-  ];
+  const healthPrompt = `对当前数据库做一次体检：缺少主键、外键缺索引、重复索引与空表，并给出修复 SQL。`;
+
+  // ---------------------------------------------------------------- 没有连接
+  if (!connection) {
+    return (
+      <div className="welcome home">
+        <div className="home-inner">
+          <div className="home-empty">
+            <div className="home-empty-mark">
+              <Database size={22} />
+            </div>
+            <h1>还没有连接数据库</h1>
+            <p>
+              建一个连接，或者先用内置示例库跑一遍 —— 示例库有订单、商品、用户四张表，
+              可以直接试 SQL、图表和 AI 提问。
+            </p>
+            <div className="home-empty-actions">
+              <button className="btn primary" onClick={() => openConnectionEditor('new')} data-testid="welcome-new-connection">
+                <Plus size={13} /> 新建连接
+              </button>
+              <button className="btn" onClick={() => askAi('帮我建一个示例数据库并演示几个查询。')}>
+                <Sparkles size={13} /> 让 AI 帮我建
+              </button>
+            </div>
+            <p className="home-empty-hint">支持 41 种引擎：SQLite / MySQL / PostgreSQL / MongoDB / Redis / 图 / 向量 / 搜索…</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const dbOptions = (connectionSchemas ?? []).map((schema) => schema.name);
+  const scopeLabel = database || connection.name;
+  const loadingFacts = !dbLoaded || dbLoading;
 
   return (
-    <div className="welcome">
-      <div className="welcome-inner">
-        <div className="welcome-hero">
-          <div className="welcome-mark">
-            <Zap size={22} />
-          </div>
-          <div style={{ flex: 1 }}>
-            <h1>{t('welcomeTitle')}</h1>
-            <p className="lead">{t('welcomeSubtitle')}</p>
-          </div>
-          <button className="btn ai" onClick={askAi}>
-            <Sparkles size={12} /> {t('askAI')}
-          </button>
-        </div>
-
-        <div className="welcome-grid">
-          <button className="welcome-card" onClick={openDemo} data-testid="welcome-open-demo">
-            <span className="wc-icon">
+    <div className="welcome home" data-testid="welcome-home">
+      <div className="home-inner">
+        {/* ── 当前库头部：整页唯一的作用域声明 ─────────────────────────── */}
+        <header className="home-head">
+          <div className="home-scope">
+            <span
+              className="home-scope-icon"
+              style={{ color: CONNECTION_COLORS[connection.color] ?? CONNECTION_COLORS.blue, borderColor: 'transparent', background: 'var(--bg-app)' }}
+            >
               <Database size={15} />
             </span>
-            <h3>{t('openDemo')}</h3>
-            <p>{active ? `${active.name} · ${tables.length} ${t('table')}` : '创建一个 SQLite 示例库并立即体验'}</p>
-          </button>
-          <button className="welcome-card" onClick={() => openQuery()} data-testid="welcome-new-query">
-            <span className="wc-icon">
-              <TerminalSquare size={15} />
-            </span>
-            <h3>{t('newQuery')}</h3>
-            <p>多标签 SQL、方言高亮、结果集与历史</p>
-          </button>
-          <button className="welcome-card" onClick={() => openConnectionEditor('new')} data-testid="welcome-new-connection">
-            <span className="wc-icon">
-              <Plus size={15} />
-            </span>
-            <h3>{t('newConnection')}</h3>
-            <p>8 种引擎 · SSH / SSL · 只读与环境标签</p>
-          </button>
-          <button className="welcome-card" onClick={askAi} data-testid="welcome-ask-ai">
-            <span className="wc-icon" style={{ color: 'var(--agent)', background: 'var(--agent-soft)' }}>
-              <Sparkles size={15} />
-            </span>
-            <h3>AI 数据库体检</h3>
-            <p>可执行修复 SQL、数据质量与图表分析</p>
-          </button>
-        </div>
-
-        <div className="welcome-metrics">
-          <div className="metric">
-            <span className="metric-label">连接</span>
-            <strong>{connections.length}</strong>
-            <em>SQLite / MySQL / PG / …</em>
-          </div>
-          <div className="metric">
-            <span className="metric-label">对象</span>
-            <strong>{tables.length}</strong>
-            <em>表与视图</em>
-          </div>
-          <div className="metric">
-            <span className="metric-label">数据量</span>
-            <strong>{totalRows >= 1000 ? `${(totalRows / 1000).toFixed(1)}k` : totalRows.toLocaleString()}</strong>
-            <em>估算行数</em>
-          </div>
-          <div className="metric accent">
-            <span className="metric-label">Agent</span>
-            <strong>{tools.length}</strong>
-            <em>工具 · 四层记忆</em>
-          </div>
-        </div>
-
-        <div className="welcome-dashboard">
-          <div className="panel">
-            <div className="panel-head">
-              <Activity size={12} style={{ color: 'var(--accent)' }} /> 最近查询
-              <span className="badge">{history.length}</span>
-              <div className="spacer" />
-              <button className="btn ghost small" onClick={() => openQuery()}>
-                <Plus size={11} /> 新查询
-              </button>
-            </div>
-            <div className="dash-list">
-              {history.length ? (
-                history.map((item) => (
-                  <button key={item.id} className="dash-row" onClick={() => openQuery(active?.id, item.sql)} title={item.sql}>
-                    <span className={`status-led ${item.status === 'ok' ? 'ok' : 'error'}`} />
-                    <span className="dash-main mono">{sqlPreview(item.sql, 92)}</span>
-                    <span className="dash-meta">{item.rowCount ?? 0} 行</span>
-                    <span className="dash-meta">{formatDuration(item.durationMs)}</span>
-                    <ArrowUpRight size={11} className="dash-open" />
+            <div className="home-scope-text">
+              <div className="home-scope-title">
+                <h1 title={connection.name}>{connection.name}</h1>
+                {dbOptions.length > 1 ? (
+                  <button
+                    className="home-db-switch"
+                    onClick={() => setPickingDb((open) => !open)}
+                    title="切换要看的库"
+                    data-testid="welcome-db-switch"
+                  >
+                    {database || '选择库'}
+                    <ChevronDown size={11} className={pickingDb ? 'flip' : ''} />
                   </button>
-                ))
-              ) : (
-                <div className="dash-empty">执行 SQL 或让 Agent 查询后，这里会出现活动记录。</div>
-              )}
+                ) : database && !isFileLike(database, connection.name) ? (
+                  <span className="home-db-name mono" title={database}>
+                    {database}
+                  </span>
+                ) : null}
+              </div>
+              <div className="home-scope-meta">
+                <span>{engineLabel(connection)}</span>
+                <span className="home-dot" />
+                <span className={`env-pill ${connection.environment}`} style={{ padding: '0 5px', fontSize: 9 }}>
+                  {connection.environment.toUpperCase()}
+                </span>
+                {connection.readonly ? (
+                  <span className="home-ro">
+                    <ShieldCheck size={10} /> 只读
+                  </span>
+                ) : null}
+                <span className="home-dot" />
+                {loadingFacts ? (
+                  <span className="home-loading">
+                    <Loader2 size={10} className="spin" /> 正在读取库结构…
+                  </span>
+                ) : (
+                  <span data-testid="welcome-scope-summary">
+                    {facts.tableCount} 表
+                    {facts.viewCount ? ` · ${facts.viewCount} 视图` : ''}
+                    {facts.rowKnown ? ` · ${formatCount(facts.rowTotal)} 行` : ''}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
 
-          <div className="panel">
-            <div className="panel-head">
-              <Table2 size={12} style={{ color: 'var(--accent)' }} /> 对象概览
-              <span className="badge">{tables.length}</span>
-            </div>
-            <div className="dash-list">
-              {tables.slice(0, 8).map((table) => (
-                <button
-                  key={table.name}
-                  className="dash-row"
-                  onClick={() => openData(active!.id, table.name, activeSchemas.find((schema) => schema.tables.includes(table))?.name)}
-                >
-                  {table.type === 'view' ? <span className="status-led view" /> : <Table2 size={11} style={{ color: 'var(--accent)' }} />}
-                  <span className="dash-main mono">{table.name}</span>
-                  <span className="dash-meta">{table.columns?.length ?? 0} 列</span>
-                  <span className="dash-meta">{table.rowEstimate?.toLocaleString() ?? '—'} 行</span>
-                </button>
-              ))}
-              {!tables.length ? <div className="dash-empty">连接数据库后加载对象结构。</div> : null}
-            </div>
+          <div className="home-actions">
+            <button className="btn primary" onClick={() => openQuery(connection.id, undefined, undefined, database || undefined)} data-testid="welcome-new-query">
+              <TerminalSquare size={13} /> 新建查询
+            </button>
+            <button className="btn" onClick={() => openDashboard(connection.id, database || undefined)} data-testid="welcome-dashboard-link">
+              <TrendingUp size={13} /> 仪表板
+            </button>
+            <button className="btn agent" onClick={() => askAi(healthPrompt)} data-testid="welcome-ask-ai">
+              <Sparkles size={13} /> 让 AI 体检这个库
+            </button>
+            <button
+              className="icon-btn"
+              title="重新读取库结构"
+              onClick={() => void loadSchema(connection.id, true, database || undefined)}
+              data-testid="welcome-refresh"
+            >
+              <RefreshCw size={13} />
+            </button>
           </div>
-        </div>
 
-        <div className="welcome-dashboard">
-          <div className="panel">
-            <div className="panel-head">
-              <Sparkles size={12} style={{ color: 'var(--agent)' }} /> AI 快捷能力
-              <span className="badge agent">Local / Cloud</span>
-            </div>
-            <div className="skills-list">
-              {skills.map((skill) => (
+          {pickingDb && dbOptions.length > 1 ? (
+            <div className="home-db-menu">
+              {dbOptions.map((name) => (
                 <button
-                  key={skill.label}
-                  className="skill-row"
+                  key={name}
+                  className={`home-db-item ${name === database ? 'active' : ''}`}
                   onClick={() => {
-                    setAgentOpen(true);
-                    prefillAgent(skill.prompt);
+                    setHomeDatabase(name);
+                    setPickingDb(false);
                   }}
                 >
-                  <span className="skill-icon">{skill.icon}</span>
-                  <span className="skill-text">
-                    <strong>{skill.label}</strong>
-                    <em>{skill.desc}</em>
-                  </span>
-                  <ArrowUpRight size={11} />
+                  <Database size={11} />
+                  <span className="truncate">{name}</span>
                 </button>
               ))}
             </div>
-          </div>
+          ) : null}
+        </header>
 
-          <div className="panel">
-            <div className="panel-head">
-              <TerminalSquare size={12} style={{ color: 'var(--agent)' }} /> 最近会话
+        {/* ── 三栏工作区 ──────────────────────────────────────────── */}
+        <div className="home-grid">
+          {/* 这个库里有什么 */}
+          <section className="home-col home-col-main">
+            <div className="home-col-head">
+              <span className="home-col-title">
+                <Table2 size={12} /> 这个库里有什么
+              </span>
+              <span className="home-col-count">{facts.tables.length}</span>
               <div className="spacer" />
-              <button className="icon-btn" onClick={() => void loadAgentSession(sessions[0]?.id)} disabled={!sessions.length}>
-                <ArrowUpRight size={12} />
+              {facts.keylessCount ? (
+                <span className="home-warn" title="这些表既没有主键也没有唯一索引，无法安全定位单行">
+                  <AlertTriangle size={10} /> {facts.keylessCount} 张无主键
+                </span>
+              ) : facts.tableCount ? (
+                <span className="home-ok">
+                  <ShieldCheck size={10} /> 主键齐全
+                </span>
+              ) : null}
+            </div>
+
+            {loadingFacts && !facts.tables.length ? (
+              <div className="home-skeleton">
+                {[0, 1, 2, 3, 4].map((i) => (
+                  <div key={i} className="home-skeleton-row" />
+                ))}
+              </div>
+            ) : facts.tables.length ? (
+              <div className="home-table-list">
+                {facts.tables.slice(0, 10).map((fact) => (
+                  <button
+                    key={`${fact.database}.${fact.table.name}`}
+                    className="home-table-row"
+                    onClick={() => openTable(fact.table.name, fact.database)}
+                    title={`打开 ${fact.table.name}`}
+                    data-testid={`welcome-table-${fact.table.name}`}
+                  >
+                    <span className="home-table-kind">
+                      {fact.table.type === 'view' ? <span className="status-led view" /> : null}
+                      <span className="home-table-name mono">{fact.table.name}</span>
+                    </span>
+                    <span className="home-table-bar" aria-hidden="true">
+                      {typeof fact.rows === 'number' && facts.largest?.rows ? (
+                        <span
+                          style={{
+                            width: `${Math.max(3, Math.round((fact.rows / facts.largest.rows) * 100))}%`,
+                          }}
+                        />
+                      ) : null}
+                    </span>
+                    <span className="home-table-rows mono">{typeof fact.rows === 'number' ? formatCount(fact.rows) : '—'}</span>
+                    <span className="home-table-cols">{fact.columns} 列</span>
+                    {fact.keyless ? (
+                      <span className="home-table-flag" title="无主键/唯一索引">
+                        <KeyRound size={9} />
+                      </span>
+                    ) : null}
+                    <ArrowRight size={11} className="home-table-open" />
+                  </button>
+                ))}
+                {facts.tables.length > 10 ? (
+                  <button className="home-more" onClick={() => askAi(`列出 ${scopeLabel} 里全部 ${facts.tables.length} 张表，并说明每张表大概存什么。`)}>
+                    还有 {facts.tables.length - 10} 张表 · 让 AI 介绍全部
+                    <ArrowRight size={10} />
+                  </button>
+                ) : null}
+              </div>
+            ) : (
+              <div className="home-empty-block">
+                <p>这个库里还没有表。</p>
+                <div className="home-empty-actions">
+                  <button className="btn small" onClick={() => askAi(`帮我在 ${scopeLabel} 里设计并创建需要的表结构。`)}>
+                    <Sparkles size={11} /> 让 AI 建表
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* 体检摘要：把「要问 AI 才知道」的库健康度直接摆在表清单下面 */}
+            {!loadingFacts && facts.tables.length ? (
+              <div className="home-health">
+                <span className="home-health-title">
+                  <ShieldCheck size={11} /> 体检
+                </span>
+                <span className="home-health-item">
+                  {facts.rowKnown === facts.tables.length ? '行数已全部估算' : `${facts.rowKnown}/${facts.tables.length} 张有行数估算`}
+                </span>
+                <span className={`home-health-item ${facts.keylessCount ? 'warn' : ''}`}>
+                  {facts.keylessCount ? `${facts.keylessCount} 张无主键` : '主键齐全'}
+                </span>
+                {facts.emptyCount ? <span className="home-health-item warn">{facts.emptyCount} 张空表</span> : null}
+                <div className="spacer" />
+                <button className="btn ghost small" onClick={() => askAi(healthPrompt)} data-testid="welcome-health">
+                  让 AI 深入体检
+                </button>
+              </div>
+            ) : null}
+          </section>
+
+          {/* 接下来能做什么 */}
+          <section className="home-col home-col-side">
+            <div className="home-col-head">
+              <span className="home-col-title">
+                <Sparkles size={12} /> 接下来能做什么
+              </span>
+              <div className="spacer" />
+              <button className="btn ghost small" onClick={() => setAgentOpen(true)}>
+                打开助手
               </button>
             </div>
-            <div className="dash-list">
-              {sessions.length ? (
-                sessions.slice(0, 5).map((session) => (
-                  <button key={session.id} className="dash-row" onClick={() => void loadAgentSession(session.id)}>
-                    <span className="status-led agent" />
-                    <span className="dash-main truncate">{session.title}</span>
-                    <span className="dash-meta">{formatRelative(session.updatedAt)}</span>
+
+            <div className="home-suggest-list">
+              {suggestions.length ? (
+                suggestions.map((suggestion) => (
+                  <button
+                    key={suggestion.id}
+                    className="home-suggest"
+                    onClick={() => askAi(suggestion.prompt)}
+                    title={suggestion.reason}
+                    data-testid={`welcome-suggest-${suggestion.kind}`}
+                  >
+                    <span className="home-suggest-label">{suggestion.label}</span>
+                    <span className="home-suggest-prompt">{suggestion.prompt}</span>
+                    <ArrowRight size={10} className="home-suggest-go" />
                   </button>
                 ))
               ) : (
-                <div className="dash-empty">还没有会话。向 AI 提一个具体问题开始。</div>
+                <div className="home-empty-block">
+                  <p>{loadingFacts ? '正在按这个库的表生成建议…' : '这个库还没法生成建议，直接问 AI 也行。'}</p>
+                </div>
               )}
             </div>
-          </div>
+
+            <div className="home-quick">
+              <button className="home-quick-item" onClick={() => askAi(healthPrompt)}>
+                <ShieldCheck size={12} />
+                <span>
+                  <strong>数据库体检</strong>
+                  <em>主键 / 外键索引 / 重复索引 / 空表</em>
+                </span>
+              </button>
+              <button className="home-quick-item" onClick={() => askAi(`总结 ${scopeLabel} 的关键业务口径，并写入长期记忆。`)}>
+                <Database size={12} />
+                <span>
+                  <strong>沉淀业务口径</strong>
+                  <em>跨会话记住这个库的口径</em>
+                </span>
+              </button>
+            </div>
+          </section>
         </div>
 
-        <div className="welcome-footnote">
-          <span className="badge">{connections.length} 连接</span>
-          <span className="badge">{tables.length} 对象</span>
-          <span className="badge agent">{tools.length} Agent 工具</span>
-          <span className="badge">四层记忆</span>
-          <span className="muted">{t('welcome_tip')}</span>
-        </div>
+        {/* ── 最近跑过 ──────────────────────────────────────────── */}
+        <footer className="home-recent">
+          <span className="home-recent-label">最近跑过</span>
+          {recent.length ? (
+            <div className="home-recent-list">
+              {recent.map((item) => (
+                <button
+                  key={item.id}
+                  className="home-recent-chip"
+                  onClick={() => openQuery(connection.id, item.sql, undefined, database || undefined)}
+                  title={`${item.sql}\n${formatRelative(item.createdAt)}`}
+                >
+                  <span className={`status-led ${item.status === 'ok' ? 'ok' : 'error'}`} />
+                  <span className="home-recent-sql mono">{sqlPreview(item.sql, 46)}</span>
+                  <span className="home-recent-meta">{formatDuration(item.durationMs)}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <span className="home-recent-empty">还没有查询记录 —— 跑第一条 SQL 会出现在这里</span>
+          )}
+        </footer>
       </div>
     </div>
   );

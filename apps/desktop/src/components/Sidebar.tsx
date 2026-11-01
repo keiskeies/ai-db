@@ -82,6 +82,8 @@ export function Sidebar() {
   const toggleConnection = useApp((s) => s.toggleConnection);
   const selectConnection = useApp((s) => s.selectConnection);
   const toggleSchema = useApp((s) => s.toggleSchema);
+  const homeDatabase = useApp((s) => s.homeDatabase);
+  const setHomeDatabase = useApp((s) => s.setHomeDatabase);
   const openData = useApp((s) => s.openData);
   const openQuery = useApp((s) => s.openQuery);
   const openDesign = useApp((s) => s.openDesign);
@@ -703,10 +705,13 @@ export function Sidebar() {
                         return (
                           <div key={schemaKey}>
                             <div
-                              className="tree-node db-node"
+                              className={`tree-node db-node${conn.id === activeConnectionId && schema.name === homeDatabase ? ' current' : ''}`}
                               style={{ paddingLeft: INDENT.database }}
                               onClick={() => {
                                 const willOpen = !schemaOpen;
+                                // 点库 = 只把首页切到这个库；Agent 的目标库不动（已解耦）
+                                if (conn.id !== activeConnectionId) selectConnection(conn.id);
+                                setHomeDatabase(schema.name);
                                 toggleSchema(schemaKey);
                                 if (willOpen && !loaded && !loading) void loadSchema(conn.id, false, schema.name);
                               }}

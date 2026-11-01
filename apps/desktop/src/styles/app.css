@@ -114,6 +114,9 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .tree-node:hover .node-actions { display: flex; }
 .node-actions .icon-btn { width: 20px; height: 20px; }
 .db-node { font-weight: 600; color: var(--text-secondary); }
+/* 「当前库」：左侧点中的那个库，首页正显示它。
+   只加一档提亮 + 左侧标记，不用整行填充，避免和选中态（active）抢语义。 */
+.db-node.current { color: var(--text-primary); box-shadow: inset 2px 0 0 var(--accent); }
 .sidebar-foot { border-top: 1px solid var(--border-subtle); padding: 8px; display: flex; gap: 6px; }
 
 .workspace { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-panel); }
@@ -233,25 +236,10 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .empty-state h3 { margin: 0 0 6px; font-size: 14px; color: var(--text-secondary); font-weight: 600; }
 .empty-state p { margin: 0; font-size: 12px; line-height: 1.6; }
 
-/* ---------- welcome ---------- */
-.welcome { flex: 1; overflow: auto; display: flex; justify-content: center; padding: 48px 32px; }
-.welcome-inner { width: 100%; max-width: 860px; }
-.welcome-hero { display: flex; align-items: center; gap: 18px; margin-bottom: 26px; }
-.welcome-mark { width: 54px; height: 54px; border-radius: 15px; background: linear-gradient(140deg, var(--brand-a), var(--brand-b)); display: grid; place-items: center; color: var(--on-brand); box-shadow: 0 12px 30px rgba(0,0,0,.25); }
-.welcome h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -.5px; }
-.welcome .lead { color: var(--text-secondary); font-size: 13.5px; line-height: 1.6; margin: 0; }
-.welcome-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 26px 0; }
-.welcome-card {
-  text-align: left; padding: 14px; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle);
-  background: var(--bg-elevated); display: flex; flex-direction: column; gap: 8px; min-height: 116px;
-  transition: border-color .15s, transform .15s;
-}
-.welcome-card:hover { border-color: var(--border-strong); transform: translateY(-1px); }
-.welcome-card .wc-icon { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: var(--bg-app); color: var(--accent); }
-.welcome-card h3 { margin: 0; font-size: 12.5px; }
-.welcome-card p { margin: 0; color: var(--text-muted); font-size: 11.5px; line-height: 1.5; }
-.welcome-section { margin-top: 26px; }
-.welcome-section h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--text-muted); margin: 0 0 10px; }
+/* ---------- welcome ----------
+   欢迎页已重做成「当前库的家」。布局与样式集中在 home.css，
+   这里只留外层滚动容器，保证 Workspace 里的挂载方式不变。 */
+.welcome { flex: 1; overflow: auto; display: flex; padding: 0; }
 .table-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .table-chip { height: 26px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--border-subtle); background: var(--bg-panel); color: var(--text-secondary); font-size: 11.5px; display: inline-flex; align-items: center; gap: 5px; }
 .table-chip:hover { border-color: var(--accent); color: var(--text-primary); }
@@ -413,6 +401,21 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 .agent-dot { width: 16px; height: 16px; border-radius: 5px; background: var(--agent); display: grid; place-items: center; color: var(--on-solid); font-size: 9px; font-weight: 800; }
 .agent-meta { font-size: 10px; color: var(--text-muted); }
 .agent-sub { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--border-subtle); font-size: 10.5px; color: var(--text-muted); }
+/* 首页与 Agent 的库不一致：只做一行低对比提示，不与对话内容抢注意力 */
+.agent-scope-mismatch {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  padding: 5px 12px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.agent-scope-mismatch b { color: var(--text-secondary); font-weight: 600; font-family: var(--font-mono); }
+.agent-scope-mismatch .btn { margin-left: auto; }
 .agent-transcript-wrap { position: relative; flex: 1; min-height: 0; display: flex; }
 .agent-transcript { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 13px 6px; }
 .agent-transcript-inner { display: flex; flex-direction: column; gap: 16px; min-height: 100%; }
@@ -550,22 +553,118 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 @keyframes activity-pulse { 50% { opacity: .45; transform: scale(.88); } }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 
-.composer { border-top: 1px solid var(--border-subtle); padding: 9px 10px 8px; background: var(--bg-panel); }
-.composer-box { border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg-elevated); overflow: hidden; transition: border-color .15s, box-shadow .15s; }
-.composer-box:focus-within { border-color: var(--agent); box-shadow: 0 0 0 2px var(--agent-soft); }
-.composer textarea { width: 100%; border: none; outline: none; background: transparent; resize: none; padding: 9px 10px 4px; min-height: 38px; max-height: 160px; line-height: 1.55; font-size: 12.5px; }
+/* ---------- composer：浮动圆角卡 + 胶囊工具行 + 卡外状态条 ---------- */
+.composer { padding: 10px 12px 8px; background: var(--bg-panel); }
+/* 卡片浮起：圆角更软，阴影拉开层级，不再用边框和分割线切分内部 */
+.composer-box {
+  position: relative;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 70%, transparent);
+  border-radius: 18px;
+  background: var(--bg-elevated);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .04) inset, 0 6px 20px rgba(0, 0, 0, .22);
+  transition: border-color .15s, box-shadow .15s;
+}
+.composer-box:focus-within {
+  border-color: color-mix(in srgb, var(--agent) 60%, var(--border-strong));
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .05) inset, 0 8px 26px rgba(0, 0, 0, .28);
+}
+.composer textarea {
+  width: 100%; border: none; outline: none; background: transparent; resize: none;
+  padding: 13px 15px 2px; min-height: 44px; max-height: 160px; line-height: 1.6; font-size: 13px;
+}
 .composer textarea::placeholder { color: var(--text-muted); }
-.composer-tools { display: flex; align-items: center; gap: 4px; padding: 4px 6px 6px; }
-.composer-tools .icon-btn { width: 24px; height: 24px; }
-.composer-foot { display: flex; align-items: center; gap: 6px; padding: 5px 7px 7px; border-top: 1px solid var(--border-subtle); }
-.mode-select { height: 23px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-panel); color: var(--text-secondary); font-size: 10.5px; padding: 0 4px; outline: none; }
-.model-select { max-width: 170px; }
-.model-manage-btn { cursor: pointer; }
-.send-btn { width: 28px; height: 28px; border-radius: 7px; border: none; background: var(--agent); color: var(--on-solid); display: grid; place-items: center; margin-left: auto; }
-.send-btn:hover { filter: brightness(1.08); }
+.composer-tools { position: relative; display: flex; align-items: center; gap: 6px; padding: 4px 10px 9px; }
+
+/* 胶囊按钮：圆形/半圆，无描边，靠底色与 hover 提亮 */
+.composer-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 27px; padding: 0 10px;
+  border: 1px solid transparent; border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-panel) 70%, transparent);
+  color: var(--text-secondary); font-size: 11.5px; white-space: nowrap;
+  transition: background-color .13s, color .13s, border-color .13s;
+}
+.composer-pill:hover { background: var(--bg-hover); color: var(--text-primary); }
+.composer-pill.open { background: var(--bg-active); color: var(--text-primary); border-color: var(--border-strong); }
+.composer-pill:disabled { opacity: .45; cursor: not-allowed; }
+.composer-pill .pill-caret { color: var(--text-muted); flex: 0 0 auto; }
+/* 左下那颗纯粹的「+」：圆形、稍大，和右侧发送键呼应 */
+.composer-pill-add {
+  width: 27px; height: 27px; padding: 0; justify-content: center;
+  border-radius: 50%; background: color-mix(in srgb, var(--bg-panel) 55%, transparent);
+}
+.composer-pill-add.open svg { transform: rotate(45deg); }
+.composer-pill-add svg { transition: transform .16s ease; }
+/* 右侧并排「模型 + 思考档位」：模型按内容自然宽度显示，真放不下时才收缩并走省略号 */
+.composer-model { max-width: 52%; min-width: 0; flex: 0 0 auto; }
+.composer-model .truncate { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.composer-pill[data-testid='agent-reasoning-tier'] { flex: 0 0 auto; }
+
+/* 胶囊弹层：从胶囊行向上展开，锚在左侧 */
+.pill-menu {
+  position: absolute; left: 8px; bottom: calc(100% + 2px); z-index: 32;
+  min-width: 152px; max-width: 280px; max-height: 280px; overflow: auto;
+  padding: 4px;
+  background: var(--bg-elevated); border: 1px solid var(--border-strong);
+  border-radius: 11px; box-shadow: var(--shadow-pop);
+  animation: slideUp .14s ease;
+}
+.pill-menu-model { left: auto; right: 8px; min-width: 190px; }
+/* 右半边的胶囊（思考档位现在在模型右边）弹层要往左展开，否则会顶出卡片 */
+.pill-menu-right { left: auto; right: 8px; }
+.pill-menu-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 6px 9px; border: none; background: transparent; border-radius: 7px;
+  color: var(--text-secondary); font-size: 12px; text-align: left;
+}
+.pill-menu-item > span { flex: 1; min-width: 0; }
+.pill-menu-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.pill-menu-item.active { color: var(--agent); }
+.pill-menu-item:disabled { opacity: .45; cursor: not-allowed; }
+.pill-menu-sep { height: 1px; margin: 4px 6px; background: var(--border-subtle); }
+.pill-menu-hint { padding: 4px 9px 3px; font-size: 10px; color: var(--text-muted); }
+
+.send-btn {
+  width: 30px; height: 30px; border-radius: 50%; border: none;
+  background: var(--agent); color: var(--on-solid);
+  display: grid; place-items: center; margin-left: 2px; flex: 0 0 30px;
+  transition: filter .13s, transform .13s;
+}
+.send-btn:hover:not(:disabled) { filter: brightness(1.1); }
+.send-btn:active:not(:disabled) { transform: scale(.94); }
 .send-btn.stop { background: var(--danger); color: var(--on-solid); }
-.send-btn:disabled { opacity: .4; cursor: not-allowed; }
-.composer-hint { font-size: 9.5px; color: var(--text-muted); margin-top: 5px; display: flex; gap: 6px; align-items: center; }
+.send-btn:disabled { opacity: .35; cursor: not-allowed; }
+
+/* agent 顶部连接/库选择器沿用的紧凑下拉 */
+.mode-select { height: 23px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-panel); color: var(--text-secondary); font-size: 10.5px; padding: 0 4px; outline: none; }
+
+/* 卡外一行：左边运行状态（轮次·步数·tok/s ｜ 累计 token·缓存命中 ｜ 上下文占比），右边风险提示 */
+.composer-stats {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 4px 0; color: var(--text-muted); font-size: 10px;
+  min-height: 14px;
+}
+.composer-stats .stat-groups { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.composer-stats .stat-group { display: inline-flex; align-items: center; gap: 6px; }
+.composer-stats .stat-group svg { opacity: .7; flex: 0 0 auto; }
+.composer-stats .stat {
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  letter-spacing: .1px; white-space: nowrap;
+}
+.composer-stats .stat-sep { width: 1px; height: 9px; background: var(--border-subtle); flex: 0 0 1px; }
+.composer-stats .stat-ring { display: inline-grid; place-items: center; color: var(--agent); }
+/* 风险提示靠右、可以压缩；窄面板下自然折到下一行而不会把状态挤没 */
+.composer-stats .stat-note {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-left: auto; flex: 0 1 auto; min-width: 0;
+  font-size: 9.5px; color: color-mix(in srgb, var(--text-muted) 82%, transparent);
+  white-space: nowrap;
+}
+.composer-stats .stat-note svg { opacity: .6; flex: 0 0 auto; }
+.composer-stats .stat-note span { overflow: hidden; text-overflow: ellipsis; }
+/* 运行中微微提亮，提醒用户这条是真的在生成 */
+.composer-stats .stat-note.active { color: var(--text-secondary); }
+.composer-stats .stat-note.active svg { opacity: .85; }
 .popover { position: absolute; z-index: 30; background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop); overflow: hidden; }
 .mention-popover { left: 10px; right: 10px; bottom: 118px; max-height: 240px; overflow: auto; }
 .popover-item { display: flex; width: 100%; border: none; background: transparent; padding: 7px 10px; gap: 8px; text-align: left; font-size: 11.5px; color: var(--text-secondary); align-items: center; }
@@ -782,7 +881,7 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 @keyframes slideIn { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
 
 @media (max-width: 1240px) {
-  .welcome-grid { grid-template-columns: repeat(2, 1fr); }
+  /* 欢迎页的响应式规则见 home.css */
 }
 @media (max-width: 1000px) {
   .agent-panel { position: absolute; right: 0; top: 0; bottom: 0; z-index: 25; box-shadow: var(--shadow-pop); width: min(440px, 94vw); flex-basis: auto; }
@@ -793,9 +892,6 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
   .sidebar { display: none; }
   .brand-sub { display: none; }
   .titlebar .cmd-hint { display: none; }
-  .welcome { padding: 26px 16px; }
-  .welcome-grid { grid-template-columns: 1fr 1fr; }
-  .welcome h1 { font-size: 21px; }
   .agent-panel { width: 100vw; }
 }
 
@@ -895,7 +991,6 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 .ribbon-btn[data-tone='lime'] { --tone: #84cc16; }
 .ribbon-btn[data-tone='cyan'] { --tone: #0ea5e9; }
 .ribbon-btn[data-tone='fuchsia'] { --tone: #d946ef; }
-.ribbon-btn[data-tone='pink'] { --tone: #ec4899; }
 .ribbon-btn[data-tone='teal'] .ribbon-icon svg { stroke: url(#rb-teal); }
 .ribbon-btn[data-tone='sky'] .ribbon-icon svg { stroke: url(#rb-sky); }
 .ribbon-btn[data-tone='emerald'] .ribbon-icon svg { stroke: url(#rb-emerald); }
@@ -907,7 +1002,6 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 .ribbon-btn[data-tone='lime'] .ribbon-icon svg { stroke: url(#rb-lime); }
 .ribbon-btn[data-tone='cyan'] .ribbon-icon svg { stroke: url(#rb-cyan); }
 .ribbon-btn[data-tone='fuchsia'] .ribbon-icon svg { stroke: url(#rb-fuchsia); }
-.ribbon-btn[data-tone='pink'] .ribbon-icon svg { stroke: url(#rb-pink); }
 [data-density='compact'] .ribbon { flex-basis: 60px; height: 60px; }
 [data-density='compact'] .ribbon-btn { min-width: 54px; height: 52px; }
 .tree-count { margin-left: auto; font-size: 9px; color: var(--text-muted); padding-right: 6px; }

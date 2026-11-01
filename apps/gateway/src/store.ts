@@ -1112,13 +1112,35 @@ export class Store {
     return row ? this.rowToSession(row) : undefined;
   }
 
-  listSessions(limit = 60): AgentSessionMeta[] {
-    return this.all<SessionRow>(`SELECT * FROM agent_sessions WHERE archived = 0 ORDER BY updated_at DESC LIMIT ${Math.min(200, limit)}`).map((r) => this.rowToSession(r));
+  /**
+   * 列会话。第一个参数兼容旧的「直接传 limit」写法。
+   * 未绑定库（database IS NULL）的旧会话在任何库下都返回 —— 它们是"还没选库"时
+   * 产生的记录，按库过滤时藏起来会让用户以为历史丢了。
+   */
+  listSessions(
+    opts: number | { connectionId?: string; database?: string; limit?: number } = 60,
+  ): AgentSessionMeta[] {
+    const o = typeof opts === 'number' ? { limit: opts } : opts;
+    const where: string[] = ['archived = 0'];
+    const args: string[] = [];
+    if (o.connectionId) {
+      where.push('connection_id = ?');
+      args.push(o.connectionId);
+    }
+    if (o.database) {
+      where.push('(database IS NULL OR database = ?)');
+      args.push(o.database);
+    }
+    const limit = Math.min(200, Math.max(1, o.limit ?? 60));
+    return this.all<SessionRow>(
+      `SELECT * FROM agent_sessions WHERE ${where.join(' AND ')} ORDER BY updated_at DESC LIMIT ${limit}`,
+      args,
+    ).map((r) => this.rowToSession(r));
   }
 
   updateSession(
     id: string,
-    patch: Partial<Pick<AgentSessionMeta, 'connectionId' | 'database' | 'title' | 'summary' | 'model' | 'permissionMode' | 'status' | 'tokensIn' | 'tokensOut'>> & { archived?: boolean },
+    patch: Partial<Pick<AgentSessionMeta, 'connectionId' | 'database' | 'title' | 'summary' | 'model' | 'permissionMode' | 'status' | 'tokensIn' | 'tokensOut' | 'turns' | 'steps' | 'cacheHitTokens' | 'cacheMissTokens' | 'contextTokens'>> & { archived?: boolean },
   ): AgentSessionMeta {
     const map: Record<string, string> = {
       connectionId: 'connection_id',

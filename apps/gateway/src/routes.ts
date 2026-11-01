@@ -2209,7 +2209,15 @@ export function createApiRouter(deps: ApiDeps): Router {
     res.send(file.buffer);
   });
 
-  router.get('/agent/sessions', (_req, res) => res.json({ sessions: store.listSessions() }));
+  // 不传参数时与旧行为完全一致（全量），前端按库过滤时带 connectionId / database
+  router.get('/agent/sessions', (req, res) =>
+    res.json({
+      sessions: store.listSessions({
+        connectionId: typeof req.query.connectionId === 'string' ? req.query.connectionId : undefined,
+        database: typeof req.query.database === 'string' ? req.query.database : undefined,
+      }),
+    }),
+  );
   router.post(
     '/agent/sessions',
     ah(async (req, res) => {

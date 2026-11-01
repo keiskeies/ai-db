@@ -104,3 +104,96 @@ test('召回只带当前库的记忆，不跨库串味', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('会话累计用量：轮次/步数/缓存命中可写入并读回', () => {
+  const dir = tempDir();
+  try {
+    const store = new Store(join(dir, 'aidb.db'), 'secret');
+    const session = store.createSession({ connectionId: 'conn-1' });
+    // 新会话的累计指标必须是 0 而不是 undefined，前端状态条直接拿来算
+    assert.equal(session.turns, 0);
+    assert.equal(session.steps, 0);
+    assert.equal(session.cacheHitTokens, 0);
+    assert.equal(session.cacheMissTokens, 0);
+    assert.equal(session.contextTokens, 0);
+
+    const updated = store.updateSession(session.id, { turns: 3, steps: 11, cacheHitTokens: 900, cacheMissTokens: 100, contextTokens: 4200 });
+    assert.equal(updated.turns, 3);
+    assert.equal(updated.steps, 11);
+    assert.equal(updated.cacheHitTokens, 900);
+    assert.equal(updated.cacheMissTokens, 100);
+    assert.equal(updated.contextTokens, 4200);
+
+    // 重开会话必须还在——这些值不该只活在内存里
+    const reread = store.getSession(session.id);
+    assert.deepEqual(
+      { turns: reread?.turns, steps: reread?.steps, hit: reread?.cacheHitTokens, miss: reread?.cacheMissTokens, ctx: reread?.contextTokens },
+      { turns: 3, steps: 11, hit: 900, miss: 100, ctx: 4200 },
+    );
+    store.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('老库升级后补出轮次/步数/缓存列，历史会话归零', () => {
+  const dir = tempDir();
+  const dbPath = join(dir, 'aidb.db');
+  try {
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(`CREATE TABLE agent_sessions (
+      id TEXT PRIMARY KEY, connection_id TEXT, database TEXT, title TEXT NOT NULL DEFAULT '新会话', summary TEXT,
+      model TEXT, permission_mode TEXT NOT NULL DEFAULT 'ask', status TEXT NOT NULL DEFAULT 'idle',
+      tokens_in INTEGER DEFAULT 0, tokens_out INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, archived INTEGER DEFAULT 0
+    )`);
+    legacy.exec(`INSERT INTO agent_sessions (id,connection_id,title,permission_mode,status,tokens_in,tokens_out,created_at,updated_at)
+      VALUES ('old-1','conn-1','历史会话','ask','done',500,60,'2025-01-01T00:00:00.000Z','2025-01-01T00:00:00.000Z')`);
+    legacy.close();
+
+    const store = new Store(dbPath, 'secret');
+    const old = store.getSession('old-1');
+    // 老会话没有这些数据，补 0；已有 token 不能被覆盖
+    assert.equal(old?.turns, 0);
+    assert.equal(old?.steps, 0);
+    assert.equal(old?.cacheHitTokens, 0);
+    assert.equal(old?.contextTokens, 0);
+    assert.equal(old?.tokensIn, 500);
+    // 升级后的库还能正常写入新指标
+    const patched = store.updateSession('old-1', { turns: 2, steps: 4 });
+    assert.equal(patched.turns, 2);
+    assert.equal(patched.steps, 4);
+    store.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('会话可按连接与库过滤，不传参数时返回全部', () => {
+  const dir = tempDir();
+  const store = new Store(join(dir, 'aidb.db'), 'secret');
+  try {
+    const media = store.createSession({ connectionId: 'c1', database: 'media' });
+    const friend = store.createSession({ connectionId: 'c1', database: 'friendship' });
+    const other = store.createSession({ connectionId: 'c2', database: 'media' });
+    const noDb = store.createSession({ connectionId: 'c1' });
+
+    assert.equal(store.listSessions().length, 4);
+
+    const c1 = store.listSessions({ connectionId: 'c1' }).map((s) => s.id).sort();
+    assert.deepEqual(c1, [media.id, friend.id, noDb.id].sort());
+
+    // 未绑定库的旧会话也出现在 media 作用域里（见实现注释：藏起来会被当成丢数据）
+    const c1media = store.listSessions({ connectionId: 'c1', database: 'media' }).map((s) => s.id).sort();
+    assert.deepEqual(c1media, [media.id, noDb.id].sort());
+
+    // 未绑定库的旧会话在任何库下都可见
+    const c1friend = store.listSessions({ connectionId: 'c1', database: 'friendship' }).map((s) => s.id).sort();
+    assert.deepEqual(c1friend, [friend.id, noDb.id].sort());
+
+    assert.equal(other.database, 'media');
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

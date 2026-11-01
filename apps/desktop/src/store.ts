@@ -115,6 +115,9 @@ interface UiPrefs {
   /** 上次使用的连接与每个连接各自记住的数据库 */
   activeConnectionId?: string;
   agentDatabaseByConnection?: Record<string, string>;
+  /** 首页（当前库的家）按连接记住上次看的库；与 agentDatabaseByConnection 分开存，
+      否则旧数据会把两个字段又绑回一起 */
+  homeDatabaseByConnection?: Record<string, string>;
   /** 仪表板的时间范围视角按「连接/库」记住，切回来不用重新选 */
   dashboardRange?: Record<string, string>;
   /** 侧栏展开状态也跨刷新保留，不再每次自动展开连接默认库 */
@@ -187,6 +190,8 @@ interface AppStore {
    * 和工具默认库；空串表示交给后端按会话/连接默认库兜底。
    */
   agentDatabase: string;
+  /** 首页正在展示的库。与 agentDatabase 解耦，只由侧栏点库 / 首页库下拉写。 */
+  homeDatabase: string;
   live?: LiveTurn;
   approval?: ApprovalState;
   agentPrefill?: string;
@@ -216,6 +221,8 @@ interface AppStore {
 
   loadSchema: (connectionId: string, refresh?: boolean, database?: string) => Promise<void>;
   selectConnection: (id: string) => void;
+  /** 只影响首页显示哪个库，绝不碰 Agent 的目标库。 */
+  setHomeDatabase: (database: string) => void;
   setActiveConnection: (id?: string) => void;
   toggleConnection: (id: string) => void;
   toggleSchema: (key: string) => void;
@@ -248,12 +255,16 @@ interface AppStore {
   closeContextMenu: () => void;
   setAgentExpanded: (expanded: boolean) => void;
   setAgentMode: (mode: PermissionMode) => void;
-  setAgentDatabase: (database: string) => void;
+  setAgentDatabase: (database: string) => Promise<void>;
+  restoreSessionForScope: () => Promise<void>;
+  /** 返回 false 表示被运行态拒绝（已弹提示）。 */
+  requestAgentTask: (prompt: string) => boolean;
   setSessionsOpen: (open: boolean) => void;
   newAgentSession: () => Promise<void>;
   loadAgentSession: (id: string) => Promise<void>;
   deleteAgentSession: (id: string) => Promise<void>;
   refreshSessions: () => Promise<void>;
+  sessionsForScope: (connectionId?: string, database?: string) => AgentSessionMeta[];
   renameAgentSession: (id: string, title: string) => Promise<void>;
   sendAgent: (text: string, mode?: PermissionMode, images?: string[]) => Promise<void>;
   abortAgent: () => Promise<void>;
@@ -280,6 +291,12 @@ interface AppStore {
   openBackup: () => Promise<void>;
   refreshAllSchemas: () => Promise<void>;
 }
+
+/**
+ * 用户在抽屉里手动点会话时，loadAgentSession 会把该会话的库写回 agentDatabase。
+ * 若不抑制，"库变了"会再次触发自动恢复，把用户刚点的会话换成"最近一条"。
+ */
+let suppressAutoRestore = false;
 
 const WELCOME: Tab = { id: 'welcome', kind: 'welcome', title: '欢迎' };
 let tabSeq = 1;
@@ -325,6 +342,7 @@ export const useApp = create<AppStore>((set, get) => ({
   agentFollowUps: [],
   agentMode: 'ask',
   agentDatabase: '',
+  homeDatabase: readUiPrefs().homeDatabaseByConnection?.[readUiPrefs().activeConnectionId ?? ''] ?? '',
   sessionsOpen: false,
   memoryOpen: false,
   memoryQuery: '',
@@ -368,7 +386,12 @@ export const useApp = create<AppStore>((set, get) => ({
       const prefs = readUiPrefs();
       const preferred = prefs.activeConnectionId ? data.connections.find((c) => c.id === prefs.activeConnectionId) : undefined;
       const target = preferred ?? data.connections.find((c) => c.name.startsWith('Demo')) ?? data.connections[0];
-      set({ activeConnectionId: target.id, agentDatabase: rememberedAgentDatabase(target.id) });
+      set({
+        activeConnectionId: target.id,
+        agentDatabase: rememberedAgentDatabase(target.id),
+        // 重启后首页要停在关闭前看的那个库（§9.5(c)），不能退回连接默认库
+        homeDatabase: prefs.homeDatabaseByConnection?.[target.id] ?? '',
+      });
       await get().loadSchema(target.id);
     } catch (err) {
       set({ booted: false, bootError: errorText(err) });
@@ -431,8 +454,29 @@ export const useApp = create<AppStore>((set, get) => ({
 
   selectConnection: (id) => {
     const previous = get().activeConnectionId;
-    set({ activeConnectionId: id, ...(previous === id ? {} : { agentDatabase: rememberedAgentDatabase(id) }) });
+    if (previous === id) {
+      if (!get().schemas[id]) void get().loadSchema(id);
+      return;
+    }
+    // 换连接时首页库走回落链：该连接上次看的库 → 空（由首页再退到连接默认库/第一个库）
+    const rememberedHome = readUiPrefs().homeDatabaseByConnection?.[id] ?? '';
+    set({
+      activeConnectionId: id,
+      agentDatabase: rememberedAgentDatabase(id),
+      homeDatabase: rememberedHome,
+    });
     if (!get().schemas[id]) void get().loadSchema(id);
+  },
+
+  setHomeDatabase: (database) => {
+    const connId = get().activeConnectionId;
+    if (connId) {
+      const homeDatabaseByConnection = { ...(readUiPrefs().homeDatabaseByConnection ?? {}) };
+      if (database) homeDatabaseByConnection[connId] = database;
+      else delete homeDatabaseByConnection[connId];
+      saveUiPrefs({ homeDatabaseByConnection });
+    }
+    set({ homeDatabase: database });
   },
 
   setActiveConnection: (id) => {
@@ -716,11 +760,61 @@ export const useApp = create<AppStore>((set, get) => ({
 
   setAgentMode: (mode) => set({ agentMode: mode }),
 
-  setAgentDatabase: (database) => {
+  setAgentDatabase: async (database) => {
+    const previous = get().agentDatabase;
+    if (previous === database) return;
     set({ agentDatabase: database });
     // 选完就落库：否则重开会话会退回连接默认库，历史对话和实际执行对不上
     const id = get().agentSessionId;
     if (id) void api.updateSession(id, { database }).catch(() => undefined);
+    if (suppressAutoRestore) return;
+    // 换库 → 自动接上该库最近的那条会话
+    await get().restoreSessionForScope();
+  },
+
+  /**
+   * 首页等「外部入口」触发 Agent 的唯一通道。
+   * 先判运行态：正在回答时直接拒绝，连库都不切 —— 否则会出现
+   * 「目标库变了但会话没换」的半截状态，下一次提问就落到错库上。
+   */
+  requestAgentTask: (prompt) => {
+    const live = get().live;
+    if (live && (live.status === 'streaming' || live.status === 'awaiting')) {
+      get().notify('warning', 'Agent 正在回答，请等这一轮结束再操作');
+      return false;
+    }
+    const target = get().homeDatabase;
+    if (target && target !== get().agentDatabase) void get().setAgentDatabase(target);
+    set({ agentOpen: true });
+    get().prefillAgent(prompt);
+    return true;
+  },
+
+  /**
+   * 把界面切到「当前库最近一条会话」。触发方只有 setAgentDatabase。
+   * 正在回答时不动作：静默换掉会话会让用户看不见自己那一轮跑到哪去了。
+   */
+  restoreSessionForScope: async () => {
+    const live = get().live;
+    if (live && (live.status === 'streaming' || live.status === 'awaiting')) return;
+    const { activeConnectionId, agentDatabase } = get();
+    await get().refreshSessions();
+    const recent = get().sessionsForScope(activeConnectionId, agentDatabase || undefined)[0];
+    if (recent) {
+      await get().loadAgentSession(recent.id);
+      return;
+    }
+    // 该库还没有会话：清成空白，但不建后端会话（首条消息时才创建，
+    // 否则切几次库就堆几个空会话）
+    set({
+      agentSessionId: undefined,
+      agentSessionMeta: undefined,
+      agentMessages: [],
+      agentFollowUps: [],
+      live: undefined,
+      approval: undefined,
+      agentDatabase,
+    });
   },
   setSessionsOpen: (open) => set({ sessionsOpen: open }),
 
@@ -732,6 +826,19 @@ export const useApp = create<AppStore>((set, get) => ({
       /* ignore */
     }
   },
+
+  /**
+   * 当前作用域内的会话。过滤只在这一层做，refreshSessions 始终拉全量 ——
+   * 否则全局 sessions 会被写成某个库的子集，切回别的库就变成空列表。
+   * connectionId / database 为空的历史会话一律放行：藏起来会被当成丢数据。
+   * 比较不做大小写归一（MySQL 在 Linux 上库名大小写敏感）。
+   */
+  sessionsForScope: (connectionId, database) =>
+    get().sessions.filter(
+      (s) =>
+        (!connectionId || !s.connectionId || s.connectionId === connectionId) &&
+        (!database || !s.database || s.database === database),
+    ),
 
   renameAgentSession: async (id, title) => {
     const trimmed = title.trim();
@@ -774,6 +881,7 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 
   loadAgentSession: async (id) => {
+    suppressAutoRestore = true;
     try {
       if (get().live && (get().live!.status === 'streaming' || get().live!.status === 'awaiting')) await get().abortAgent();
       const detail = await api.getSession(id);
@@ -793,6 +901,8 @@ export const useApp = create<AppStore>((set, get) => ({
       if (detail.session.connectionId && !get().schemas[detail.session.connectionId]) void get().loadSchema(detail.session.connectionId);
     } catch (err) {
       get().notify('error', get().t('error'), errorText(err));
+    } finally {
+      suppressAutoRestore = false;
     }
   },
 

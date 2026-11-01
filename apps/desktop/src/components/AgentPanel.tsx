@@ -934,6 +934,8 @@ export function AgentPanel() {
   const schemas = useApp((s) => activeConnectionId ? s.schemas[activeConnectionId] : undefined);
   const agentMode = useApp((s) => s.agentMode);
   const agentDatabase = useApp((s) => s.agentDatabase);
+  const homeDatabase = useApp((s) => s.homeDatabase);
+  const sessionsForScope = useApp((s) => s.sessionsForScope);
   const prefill = useApp((s) => s.agentPrefill);
 
   const setAgentOpen = useApp((s) => s.setAgentOpen);
@@ -1171,12 +1173,17 @@ export function AgentPanel() {
     settings.agent.model;
   const providerLabel = settings.agent.provider === 'local' ? 'Local' : activeModelLabel;
   const modeLabel = MODE_OPTIONS.find((m) => m.value === agentMode);
-  // 纯前端过滤：listSessions 已经返回全量，不需要新接口
+  // 先按「当前连接的当前库」收窄，再按搜索词过滤。
+  // 未绑定连接/库的历史会话在 sessionsForScope 里一律放行，不会被藏掉。
+  const scopedSessions = useMemo(
+    () => sessionsForScope(activeConnectionId, agentDatabase),
+    [sessionsForScope, activeConnectionId, agentDatabase, sessions],
+  );
   const filteredSessions = useMemo(() => {
     const query = sessionQuery.trim().toLowerCase();
-    if (!query) return sessions;
-    return sessions.filter((session) => session.title.toLowerCase().includes(query));
-  }, [sessions, sessionQuery]);
+    if (!query) return scopedSessions;
+    return scopedSessions.filter((session) => session.title.toLowerCase().includes(query));
+  }, [scopedSessions, sessionQuery]);
 
   const send = () => {
     const value = input.trim();
@@ -1373,6 +1380,17 @@ export function AgentPanel() {
         </span>
       </div>
 
+      {/* 首页与 Agent 已经解耦：两边库不一致时必须说清楚，否则用户会以为
+          刚在首页点的「AI 体检」问的是首页那个库。 */}
+      {homeDatabase && agentDatabase && homeDatabase !== agentDatabase ? (
+        <div className="agent-scope-mismatch" data-testid="agent-scope-mismatch">
+          首页在看 <b>{homeDatabase}</b>，Agent 瞄准 <b>{agentDatabase}</b>
+          <button className="btn ghost small" onClick={() => void setAgentDatabase(homeDatabase)}>
+            对齐到 {homeDatabase}
+          </button>
+        </div>
+      ) : null}
+
       <div className="agent-transcript-wrap">
         <div className="agent-transcript" ref={scrollRef} onScroll={onTranscriptScroll} data-testid="agent-transcript">
           <div className="agent-transcript-inner" ref={contentRef}>
@@ -1410,10 +1428,10 @@ export function AgentPanel() {
                     </button>
                   ))}
                 </div>
-                {sessions.length ? (
+                {scopedSessions.length ? (
                   <div style={{ marginTop: 18, textAlign: 'left' }}>
                     <div className="plan-title" style={{ padding: '0 2px' }}>{t('recent')}</div>
-                    {sessions.slice(0, 3).map((session) => (
+                    {scopedSessions.slice(0, 3).map((session) => (
                       <button key={session.id} className="recent-item" onClick={() => void loadAgentSession(session.id)}>
                         <TerminalSquare size={12} style={{ color: 'var(--agent)' }} />
                         <span className="truncate" style={{ flex: 1 }}>{session.title}</span>

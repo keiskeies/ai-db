@@ -1,0 +1,795 @@
+/* ============================================================
+   欢迎页 = 当前库的家（方案 A）
+
+   设计契约：
+   1. 整页只有一个作用域 —— 头部条声明的那个库。任何计数都必须能点进去看到同源的数据。
+   2. 首屏承载全部主要信息（NN/g：57% 的浏览时间停在首屏），不做「靠滚动才有内容」。
+   3. 一张主栏 + 一张窄栏，不是 4 个等权盒子 —— 用宽度差建立层级（squint test 要能看出主次）。
+   4. 只在「AI 生成的内容」用 agent 色，其余一律中性；颜色是信息，不是装饰。
+   ============================================================ */
+
+.home {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  /* 工作区真正可用的宽度 = 视口 - 连接栏 - AI 面板，两者都可拖拽，
+     所以按「自己有多宽」响应，而不是按视口宽度响应。 */
+  container-type: inline-size;
+  container-name: home;
+}
+
+/* 容器查询不能作用于容器自身，所有内边距与布局放在内层 */
+.home-inner {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  padding: 18px 22px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ---------------- 当前库头部 ---------------- */
+.home-head {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 13px 15px;
+  border: 1px solid var(--border-panel);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 78%, transparent), transparent);
+}
+
+.home-scope {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  min-width: 0;
+  flex: 1 1 260px;
+}
+
+.home-scope-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 34px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.home-scope-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.home-scope-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.home-scope-title h1 {
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.2px;
+  margin: 0;
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-db-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 21px;
+  padding: 0 7px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-app);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  max-width: 260px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.home-db-switch:hover {
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.home-db-switch .flip {
+  transform: rotate(180deg);
+}
+
+.home-db-name {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-db-menu {
+  position: absolute;
+  top: 52px;
+  left: 60px;
+  z-index: 20;
+  min-width: 220px;
+  max-height: 300px;
+  overflow: auto;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-pop);
+}
+
+.home-db-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  height: 26px;
+  padding: 0 7px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  text-align: left;
+}
+
+.home-db-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.home-db-item.active {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.home-scope-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* 「5 表 · 4,786 行」这类摘要不允许被逐词拆开 */
+.home-scope-meta > span {
+  white-space: nowrap;
+}
+
+.home-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+
+.home-ro {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--warning);
+}
+
+.home-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+}
+
+.spin {
+  animation: home-spin 1s linear infinite;
+}
+
+@keyframes home-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.home-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+}
+
+/* 窄一点时按钮先让自己换行，而不是把标题挤没 */
+@media (max-width: 1320px) {
+  .home-actions {
+    max-width: 330px;
+  }
+}
+
+.btn.agent {
+  border-color: color-mix(in srgb, var(--agent) 40%, transparent);
+  color: var(--agent);
+  background: var(--agent-soft);
+}
+
+.btn.agent:hover {
+  background: color-mix(in srgb, var(--agent) 22%, transparent);
+  color: var(--text-primary);
+}
+
+/* ---------------- 三栏工作区 ---------------- */
+.home-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.62fr) minmax(300px, 1fr);
+  gap: 12px;
+  /* 撑满工作区：让两张面板成为「一块工作区」，而不是两张浮在空白上的卡片 */
+  flex: 1;
+  min-height: 0;
+}
+
+.home-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+
+/* 主栏的表清单是这一页的主角，给它全部剩余高度并在内部滚动；
+   这样「最近跑过」永远钉在首屏底部，不会被长表挤下去。 */
+.home-col-main {
+  min-height: 200px;
+}
+
+.home-col-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  flex: 0 0 32px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.home-col-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.home-col-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 0 5px;
+  height: 15px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+}
+
+.home-warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--warning);
+}
+
+.home-ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--success);
+}
+
+/* ---------------- 表清单 ---------------- */
+.home-table-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px;
+}
+
+.home-table-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.home-table-row:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* 第一行（最大的表）略微提亮：告诉眼睛「从这里开始读」 */
+.home-table-row:first-child .home-table-name {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.home-table-row:first-child .home-table-bar > span {
+  background: var(--accent);
+}
+
+.home-table-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.home-table-name {
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 行数条：一眼看出「这个库里最重的是谁」，比一排等宽数字有用 */
+.home-table-bar {
+  width: 76px;
+  flex: 0 0 76px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+
+.home-table-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 62%, transparent);
+}
+
+.home-table-rows {
+  width: 54px;
+  flex: 0 0 54px;
+  text-align: right;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+}
+
+.home-table-cols {
+  width: 42px;
+  flex: 0 0 42px;
+  text-align: right;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.home-table-flag {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  color: var(--warning);
+  flex: 0 0 15px;
+}
+
+.home-table-open {
+  opacity: 0;
+  color: var(--accent);
+  flex: 0 0 11px;
+}
+
+.home-table-row:hover .home-table-open {
+  opacity: 1;
+}
+
+.home-more {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  margin-top: 2px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+
+.home-more:hover {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+/* ---------------- 骨架屏 ---------------- */
+.home-skeleton {
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.home-skeleton-row {
+  height: 26px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--bg-elevated), color-mix(in srgb, var(--bg-elevated) 55%, var(--bg-hover)));
+  animation: skeleton 1.4s ease-in-out infinite;
+}
+
+/* ---------------- AI 建议 ---------------- */
+.home-suggest-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.home-suggest {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.home-suggest:hover {
+  background: var(--agent-soft);
+  border-color: color-mix(in srgb, var(--agent) 26%, transparent);
+  color: var(--text-primary);
+}
+
+.home-suggest-label {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  color: var(--agent);
+  background: color-mix(in srgb, var(--agent) 14%, transparent);
+  white-space: nowrap;
+}
+
+.home-suggest-prompt {
+  font-size: 11px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-suggest-go {
+  opacity: 0;
+  color: var(--agent);
+}
+
+.home-suggest:hover .home-suggest-go {
+  opacity: 1;
+}
+
+.home-quick {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.home-quick-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.home-quick-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-subtle);
+}
+
+.home-quick-item > svg {
+  margin-top: 2px;
+  color: var(--agent);
+  flex: 0 0 12px;
+}
+
+.home-quick-item strong {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.home-quick-item em {
+  font-style: normal;
+  font-size: 9.5px;
+  color: var(--text-muted);
+}
+
+/* ---------------- 最近跑过 ---------------- */
+.home-recent {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  min-height: 40px;
+  flex: 0 0 auto;
+  /* 芯片行统一由它撑满整宽 */
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.home-recent-label {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.home-recent-list {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  /* 三个芯片按比例收窄而不是整体横向溢出：宁可每个短一点，也不要在首屏出现裁切 */
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  flex-wrap: nowrap;
+}
+
+.home-recent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-app);
+  color: var(--text-secondary);
+  flex: 0 1 220px;
+  min-width: 0;
+  align-self: center;
+}
+
+.home-recent-chip:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.home-recent-sql {
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-recent-meta {
+  font-size: 9px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.home-recent-empty {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+/* ---------------- 体检摘要 ---------------- */
+.home-health {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-top: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-app) 55%, transparent);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.home-health-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.home-health-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.home-health-item.warn {
+  color: var(--warning);
+}
+
+/* ---------------- 空状态 ---------------- */
+.home-empty-block {
+  padding: 20px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  align-items: flex-start;
+}
+
+.home-empty-block p {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.home-empty-actions {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+/* 完全没有连接的首页：一个真正的欢迎门厅 */
+.home-empty {
+  margin: auto;
+  max-width: 460px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+  padding: 40px 0;
+}
+
+.home-empty-mark {
+  width: 46px;
+  height: 46px;
+  border-radius: 13px;
+  display: grid;
+  place-items: center;
+  color: var(--on-brand);
+  background: linear-gradient(140deg, var(--brand-a), var(--brand-b));
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.24);
+}
+
+.home-empty h1 {
+  font-size: 19px;
+  margin: 0;
+  letter-spacing: -0.3px;
+}
+
+.home-empty p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+
+.home-empty-hint {
+  font-size: 10px !important;
+  color: var(--text-muted) !important;
+}
+
+/* ---------------- 窄屏 ----------------
+   容器查询按「工作区自己有多宽」生效：侧栏和 AI 面板都能拖宽，
+   同样的窗口宽度下首页可用宽度可能差出 600px。 */
+
+/* 头部先收窄按钮区，保住库名不被挤掉 */
+@container home (max-width: 760px) {
+  .home-actions {
+    max-width: 100%;
+    justify-content: flex-start;
+  }
+  .home-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 11px;
+  }
+  /* 竖排后主轴变成纵向，flex-basis 会变成高度 —— 必须复位，
+     否则头部会被撑成一块 260px 高的空面板。 */
+  .home-scope {
+    flex: 0 0 auto;
+  }
+  /* 单栏滚动由外层 .welcome 负责，这里不要互相抢成 overflow:hidden */
+  .home-grid {
+    flex: 0 0 auto;
+  }
+}
+
+/* 两栏塌成一栏：主栏（表清单）在上，AI 建议在下 */
+@container home (max-width: 720px) {
+  .home-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* 塌成单栏后高度由内容决定，不再撑满整块工作区，
+     否则最后一块会被裁在视口外 */
+  .home-col-side {
+    max-height: none;
+    flex: 0 0 auto;
+  }
+  .home-col-main {
+    flex: 0 0 auto;
+    min-height: 0;
+  }
+  .home-table-list,
+  .home-suggest-list {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+}
+
+@container home (max-width: 520px) {
+  .home {
+    padding: 12px 12px 16px;
+  }
+  /* 竖排时「最近跑过」变成一列：标签在左上，不参与换行对齐 */
+  .home-recent {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 5px;
+  }
+  .home-recent-list {
+    flex-direction: column;
+    flex-wrap: nowrap;
+    overflow: visible;
+    gap: 4px;
+  }
+  .home-recent-chip {
+    flex: 0 0 auto;
+    width: 100%;
+    max-width: none;
+    height: 28px;
+  }
+  .home-table-bar {
+    display: none;
+  }
+  .home-scope-title h1 {
+    max-width: 100%;
+  }
+}
