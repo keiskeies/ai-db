@@ -39,7 +39,10 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   title TEXT NOT NULL DEFAULT '新会话',
   summary TEXT, model TEXT, permission_mode TEXT NOT NULL DEFAULT 'ask',
   status TEXT NOT NULL DEFAULT 'idle',        -- idle|running|done|error|aborted
-  tokens_in INTEGER DEFAULT 0, tokens_out INTEGER DEFAULT 0,
+  tokens_in INTEGER DEFAULT 0, tokens_out INTEGER DEFAULT 0,  -- 会话累计输入/输出
+  -- 输入卡状态条的数据源：轮次与步数跨会话保留，缓存命中口径为「命中 / (命中+未命中)」
+  turns INTEGER DEFAULT 0, steps INTEGER DEFAULT 0,
+  cache_hit_tokens INTEGER DEFAULT 0, cache_miss_tokens INTEGER DEFAULT 0,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, archived INTEGER DEFAULT 0
 );
 
@@ -275,6 +278,8 @@ export interface QueryResult {
 | GET | `/audit` | 审计日志；`?format=csv` 导出 |
 | GET | `/snippets` · POST/PUT/DELETE | SQL 片段 |
 | GET | `/agent/tools` | 工具清单 + JSON Schema（UI 展示） |
+| GET | `/capabilities` | 功能能力契约列表（12 个工具箱模块，字段 / 状态 / 对应工具） |
+| GET | `/capabilities/:id` | 单个能力契约；未知 id 返回 404 `CAPABILITY_NOT_FOUND` |
 | GET | `/commands` | 命令注册表（`title / slots / sources / execution / artifact`） |
 | POST | `/commands/:id/runs` | 启动一次命令运行，返回 `{run}`；运行进度走 SSE |
 | GET | `/commands/runs/:id` | 运行快照（状态 / 步骤 / 产物 id） |
@@ -360,7 +365,12 @@ type AgentEvent =
   | { type: 'plan'; items: { id: string; text: string; status: 'todo'|'doing'|'done' }[] }
   | { type: 'memory_used'; memories: { id: string; title: string; kind: string }[] }
   | { type: 'suggestions'; items: QuestionSuggestion[] }   // 回合结束后基于本轮实际涉及的表生成的追问建议
-  | { type: 'usage'; tokensIn: number; tokensOut: number }
+  // 单次模型调用的用量。cacheHitTokens/cacheMissTokens 只在服务商真的返回缓存统计时出现，
+  // 前端据此隐藏「缓存命中」指标，绝不把「没上报」显示成 0%。
+  | { type: 'usage'; tokensIn: number; tokensOut: number; cacheHitTokens?: number; cacheMissTokens?: number; durationMs: number }
+  // 回合收尾的累计快照：步数、模型调用数、累计用量、上下文占用与模型耗时（tok/s 的分母）
+  | { type: 'turn_usage'; steps: number; modelCalls: number; tokensIn: number; tokensOut: number;
+      cacheHitTokens?: number; cacheMissTokens?: number; contextTokens: number; modelDurationMs: number }
   | { type: 'done'; turnId: string; durationMs: number; summary?: string }
   | { type: 'aborted'; turnId: string; reason: string }
   | { type: 'error'; code: string; message: string; retryable?: boolean };
