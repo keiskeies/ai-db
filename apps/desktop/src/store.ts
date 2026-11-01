@@ -46,10 +46,26 @@ export interface LiveTurn {
   tools: LiveTool[];
   plan: AgentPlanItem[];
   status: 'streaming' | 'awaiting' | 'done' | 'aborted' | 'error';
+  /** 中止原因：超时不是用户点的停止，界面不能都说成「已中止」。 */
+  abortCause?: 'timeout' | 'user';
   error?: string;
   startedAt: number;
+  /** 回合结束时间；流式期间缺省，状态条的 tok/s 用它定格。 */
+  endedAt?: number;
   tokensIn: number;
   tokensOut: number;
+  /** 本轮已走过的模型步数。 */
+  steps: number;
+  /** 本轮发生的模型调用次数。 */
+  modelCalls: number;
+  /** 本轮命中缓存的输入 tokens；服务商不返回缓存统计时缺省。 */
+  cacheHitTokens?: number;
+  /** 本轮未命中缓存的输入 tokens。 */
+  cacheMissTokens?: number;
+  /** 最近一次模型调用的输入 tokens，即当前上下文占用。 */
+  contextTokens: number;
+  /** 本轮模型调用累计耗时（不含工具执行），tok/s 的分母。 */
+  modelDurationMs: number;
   memories: Array<{ id: string; title: string; kind: string }>;
   /** 本轮附带的图片附件 id，用于流式期间的用户气泡回显。 */
   userImages?: string[];
@@ -856,16 +872,34 @@ export const useApp = create<AppStore>((set, get) => ({
         case 'usage':
           live.tokensIn += event.tokensIn;
           live.tokensOut += event.tokensOut;
+          live.contextTokens = event.tokensIn;
+          live.modelDurationMs += event.durationMs ?? 0;
+          if (event.cacheHitTokens !== undefined) live.cacheHitTokens = (live.cacheHitTokens ?? 0) + event.cacheHitTokens;
+          if (event.cacheMissTokens !== undefined) live.cacheMissTokens = (live.cacheMissTokens ?? 0) + event.cacheMissTokens;
+          break;
+        case 'turn_usage':
+          live.steps = event.steps;
+          live.modelCalls = event.modelCalls;
+          live.tokensIn = event.tokensIn;
+          live.tokensOut = event.tokensOut;
+          live.contextTokens = event.contextTokens;
+          live.modelDurationMs = event.modelDurationMs;
+          if (event.cacheHitTokens !== undefined) live.cacheHitTokens = event.cacheHitTokens;
+          if (event.cacheMissTokens !== undefined) live.cacheMissTokens = event.cacheMissTokens;
           break;
         case 'done':
           live.status = 'done';
+          live.endedAt = Date.now();
           break;
         case 'aborted':
           live.status = 'aborted';
+          live.abortCause = event.cause ?? 'user';
+          live.endedAt = Date.now();
           break;
         case 'error':
           live.status = 'error';
           live.error = event.message;
+          live.endedAt = Date.now();
           return { live, approval: undefined };
         default:
           break;
@@ -909,6 +943,10 @@ export const useApp = create<AppStore>((set, get) => ({
           startedAt: Date.now(),
           tokensIn: 0,
           tokensOut: 0,
+          steps: 0,
+          modelCalls: 0,
+          contextTokens: 0,
+          modelDurationMs: 0,
           memories: [],
           ...(images?.length ? { userImages: images } : {}),
         },

@@ -1,5 +1,5 @@
 import type { LlmProvider, ProviderEvent, ProviderMessage, ProviderRequest, ToolCall } from '../types';
-import { joinUrl, mapHttpError, ProviderError, readSse } from './common';
+import { joinUrl, mapHttpError, normalizeCacheUsage, ProviderError, readSse } from './common';
 
 export interface AnthropicConfig {
   apiKey?: string;
@@ -97,8 +97,23 @@ export class AnthropicProvider implements LlmProvider {
 
     let inputTokens = 0;
     let outputTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheWriteTokens = 0;
     let stopReason = 'end_turn';
     const pending = new Map<number, { id: string; name: string; json: string }>();
+
+    /**
+     * Anthropic 的 input_tokens 不含缓存部分：
+     * 真实输入 = input_tokens + cache_read_input_tokens（命中）+ cache_creation_input_tokens（写入，按未命中计）。
+     * 只取 input_tokens 会让输入 token 严重偏低，上下文占比和成本都会失真。
+     */
+    const absorbUsage = (usage: any): void => {
+      if (!usage || typeof usage !== 'object') return;
+      if (typeof usage.input_tokens === 'number') inputTokens = usage.input_tokens;
+      if (typeof usage.output_tokens === 'number') outputTokens = usage.output_tokens;
+      if (typeof usage.cache_read_input_tokens === 'number') cacheReadTokens = usage.cache_read_input_tokens;
+      if (typeof usage.cache_creation_input_tokens === 'number') cacheWriteTokens = usage.cache_creation_input_tokens;
+    };
 
     for await (const frame of readSse(res.body)) {
       if (!frame.data || frame.data === '[DONE]') continue;
@@ -110,8 +125,7 @@ export class AnthropicProvider implements LlmProvider {
       }
       switch (evt.type) {
         case 'message_start':
-          inputTokens = evt.message?.usage?.input_tokens ?? 0;
-          outputTokens = evt.message?.usage?.output_tokens ?? 0;
+          absorbUsage(evt.message?.usage);
           break;
         case 'content_block_start':
           if (evt.content_block?.type === 'tool_use') {
@@ -139,7 +153,8 @@ export class AnthropicProvider implements LlmProvider {
           break;
         }
         case 'message_delta':
-          if (evt.usage?.output_tokens) outputTokens = evt.usage.output_tokens;
+          // message_delta 的 usage 是累计输出，同时可能补充缓存统计
+          absorbUsage(evt.usage);
           if (evt.delta?.stop_reason) stopReason = evt.delta.stop_reason;
           break;
         case 'error':
@@ -148,7 +163,13 @@ export class AnthropicProvider implements LlmProvider {
           break;
       }
     }
-    yield { type: 'usage', tokensIn: inputTokens, tokensOut: outputTokens };
+    // 输入总量要把缓存命中/写入都算进来，缓存字段仅在服务商真的返回时才上报
+    const totalIn = inputTokens + cacheReadTokens + cacheWriteTokens;
+    const cache =
+      cacheReadTokens > 0 || cacheWriteTokens > 0
+        ? normalizeCacheUsage(totalIn, cacheReadTokens, inputTokens + cacheWriteTokens)
+        : {};
+    yield { type: 'usage', tokensIn: totalIn, tokensOut: outputTokens, ...cache };
     yield { type: 'done', stopReason };
   }
 }

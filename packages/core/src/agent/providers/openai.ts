@@ -1,5 +1,19 @@
 import type { LlmProvider, ProviderEvent, ProviderMessage, ProviderRequest, ToolCall } from '../types';
-import { isPrivateEndpoint, joinUrl, mapHttpError, ProviderError, readSse } from './common';
+import { isPrivateEndpoint, joinUrl, mapHttpError, normalizeCacheUsage, ProviderError, readSse } from './common';
+
+/** 从 OpenAI 兼容响应的 usage 里取缓存命中量；各家字段位置不同，这里统一认。 */
+function readCacheUsage(usage: any): { hit?: number; miss?: number } {
+  if (!usage || typeof usage !== 'object') return {};
+  const num = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
+  // DeepSeek 系：命中与未命中都直接给在 usage 上
+  const deepHit = num(usage.prompt_cache_hit_tokens);
+  const deepMiss = num(usage.prompt_cache_miss_tokens);
+  if (deepHit !== undefined || deepMiss !== undefined) return { hit: deepHit, miss: deepMiss };
+  // OpenAI / Moonshot / 硅基流动等：可能只给命中量，也可能挂一层 prompt_tokens_details
+  const cached = num(usage.prompt_tokens_details?.cached_tokens) ?? num(usage.cached_tokens);
+  if (cached !== undefined) return { hit: cached };
+  return {};
+}
 
 export interface OpenAIConfig {
   apiKey?: string;
@@ -91,6 +105,8 @@ export class OpenAIProvider implements LlmProvider {
     const calls = new Map<number, { id: string; name: string; args: string }>();
     let tokensIn = 0;
     let tokensOut = 0;
+    let cacheHitTokens: number | undefined;
+    let cacheMissTokens: number | undefined;
     let stopReason = 'stop';
 
     for await (const frame of readSse(res.body)) {
@@ -105,6 +121,9 @@ export class OpenAIProvider implements LlmProvider {
       if (evt.usage) {
         tokensIn = evt.usage.prompt_tokens ?? tokensIn;
         tokensOut = evt.usage.completion_tokens ?? tokensOut;
+        const cache = readCacheUsage(evt.usage);
+        if (cache.hit !== undefined) cacheHitTokens = cache.hit;
+        if (cache.miss !== undefined) cacheMissTokens = cache.miss;
       }
       const choice = evt.choices?.[0];
       if (!choice) continue;
@@ -133,7 +152,7 @@ export class OpenAIProvider implements LlmProvider {
       };
       yield { type: 'tool_call', call };
     }
-    yield { type: 'usage', tokensIn, tokensOut };
+    yield { type: 'usage', tokensIn, tokensOut, ...normalizeCacheUsage(tokensIn, cacheHitTokens, cacheMissTokens) };
     yield { type: 'done', stopReason };
   }
 }

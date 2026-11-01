@@ -3,6 +3,7 @@ import { describeCall, evaluatePermission, resolveRisk, toolSignature } from './
 import { getTool, providerTools } from './tools';
 import { rescueXmlToolCalls } from './xmlTools';
 import type {
+  AgentAbortCause,
   AgentEvent,
   AgentRunInput,
   AgentRuntimeDeps,
@@ -15,9 +16,25 @@ import type {
 export interface AgentRunResult {
   text: string;
   status: 'done' | 'aborted' | 'error';
-  usage: { tokensIn: number; tokensOut: number };
+  usage: {
+    tokensIn: number;
+    tokensOut: number;
+    /** 命中提示词缓存的输入 tokens；服务商未返回缓存信息时缺省。 */
+    cacheHitTokens?: number;
+    cacheMissTokens?: number;
+  };
+  /** 本回合实际走过的模型步数（工具循环轮数），至少为 1。 */
+  steps: number;
+  /** 本回合发生的模型调用次数（含重试与多步工具循环）。 */
+  modelCalls: number;
+  /** 最近一次模型调用的输入 tokens，即本回合结束时的上下文占用。 */
+  contextTokens: number;
+  /** 本回合模型调用总耗时，用于计算真实的 tok/s。 */
+  modelDurationMs: number;
   toolCalls: number;
   plan: AgentPlanItem[];
+  /** 中止原因；只有 status 为 aborted 时才有值，上次调用方据此决定是否写续跑检查点。 */
+  abortCause?: AgentAbortCause;
   error?: { code: string; message: string };
 }
 
@@ -183,8 +200,8 @@ function buildRepairHint(
   return {
     attempt,
     instruction:
-      error?.code === 'MULTI_STATEMENT_DISABLED'
-        ? '这条 SQL 含多条写语句，用户没有开启「允许多语句」。请拆成单条语句，逐次调用 run_sql 执行；只读的多条 SELECT 可以一次执行。'
+      error?.code === 'SCRIPT_TOO_LARGE'
+        ? '这段脚本的语句条数超过单次上限。请分批执行：每批控制在合理条数内，逐次调用 run_sql，确认上一批结果后再继续。'
         : (suggestions.length ? '优先使用 suggestions 中的真实标识符；' : '') +
           '上一条 SQL 执行失败。请根据错误与下面的真实列定义修正 SQL，然后重新调用 run_sql；不要重复原 SQL。仍不确定列名时先调用 inspect_schema。',
     ...(error ? { error: `${error.code}: ${error.message}` } : {}),
@@ -236,10 +253,26 @@ export class AgentRuntime {
     let finalText = '';
     let tokensIn = 0;
     let tokensOut = 0;
+    let cacheHitTokens = 0;
+    let cacheMissTokens = 0;
+    /** 服务商是否真的返回过缓存统计——没返回过就不能对外报 0%。 */
+    let cacheReported = false;
+    let modelCalls = 0;
+    let steps = 0;
+    /** 最近一次模型调用的输入 tokens，即当前上下文占用。 */
+    let contextTokens = 0;
+    /** 本回合模型调用的总耗时；tok/s 要用它而不是墙钟时间，否则工具执行会被算进生成速度。 */
+    let modelDurationMs = 0;
     let toolCount = 0;
     let sqlRepairs = 0;
     let plan: AgentPlanItem[] = [];
     let toolsSincePlan = 0;
+
+    const usageSummary = () => ({
+      tokensIn,
+      tokensOut,
+      ...(cacheReported ? { cacheHitTokens, cacheMissTokens: cacheMissTokens || Math.max(0, tokensIn - cacheHitTokens) } : {}),
+    });
 
     deps.emit({ type: 'start', turnId, sessionId: input.sessionId, model: deps.provider.label });
     if (input.context.memories?.length) {
@@ -249,20 +282,88 @@ export class AgentRuntime {
       });
     }
 
+    /** 回合收尾统一发一次累计用量：状态条上的步数、缓存命中都靠这条事件定格。 */
+    const emitTurnUsage = (): void => {
+      deps.emit({
+        type: 'turn_usage',
+        steps,
+        modelCalls,
+        tokensIn,
+        tokensOut,
+        contextTokens,
+        modelDurationMs,
+        ...(cacheReported ? { cacheHitTokens, cacheMissTokens: cacheMissTokens || Math.max(0, tokensIn - cacheHitTokens) } : {}),
+      });
+    };
+
     const finish = (status: AgentRunResult['status'], error?: AgentRunResult['error']): AgentRunResult => {
+      emitTurnUsage();
       if (status === 'done') {
         deps.emit({ type: 'done', turnId, durationMs: now() - started, summary: finalText.slice(0, 280) });
       }
-      return { text: finalText.trim(), status, usage: { tokensIn, tokensOut }, toolCalls: toolCount, plan, error };
+      return { text: finalText.trim(), status, usage: usageSummary(), steps, modelCalls, contextTokens, modelDurationMs, toolCalls: toolCount, plan, error };
+    };
+
+    /**
+     * 中止文案必须诚实：超时不是用户的选择。
+     * 分钟数由真实预算算出来，写死「8 分钟」会在预算跟着步数变化时说错话。
+     */
+    const abortReason = (cause: AgentAbortCause): string => {
+      if (cause === 'timeout') {
+        const limitMs = input.turnBudgetMs ?? (input.deadlineAt ? input.deadlineAt - started : undefined);
+        const minutes = limitMs && limitMs > 0 ? Math.max(1, Math.round(limitMs / 60_000)) : undefined;
+        return `本回合已达${minutes ? ` ${minutes} 分钟` : ''}上限（可继续）`;
+      }
+      return '用户中止';
     };
 
     const aborted = (): AgentRunResult => {
-      deps.emit({ type: 'aborted', turnId, reason: '用户中止' });
-      return { text: finalText.trim(), status: 'aborted', usage: { tokensIn, tokensOut }, toolCalls: toolCount, plan };
+      emitTurnUsage();
+      const cause = input.abortCause?.() ?? 'user';
+      deps.emit({ type: 'aborted', turnId, reason: abortReason(cause), cause });
+      return {
+        text: finalText.trim(),
+        status: 'aborted',
+        usage: usageSummary(),
+        steps,
+        modelCalls,
+        contextTokens,
+        modelDurationMs,
+        toolCalls: toolCount,
+        plan,
+        abortCause: cause,
+      };
+    };
+
+    /**
+     * 临近截止的软提醒：只在传了 deadlineAt 时才存在。
+     *
+     * 模型看不见墙钟，不给它数字它就会一直慢慢磨——事故里跑到第 30 步还在逐个读文件。
+     * 提醒必须可执行，所以除了剩余时间，还要强制它落两份痕：更新计划、把下一步写进正文。
+     * 一个回合只提醒一次：反复刷只会多烧上下文，反而更快撞上限。
+     */
+    let deadlineWarned = false;
+    const deadlineReminder = (): string | undefined => {
+      if (!input.deadlineAt || deadlineWarned) return undefined;
+      const leftMs = input.deadlineAt - now();
+      const budgetMs = input.turnBudgetMs ?? (input.deadlineAt - started);
+      // 剩余不足预算的 20% 才提醒；预算未知（<=0）时按剩余时间判断，不硬塞一个假比例
+      if (budgetMs > 0 ? leftMs > budgetMs * 0.2 : leftMs > 60_000) return undefined;
+      deadlineWarned = true;
+      const leftSeconds = Math.max(0, Math.round(leftMs / 1000));
+      return (
+        `\n\n[deadline reminder] 本回合时间预算快用完了：约剩 ${leftSeconds} 秒（上限 ${Math.round(budgetMs / 60_000)} 分钟，已跑 ${steps} 步 / ${toolCount} 次工具）。` +
+        '现在立刻做三件事，不要再开启任何需要多步才能完成的新工作：\n' +
+        '1) 调用 update_plan：已完成的项标 done，当前这项标 doing，剩余项列清楚；\n' +
+        '2) 在回复正文里写明「已完成什么、剩下什么、下一步具体做什么」，这段会被保存成续跑检查点；\n' +
+        '3) 剩余工作优先用批量写法（一条语句覆盖多个对象），不要逐个对象慢慢来。'
+      );
     };
 
     for (let step = 0; step < maxSteps; step++) {
       if (input.signal?.aborted) return aborted();
+      steps = step + 1;
+      modelCalls++;
       const request = {
         system: deps.buildSystem(input),
         messages,
@@ -275,6 +376,7 @@ export class AgentRuntime {
       const calls: ToolCall[] = [];
       let stepText = '';
       let providerError: { code: string; message: string } | undefined;
+      const callStarted = now();
 
       try {
         for await (const ev of deps.provider.stream(request, input.signal)) {
@@ -289,17 +391,34 @@ export class AgentRuntime {
           } else if (ev.type === 'usage') {
             tokensIn += ev.tokensIn;
             tokensOut += ev.tokensOut;
-            deps.emit({ type: 'usage', tokensIn: ev.tokensIn, tokensOut: ev.tokensOut });
+            // 单次调用的输入 tokens 就是这一刻的上下文占用
+            contextTokens = ev.tokensIn;
+            if (ev.cacheHitTokens !== undefined || ev.cacheMissTokens !== undefined) {
+              cacheReported = true;
+              cacheHitTokens += ev.cacheHitTokens ?? 0;
+              cacheMissTokens += ev.cacheMissTokens ?? 0;
+            }
+            deps.emit({
+              type: 'usage',
+              tokensIn: ev.tokensIn,
+              tokensOut: ev.tokensOut,
+              durationMs: now() - callStarted,
+              ...(ev.cacheHitTokens !== undefined ? { cacheHitTokens: ev.cacheHitTokens } : {}),
+              ...(ev.cacheMissTokens !== undefined ? { cacheMissTokens: ev.cacheMissTokens } : {}),
+            });
           }
         }
       } catch (err: any) {
         if (input.signal?.aborted || err?.name === 'AbortError') return aborted();
         providerError = { code: err?.code ?? 'PROVIDER_ERROR', message: err?.message ?? '模型调用失败' };
       }
+      // 模型调用的耗时单独累计：tok/s 只该反映生成速度，不该被工具执行时间稀释
+      modelDurationMs += now() - callStarted;
       if (input.signal?.aborted) return aborted();
       if (providerError) {
+        emitTurnUsage();
         deps.emit({ type: 'error', code: providerError.code, message: providerError.message, retryable: true });
-        return { text: finalText.trim(), status: 'error', usage: { tokensIn, tokensOut }, toolCalls: toolCount, plan, error: providerError };
+        return { text: finalText.trim(), status: 'error', usage: usageSummary(), steps, modelCalls, contextTokens, modelDurationMs, toolCalls: toolCount, plan, error: providerError };
       }
 
       if (!calls.length && stepText) {
@@ -426,6 +545,9 @@ export class AgentRuntime {
           modelContent += '\n\n[plan reminder] The visible task plan is stale. Call update_plan now with the same items: mark finished steps done, mark the current step doing, then continue. Do not replace the plan with a shorter one.';
           toolsSincePlan = 0;
         }
+        // 计划提醒之后再看预算：临近截止的存档指令优先级最高，放最后模型更容易照做
+        const deadline = deadlineReminder();
+        if (deadline) modelContent += deadline;
         messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: modelContent });
       }
     }

@@ -309,6 +309,114 @@ function LiveActivity({ live }: { live: LiveTurn }) {
   );
 }
 
+/** 大数字压缩成 1.2k / 237M 这种一眼能读的形式。 */
+function compactTokens(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n < 1000) return String(Math.round(n));
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M`;
+}
+
+interface ComposerStatsInput {
+  live?: LiveTurn;
+  session?: { turns: number; steps: number; tokensIn: number; tokensOut: number; cacheHitTokens: number; cacheMissTokens: number; contextTokens: number };
+  contextWindow?: number;
+  /** 右侧风险提示文案；由调用方按当前语言传入。 */
+  disclaimer: string;
+}
+
+/**
+ * 输入卡下方那行：左边是运行状态（轮次/步数/tok·s⁻¹ · 累计 token/缓存命中 · 上下文占比），
+ * 右边固定挂一句风险提示。缺数据的格子直接不渲染——服务商不返回缓存统计时，
+ * 宁可不显示也不报一个假的 0%。
+ *
+ * 这里只放「AI 可能出错，请核对」这类自保提示，不做任何「可审计/有保障」的承诺：
+ * 保证类措辞等于替产品背书，出事时反而成为把柄；权限档位已经由左侧胶囊直接标明，
+ * 不需要再用文字重复一遍。
+ */
+function ComposerStats({ live, session, contextWindow, disclaimer }: ComposerStatsInput) {
+  const running = live?.status === 'streaming' || live?.status === 'awaiting';
+  // 运行中显示「会话累计 + 本轮」，结束后会话已刷新，直接用会话值，避免重复相加
+  const turns = (session?.turns ?? 0) + (running ? 1 : 0);
+  const steps = (session?.steps ?? 0) + (live?.steps ?? 0);
+  const tokensIn = (session?.tokensIn ?? 0) + (running ? (live?.tokensIn ?? 0) : 0);
+  const tokensOut = (session?.tokensOut ?? 0) + (running ? (live?.tokensOut ?? 0) : 0);
+  const total = tokensIn + tokensOut;
+  const cacheHit = (session?.cacheHitTokens ?? 0) + (running ? (live?.cacheHitTokens ?? 0) : 0);
+  const cacheMiss = (session?.cacheMissTokens ?? 0) + (running ? (live?.cacheMissTokens ?? 0) : 0);
+  const cacheTotal = cacheHit + cacheMiss;
+  // 一次调用都没成功时（比如上游没连上、回合中止），token/上下文都是 0：
+  // 这时候整格不显示，避免出现「0 步 0 tok」这种看着像数据坏了的读数。
+  const hasUsage = total > 0;
+
+  // 结束的回合用定格值，运行中的回合用已计时的模型耗时
+  const durationMs = live ? live.modelDurationMs : 0;
+  const rate = durationMs > 0 && live ? (live.tokensOut / durationMs) * 1000 : 0;
+  // 上下文占用：运行中用最近一次调用的输入，结束后回落到会话里持久化的值
+  const contextTokens = live?.contextTokens || (session?.contextTokens ?? 0);
+  const contextRatio = contextWindow && contextWindow > 0 && contextTokens > 0 ? Math.min(1, contextTokens / contextWindow) : 0;
+  // 没有真实占用时不显示这一格——一个空的 0% 只会误导人
+  const showContext = Boolean(contextWindow && contextWindow > 0 && contextTokens > 0);
+  const hasStats = Boolean(turns || steps || total);
+
+  return (
+    <div className="composer-stats" data-testid="composer-stats">
+      {hasStats ? (
+        <span className="stat-groups">
+          <span className="stat-group" title="会话累计对话轮次 · 累计模型步数">
+            <Clock size={10} />
+            <span className="stat">{turns} 轮</span>
+            {steps > 0 ? <span className="stat">{steps} 步</span> : null}
+            {rate > 0 ? <span className="stat">{rate >= 100 ? Math.round(rate) : rate.toFixed(1)} tok/s</span> : null}
+          </span>
+          {hasUsage ? (
+            <>
+              <span className="stat-sep" aria-hidden="true" />
+              <span className="stat-group" title={`会话累计用量：输入 ${tokensIn.toLocaleString()} · 输出 ${tokensOut.toLocaleString()}`}>
+                <Database size={10} />
+                <span className="stat">{compactTokens(total)} tok</span>
+                {cacheTotal > 0 ? (
+                  <span className="stat" title={`命中 ${cacheHit.toLocaleString()} · 未命中 ${cacheMiss.toLocaleString()}（${cacheTotal.toLocaleString()} 输入）`}>
+                    缓存命中 {((cacheHit / cacheTotal) * 100).toFixed(1)}%
+                  </span>
+                ) : null}
+              </span>
+            </>
+          ) : null}
+          {showContext && contextWindow ? (
+            <>
+              <span className="stat-sep" aria-hidden="true" />
+              <span className="stat-group" title={`上下文占用 ${contextTokens.toLocaleString()} / ${contextWindow.toLocaleString()} tokens`}>
+                <span className="stat-ring" aria-hidden="true">
+                  <svg viewBox="0 0 16 16" width="11" height="11">
+                    <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity="0.22" strokeWidth="2" />
+                    <circle
+                      cx="8"
+                      cy="8"
+                      r="6"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeDasharray={`${contextRatio * 37.7} 37.7`}
+                      transform="rotate(-90 8 8)"
+                    />
+                  </svg>
+                </span>
+                <span className="stat">{(contextRatio * 100).toFixed(0)}%</span>
+              </span>
+            </>
+          ) : null}
+        </span>
+      ) : null}
+      <span className={`stat-note ${running ? 'active' : ''}`} data-testid="composer-disclaimer">
+        <ShieldAlert size={9} />
+        <span>{disclaimer}</span>
+      </span>
+    </div>
+  );
+}
+
 function MiniTable({ data, max = 8 }: { data: { columns?: Array<{ name: string } | string>; rows?: unknown[][] }; max?: number }) {
   if (!data?.columns || !Array.isArray(data.rows)) return null;
   const names = data.columns.map((c) => (typeof c === 'string' ? c : c.name));
@@ -1377,7 +1485,14 @@ export function AgentPanel() {
                   ) : null}
                   {!busy ? (
                     <div className="turn-end">
-                      {live.status === 'aborted' ? t('aborted') : live.status === 'error' ? t('failed') : t('completed')} · {live.tools.length} 次工具 · {formatDuration(Date.now() - live.startedAt)}
+                      {live.status === 'aborted'
+                        ? live.abortCause === 'timeout'
+                          ? t('timedOut')
+                          : t('aborted')
+                        : live.status === 'error'
+                          ? t('failed')
+                          : t('completed')}{' '}
+                      · {live.tools.length} 次工具 · {formatDuration(Date.now() - live.startedAt)}
                       {live.tokensIn || live.tokensOut ? ` · ↑${live.tokensIn} ↓${live.tokensOut}` : ''}
                     </div>
                   ) : null}

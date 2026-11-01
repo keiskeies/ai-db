@@ -581,6 +581,7 @@ export interface FeatureSettings {
 export type SearchBackendId =
   | 'exa'
   | 'parallel'
+  | 'bing'
   | 'duckduckgo'
   | 'searxng'
   | 'brave'
@@ -603,6 +604,8 @@ export interface SearchSettings {
   safeSearch: boolean;
   healthTelemetry: boolean;
   searxngBaseUrl: string;
+  /** 出站代理（如 http://127.0.0.1:7890）；网关启动时注入进程环境，改动后需重启生效。 */
+  proxyUrl?: string;
   anthropicModel?: string;
   openaiModel?: string;
   /** Read-only: which optional backends have a saved key. */
@@ -691,7 +694,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   features: { skills: true, reportDeck: true, mcp: true },
   search: {
-    enabled: ['exa', 'parallel', 'duckduckgo', 'searxng'],
+    /** 只默认启用实测可达的免密钥后端；DuckDuckGo/SearXNG 需代理或自建，改为手动开启。 */
+    enabled: ['exa', 'parallel', 'bing'],
     numResults: 8,
     concurrency: 6,
     timeoutMs: 30000,
@@ -701,7 +705,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     rerank: false,
     safeSearch: true,
     healthTelemetry: true,
-    searxngBaseUrl: 'https://searx.be',
+    /** 公共实例一律禁用 format=json，只有自建实例可用，因此默认留空而不是指向一个连不上的地址。 */
+    searxngBaseUrl: '',
     anthropicModel: 'claude-sonnet-4-20250514',
     openaiModel: 'gpt-5.1',
   },
@@ -724,6 +729,16 @@ export interface AgentSessionMeta {
   status: 'idle' | 'running' | 'done' | 'error' | 'aborted';
   tokensIn: number;
   tokensOut: number;
+  /** 会话累计完成的对话轮次。 */
+  turns: number;
+  /** 会话累计走过的模型步数。 */
+  steps: number;
+  /** 会话累计命中提示词缓存的输入 tokens；服务商不返回缓存统计时保持 0。 */
+  cacheHitTokens: number;
+  /** 会话累计未命中提示词缓存的输入 tokens。 */
+  cacheMissTokens: number;
+  /** 最近一次模型调用的输入 tokens，即重开会话时仍要显示的上下文占用。 */
+  contextTokens: number;
   createdAt: string;
   updatedAt: string;
 }

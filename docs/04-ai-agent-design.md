@@ -63,6 +63,8 @@ for (step = 0; step < maxSteps; step++) {
 
 **约束**：`maxSteps` 默认 12；同一工具相同参数连续失败 2 次 → 中止并解释；单工具超时 60s（查询 30s）；取消信号贯穿 Provider 与 Driver。
 
+**回合时间预算**：默认由步数预算推导 `clamp(maxSteps × 20s, 8min, 30min)`，优先级仍是 `AIDB_AGENT_TURN_MS` > 命令意图 > 推导。放在这里而不是写死 8 分钟的原因：实测每步约 15 秒，写死 8 分钟等于承诺 100 步却只给 32 步，时间会抢在步数前面把回合截断。同时：① 跑到预算 80% 时在工具结果后追加 `[deadline reminder]`，要求模型立即 `update_plan`、在正文写明剩余工作，并改用批量写法收敛；② 超时中止与用户中止必须区分（`AgentAbortCause`），超时的 `aborted` 事由如实写「本回合已达 N 分钟上限（可继续）」；③ 超时中止会落一条**续跑检查点** assistant 消息（计划状态、已跑步数、时间如何耗尽、下一步做什么），下一轮「继续」据此接上而不是重来。
+
 ### 3.1 SQL 失败自动修复
 
 `run_sql` 返回数据库错误时（权限拒绝、审批拒绝、只读拒绝除外），Runtime 会把修复提示
@@ -125,6 +127,15 @@ for (step = 0; step < maxSteps; step++) {
 
 > 命令化的任务入口（`/report`、`/compare`、`/diff`、`/recon`、`/fix`）见 [命令化 Agent 工作流设计与开发计划](./11-command-workflows.md)。命令私有工具（如 `compose_report`）只在该命令的 Agent 步骤内可用，不计入下表的 52 个全局工具。
 
+### 4.0 能力目录（Capabilities）
+
+除工具表之外，系统提示还会注入一段**能力目录**（`apps/gateway/src/agentHost.ts` 的 `capabilityPromptBlock()`），来源是 `packages/core/src/capabilities/*.json` 的 12 份契约。它回答的是「软件自带功能有哪些、字段怎么填、返回什么状态」，与「工具能不能调」是两件事：
+
+- **有工具的功能**：写明工具名、参数（`key:type`，`*` 表示必填）与状态 id，模型直接调用；
+- **无工具的功能**：压成一行「引导用户到工具箱 → X」，并明确禁止编造参数、声称已完成或自己拼 REST 请求。
+
+契约同时被 `GET /capabilities`、REST 参数校验与（后续）UI 表单渲染消费。设计见 [功能能力契约](./16-capability-contract.md)。工具返回的 `meta.state` / `meta.progress` 与契约的 `states[]` / `progress` 对应，模型据此用 `states[].phrase` 组织汇报。
+
 风险等级：`read < write < ddl < destructive`。所有工具入参使用 JSON Schema（`additionalProperties: false`）。
 
 | # | 工具 | 风险 | 作用 | 关键参数 |
@@ -171,7 +182,7 @@ for (step = 0; step < maxSteps; step++) {
 | 40 | `delete_collection` | destructive | 删除 Qdrant 集合 / ES·OpenSearch 索引 / Weaviate class / MongoDB 集合 / ArangoDB 集合；`confirm` 必须与 `name` 完全一致 | `{ connectionId, database?, name, confirm }` |
 | 41 | `schema_diff` | read | 两个连接的结构差异、破坏性标记与目标方言 DDL | `{ sourceConnectionId, targetConnectionId, sourceDatabase?, targetDatabase?, tables?, includeDrops? }` |
 | 42 | `recon_data` | read | 两个源的键级 / 字段级对账（SQL 表、Redis 键空间、MongoDB/Elasticsearch 文档） | `{ left, right, fieldMap?, level?, baseSide?, maxKeys? }` |
-| 43 | `transfer_data` | write | 跨连接复制表结构与数据，目标缺失表自动创建 | `{ sourceConnectionId, targetConnectionId, tables?, mode?, createMissing? }` |
+| 43 | `transfer_data` | write | 跨连接复制表结构与数据，目标缺失表自动创建；返回 `meta.state`（ok/partial/failed）与 `meta.progress`（逐表进度快照） | `{ sourceConnectionId, targetConnectionId, tables?, mode?, createMissing?, limit? }` |
 | 44 | `mcp_list_tools` | read | 列出已配置 MCP Server 的工具 | `{ server }` |
 | 45 | `mcp_list_servers` | read | 列出已配置 MCP Server（含内置与外部）、id、启停状态、目录/域名与内置工具名；调用前先看这里，禁止猜服务器名 | `{ includeDisabled? }` |
 | 46 | `mcp_call` | 动态* | 调用 MCP Server 工具；内置只读工具直接执行，写工具与外部 Server 需审批 | `{ server, tool, arguments? }` |
@@ -189,11 +200,13 @@ for (step = 0; step < maxSteps; step++) {
 
 AiDB 预置 3 个第一方 MCP Server（进程内运行，不需要 npx、不下载第三方包），在 **设置 → MCP 与工具** 中启停与配置：
 
+> 该页自上而下的排版是：**新增 MCP Server（默认展开）→ 已配置列表 → Agent 工具目录（默认展开）**。把新增表单放在顶部是因为它是最常用的入口，不必先滚过已配置列表；工具目录默认展开则避免「只看到折叠标题、以为没有内容」。
+
 | Server | 默认 | 配置 | 工具 | 边界 |
 |---|---|---|---|---|
-| `builtin-filesystem` | 启用 | 允许目录（绝对路径） | `list_directory` / `read_file` / `read_multiple_files` / `search_files` / `grep_files` / `file_info` / `write_file` / `edit_file` / `move_file` / `delete_file` | 未配置目录时不可访问任何文件；路径必须落在授权目录内，符号链接逃逸与 `..` 越界均拒绝；读写上限 2 MB；`list_directory` 支持 `recursive`（等价 depth=8）并始终跳过依赖/构建目录；`grep_files` 支持上下文/文件/计数模式并优先用 ripgrep；`delete_file` 仅限文件且需 confirm，按 destructive 审批，目录不可删 |
+| `builtin-filesystem` | 启用 | 允许目录（绝对路径） | `list_directory` / `read_file` / `read_multiple_files` / `search_files` / `grep_files` / `file_info` / `write_file` / `edit_file` / `move_file` / `delete_file` | 未配置目录时不可访问任何文件；路径必须落在授权目录内，符号链接逃逸与 `..` 越界均拒绝；读写上限 2 MB；`list_directory` 支持 `recursive`（等价 depth=8）并始终跳过依赖/构建目录；`grep_files` 支持上下文/文件/计数模式并优先用 ripgrep；其 `pattern` 是 JavaScript 正则而非 glob——能编译就一律按内容检索，编译失败且形如文件名通配符（含 `*`/`?` 且不含 `( ) [ ] { } | ^ $ + \`）时改按文件名列出，避免模型按工具名直觉传 `*.java` 直接失败，其余情况仍报错并提示改用 `include`；`delete_file` 仅限文件且需 confirm，按 destructive 审批，目录不可删 |
 | `builtin-git` | 启用 | 仓库目录 | `git_status` / `git_log` / `git_diff` / `git_show` | 只读子命令，固定参数白名单；`ref` / 路径校验，不执行任意 git 参数 |
-| `builtin-web` | 关闭 | 域名限制（可选；留空=所有公网） | `fetch_url` / `web_search` | 仅 HTTP(S)；默认拦截 loopback、内网、链路本地与云元数据地址，重定向逐跳复检；正文上限 1 MB；`web_search` 聚合 Exa / Parallel / DuckDuckGo / SearXNG 与可选 Key 后端（Brave / Tavily / Serper / Mojeek / DeepSeek / Anthropic / OpenAI），并发 fan-out、URL 去重、单后端失败不影响整体 |
+| `builtin-web` | 关闭 | 域名限制（可选；留空=所有公网） | `fetch_url` / `web_search` | 仅 HTTP(S)；默认拦截 loopback、内网、链路本地与云元数据地址，重定向逐跳复检；正文上限 1 MB；`web_search` 聚合 Exa / Parallel / Bing（免密钥且国内可达）与可选 DuckDuckGo（需代理）/ SearXNG（需自建）及可选 Key 后端（Brave / Tavily / Serper / Mojeek / DeepSeek / Anthropic / OpenAI），并发 fan-out、URL 去重、单后端失败不影响整体，失败信息带连接诊断 |
 
 Agent 通过 `mcp_list_servers` 获取真实 id（`builtin-filesystem` 等）与已配置目录，再用 `mcp_list_tools` / `mcp_call` 调用；系统提示同时注入这份目录，禁止猜服务器名。`mcp_call` 的 `server` 可以省略：内置工具按唯一工具名反推所属内置 Server（`read_file` → `builtin-filesystem`），外部 Server 不做反推、风险仍为 `write`；写错或漏传时错误信息会列出可用的 server id 与工具。内置只读工具按 `read` 风险直接执行，`write_file` / `edit_file` / `move_file` 在询问模式逐次审批，`delete_file` 按 destructive 审批且只允许单文件。外部 stdio MCP Server 仍按用户配置启动，风险默认 `write`。**工具审批中的「始终允许」只放行调用，不等于目录白名单；文件系统仍须在设置里显式授权目录。** 不内置 shell：任意命令执行由 Skill Host 的声明式入口 + 白名单负责。
 
@@ -265,7 +278,9 @@ type ToolResult = {
 - 读取：`SELECT`、`WITH…SELECT`、`EXPLAIN`、`SHOW`、`DESCRIBE`、`PRAGMA`（只读 pragma 白名单）。
 - 写入：`INSERT/UPDATE/DELETE/REPLACE/MERGE`；`UPDATE/DELETE` 无 `WHERE` → destructive。
 - DDL：`CREATE/ALTER/RENAME`；其中 `ALTER … DROP COLUMN`、`DROP`、`TRUNCATE` → destructive。
-- 多语句：只读脚本（多条 SELECT/SHOW）一次执行；含写/DDL 的脚本默认拒绝（设置可开），开启时逐条分类并合并风险。Agent 收到 `MULTI_STATEMENT_DISABLED` 后会收到「拆成单条」的修复提示，而不是重复原 SQL。
+- 多语句：按**条数**封顶（`MAX_SCRIPT_STATEMENTS = 200`），不按「含不含写」拦截。上限内的脚本——建表序列 `CREATE TABLE` + `CREATE INDEX`、一张表几十条 `ALTER TABLE … COMMENT`——缺省即一次执行；超过上限才要求显式声明，错误码 `SCRIPT_TOO_LARGE`。这道闸只限制**规模**，不是权限边界：同样的语句逐条调用本来就被允许，真正的边界是下面的静态分类与审批。模型可传 `run_sql.allowMulti: true` 显式越过上限，与用户的「允许多语句」设置**取或**；`sql` 仍是唯一承载 SQL 的字段，因此 `classifySql` 依旧取全脚本最高风险，一条 `DROP` 混在 20 条 `ALTER` 里照样判 destructive 并走审批。整段脚本**非原子**：中途失败时前面的语句已生效。审批摘要会带上语句条数（`18 条语句：…`），让整段脚本的规模在弹窗与审计里看得见。
+  - 历史依据：本机 2089 条真实 SQL 里有 22 段多语句脚本，旧规则（含写就拒）拦下 18 段，而这 18 段全部是正当工作，误报率 100%，每次误报还要模型重跑一整步。会话级语句（`SET`/`USE`/事务边界）另按 `session` 分类，不参与风险相加。
+  - 注意：多语句的执行是**逐条串行**的（`manager.query` 循环 `driver.run`），池化驱动在串行调用下复用同一条空闲连接，因此 `SET SESSION … ; SELECT …` 这类脚本的设置对该批次后续语句生效。但会话变量不会跨 `run_sql` 调用保留，需要跨语句保持状态时请用 `begin_transaction` 固定连接。
 - 只读模式：仅允许读取类；带 `FOR UPDATE` 视为写；`SELECT … INTO` / `INSERT … SELECT`（有写目标）按写处理。
 
 ## 6. 计划（Todo）
@@ -354,6 +369,12 @@ pinned → +0.3 且不衰减
 | Local Reasoner | 进程内确定性规划器 | 模拟逐字 | 直接产生 tool_calls |
 
 - 统一接口：`stream(req): AsyncIterable<AgentEvent>`；事件：`text_delta | thinking_delta | tool_call | usage | stop(reason)`。
+- 用量与缓存归一化：各家 `usage` 字段名不同，provider 必须统一成 `tokensIn / tokensOut / cacheHitTokens / cacheMissTokens`：
+  - OpenAI 系：`prompt_tokens_details.cached_tokens`（或顶层 `cached_tokens`），未命中量由 `prompt_tokens - cached` 推出；
+  - DeepSeek 系：`prompt_cache_hit_tokens` 与 `prompt_cache_miss_tokens` 直接给全；
+  - Anthropic 系：`cache_read_input_tokens`（命中）与 `cache_creation_input_tokens`（写入，按未命中计），且**真实输入 = `input_tokens` + 两者**，只取 `input_tokens` 会把上下文占比算小。
+  - 服务商没返回缓存字段时两个字段都缺省，前端据此隐藏「缓存命中」指标——不能把「没上报」显示成 0% 命中。归一化实现见 `packages/core/src/agent/providers/common.ts` 的 `normalizeCacheUsage()`。
+- 回合用量快照：`AgentRuntime` 在一次回合收尾（正常结束、中止、供应商报错都算）发出 `turn_usage`，带 `steps`（工具循环轮数）、`modelCalls`、累计 `tokensIn/tokensOut`、`cacheHitTokens/cacheMissTokens`、`contextTokens`（最近一次调用的输入，即上下文占用）与 `modelDurationMs`（只累计模型调用耗时，tok/s 的分母）。
 - 配置：baseURL、apiKey（加密）、model、temperature、maxTokens、headers；请求超时/重试（429/5xx 指数退避，最多 2 次）。
 - 错误映射：401→"密钥无效"、429→"限流"、context_length→自动压缩后重试一次。
 

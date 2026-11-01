@@ -69,6 +69,33 @@ export function mapHttpError(status: number, body: string): ProviderError {
   return new ProviderError(`模型接口返回 ${status}：${detail}`, { code, status, retryable });
 }
 
+/**
+ * 提示词缓存用量的归一化。
+ *
+ * 各家服务商的字段名与口径都不一样，但都能归到「命中多少 / 未命中多少」两个数字上：
+ * - OpenAI 系：`prompt_tokens_details.cached_tokens`，未命中部分要自己减出来；
+ * - DeepSeek 系：`prompt_cache_hit_tokens` 与 `prompt_cache_miss_tokens` 都给；
+ * - Anthropic 系：`cache_read_input_tokens` 是命中量，其余输入都算未命中。
+ *
+ * 两个数都拿不到时返回空对象——调用方据此隐藏缓存指标，而不是显示一个假的 0%。
+ */
+export function normalizeCacheUsage(
+  tokensIn: number,
+  cacheHitTokens?: number,
+  cacheMissTokens?: number,
+): { cacheHitTokens?: number; cacheMissTokens?: number } {
+  // 负数与非数字都按「服务商没报这个字段」处理，不能让脏数据污染命中率
+  const valid = (value: number | undefined): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined;
+  const hit = valid(cacheHitTokens);
+  const miss = valid(cacheMissTokens);
+  if (hit === undefined && miss === undefined) return {};
+  const input = Number.isFinite(tokensIn) ? Math.max(0, Math.floor(tokensIn)) : 0;
+  if (hit !== undefined && miss !== undefined) return { cacheHitTokens: hit, cacheMissTokens: miss };
+  if (hit !== undefined) return { cacheHitTokens: hit, cacheMissTokens: Math.max(0, input - hit) };
+  return { cacheHitTokens: Math.max(0, input - (miss as number)), cacheMissTokens: miss };
+}
+
 export function joinUrl(base: string, path: string): string {
   return `${base.replace(/\/+$/, '')}${path}`;
 }

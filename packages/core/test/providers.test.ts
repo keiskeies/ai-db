@@ -203,3 +203,124 @@ test('openai provider allows keyless local endpoints but not public ones', async
     globalThis.fetch = originalFetch;
   }
 });
+
+// ---------- 提示词缓存用量：三家服务商的字段都要归一化 ----------
+import { normalizeCacheUsage } from '../src/agent/providers/common';
+
+test('cache usage normalization covers every provider shape', () => {
+  // DeepSeek：命中与未命中都直接给，原样透出
+  assert.deepEqual(normalizeCacheUsage(100, 90, 10), { cacheHitTokens: 90, cacheMissTokens: 10 });
+  // OpenAI 系：只给命中量，未命中由输入总量减出来
+  assert.deepEqual(normalizeCacheUsage(100, 60), { cacheHitTokens: 60, cacheMissTokens: 40 });
+  // Anthropic 系：只给未命中量时反向补出命中
+  assert.deepEqual(normalizeCacheUsage(100, undefined, 30), { cacheHitTokens: 70, cacheMissTokens: 30 });
+  // 都没有就是空对象——调用方据此隐藏指标，而不是报 0%
+  assert.deepEqual(normalizeCacheUsage(100), {});
+  assert.deepEqual(normalizeCacheUsage(100, undefined, undefined), {});
+  // 负数与非数字按缺省处理，不能让脏数据污染比率
+  assert.deepEqual(normalizeCacheUsage(100, -5, Number.NaN), {});
+});
+
+async function usageOf(provider: { stream: (req: any) => AsyncIterable<ProviderEvent> }): Promise<Extract<ProviderEvent, { type: 'usage' }>> {
+  const events = await collect(provider.stream({ system: 's', messages: [{ role: 'user', content: 'hi' }], tools: [] }) as AsyncIterable<ProviderEvent>);
+  const usage = events.find((e) => e.type === 'usage');
+  assert.ok(usage && usage.type === 'usage');
+  return usage as Extract<ProviderEvent, { type: 'usage' }>;
+}
+
+test('openai provider reports DeepSeek cache fields', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    sseResponse(
+      [
+        'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+        'data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":7,"prompt_cache_hit_tokens":90,"prompt_cache_miss_tokens":10}}\n\n',
+        'data: [DONE]\n\n',
+      ].join(''),
+    )) as typeof fetch;
+  try {
+    const usage = await usageOf(new OpenAIProvider({ apiKey: 'k', baseUrl: 'http://mock/v1', model: 'deepseek-chat' }));
+    assert.equal(usage.tokensIn, 100);
+    assert.equal(usage.cacheHitTokens, 90);
+    assert.equal(usage.cacheMissTokens, 10);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('openai provider reads nested prompt_tokens_details.cached_tokens', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    sseResponse(
+      [
+        'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+        'data: {"choices":[],"usage":{"prompt_tokens":200,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":150}}}\n\n',
+        'data: [DONE]\n\n',
+      ].join(''),
+    )) as typeof fetch;
+  try {
+    const usage = await usageOf(new OpenAIProvider({ apiKey: 'k', baseUrl: 'http://mock/v1', model: 'gpt-4o-mini' }));
+    assert.equal(usage.cacheHitTokens, 150);
+    assert.equal(usage.cacheMissTokens, 50);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('openai provider omits cache fields when the provider reports none', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    sseResponse(
+      [
+        'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+        'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":3}}\n\n',
+        'data: [DONE]\n\n',
+      ].join(''),
+    )) as typeof fetch;
+  try {
+    const usage = await usageOf(new OpenAIProvider({ apiKey: 'k', baseUrl: 'http://mock/v1', model: 'plain' }));
+    assert.equal(usage.cacheHitTokens, undefined);
+    assert.equal(usage.cacheMissTokens, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('anthropic provider counts cache read/write into input tokens', async () => {
+  const originalFetch = globalThis.fetch;
+  const frames = [
+    // 真实输入 = input_tokens(10) + cache_read(80) + cache_creation(10)
+    'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":0,"cache_read_input_tokens":80,"cache_creation_input_tokens":10}}}\n\n',
+    'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"hi"}}\n\n',
+    'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"there"}}\n\n',
+    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}\n\n',
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+  ].join('');
+  globalThis.fetch = (async () => sseResponse(frames)) as typeof fetch;
+  try {
+    const usage = await usageOf(new AnthropicProvider({ apiKey: 'k', baseUrl: 'http://mock', model: 'claude-test' }));
+    assert.equal(usage.tokensIn, 100, '缓存读写必须计入输入总量');
+    assert.equal(usage.tokensOut, 4);
+    assert.equal(usage.cacheHitTokens, 80);
+    assert.equal(usage.cacheMissTokens, 20, '未命中 = 原始输入 + 缓存写入');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('anthropic provider omits cache fields without cache usage', async () => {
+  const originalFetch = globalThis.fetch;
+  const frames = [
+    'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":11,"output_tokens":0}}}\n\n',
+    'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}\n\n',
+    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}\n\n',
+  ].join('');
+  globalThis.fetch = (async () => sseResponse(frames)) as typeof fetch;
+  try {
+    const usage = await usageOf(new AnthropicProvider({ apiKey: 'k', baseUrl: 'http://mock', model: 'claude-test' }));
+    assert.equal(usage.tokensIn, 11);
+    assert.equal(usage.cacheHitTokens, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

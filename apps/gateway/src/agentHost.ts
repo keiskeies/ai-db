@@ -33,6 +33,7 @@ import {
   type Risk,
   type ToolCall,
   type ToolResult,
+  type AgentPlanItem,
 } from '@aidb/core';
 import type { GatewayConfig } from './config';
 import { DbError } from './drivers';
@@ -74,6 +75,104 @@ export interface AgentHostOptions {
   executor: ToolExecutor;
   config: GatewayConfig;
   skills?: SkillStore;
+  /**
+   * 本回合时间预算解析器，返回 undefined 表示回落到默认规则。
+   *
+   * 为什么需要它：`Math.max(30_000, ...)` 的 30 秒地板让超时分支无法在秒级测通，
+   * 而超时后落检查点这条路径必须有测试。多入口（bot / 远程）按入口分配预算也用得上，
+   * 不是纯测试桩——生产默认路径仍是 env > intent > 步数推导，见 resolveTurnBudgetMs。
+   */
+  turnBudgetMs?: (context: { maxSteps: number; intentTimeoutMs?: number }) => number | undefined;
+}
+
+/** 每步模型调用的实测中位耗时（15s）留三分之一余量，用来把步数预算折成时间预算。 */
+const PER_STEP_MS = 20_000;
+/** 时间预算下限：默认 12 步的推导结果必须落在这里，保证与旧行为（480s）一致。 */
+const MIN_TURN_MS = 480_000;
+/** 时间预算上限：再长就不该靠一个回合硬扛，而该靠检查点续跑。 */
+const MAX_TURN_MS = 1_800_000;
+
+/**
+ * 由步数预算推导时间预算。
+ *
+ * 不给「更长」而给「自洽」：承诺 100 步却只给 8 分钟，必然在 32 步左右被时间抢先截断，
+ * 用户看到的就是「跑一半停了」。上限跟着步数走之后，先卡住的才是步数而不是时间。
+ * 长回合的安全性来自软提醒（80% 收敛）与检查点（断了能接），不来自放宽上限本身。
+ */
+export function deriveTurnBudgetMs(maxSteps: number): number {
+  return Math.min(MAX_TURN_MS, Math.max(MIN_TURN_MS, maxSteps * PER_STEP_MS));
+}
+
+/**
+ * 解析本回合的时间预算。优先级：env > 命令意图 > 按步数推导。
+ *
+ * 保留 env 与 intent 的既有语义（运维与 /init 之类命令依赖它们），只把最后一档
+ * 从写死的 480_000 换成随步数走——这一步就是「承诺 100 步却只给 8 分钟」的解药。
+ * 30 秒地板保持原样：预算再小只会把正常回合截成碎片。
+ */
+export function resolveTurnBudgetMs(input: {
+  maxSteps: number;
+  intentTimeoutMs?: number;
+  env?: Record<string, string | undefined>;
+}): number {
+  const env = input.env ?? process.env;
+  const raw = env.AIDB_AGENT_TURN_MS ?? input.intentTimeoutMs ?? deriveTurnBudgetMs(input.maxSteps);
+  return Math.max(30_000, Number(raw));
+}
+
+/** 把毫秒说成「M 分 S 秒」，避免检查点里出现 493000 这种没人读的数字。 */
+function humanDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes ? `${minutes} 分 ${seconds} 秒` : `${seconds} 秒`;
+}
+
+/**
+ * 超时中止时写进会话的「续跑检查点」。
+ *
+ * 为什么要单独写一条：abort 之后 runtime 只留下半截正文，用户再问「继续」时，
+ * 模型从历史里只能看到那半截，等于从零开始重新摸索——上一回合烧掉的时间白费。
+ * 这条把「做到哪、剩下什么、下一步做什么」显式留在历史里，续跑才有落点。
+ *
+ * 措辞同时面向两类读者：模型（拿它当上下文继续干）和人（看懂为什么断在这里）。
+ */
+export function buildResumeCheckpoint(input: {
+  plan: AgentPlanItem[];
+  steps: number;
+  toolCalls: number;
+  elapsedMs: number;
+  budgetMs: number;
+  toolTrace: string[];
+}): string {
+  const { plan, steps, toolCalls, elapsedMs, budgetMs, toolTrace } = input;
+  const lines: string[] = [
+    `## 本回合因超时中止（进度已保留，回复「继续」可接着做）`,
+    ``,
+    `时间预算 ${humanDuration(budgetMs)}已用尽（实际 ${humanDuration(elapsedMs)}），已跑 ${steps} 步、${toolCalls} 次工具调用后被中止。这不是执行出错，也不是模型放弃。`,
+  ];
+  if (plan.length) {
+    lines.push('', '计划状态：');
+    for (const item of plan) {
+      lines.push(`- [${item.status}] ${item.text}`);
+    }
+  } else {
+    lines.push('', '计划状态：本回合没有登记计划，续跑时请先 update_plan 建立计划再动手。');
+  }
+  if (toolTrace.length) {
+    const counts = new Map<string, number>();
+    for (const tool of toolTrace) counts.set(tool, (counts.get(tool) ?? 0) + 1);
+    const rendered = [...counts.entries()].map(([tool, n]) => (n > 1 ? `${tool} ×${n}` : tool)).join('、');
+    lines.push('', `本回合已用工具：${rendered}。已有结果都在会话里，不要重复相同的读取。`);
+  }
+  const next = plan.find((item) => item.status === 'doing') ?? plan.find((item) => item.status === 'todo');
+  lines.push(
+    '',
+    next
+      ? `下一步：继续「${next.text}」。优先用一条语句覆盖多个对象的批量写法，减少往返。`
+      : '下一步：接续上一个动作继续。已经拿到的结论不要重新查证；优先用批量写法减少往返。',
+  );
+  return lines.join('\n');
 }
 
 interface PendingApproval {
@@ -242,14 +341,25 @@ export class AgentHost {
     }
     const images = this.loadImages(input.images);
     const provider = createProvider(settings.agent);
+    // 步数预算在这里先定：它同时喂给 runtime 与时间预算推导，两处各算一次必然漂移。
+    // 语义命令通常要「看结构 → 多次查数 → 出图」，给足步数；普通提问保持用户设置。
+    const maxSteps = intent ? Math.min(40, Math.max(16, (settings.agent.maxSteps || 12) * 2)) : settings.agent.maxSteps;
+    const turnBudgetMs =
+      this.opts.turnBudgetMs?.({ maxSteps, ...(intent?.timeoutMs ? { intentTimeoutMs: intent.timeoutMs } : {}) }) ??
+      resolveTurnBudgetMs({ maxSteps, ...(intent?.timeoutMs ? { intentTimeoutMs: intent.timeoutMs } : {}), env: process.env });
+    const startedAt = Date.now();
+    // 超时不是用户的选择，续跑检查点也不该在用户主动停止时出现——这个标记是两者唯一的分水岭。
+    // runtime 用 abortCause() 取它，因此必须在中止发生后才被读，不能在创建时快照。
+    let timedOut = false;
     const controller = new AbortController();
     this.active.set(sessionId, controller);
     // 硬上限：模型端整条流卡死时也要结束回合，避免会话永远 running
     const turnTimer = setTimeout(() => {
       if (controller.signal.aborted) return;
+      timedOut = true;
       controller.abort();
       this.opts.store.updateSession(sessionId, { status: 'aborted' });
-    }, Math.max(30_000, Number(process.env.AIDB_AGENT_TURN_MS ?? (intent?.timeoutMs ?? 480_000))));
+    }, turnBudgetMs);
     turnTimer.unref();
 
     const store = this.opts.store;
@@ -441,11 +551,32 @@ export class AgentHost {
         sessionAllowed,
         alwaysAllowed: this.alwaysAllowed,
         signal: controller.signal,
+        // 预算相关的三个字段一起给：runtime 靠 deadlineAt 决定何时追加收敛提醒，
+        // 靠 turnBudgetMs 把「还剩多少」说成人话，靠 abortCause 区分超时与用户中止。
+        deadlineAt: startedAt + turnBudgetMs,
+        turnBudgetMs,
+        abortCause: () => (timedOut ? 'timeout' : 'user'),
       });
       status = result.status;
       usage = result.usage;
       const finalBlocks = thinking ? [{ type: 'thinking' as const, text: thinking }, ...blocks] : blocks;
       store.appendMessage({ sessionId, role: 'assistant', content: result.text, blocks: finalBlocks, tokens: result.usage.tokensOut });
+      // 超时中止时补一条续跑检查点。必须写在半截正文之后：正文是模型说过的话，
+      // 检查点是「它本来还要做什么」，两者顺序颠倒会让下一轮的上下文读起来像倒叙。
+      if (result.status === 'aborted' && result.abortCause === 'timeout') {
+        store.appendMessage({
+          sessionId,
+          role: 'assistant',
+          content: buildResumeCheckpoint({
+            plan: result.plan,
+            steps: result.steps,
+            toolCalls: result.toolCalls,
+            elapsedMs: Date.now() - startedAt,
+            budgetMs: turnBudgetMs,
+            toolTrace: blocks.filter((b) => b.type === 'tool_call').map((b) => b.tool).filter(Boolean) as string[],
+          }),
+        });
+      }
       const previous = store.getSession(sessionId);
       const summaryLine = `Q: ${text.slice(0, 200)}\nA: ${result.text.slice(0, 400)}`;
       const summary = `${previous?.summary ? `${previous.summary}\n---\n` : ''}${summaryLine}`.slice(-6000);

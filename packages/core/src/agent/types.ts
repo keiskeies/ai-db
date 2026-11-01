@@ -26,6 +26,20 @@ export interface ToolResult {
     rowsAffected?: number;
     truncated?: boolean;
     backupPath?: string;
+    /**
+     * 长任务进度快照。只在执行结束时上报一次，不是流式推送。
+     * 只有声明了 `progress.supported` 的功能对应的工具才填。
+     */
+    progress?: {
+      current: number;
+      total: number;
+      /** 进度单位，与 capability.progress.unit 对应，如 'table' / 'row' / 'batch'。 */
+      unit: string;
+      /** 当前正在处理的对象名，如 'orders'。 */
+      label?: string;
+    };
+    /** 终态 id，与 capability.states[].id 对应，供模型用 states[].phrase 组织汇报。 */
+    state?: string;
   };
 }
 
@@ -102,11 +116,25 @@ export interface ProviderRequest {
   context?: AgentContextData;
 }
 
+/**
+ * 一次模型调用的用量明细。
+ * 缓存字段各服务商叫法不同，provider 归一化到 cacheHitTokens / cacheMissTokens 后再上报；
+ * 服务商不返回缓存信息时两个字段都缺省，调用方必须据此隐藏「缓存命中」而不是显示 0。
+ */
+export interface ProviderUsage {
+  tokensIn: number;
+  tokensOut: number;
+  /** 命中提示词缓存的输入 tokens。 */
+  cacheHitTokens?: number;
+  /** 未命中提示词缓存的输入 tokens。 */
+  cacheMissTokens?: number;
+}
+
 export type ProviderEvent =
   | { type: 'text'; text: string }
   | { type: 'thinking'; text: string }
   | { type: 'tool_call'; call: ToolCall }
-  | { type: 'usage'; tokensIn: number; tokensOut: number }
+  | ({ type: 'usage' } & ProviderUsage)
   | { type: 'done'; stopReason: string };
 
 export interface LlmProvider {
@@ -129,6 +157,14 @@ export interface ApprovalPayload {
   expiresAt: number;
 }
 
+/**
+ * 一个回合为什么被中止。
+ *
+ * 区分它们是必须的：超时中止不是用户的选择，UI 不能继续显示「已中止」，
+ * 上层也要据此写「可续跑」的检查点——用户点停止时不该替他留续跑提示。
+ */
+export type AgentAbortCause = 'timeout' | 'user';
+
 export type AgentEvent =
   | { type: 'start'; turnId: string; sessionId: string; model: string }
   | { type: 'text_delta'; text: string }
@@ -142,9 +178,25 @@ export type AgentEvent =
   | { type: 'plan'; items: AgentPlanItem[] }
   | { type: 'memory_used'; memories: { id: string; title: string; kind: string }[] }
   | { type: 'suggestions'; items: QuestionSuggestion[] }
-  | { type: 'usage'; tokensIn: number; tokensOut: number }
+  /** 单次模型调用的用量；一次 agent 回合可能因为多步工具循环而发出多次。 */
+  | ({ type: 'usage'; durationMs: number } & ProviderUsage)
+  /** 一次 agent 回合结束时的累计用量与步数。 */
+  | {
+      type: 'turn_usage';
+      steps: number;
+      tokensIn: number;
+      tokensOut: number;
+      cacheHitTokens?: number;
+      cacheMissTokens?: number;
+      modelCalls: number;
+      /** 最近一次模型调用的输入 tokens，即当前上下文占用。 */
+      contextTokens: number;
+      /** 本回合模型调用的总耗时（不含工具执行），用于算真实的 tok/s。 */
+      modelDurationMs: number;
+    }
   | { type: 'done'; turnId: string; durationMs: number; summary?: string }
-  | { type: 'aborted'; turnId: string; reason: string }
+  /** cause 让界面不必从 reason 里猜是超时还是用户点的停止。 */
+  | { type: 'aborted'; turnId: string; reason: string; cause?: AgentAbortCause }
   | { type: 'error'; code: string; message: string; retryable?: boolean };
 
 export interface AgentRunInput {
@@ -161,6 +213,18 @@ export interface AgentRunInput {
   sessionAllowed?: Set<string>;
   alwaysAllowed?: Set<string>;
   signal?: AbortSignal;
+  /**
+   * 本回合的截止时间（毫秒时间戳）。给了之后 runtime 才有「预算」概念：
+   * 每步工具结果后按剩余时间追加软提醒。省略时完全无副作用。
+   */
+  deadlineAt?: number;
+  /** 本回合的时间预算，只用于把「已用/剩余」说成人话；省略时用 deadlineAt 与开局时间推算。 */
+  turnBudgetMs?: number;
+  /**
+   * 中止原因取器。用函数而不是快照值：abort 可能发生在 run() 已经拿到 input 之后，
+   * 快照会永远读到「还没超时」。上层（agentHost）只需翻转自己的标记。
+   */
+  abortCause?: () => AgentAbortCause;
 }
 
 export interface AgentRuntimeDeps {
