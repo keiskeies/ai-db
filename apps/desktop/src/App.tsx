@@ -3,7 +3,6 @@ import type { ContextMenuItem } from './store';
 import { desktopBridge, type OpenTablePayload } from './lib/desktop';
 import {
   Archive,
-  BarChart3,
   Bot,
   Boxes,
   Clipboard,
@@ -49,7 +48,6 @@ const RIBBON_TONES: Record<string, [string, string]> = {
   lime: ['#d9f99d', '#84cc16'],
   cyan: ['#a5f3fc', '#0ea5e9'],
   fuchsia: ['#f5d0fe', '#d946ef'],
-  pink: ['#fbcfe8', '#ec4899'],
 };
 
 function RibbonGradients() {
@@ -354,7 +352,6 @@ export default function App() {
         <div className="ribbon-sep" />
         <RibbonButton icon={<Clock size={20} />} label="自动运行" tone="cyan" onClick={() => openTools('jobs')} />
         <RibbonButton icon={<Network size={20} />} label="模型" tone="fuchsia" onClick={() => openRelations()} />
-        <RibbonButton icon={<BarChart3 size={20} />} label="图表" tone="pink" onClick={() => openQuery()} />
         <RibbonButton
           icon={<LayoutDashboard size={20} />}
           label="仪表板"
