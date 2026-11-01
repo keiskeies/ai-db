@@ -164,7 +164,9 @@ export async function loadSuggestions(connectionId: string, database: string, li
 
 export function formatCount(value: number): string {
   if (!Number.isFinite(value)) return '—';
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  // 先四舍五入再判档，否则 999_999 会显示成「1000.0k」而不是「1.0M」
+  const m = Number((value / 1_000_000).toFixed(1));
+  if (m >= 1) return `${m.toFixed(1)}M`;
   if (value >= 10_000) return `${(value / 1000).toFixed(1)}k`;
   return value.toLocaleString();
 }
