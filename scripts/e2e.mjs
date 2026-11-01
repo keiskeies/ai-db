@@ -83,6 +83,15 @@ function freePort() {
   });
 }
 
+/**
+ * 打开示例库的订单表。
+ * 欢迎页改版后没有「打开示例库」卡片了，改成「当前库的家」里的一张表行；
+ * 但用例的意图不变：从欢迎页直接进入 demo 的 orders 数据页。
+ */
+async function openDemoTable(page) {
+  await page.click('[data-testid="welcome-table-orders"]');
+}
+
 async function waitHealth(url, timeout = 25000) {
   const started = Date.now();
   while (Date.now() - started < timeout) {
@@ -1515,6 +1524,48 @@ await page.waitForTimeout(1600);
 check('database-wide search works', (await page.locator('.tools-content .result-row').count()) > 0);
 const toolboxLabels = await page.locator('.tools-nav button').allInnerTexts();
 check('database toolbox does not list agent features', !toolboxLabels.some((text) => /Skills|MCP|通知渠道|命令工作流/.test(text)), toolboxLabels.join(' | '));
+
+// 契约驱动表单的 5 个面板：逐个打开，确认控件真的可用。
+// 这几条是为了防止「契约渲染把面板渲染成空壳」之类的回归——单测与文档契约都覆盖不到。
+const migratedPanels = [
+  { label: '数据生成', prefix: 'generate', must: 'table' },
+  { label: '数据库搜索', prefix: 'search', must: 'scope' },
+  { label: '服务器监控', prefix: 'monitor', must: 'connectionId' },
+  { label: '高级对象', prefix: 'objects', must: 'connectionId' },
+  { label: '数据字典', prefix: 'dictionary', must: 'database' },
+];
+for (const panel of migratedPanels) {
+  await page.locator('.tools-nav button').filter({ hasText: panel.label }).click();
+  // .capability-form 用 display:contents，自身没有盒子，所以等 state=attached 而不是 visible
+  await page.waitForSelector(`[data-testid="${panel.prefix}-form"]`, { state: 'attached', timeout: 10000 });
+  await page.waitForTimeout(1200);
+  const formCount = await page.locator(`[data-testid="${panel.prefix}-form"]`).count();
+  check(`${panel.label} renders a capability-driven form`, formCount >= 1, `forms=${formCount}`);
+}
+
+// 数据生成面板：表必须自动选中第一张，两个操作按钮必须可点（对应 §12.6 的回归 #1 / #2）
+await page.locator('.tools-nav button').filter({ hasText: '数据生成' }).click();
+await page.waitForTimeout(1500);
+const generateTable = page.locator('[data-testid="generate-table"]');
+await page.waitForFunction(
+  () => {
+    const select = document.querySelector('[data-testid="generate-table"]');
+    return select instanceof HTMLSelectElement && select.options.length > 1 && !select.disabled;
+  },
+  null,
+  { timeout: 15000 },
+);
+const generateTableValue = await generateTable.inputValue();
+check('generate panel auto-selects a table', Boolean(generateTableValue), `value=${generateTableValue}`);
+const generateButtons = page.locator('.tools-content button').filter({ hasText: /预览|生成并插入/ });
+check('generate panel actions are enabled', (await generateButtons.count()) === 2 && !(await generateButtons.first().isDisabled()));
+
+// 数据生成面板的「库」字段在单库引擎下应被隐藏，不能留下只有标签的空字段（对应 §12.6 的回归 #3 / #4）
+const emptyFields = await page.locator('.tools-content .capability-form .field').evaluateAll((nodes) =>
+  nodes.filter((node) => !node.querySelector('select, input, textarea') && getComputedStyle(node).display !== 'none').length,
+);
+check('generate panel has no label-only fields', emptyFields === 0, `empty=${emptyFields}`);
+
 await page.locator('.tools-modal .modal-head .icon-btn').click();
 await page.waitForTimeout(200);
 await page.click('[data-testid="open-settings"]');
@@ -1537,36 +1588,133 @@ await page.waitForFunction(() => document.querySelector('.settings-content')?.te
 check('built-in filesystem tools are discoverable', true);
 check('settings MCP panel renders', true);
 
+// 排版：新增表单在页面顶部且默认展开，已配置列表在它下面
+const mcpOrder = await page.locator('.settings-content .tool-scroll').evaluate((el) => {
+  const add = el.querySelector('[data-testid="mcp-add-server"]');
+  const configured = [...el.querySelectorAll('.panel-head')].find((node) => node.textContent?.includes('已配置'));
+  if (!add || !configured) return null;
+  const addTop = add.getBoundingClientRect().top;
+  const configuredTop = configured.closest('.panel')?.getBoundingClientRect().top ?? 0;
+  return {
+    addOpen: add instanceof HTMLDetailsElement && add.open,
+    addFirst: addTop <= configuredTop,
+  };
+});
+check('MCP add-server form is expanded by default', mcpOrder?.addOpen === true, JSON.stringify(mcpOrder));
+check('MCP add-server form sits above the configured list', mcpOrder?.addFirst === true, JSON.stringify(mcpOrder));
+
 // Agent 工具目录（只读）
-await page.locator('.settings-content [data-testid="agent-tool-catalog"] .panel-head').click();
-await page.waitForFunction(() => document.querySelectorAll('.settings-content .agent-catalog-row').length > 0, null, { timeout: 10000 });
-const catalogRows = await page.locator('.settings-content .agent-catalog-row').count();
-const catalogGroups = await page.locator('.settings-content .agent-catalog-group-head').count();
+// 注意：新增的「功能能力目录」复用同一套 .agent-catalog-row 样式，
+// 所以这里的选择器必须限定在 [data-testid="agent-tool-catalog"] 之内，
+// 否则会把两个目录的行数加在一起。
+const toolCatalog = page.locator('.settings-content [data-testid="agent-tool-catalog"]');
+// 目录默认展开。<details> 收起时子元素仍在 DOM 里，所以行数断言证明不了展开状态，
+// 必须直接读 open 属性。
+check(
+  'agent tool catalog is expanded by default',
+  (await toolCatalog.evaluate((el) => (el instanceof HTMLDetailsElement ? el.open : false))) === true,
+);
+// 只在被收起时才点开（点击 summary 是 toggle 语义）
+if (!(await toolCatalog.evaluate((el) => el instanceof HTMLDetailsElement && el.open))) {
+  await toolCatalog.locator('.panel-head').click();
+}
+await page.waitForFunction(() => document.querySelectorAll('[data-testid="agent-tool-catalog"] .agent-catalog-row').length > 0, null, { timeout: 10000 });
+const catalogRows = await toolCatalog.locator('.agent-catalog-row').count();
+const catalogGroups = await toolCatalog.locator('.agent-catalog-group-head').count();
 check(
   'agent tool catalog lists every tool grouped by capability',
   catalogRows === 52 && catalogGroups >= 8,
   `rows=${catalogRows} groups=${catalogGroups}`,
 );
-const catalogText = await page.locator('.settings-content [data-testid="agent-tool-catalog"]').evaluate((el) => el.textContent ?? '');
+const catalogText = await toolCatalog.evaluate((el) => el.textContent ?? '');
 check('run_sql appears in the catalog with its multi-statement constraint', /run_sql/.test(catalogText) && catalogText.includes('允许多语句'));
 check('catalog marks MCP tools as gated by the MCP switch', catalogText.includes('总开关'));
-await page.locator('.settings-content [data-testid="agent-tool-catalog"] input[aria-label="过滤 Agent 工具"]').fill('事务');
-await page.waitForFunction(() => document.querySelectorAll('.settings-content .agent-catalog-row').length === 7, null, { timeout: 5000 });
-const filteredRows = await page.locator('.settings-content .agent-catalog-row').count();
+await toolCatalog.locator('input[aria-label="过滤 Agent 工具"]').fill('事务');
+await page.waitForFunction(() => document.querySelectorAll('[data-testid="agent-tool-catalog"] .agent-catalog-row').length === 7, null, { timeout: 5000 });
+const filteredRows = await toolCatalog.locator('.agent-catalog-row').count();
 check('catalog filter narrows to the matching group', filteredRows === 7, `rows=${filteredRows}`);
-await page.locator('.settings-content [data-testid="agent-tool-catalog"] input[aria-label="过滤 Agent 工具"]').fill('');
-const catalogToggles = await page.locator('.settings-content [data-testid="agent-tool-catalog"] input[type="checkbox"], .settings-content [data-testid="agent-tool-catalog"] button').count();
+await toolCatalog.locator('input[aria-label="过滤 Agent 工具"]').fill('');
+const catalogToggles = await toolCatalog.locator('input[type="checkbox"], button').count();
 check('catalog is read-only (no switches or buttons inside)', catalogToggles === 0, `controls=${catalogToggles}`);
-await page.locator('.settings-content [data-testid="agent-tool-catalog"]').scrollIntoViewIfNeeded();
+await toolCatalog.scrollIntoViewIfNeeded();
+
 await page.screenshot({ path: join(shots, 'desktop-agent-tools.png') });
+
+// 功能能力（独立设置页，只读）——12 个工具箱模块的表单契约
+await page.locator('.settings-nav button').filter({ hasText: '功能能力' }).click();
+await page.waitForSelector('[data-testid="capability-catalog"]', { timeout: 10000 });
+await page.waitForFunction(() => document.querySelectorAll('.capability-card').length > 0, null, { timeout: 10000 });
+const capCards = await page.locator('.capability-card').count();
+check('capability page lists every toolbox module', capCards === 12, `cards=${capCards}`);
+
+const capText = await page.locator('[data-testid="capability-catalog"]').evaluate((el) => el.textContent ?? '');
+check(
+  'capability page distinguishes tools from guide-only features',
+  capText.includes('transfer_data') && capText.includes('无工具'),
+);
+
+// 明细：展开单个功能后应出现字段表、流程、状态与限制
+check('capability details collapsed by default', (await page.locator('.capability-field-table').count()) === 0);
+await page.locator('[data-testid="capability-toggle-transfer"]').click();
+await page.waitForFunction(() => document.querySelectorAll('.capability-field-table').length === 1, null, { timeout: 5000 });
+const transferDetail = await page.locator('.capability-card[data-capability="transfer"]').evaluate((el) => el.textContent ?? '');
+check(
+  'capability detail shows fields, flow, states and constraints',
+  transferDetail.includes('sourceConnectionId') &&
+    transferDetail.includes('流程') &&
+    transferDetail.includes('running') &&
+    transferDetail.includes('replace'),
+  transferDetail.slice(0, 160),
+);
+const fieldRows = await page.locator('.capability-card[data-capability="transfer"] .capability-field-row').count();
+check('capability detail lists every field row', fieldRows === 8, `fields=${fieldRows}`);
+
+// 「展开全部字段」把 12 个功能全部打开
+await page.locator('input[aria-label="过滤功能能力"]').fill('');
+await page.locator('label:has-text("展开全部字段") input').check();
+await page.waitForFunction(() => document.querySelectorAll('.capability-field-table').length === 12, null, { timeout: 5000 });
+check('expand-all opens every capability', (await page.locator('.capability-field-table').count()) === 12);
+await page.locator('label:has-text("展开全部字段") input').uncheck();
+await page.waitForTimeout(300);
+
+// 过滤：按标题、按字段名、按工具名都应命中
+await page.locator('input[aria-label="过滤功能能力"]').fill('数据传输');
+await page.waitForFunction(() => document.querySelectorAll('.capability-card').length === 1, null, { timeout: 5000 });
+check('capability filter matches title', (await page.locator('.capability-card').count()) === 1);
+await page.locator('input[aria-label="过滤功能能力"]').fill('intervalSeconds');
+await page.waitForFunction(() => document.querySelectorAll('.capability-card').length >= 1, null, { timeout: 5000 });
+check('capability filter matches field name', (await page.locator('.capability-card').count()) >= 1);
+await page.locator('input[aria-label="过滤功能能力"]').fill('transfer_data');
+await page.waitForFunction(() => document.querySelectorAll('.capability-card').length === 1, null, { timeout: 5000 });
+check('capability filter matches tool name', (await page.locator('.capability-card').count()) === 1);
+await page.locator('input[aria-label="过滤功能能力"]').fill('没有这个功能xyz');
+await page.waitForFunction(() => document.querySelectorAll('.capability-card').length === 0, null, { timeout: 5000 });
+check('capability filter shows empty state', (await page.locator('.capability-list .dash-empty').count()) === 1);
+await page.locator('input[aria-label="过滤功能能力"]').fill('');
+await page.waitForTimeout(300);
+
+// 只允许「展开全部字段」这一个视图控制；不能出现启停开关或动作按钮
+const capSwitches = await page
+  .locator('[data-testid="capability-catalog"] input[type="checkbox"]')
+  .evaluateAll((nodes) => nodes.filter((node) => {
+    const label = node.closest('label')?.textContent ?? '';
+    return !label.includes('展开全部字段');
+  }).length);
+const capActionButtons = await page.locator('[data-testid="capability-catalog"] button.btn').count();
+check(
+  'capability page has no enable/disable switches',
+  capSwitches === 0 && capActionButtons === 0,
+  `switches=${capSwitches} buttons=${capActionButtons}`,
+);
+await page.screenshot({ path: join(shots, 'desktop-capabilities.png') });
 await page.locator('.settings-nav button').filter({ hasText: '网络搜索' }).click();
 await page.waitForFunction(() => document.querySelector('.settings-content')?.textContent?.includes('已启用后端'), null, { timeout: 10000 });
 await page.waitForSelector('.settings-content .search-backend', { timeout: 10000 });
 const searchText = await page.locator('.settings-content').evaluate((el) => el.textContent ?? '');
-check('search settings render 11 backends', searchText.includes('已启用后端') && ['Exa', 'Parallel', 'DuckDuckGo', 'SearXNG', 'Brave', 'Tavily', 'Serper', 'Mojeek', 'DeepSeek', 'Anthropic', 'OpenAI'].every((label) => searchText.includes(label)), searchText.slice(0, 160));
+check('search settings render 12 backends', searchText.includes('已启用后端') && ['Exa', 'Parallel', 'Bing', 'DuckDuckGo', 'SearXNG', 'Brave', 'Tavily', 'Serper', 'Mojeek', 'DeepSeek', 'Anthropic', 'OpenAI'].every((label) => searchText.includes(label)), searchText.slice(0, 160));
 const searchBackends = await page.locator('.settings-content .search-backend').count();
 const checkedBackends = await page.locator('.settings-content .search-backend input:checked').count();
-check('search panel lists every backend with four free defaults', searchBackends === 11 && checkedBackends === 4, `${searchBackends} rows / ${checkedBackends} checked`);
+check('search panel lists every backend with three free defaults', searchBackends === 12 && checkedBackends === 3, `${searchBackends} rows / ${checkedBackends} checked`);
 check('search panel groups global params and result strategy', searchText.includes('全局参数') && searchText.includes('结果策略') && searchText.includes('numResults') && searchText.includes('backendTimeoutMs'));
 const searchKeyInputs = await page.locator('.settings-content .search-key input').count();
 check('search panel exposes seven key fields plus searxng', searchKeyInputs === 8, `${searchKeyInputs} key inputs`);
@@ -1584,11 +1732,11 @@ await page.locator('.settings-content .search-key input[aria-label="brave API Ke
 await page.locator('.settings-content .search-actions button.btn.primary').click();
 await page.waitForFunction(() => document.querySelector('.settings-content')?.textContent?.includes('已配置密钥：0/7'), null, { timeout: 10000 });
 check('search key can be cleared', true);
-const searchBackendBefore = (await api('/search/backends')).body;
 await page.locator('.settings-content .search-actions button').filter({ hasText: '重置状态' }).click();
 await page.waitForFunction(() => document.body.textContent?.includes('已重置后端健康状态'), null, { timeout: 10000 });
 const searchBackendAfter = (await api('/search/backends')).body;
-check('search health telemetry resets', searchBackendAfter.health.every((item) => item.status === 'idle' && item.failures === 0) && searchBackendBefore.backends.length === 11, JSON.stringify(searchBackendAfter.health.slice(0, 2)));
+// 不硬编码后端数量：新增后端（如 bing）不该让这条断言变红，只校验重置后的健康状态。
+check('search health telemetry resets', searchBackendAfter.health.every((item) => item.status === 'idle' && item.failures === 0) && searchBackendAfter.backends.length === searchBackendAfter.health.length, JSON.stringify(searchBackendAfter.health.slice(0, 2)));
 check('reset button drives the health endpoint', true);
 await page.locator('.settings-nav button').filter({ hasText: 'Skills' }).click();
 await page.waitForFunction(() => document.querySelector('.settings-content')?.textContent?.includes('3 个可用'), null, { timeout: 10000 });
@@ -1598,7 +1746,7 @@ check('settings Skills panel renders', true);
 await page.locator('.settings-modal .modal-head .icon-btn').click();
 await page.waitForTimeout(200);
 
-await page.click('[data-testid="welcome-open-demo"]');
+await openDemoTable(page);
 await page.waitForSelector('[data-testid="data-grid"] tbody tr', { timeout: 15000 });
 const gridRows = await page.locator('[data-testid="data-grid"] tbody tr').count();
 check('data grid opens demo table', gridRows === 100, `${gridRows} rows`);
@@ -1947,6 +2095,29 @@ const activityLabels = await page.evaluate(() => {
 });
 check('activity label changes as the turn advances', activityLabels.length >= 2, activityLabels.join(' | '));
 check('agent inspects schema', (await page.locator('[data-testid="tool-card"]').count()) > 0);
+
+// 输入卡改版 + 状态条：胶囊替代原生 select，卡外一行显示轮次/步数/token
+check('composer uses capsule pills instead of native selects', (await page.locator('.composer select').count()) === 0);
+const composerStats = await page.locator('[data-testid="composer-stats"]').innerText().catch(() => '');
+check('composer stats line shows turns and steps', /\d+\s*轮/.test(composerStats) && /\d+\s*步/.test(composerStats), composerStats.replace(/\s+/g, ' ').slice(0, 80));
+// 风险提示必须和状态数据同一行，不能再多占一行高度
+const statsBox = await page.locator('[data-testid="composer-stats"]').boundingBox();
+const noteBox = await page.locator('[data-testid="composer-disclaimer"]').boundingBox();
+check('disclaimer sits on the same row as the stats', Boolean(statsBox && noteBox) && Math.abs((statsBox.y + statsBox.height / 2) - (noteBox.y + noteBox.height / 2)) < 8, { statsH: Math.round(statsBox?.height ?? 0) });
+check('audited-policy line is gone', !/均可审计|fully audited/.test(await page.locator('[data-testid="agent-panel"]').innerText()));
+await page.locator('[data-testid="agent-mode"]').click();
+await page.waitForSelector('[data-testid="agent-mode-menu"]', { timeout: 5000 });
+check('permission capsule opens a menu with all four modes', (await page.locator('[data-testid="agent-mode-menu"] .pill-menu-item').count()) === 4);
+await page.keyboard.press('Escape');
+check('Escape closes the capsule menu', (await page.locator('[data-testid="agent-mode-menu"]').count()) === 0);
+// 思考档位必须排在模型右边，且只渲染一次
+const modelBox = await page.locator('[data-testid="agent-model-select"]').boundingBox();
+const tierCount = await page.locator('[data-testid="agent-reasoning-tier"]').count();
+check('reasoning tier renders once', tierCount <= 1, tierCount);
+if (modelBox && tierCount === 1) {
+  const tierBox = await page.locator('[data-testid="agent-reasoning-tier"]').boundingBox();
+  check('reasoning tier sits right of the model capsule', Boolean(tierBox) && tierBox.x > modelBox.x + modelBox.width - 1, { modelRight: Math.round(modelBox.x + modelBox.width), tierLeft: Math.round(tierBox?.x ?? 0) });
+}
 await page.screenshot({ path: join(shots, 'desktop-agent.png') });
 await page.fill('[data-testid="agent-input"]', '/chart');
 await page.waitForFunction(() => document.querySelector('.popover')?.textContent?.includes('/chart'), null, { timeout: 10000 });
@@ -2766,7 +2937,7 @@ await api(`/connections/${demo.id}`, { method: 'PUT', body: JSON.stringify({ rea
 await page.reload({ waitUntil: 'domcontentloaded' });
 await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
 await page.waitForTimeout(700);
-await page.click('[data-testid="welcome-open-demo"]');
+await openDemoTable(page);
 await page.waitForSelector('[data-testid="data-grid"] tbody tr', { timeout: 20000 });
 const readonlyWriteEntry = (await page.locator('[data-testid="data-add-row"]').isDisabled())
   && (await page.locator('[data-testid="data-paste-rows"]').isDisabled())
