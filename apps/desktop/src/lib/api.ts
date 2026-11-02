@@ -63,6 +63,14 @@ function resolveToken(): string {
 
 export const TOKEN = resolveToken();
 
+/**
+ * 每次调用都重新解析：WS 重连时要能拿到配对之后才写入的 token，
+ * 而不是页面加载时快照下来的那个空串。
+ */
+export function authToken(): string {
+  return resolveToken();
+}
+
 export class ApiError extends Error {
   code: string;
   status: number;
