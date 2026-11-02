@@ -459,7 +459,7 @@ export function AgentContextTool() {
             <div className="ctx-section-head">术语词典（消除简称 / 黑话歧义）</div>
             <div className="tool-row">
               <input className="input" style={{ width: 160 }} placeholder="术语，如 JS" value={draftTerm.title} onChange={(e) => setDraftTerm({ ...draftTerm, title: e.target.value })} />
-              <input className="input" style={{ flex: 1 }} placeholder="释义，如 JumpServer 堡垒机" value={draftTerm.content} onChange={(e) => setDraftTerm({ ...draftTerm, content: e.target.value })} />
+              <input className="input grow" placeholder="释义，如 JumpServer 堡垒机" value={draftTerm.content} onChange={(e) => setDraftTerm({ ...draftTerm, content: e.target.value })} />
               <button className="btn small primary" onClick={() => addMemory('glossary', draftTerm, () => setDraftTerm({ title: '', content: '' }))} disabled={busy}>
                 <Plus size={11} /> 添加术语
               </button>

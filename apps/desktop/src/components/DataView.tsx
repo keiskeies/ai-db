@@ -753,10 +753,10 @@ export function DataView({ tab }: { tab: DataTab }) {
         </button>
         <input
           ref={fileRef}
+          className="file-input"
           type="file"
           accept=".csv,.tsv,.txt,.json,.xml,.xlsx,.xls"
-          style={{ display: 'none' }}
-          data-testid="data-import-file" 
+          data-testid="data-import-file"
           onChange={(e) => {
             const file = e.target.files?.[0];
             if (file) void importFile(file);

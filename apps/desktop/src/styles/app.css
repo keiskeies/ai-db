@@ -236,6 +236,9 @@ input[type='number']::-webkit-inner-spin-button, input[type='number']::-webkit-o
 /* 少数地方直接给 textarea 挂 .input：高度必须让位给 rows 和行高，否则内容会被 30px 裁掉 */
 textarea.input { height: auto; padding: 6px 9px; line-height: 1.5; font-family: var(--font-mono); }
 .textarea.grow { width: 100%; }
+.input.grow { flex: 1; }
+/* 选文件一律走自己的按钮：裸 <input type=file> 会画出系统的「选择文件」控件 */
+.file-input { display: none; }
 .input:focus, .select:focus, .textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .select { appearance: none; }
 /* 触发器 + 自绘弹层：原生 select 的下拉列表由系统绘制，主题和暗色面板对不上 */
@@ -838,6 +841,9 @@ details[open] > summary::before { transform: rotate(45deg); opacity: .7; }
 .memory-card .m-content { font-size: 11.5px; color: var(--text-secondary); line-height: 1.6; white-space: pre-wrap; }
 .memory-card .m-foot { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 10px; color: var(--text-muted); }
 .memory-form { border: 1px dashed var(--border-strong); border-radius: var(--radius-md); padding: 9px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 7px; }
+/* 记忆表单首行的控件比常规矮一档：三个必须等高，尺寸定在规则里而不是逐个内联 */
+.memory-form .row .input, .memory-form .row .select { height: 26px; font-size: 11px; }
+.memory-form .row .input[type='number'] { width: 70px; flex: 0 0 auto; }
 
 /* ---------- settings / palette / context ---------- */
 .settings-modal .modal-body { padding: 0; display: flex; min-height: 0; }

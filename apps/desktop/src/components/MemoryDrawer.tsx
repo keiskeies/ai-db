@@ -72,12 +72,12 @@ export function MemoryDrawer() {
         {showForm ? (
           <div className="memory-form">
             <div className="row gap-6">
-              <Select className="select" style={{ height: 26, fontSize: 11 }} value={kind} onChange={(e) => setKind(e.target.value as MemoryKind)}>
+              <Select className="select" value={kind} onChange={(e) => setKind(e.target.value as MemoryKind)}>
                 {MEMORY_KINDS.map((k) => (
                   <Option key={k} value={k}>{MEMORY_KIND_LABELS[k][locale]}</Option>
                 ))}
               </Select>
-              <Select className="select" style={{ height: 26, fontSize: 11 }} value={scope} onChange={(e) => setScope(e.target.value)}>
+              <Select className="select" value={scope} onChange={(e) => setScope(e.target.value)}>
                 <Option value="global">全局</Option>
                 <Option value="connection">当前连接</Option>
                 <Option value="database">当前库</Option>
@@ -85,7 +85,6 @@ export function MemoryDrawer() {
               <div className="spacer" />
               <input
                 className="input"
-                style={{ width: 70, height: 26 }}
                 type="number"
                 min={0}
                 max={1}

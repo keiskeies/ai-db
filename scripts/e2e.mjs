@@ -167,12 +167,43 @@ function freePort() {
 }
 
 /**
+ * 把活动连接切回内置示例库。
+ * 首页作用域和工具箱里的「数据库搜索」都跟着 activeConnectionId 走，而前面建过
+ * Mongo/Redis/DuckDB… 之后它就是活动连接（首页/搜索会停在那些库上），
+ * 因此需要显式回到 demo，后面的断言才有确定的作用域。
+ */
+async function activateDemoConnection(page) {
+  const row = page.locator('.conn-row', { hasText: 'Demo · Shop DB' });
+  await row.waitFor({ timeout: 15000 });
+  const isDemo = () =>
+    page.waitForFunction(
+      () => {
+        const el = document.querySelector('.conn-row.active');
+        return el ? (el.textContent ?? '').includes('Demo · Shop DB') : false;
+      },
+      null,
+      { timeout: 8000 },
+    ).then(() => true, () => false);
+  if (!(await isDemo())) {
+    await row.click();
+    await isDemo();
+  }
+}
+
+/**
  * 打开示例库的订单表。
  * 欢迎页改版后没有「打开示例库」卡片了，改成「当前库的家」里的一张表行；
  * 但用例的意图不变：从欢迎页直接进入 demo 的 orders 数据页。
+ * 首页只渲染当前库的表，所以先切回 demo；没有欢迎页标签时退回连接树上的表节点。
  */
 async function openDemoTable(page) {
-  await page.click('[data-testid="welcome-table-orders"]');
+  await activateDemoConnection(page);
+  const homeRow = page.locator('[data-testid="welcome-table-orders"]');
+  if (await homeRow.waitFor({ timeout: 10000 }).then(() => true, () => false)) {
+    await homeRow.click();
+    return;
+  }
+  await page.click('[title="TABLE orders"]');
 }
 
 /** 自定义 Select：点触发器 → 点弹层里对应 value 的项（原生 selectOption 只认真 select）。 */
@@ -1640,10 +1671,12 @@ if (DUCKDB_E2E) {
 }
 
 if (MONGO_PORT || REDIS_PORT || NEO4J_PORT || DM_PORT || QDRANT_PORT || ES_PORT || WEAVIATE_PORT || DUCKDB_E2E || TDENGINE_PORT || FALKORDB_PORT || INFLUXDB_PORT || ARANGO_PORT || TIMESCALE_PORT) {
-  // 恢复初始工作区：bootstrap 会把 active connection 指回 demo，并重新出现欢迎页
+  // 重新载入后回到初始工作区。注意 bootstrap 优先用 localStorage 里的 activeConnectionId，
+  // 联机段建过连接后它就是活动连接，所以这里显式切回 demo，下面的搜索/首页断言才有确定作用域。
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
   await page.waitForTimeout(800);
+  await activateDemoConnection(page);
 }
 
 await page.click('[data-testid="ribbon"] button[title="视图"]');
@@ -2838,6 +2871,26 @@ await page.click('[data-testid="agent-memory"]');
 await page.waitForSelector('[data-testid="memory-drawer"]', { timeout: 10000 });
 await page.waitForSelector('[data-testid="memory-drawer"] .memory-card', { timeout: 15000 }).catch(() => undefined);
 check('memory drawer lists memories', (await page.locator('[data-testid="memory-drawer"] .memory-card').count()) > 0);
+// 记忆表单首行的三个控件等高：尺寸写在容器规则里，不是三个控件各写一遍内联 style
+await page.locator('[data-testid="memory-drawer"] .drawer-head .icon-btn').first().click();
+await page.waitForSelector('.memory-form .input[type="number"]', { timeout: 5000 });
+const formRow = await page.evaluate(() => {
+  const row = document.querySelector('.memory-form .row');
+  if (!row) return null;
+  const controls = [...row.querySelectorAll('.input, .select')].map((el) => ({
+    height: Math.round(el.getBoundingClientRect().height),
+    fontSize: getComputedStyle(el).fontSize,
+    inline: el.getAttribute('style'),
+  }));
+  const sized = controls.length > 0 && controls.every((c) => c.height === controls[0].height && c.fontSize === controls[0].fontSize);
+  const bare = controls.every((c) => c.inline === null);
+  return { controls, sized, bare };
+});
+check(
+  '记忆表单首行控件由容器规则统一尺寸',
+  formRow && formRow.sized && formRow.bare && formRow.controls.length >= 3,
+  JSON.stringify(formRow?.controls),
+);
 await page.screenshot({ path: join(shots, 'desktop-memory.png') });
 await page.locator('[data-testid="memory-drawer"] .drawer-head .icon-btn').last().click();
 await page.waitForTimeout(400);

@@ -1676,10 +1676,10 @@ export function AgentPanel() {
           <div className="composer-tools" ref={pillBarRef}>
             <input
               ref={fileInputRef}
+              className="file-input"
               type="file"
               accept="image/png,image/jpeg,image/gif,image/webp"
               multiple
-              style={{ display: 'none' }}
               onChange={(e) => {
                 void uploadImages(Array.from(e.target.files ?? []));
                 e.target.value = '';

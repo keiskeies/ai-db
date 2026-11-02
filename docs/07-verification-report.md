@@ -386,3 +386,25 @@ Expo Web 构建在 390×844 视口通过：配对页、配对码真实兑换、A
 | 截图 | E2E 输出 `desktop-agent-tools.png` | ✅ |
 
 回归：docs 335/335、core 153/153、gateway 188 pass / 65 skip（共 253）、E2E 201/201，控制台错误 0。
+
+## 15. 表单控件由应用绘制（2026-11-02）
+
+用户从「AI 助手的库表选择框难看」出发，追问「还有哪些表单没用组件美化」。审计结果是一整类问题：系统控件只染 `accent-color`，底色 / 描边 / 弹层仍由系统绘制，换肤跟不上——暗色面板上复选框是系统白底、`number` 带浅色 spinner、下拉与建议列表弹层始终是系统白、`details` 的三角不吃主题，`confirm` / `prompt` 更是把主题和语言整个甩开。修复按整类做，不做单点补丁。
+
+| 验证项 | 方式 | 结果 |
+|---|---|---|
+| 原生下拉清零 | `verify:controls`：`.tsx` 里不允许出现 `select` / `option` / `optgroup` / `datalist` 标签，CSS 里不允许留失效的 `select` 元素选择器 | ✅ |
+| 自绘下拉在场 | E2E：连接表单 41 引擎按模型/系列分组、`data-value` 可读、选中打勾 | ✅ |
+| 可输入建议列表 | E2E（Mongo 联机）：集合输入点开后 `nativeOptions=0`、建议项 >0、弹层底色 avg 33（跟暗色面板）、点建议填进输入框 | ✅ |
+| 复选 / 单选接管 | E2E 暗 + 浅两套：`appearance: none`、未勾选底色跟面板（暗 avg<90 / 浅 avg>180）、勾选涂品牌色并由 `::after` 画对勾 | ✅ |
+| 数字输入 | E2E：`appearance: textfield`，系统 spinner 不再出现 | ✅ |
+| 折叠块 | E2E：`list-style: none` + `display: flex`，箭头由 `::before` 画边框角，展开/收起两个矩阵不同 | ✅ |
+| 系统对话框清零 | `verify:controls`：`.tsx` 里无裸 `alert(` / `confirm(` / `prompt(`；E2E：确认框底色 avg 33、危险按钮用危险色、按钮写动作本身、关掉不删数据、不留残余 | ✅ |
+| 文件选择框 | `verify:controls`：`<input type=file>` 必须挂 `.file-input`，且不允许用内联 `display:none` 藏控件 | ✅ |
+| 尺寸变体走类名 | E2E：记忆表单首行三个控件高度/字号一致且无内联 `style`（26px / 11px 由 `.memory-form .row` 规则给出） | ✅ |
+| token 引用有效 | `verify:controls`：所有 `var(--x)` 都有定义（修掉引用不存在的 `--border` / `--bg-inset`） | ✅ |
+| 截图 | `desktop-controls.png` / `desktop-controls-light.png` / `desktop-confirm.png` / `desktop-agent-tools.png` | ✅ |
+
+顺带修掉一个真 bug：`ConnectionModal` 关闭后组件仍挂载、状态留在上一次尝试上，重开「新建连接」会先渲染出上次的引擎（如 mysql + 只读已勾选）再退回默认，造成可见闪烁。改成外壳读 editor、内部 `ConnectionForm` 用 `key` 直接从 editor 初始化，删掉那段 `useEffect` 重置。
+
+回归：`verify:controls` 通过、docs 契约 382/382、typecheck 全绿、E2E 基线 254/254（配 `AIDB_TEST_MONGO_PORT` 追加为 265/265），控制台错误 0。

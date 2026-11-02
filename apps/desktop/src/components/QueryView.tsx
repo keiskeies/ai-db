@@ -737,9 +737,9 @@ ${text}
             </button>
             <input
               ref={fileInputRef}
+              className="file-input"
               type="file"
               accept=".sql,text/plain"
-              style={{ display: 'none' }}
               onChange={(e) => {
                 const file = e.target.files?.[0];
                 if (file) void openSqlFile(file);

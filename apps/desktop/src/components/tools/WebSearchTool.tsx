@@ -345,7 +345,7 @@ export function WebSearchTool() {
           <div className="search-section">
             <div className="search-section-title"><Search size={12} /> 立即测试</div>
             <div className="row" style={{ gap: 6 }}>
-              <input className="input" style={{ flex: 1 }} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="输入查询，例如 OpenAI latest news" onKeyDown={(e) => { if (e.key === 'Enter') void run(); }} />
+              <input className="input grow" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="输入查询，例如 OpenAI latest news" onKeyDown={(e) => { if (e.key === 'Enter') void run(); }} />
               <button className="btn primary" onClick={() => void run()} disabled={running}>{running ? <Loader2 size={12} className="spin" /> : <Search size={12} />} 搜索</button>
             </div>
             {reports.length ? (

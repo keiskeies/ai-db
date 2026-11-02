@@ -237,8 +237,7 @@ export function McpTool() {
                 </div>
                 <div className="row" style={{ gap: 6 }}>
                   <input
-                    className="input"
-                    style={{ flex: 1 }}
+                    className="input grow"
                     value={drafts[server.id] ?? ''}
                     placeholder={definition?.argsPlaceholder ?? ''}
                     onChange={(e) => setDrafts((current) => ({ ...current, [server.id]: e.target.value }))}

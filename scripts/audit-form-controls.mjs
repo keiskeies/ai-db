@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// 桌面端的表单控件全部由应用自己绘制。这三类漂移都只在运行时表现为
+// 桌面端的表单控件全部由应用自己绘制。这些漂移都只在运行时表现为
 // “某个控件突然变成系统样式”，e2e 覆盖不到的面板（如表设计器）更是完全静默。
 const src = process.argv[2] ?? fileURLToPath(new URL('../apps/desktop/src', import.meta.url));
 const problems = [];
@@ -73,9 +73,41 @@ walk(src, (p, text) => {
   }
 });
 
+// 5) 隐藏的文件选择框统一挂 .file-input：直接内联 display:none 会在别处漂移，
+//    而漏掉隐藏配置的 <input type=file> 会在页面上画出系统的「选择文件」控件。
+// 属性里有箭头函数（onChange={(e) => …}），按第一个 > 截断会读错，改成按括号深度找标签结尾。
+function formTags(text) {
+  const out = [];
+  for (const m of text.matchAll(/<(input|textarea)\b/g)) {
+    let i = m.index + m[0].length;
+    let depth = 0;
+    let end = -1;
+    for (; i < text.length; i++) {
+      const ch = text[i];
+      if ('{(['.includes(ch)) depth++;
+      else if ('})]'.includes(ch)) depth--;
+      else if (ch === '>' && depth === 0) { end = i; break; }
+      else if (ch === '/' && text[i + 1] === '>' && depth === 0) { end = i; break; }
+    }
+    if (end > 0) out.push({ index: m.index, props: text.slice(m.index + m[0].length, end) });
+  }
+  return out;
+}
+walk(src, (p, text) => {
+  if (!p.endsWith('.tsx')) return;
+  for (const tag of formTags(text)) {
+    if (/style=\{\{[^}]*display:\s*'none'/.test(tag.props)) {
+      problems.push(`${rel(p)}:${line(text, tag.index)} 用内联 display:none 隐藏控件（挂 .file-input / 用类名）`);
+    }
+    if (/type=["']file["']/.test(tag.props) && !/className=["']file-input["']/.test(tag.props)) {
+      problems.push(`${rel(p)}:${line(text, tag.index)} <input type=file> 未隐藏，会露出系统选文件控件（挂 .file-input）`);
+    }
+  }
+});
+
 if (problems.length) {
   console.error(`表单控件审计发现 ${problems.length} 处问题:`);
   for (const p of problems) console.error('  ' + p);
   process.exit(1);
 }
-console.log('表单控件审计通过：token 全部有定义、无失效元素选择器、系统控件已接管、无系统对话框');
+console.log('表单控件审计通过：token 全部有定义、无失效元素选择器、系统控件已接管、无系统对话框、无裸文件选择框');

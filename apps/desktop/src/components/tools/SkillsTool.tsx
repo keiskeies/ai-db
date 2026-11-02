@@ -396,9 +396,9 @@ export function SkillsTool() {
             </button>
             <input
               ref={fileRef}
+              className="file-input"
               type="file"
               accept=".zip"
-              style={{ display: 'none' }}
               onChange={(e) => {
                 const file = e.target.files?.[0];
                 if (file) void importZip(file);

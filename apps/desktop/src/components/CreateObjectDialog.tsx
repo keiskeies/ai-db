@@ -137,8 +137,7 @@ export function CreateObjectDialog({
           {fields.map((field, index) => (
             <div key={index} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
               <input
-                className="input"
-                style={{ flex: 1 }}
+                className="input grow"
                 value={field.name}
                 placeholder="字段名"
                 onChange={(event) => {
