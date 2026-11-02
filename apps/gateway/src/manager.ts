@@ -42,6 +42,7 @@ import {
 } from '@aidb/core';
 import type { GatewayConfig } from './config';
 import { createDriver, DbError, type Driver } from './drivers';
+import { GatewayEvents, type SchemaChangeCause } from './events';
 import { normalizeMql } from './drivers/mongodb';
 import type { CreateRedisKeyInput, RedisKeyDriver } from './drivers/types';
 import { supportsCollectionIndexes, supportsDocumentRead, supportsDocumentWrite, supportsFieldAdd, supportsKeyDetail, supportsLineProtocol, supportsObjectCreate, supportsStructuredQuery, supportsTransaction, supportsVectorSearch, type TransactionDriver } from './drivers/types';
@@ -83,6 +84,8 @@ export class ConnectionManager {
     private store: Store,
     private config: GatewayConfig,
     private settings: () => AppSettings,
+    // 可缺省：多个测试直接三参构造，事件总线只是通知通道，没有它功能照常。
+    private events?: GatewayEvents,
   ) {
     this.txIdleMs = config.txIdleMs && config.txIdleMs > 0 ? config.txIdleMs : ConnectionManager.TX_IDLE_MS;
     this.txTimer = setInterval(() => {
@@ -422,7 +425,7 @@ export class ConnectionManager {
     }
     const started = Date.now();
     const result = await driver.deleteKeys(names, opts.database ?? conn.database);
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -451,7 +454,7 @@ export class ConnectionManager {
     }
     const started = Date.now();
     const result = await driver.dropIndex(name.trim(), opts.database ?? conn.database);
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -488,7 +491,7 @@ export class ConnectionManager {
       { ...input, collection: input.collection.trim() },
       { database: opts.database, timeoutMs: opts.timeoutMs },
     );
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -523,7 +526,7 @@ export class ConnectionManager {
       database: opts.database,
       timeoutMs: opts.timeoutMs,
     });
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -562,7 +565,7 @@ export class ConnectionManager {
       { object: input.object.trim(), name: input.name.trim(), type: input.type?.trim() || 'text' },
       { database: opts.database, timeoutMs: opts.timeoutMs },
     );
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -612,7 +615,7 @@ export class ConnectionManager {
     if (!to.trim()) throw new DbError('目标键名不能为空', { code: 'REDIS_RENAME' });
     const started = Date.now();
     const result = await driver.renameKey(from, to, opts.database ?? conn.database);
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -629,7 +632,7 @@ export class ConnectionManager {
     if (!input.key?.trim()) throw new DbError('键名不能为空', { code: 'REDIS_KEY' });
     const started = Date.now();
     const result = await driver.createKey(input, opts.database ?? conn.database);
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -659,7 +662,7 @@ export class ConnectionManager {
     const { conn, driver } = await this.keyDriver(connectionId);
     const started = Date.now();
     const result = await driver.deleteHashField(key, field, opts.database ?? conn.database);
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -689,7 +692,7 @@ export class ConnectionManager {
     const { conn, driver } = await this.keyDriver(connectionId);
     const started = Date.now();
     const result = await driver.removeKeyMember(key, member, opts.database ?? conn.database);
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -748,7 +751,7 @@ export class ConnectionManager {
     }
     const started = Date.now();
     const result = await driver.writeLineProtocol(lines, opts.database ?? conn.database, opts.timeoutMs);
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -787,7 +790,7 @@ export class ConnectionManager {
       { name: input.name.trim(), dimension: input.dimension, distance: input.distance, fields: input.fields ?? [], edge: input.edge },
       { database: opts.database, timeoutMs: opts.timeoutMs },
     );
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -815,7 +818,7 @@ export class ConnectionManager {
     }
     const started = Date.now();
     const result = await driver.dropObject(name, { database: opts.database, timeoutMs: opts.timeoutMs });
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -1193,7 +1196,13 @@ export class ConnectionManager {
     await Promise.all([...this.clients.entries()].map(async ([id]) => this.close(id)));
   }
 
-  invalidate(connectionId: string): void {
+  invalidate(connectionId: string, cause: SchemaChangeCause = 'user'): void {
     this.store.clearSchemaCache(connectionId);
+    this.events?.emitSchemaChanged({
+      type: 'schema_changed',
+      connectionId,
+      cause,
+      at: new Date().toISOString(),
+    });
   }
 }

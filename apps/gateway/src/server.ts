@@ -17,6 +17,7 @@ import { SkillWorker } from './skillWorker';
 import { hashToken, safeEqual } from './crypto';
 import { loadConfig, type GatewayConfig } from './config';
 import { ConnectionManager } from './manager';
+import { GatewayEvents } from './events';
 import { ToolExecutor } from './executor';
 import { ensureDemoDatabase } from './seed';
 import { createApiRouter } from './routes';
@@ -30,6 +31,7 @@ export interface GatewayInstance {
   config: GatewayConfig;
   store: Store;
   manager: ConnectionManager;
+  events: GatewayEvents;
   host: AgentHost;
   skills: SkillStore;
   skillWorker: SkillWorker;
@@ -48,7 +50,8 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
   ensureDemoDatabase(config, store);
   seedBuiltinMcpServers(store);
   bindSearchStore(store);
-  const manager = new ConnectionManager(store, config, () => store.getSettings());
+  const events = new GatewayEvents();
+  const manager = new ConnectionManager(store, config, () => store.getSettings(), events);
   const skills = new SkillStore(config.home);
   skills.seedBuiltins();
   const skillRunner = new SkillRunner(skills, config.home, (skillId, names) => store.getSkillSecrets(skillId, names));
@@ -203,6 +206,15 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
     });
   });
 
+  // 结构变更广播给所有在线客户端。放在 WS 层而不是路由层：
+  // 客户端可能通过 /api/query、/api/ddl/execute、Agent 工具或工具箱改结构，
+  // 关心的是「结构变了」这个事实，与谁改的无关。
+  events.onSchemaChanged((event) => {
+    for (const client of wss.clients) {
+      if (client.readyState === 1) client.send(JSON.stringify(event));
+    }
+  });
+
   const close = async (): Promise<void> => {
     scheduler.stop();
     shutdownMcpClients();
@@ -218,5 +230,5 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
     store.close();
   };
 
-  return { app, server, wss, config, store, manager, host, skills, skillWorker, commands, scheduler, close };
+  return { app, server, wss, config, store, manager, events, host, skills, skillWorker, commands, scheduler, close };
 }
