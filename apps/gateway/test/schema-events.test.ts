@@ -374,3 +374,104 @@ test('纯数据变更仍然清掉 schema 缓存（行数估算要能刷新）', 
   const after = gateway.store.getSchemaCache(conn.id, gateway.store.getConnection(conn.id).database ?? 'main');
   assert.equal(after, undefined, '不广播不等于可以留脏缓存：缓存必须被清掉');
 });
+
+test('SQL Server 走 manager.query 执行 EXEC sp_rename 会发事件', async () => {
+  // 用假驱动替掉真实 SQL Server：本条要验的是「SQL Server 这类语句进入
+  // manager.query() 后会不会被判为结构变更并广播」，不是驱动本身对不对。
+  // 没有这个用例，SQL Server 的工具箱重命名路径就没有端到端覆盖 —— 上一轮
+  // 正是因为判定比 classifySql 更窄，这条路径既不广播也不清缓存。
+  const sqlserver = gateway.store.createConnection({
+    name: 'e2e-sqlserver',
+    engine: 'sqlserver',
+    host: '127.0.0.1',
+    port: 1433,
+    database: 'master',
+    username: 'sa',
+  });
+
+  const ran: string[] = [];
+  const fakeDriver = {
+    engine: 'sqlserver' as const,
+    test: async () => ({ ok: true, latencyMs: 1 }),
+    listDatabases: async () => ['master'],
+    describe: async () => [],
+    run: async (sql: string) => {
+      ran.push(sql);
+      return { columns: [], rows: [], rowCount: 0, durationMs: 1 };
+    },
+    runParams: async () => ({ columns: [], rows: [], rowCount: 0, durationMs: 1 }),
+    close: async () => undefined,
+  };
+  // 注入到 manager 的驱动缓存，绕开真实建连。
+  (gateway.manager as any).clients.set(sqlserver.id, { driver: fakeDriver, close: async () => undefined });
+
+  try {
+    const events = await collect(async () => {
+      const res = await api('/query', {
+        method: 'POST',
+        body: JSON.stringify({ connectionId: sqlserver.id, sql: "EXEC sp_rename 'dbo.orders','orders_v2'" }),
+      });
+      assert.equal(res.status, 200, JSON.stringify(res.body));
+    });
+    assert.deepEqual(ran, ["EXEC sp_rename 'dbo.orders','orders_v2'"], '语句应真的交给驱动执行');
+    assert.equal(events.length, 1, `SQL Server 重命名必须发事件，实际 ${events.length}`);
+    assert.equal(events[0].connectionId, sqlserver.id);
+  } finally {
+    (gateway.manager as any).clients.delete(sqlserver.id);
+    gateway.store.deleteConnection(sqlserver.id);
+  }
+});
+
+test('MySQL 事务内 DDL 立刻发事件（DDL 隐式提交，等 COMMIT 就太晚了）', async () => {
+  // MySQL/MariaDB/Oracle/DM 的 DDL 会隐式提交当前事务，执行完就已对别的会话可见。
+  // 若按「等 COMMIT 再发」处理，用户会一直看着旧结构，直到他敲 COMMIT 或手动刷新。
+  const mysql = gateway.store.createConnection({
+    name: 'e2e-mysql',
+    engine: 'mysql',
+    host: '127.0.0.1',
+    port: 3306,
+    database: 'demo',
+    username: 'root',
+  });
+
+  const ran: string[] = [];
+  const fakeDriver = {
+    engine: 'mysql' as const,
+    test: async () => ({ ok: true, latencyMs: 1 }),
+    listDatabases: async () => ['demo'],
+    describe: async () => [],
+    run: async (sql: string) => {
+      ran.push(sql);
+      return { columns: [], rows: [], rowCount: 0, durationMs: 1 };
+    },
+    runParams: async () => ({ columns: [], rows: [], rowCount: 0, durationMs: 1 }),
+    close: async () => undefined,
+    beginTransaction: async () => undefined,
+    commitTransaction: async () => undefined,
+    rollbackTransaction: async () => undefined,
+    runInTransaction: async (_sid: string, sql: string) => {
+      ran.push(sql);
+      return { columns: [], rows: [], rowCount: 0, durationMs: 1 };
+    },
+  };
+  (gateway.manager as any).clients.set(mysql.id, { driver: fakeDriver, close: async () => undefined });
+
+  const sessionId = 'e2e-mysql-tx';
+  try {
+    await api('/tx/begin', { method: 'POST', body: JSON.stringify({ connectionId: mysql.id, sessionId }) });
+
+    const events = await collect(async () => {
+      const res = await api('/query', {
+        method: 'POST',
+        body: JSON.stringify({ connectionId: mysql.id, sql: 'ALTER TABLE orders ADD COLUMN note TEXT', sessionId }),
+      });
+      assert.equal(res.status, 200, JSON.stringify(res.body));
+    });
+
+    assert.deepEqual(ran, ['ALTER TABLE orders ADD COLUMN note TEXT'], '事务内语句应走 runInTransaction');
+    assert.equal(events.length, 1, `MySQL 隐式提交的 DDL 必须立刻发事件，实际 ${events.length}`);
+  } finally {
+    (gateway.manager as any).clients.delete(mysql.id);
+    gateway.store.deleteConnection(mysql.id);
+  }
+});
