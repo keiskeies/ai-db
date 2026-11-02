@@ -843,6 +843,8 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 .approval-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
 .approval-buttons .danger-text { color: var(--danger); }
 .risk-banner { border-radius: var(--radius-md); border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent); background: var(--danger-soft); color: var(--danger); padding: 8px 10px; font-size: 11.5px; line-height: 1.6; }
+.designer-conflict { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; }
+.designer-conflict .btn { flex: none; }
 
 /* ---------- status / toasts ---------- */
 .statusbar {

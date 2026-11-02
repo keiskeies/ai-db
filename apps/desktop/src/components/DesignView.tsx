@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import type { ColumnInfo, ForeignKeyInfo, IndexInfo, TableInfo } from '@aidb/core';
 import { api } from '../lib/api';
+import { tableSignature } from '../lib/schemaSignature';
 import { useApp, type Tab } from '../store';
 
 type DesignTab = Extract<Tab, { kind: 'design' }>;
@@ -245,12 +246,29 @@ export function DesignView({ tab }: { tab: DesignTab }) {
 
   const conn = connections.find((c) => c.id === tab.connectionId);
   const engine = conn?.engine ?? 'sqlite';
-  const tableInfo: TableInfo | undefined = (schemas ?? []).flatMap((s) => s.tables).find((tbl) => tbl.name === tab.table);
+  // 必须按 tab 自己的库/模式取表：跨全部库取首个同名表时，MySQL 两库的同名 orders
+  // 会取到另一张，接下来的"签名变了就静默重置"会用错结构覆盖编辑器内容，
+  // apply() 还会对着错对象生成 DDL。
+  const tableInfo: TableInfo | undefined = useMemo(() => {
+    const all = schemas ?? [];
+    if (!tab.database) return all.flatMap((item) => item.tables).find((tbl) => tbl.name === tab.table);
+    // 有库名却只在别的库里找到同名表，宁可当作不存在，也不要拿错表覆盖编辑态。
+    return all
+      .filter((item) => item.name === tab.database)
+      .flatMap((item) => item.tables)
+      .find((tbl) => tbl.name === tab.table);
+  }, [schemas, tab.database, tab.table]);
 
   const [designerTab, setDesignerTab] = useState<DesignerTab>('fields');
   const [tableName, setTableName] = useState(tab.table ?? '');
   const [tableComment, setTableComment] = useState('');
   const [originalComment, setOriginalComment] = useState('');
+  const [originalColumns, setOriginalColumns] = useState<EditableColumn[]>([]);
+  const [originalIndexes, setOriginalIndexes] = useState<EditableIndex[]>([]);
+  const [originalForeignKeys, setOriginalForeignKeys] = useState<EditableFk[]>([]);
+  const [pendingReload, setPendingReload] = useState(false);
+  const [conflictSig, setConflictSig] = useState('');
+  const baselineSig = useRef<string>('');
   const [columns, setColumns] = useState<EditableColumn[]>(() => (tab.table ? [] : defaultColumns(engine)));
   const [indexes, setIndexes] = useState<EditableIndex[]>([]);
   const [foreignKeys, setForeignKeys] = useState<EditableFk[]>([]);
@@ -267,6 +285,49 @@ export function DesignView({ tab }: { tab: DesignTab }) {
   const initializedFor = useRef<string>('');
   const loadedAux = useRef<Record<string, boolean>>({});
 
+  // 把结构与基线一起落下。首次载入与"静默跟随外部变更"共用同一个函数，
+  // 保证两处一致的基线，否则 dirty 会误判。
+  const applyTableInfo = (info: TableInfo) => {
+    setTableName(info.name);
+    setColumns((info.columns ?? []).map(toColumn));
+    setIndexes((info.indexes ?? []).map(toIndex));
+    setForeignKeys((info.foreignKeys ?? []).map(toFk));
+    setOriginalColumns((info.columns ?? []).map(toColumn));
+    setOriginalIndexes((info.indexes ?? []).map(toIndex));
+    setOriginalForeignKeys((info.foreignKeys ?? []).map(toFk));
+    setTableComment(info.comment ?? '');
+    setOriginalComment(info.comment ?? '');
+    setSelColumn(0);
+    setSelIndex(0);
+    setSelFk(0);
+    loadedAux.current = {};
+  };
+
+  // 编辑态是否偏离了基线。与下面那个 dirty（是否有待执行的 DDL 操作）语义不同：
+  // 这个只关心"用户改没改过"，用于决定外部变更到来时能不能静默重置。
+  const baselineDirty = useMemo(() => {
+    if (!tab.table || !baselineSig.current) return false;
+    const shape = (items: EditableColumn[]) =>
+      items.map((column) => [
+        column.name,
+        composeType(column),
+        String(column.nullable),
+        column.defaultValue,
+        column.comment,
+        String(column.primaryKey),
+        String(column.autoIncrement),
+        column.removed ? 'x' : '',
+      ]);
+    const shapeIndex = (items: EditableIndex[]) =>
+      items.map((index) => [index.name, index.columns, String(index.unique), index.comment, index.removed ? 'x' : '']);
+    const shapeFk = (items: EditableFk[]) =>
+      items.map((fk) => [fk.name, fk.columns, fk.refTable, fk.refColumns, fk.onDelete, fk.onUpdate, fk.removed ? 'x' : '']);
+    return (
+      JSON.stringify([shape(columns), shapeIndex(indexes), shapeFk(foreignKeys), tableComment]) !==
+      JSON.stringify([shape(originalColumns), shapeIndex(originalIndexes), shapeFk(originalForeignKeys), originalComment])
+    );
+  }, [columns, indexes, foreignKeys, tableComment, originalColumns, originalIndexes, originalForeignKeys, originalComment]);
+
   useEffect(() => {
     if (!tab.table) {
       if (initializedFor.current !== `new:${tab.id}`) {
@@ -275,8 +336,13 @@ export function DesignView({ tab }: { tab: DesignTab }) {
         setColumns(defaultColumns(engine));
         setIndexes([]);
         setForeignKeys([]);
+        setOriginalColumns([]);
+        setOriginalIndexes([]);
+        setOriginalForeignKeys([]);
         setTableComment('');
         setOriginalComment('');
+        baselineSig.current = '';
+        setPendingReload(false);
       }
       return;
     }
@@ -284,19 +350,30 @@ export function DesignView({ tab }: { tab: DesignTab }) {
       if (!schemas) void loadSchema(tab.connectionId);
       return;
     }
-    if (initializedFor.current === `table:${tab.table}`) return;
-    initializedFor.current = `table:${tab.table}`;
-    setTableName(tableInfo.name);
-    setColumns((tableInfo.columns ?? []).map(toColumn));
-    setIndexes((tableInfo.indexes ?? []).map(toIndex));
-    setForeignKeys((tableInfo.foreignKeys ?? []).map(toFk));
-    setTableComment(tableInfo.comment ?? '');
-    setOriginalComment(tableInfo.comment ?? '');
-    setSelColumn(0);
-    setSelIndex(0);
-    setSelFk(0);
-    loadedAux.current = {};
-  }, [tab.table, tab.connectionId, tab.id, tableInfo, schemas, engine, loadSchema]);
+
+    const nextSig = tableSignature(tableInfo);
+
+    // 首次载入：直接以库里的结构建基线。
+    if (initializedFor.current !== `table:${tab.table}`) {
+      initializedFor.current = `table:${tab.table}`;
+      baselineSig.current = nextSig;
+      applyTableInfo(tableInfo);
+      setPendingReload(false);
+      return;
+    }
+
+    // 之后每次 tableInfo 变化（loadSchema 会替换整个数组）都比一次签名。
+    if (nextSig === baselineSig.current) return;
+    if (!baselineDirty) {
+      // 没改过东西：静默跟随新结构，用户看不到闪烁。
+      baselineSig.current = nextSig;
+      applyTableInfo(tableInfo);
+      return;
+    }
+    // 改过但没保存：不动编辑态，只挂横幅等用户决定。
+    setConflictSig(nextSig);
+    setPendingReload(true);
+  }, [tab.table, tab.connectionId, tab.id, tableInfo, schemas, engine, loadSchema, baselineDirty]);
 
   const activeColumns = useMemo(() => columns.filter((c) => !c.removed && c.name.trim()), [columns]);
   const activeIndexes = useMemo(() => indexes.filter((i) => !i.removed && i.name.trim() && toList(i.columns).length), [indexes]);
@@ -799,6 +876,36 @@ export function DesignView({ tab }: { tab: DesignTab }) {
           </button>
         ))}
       </div>
+
+      {pendingReload ? (
+        <div className="risk-banner designer-conflict" data-testid="designer-conflict">
+          <span>此表已在别处被修改。</span>
+          <button
+            className="btn small"
+            data-testid="designer-conflict-reload"
+            onClick={() => {
+              if (tableInfo) applyTableInfo(tableInfo);
+              baselineSig.current = conflictSig;
+              setPendingReload(false);
+            }}
+          >
+            重新加载
+          </button>
+          <button
+            className="btn small"
+            data-testid="designer-conflict-keep"
+            onClick={() => {
+              // 把基线推进到对方的版本：同一次变更不再反复提示。
+              // 代价是继续基于旧结构编辑，apply() 可能与新结构冲突——由数据库报错兜底，
+              // 好过静默丢掉用户填了一半的内容。
+              baselineSig.current = conflictSig;
+              setPendingReload(false);
+            }}
+          >
+            保留我的修改
+          </button>
+        </div>
+      ) : null}
 
       {error ? <div className="risk-banner designer-error">{error}</div> : null}
 
