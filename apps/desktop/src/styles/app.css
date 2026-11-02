@@ -143,6 +143,19 @@ input[type='number']::-webkit-inner-spin-button, input[type='number']::-webkit-o
 .conn-row:hover { background: var(--bg-hover); color: var(--text-primary); }
 .conn-row.active { background: var(--accent-soft); color: var(--text-primary); }
 .conn-color { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 7px; }
+.conn-engine { width: 16px; height: 16px; flex: 0 0 16px; display: inline-grid; place-items: center; line-height: 0; }
+/* 官方 logo 统一放进 16px 方形视觉框内等比 contain，不拉伸、不撑高行 */
+/* 暗底整体提亮一档，避免 PostgreSQL 深蓝、MongoDB 深绿这类品牌色沉进面板 */
+.conn-engine img { display: block; width: 100%; height: 100%; object-fit: contain; filter: brightness(1.3) saturate(1.1); }
+/* 品牌本身接近黑色的，暗色下走官方白色变体（单色化），否则完全看不见 */
+.conn-engine-mono img { filter: brightness(0) invert(1); }
+/* 亮底：略压暗 + 极细深色描边，黄色系（DuckDB/ClickHouse）在白底上不会糊成一片 */
+[data-theme='light'] .conn-engine img { filter: brightness(.82) saturate(1.08) drop-shadow(0 0 .35px rgba(0, 0, 0, .6)); }
+/* 亮色系品牌（DuckDB/ClickHouse/ArangoDB/金仓系浅金）在白底上再压暗一档 */
+[data-theme='light'] .conn-engine-bright img { filter: brightness(.62) saturate(1.25) drop-shadow(0 0 .35px rgba(0, 0, 0, .6)); }
+/* 没有官方 mark 的：品牌色 + 首字母圆角徽标 */
+.conn-engine-letter { border-radius: 3px; background: color-mix(in srgb, currentColor 20%, transparent); font-size: 9px; font-weight: 700; }
+.conn-engine-letter > span { line-height: 1; }
 .conn-name { font-size: 12.5px; overflow: visible; white-space: nowrap; flex: 1; }
 .conn-toggle { width: 16px; display: grid; place-items: center; color: var(--text-muted); transition: transform .15s; }
 .conn-toggle.open { transform: rotate(90deg); }

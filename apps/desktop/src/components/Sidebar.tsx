@@ -37,6 +37,7 @@ import { api } from '../lib/api';
 import { useApp, type ContextMenuItem } from '../store';
 import { desktopBridge } from '../lib/desktop';
 import { deliverExport } from '../lib/exportDelivery';
+import { EngineIcon } from './EngineIcon';
 import { TableOpsDialog, type TableDialogKind } from './TableOpsDialog';
 import { DatabaseOpsDialog, type DatabaseDialogKind } from './DatabaseOpsDialog';
 import { CreateObjectDialog } from './CreateObjectDialog';
@@ -662,6 +663,7 @@ export function Sidebar() {
                     data-testid={`connection-${conn.id}`}
                   >
                     <ChevronRight size={13} className={`conn-toggle ${isOpen ? 'open' : ''}`} onClick={(e) => { e.stopPropagation(); toggleConnection(conn.id); }} />
+                    <EngineIcon engine={conn.engine} />
                     <span className="conn-color" style={{ background: COLORS[conn.color] ?? COLORS.blue }} />
                     <span className="conn-name">{conn.name}</span>
                     {conn.environment === 'prod' ? <span className="env-pill prod" style={{ fontSize: 8, padding: '0 4px' }}>PROD</span> : null}
