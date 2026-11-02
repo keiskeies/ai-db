@@ -363,7 +363,7 @@ test('纯数据变更仍然清掉 schema 缓存（行数估算要能刷新）', 
   const conn = gateway.store.listConnections()[0];
   // 先让缓存就位
   await fetch(`${base}/api/connections/${conn.id}/schema`, { headers: { authorization: `Bearer ${TOKEN}` } });
-  const before = gateway.store.getSchemaCache(conn.id, gateway.store.getConnection(conn.id).database ?? 'main');
+  const before = gateway.store.getSchemaCache(conn.id, gateway.store.getConnection(conn.id)?.database ?? 'main');
   assert.ok(before, '前提：缓存应已写入');
 
   await api('/import', {
@@ -371,7 +371,7 @@ test('纯数据变更仍然清掉 schema 缓存（行数估算要能刷新）', 
     body: JSON.stringify({ connectionId: conn.id, table: 'quiet_probe', csv: 'id,note\n3,cc\n', hasHeader: true }),
   });
 
-  const after = gateway.store.getSchemaCache(conn.id, gateway.store.getConnection(conn.id).database ?? 'main');
+  const after = gateway.store.getSchemaCache(conn.id, gateway.store.getConnection(conn.id)?.database ?? 'main');
   assert.equal(after, undefined, '不广播不等于可以留脏缓存：缓存必须被清掉');
 });
 
