@@ -230,7 +230,6 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
         timeoutMs: store.getSettings().queryTimeoutMs,
         actor: 'user',
       });
-      manager.invalidate(connectionId);
       store.addAudit({
         actor: 'user',
         connectionId,
@@ -264,7 +263,6 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
         createMissing: input.createMissing !== false,
         limit: typeof input.limit === 'number' ? input.limit : undefined,
       });
-      manager.invalidate(targetId);
       store.addAudit({
         actor: 'user',
         connectionId: targetId,
@@ -318,7 +316,6 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
           onEvent: send,
           shouldAbort: () => closed,
         });
-        manager.invalidate(targetId);
       } catch (err: any) {
         failure = String(err?.message ?? '传输失败');
         if (!(err instanceof TransferAbortedError)) {
@@ -538,7 +535,6 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
         timeoutMs: store.getSettings().queryTimeoutMs,
         actor: 'user',
       });
-      manager.invalidate(backup.connectionId);
       store.addAudit({
         actor: 'user',
         connectionId: backup.connectionId,

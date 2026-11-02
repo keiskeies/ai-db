@@ -378,6 +378,19 @@ type AgentEvent =
 
 SSE 帧：具名事件 `event: <type>`，`data: <json>\n\n`；每 15s 心跳注释 `: ping`。
 
+### 4.0 结构变更广播（`/ws` 下行）
+
+`GET /ws?token=` 除回合事件外还推送全局结构变更事件，与具体回合无关：
+
+```ts
+{ type: 'schema_changed'; connectionId: string; cause: 'agent' | 'user'; at: string }
+```
+
+- 触发：任何使 `schema_cache` 失效的操作。SQL 类在 `ConnectionManager.query()` 判定已执行语句含 ddl/destructive 后发射；事务内的 DDL 延迟到 `COMMIT`（`ROLLBACK` 时同样发一次，结构可能已回退）。
+- 粒度是连接，不带库：客户端需重载该连接已加载的所有库。
+- 不带变更明细；需要明细请用结构对比。
+- 未鉴权连接以 code `4401` 关闭，客户端不得重试。
+
 ### 4.1 数据传输进度（`POST /transfer/stream`）
 
 ```ts

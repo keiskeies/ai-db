@@ -1928,7 +1928,6 @@ export function createApiRouter(deps: ApiDeps): Router {
         timeoutMs: store.getSettings().queryTimeoutMs,
         actor: 'user',
       });
-      manager.invalidate(connectionId);
       store.addAudit({
         actor: 'user',
         connectionId,

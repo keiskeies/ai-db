@@ -7,6 +7,7 @@ import {
   classifyMql,
   classifyRedis,
   classifySearch,
+  classifyStatement,
   classifyVector,
   editsRecords,
   engineMeta,
@@ -42,6 +43,7 @@ import {
 } from '@aidb/core';
 import type { GatewayConfig } from './config';
 import { createDriver, DbError, type Driver } from './drivers';
+import { GatewayEvents, type SchemaChangeCause } from './events';
 import { normalizeMql } from './drivers/mongodb';
 import type { CreateRedisKeyInput, RedisKeyDriver } from './drivers/types';
 import { supportsCollectionIndexes, supportsDocumentRead, supportsDocumentWrite, supportsFieldAdd, supportsKeyDetail, supportsLineProtocol, supportsObjectCreate, supportsStructuredQuery, supportsTransaction, supportsVectorSearch, type TransactionDriver } from './drivers/types';
@@ -75,7 +77,10 @@ export interface QueryOptions {
 export class ConnectionManager {
   private clients = new Map<string, CachedDriver>();
   /** 跨请求事务会话：会话 id → 连接与开始时间（用于超时回收）。 */
-  private txSessions = new Map<string, { connectionId: string; database?: string; startedAt: number; lastUsedAt: number }>();
+  private txSessions = new Map<
+    string,
+    { connectionId: string; database?: string; startedAt: number; lastUsedAt: number; schemaDirty?: boolean }
+  >();
   private readonly txIdleMs: number;
   private txTimer?: NodeJS.Timeout;
 
@@ -83,6 +88,8 @@ export class ConnectionManager {
     private store: Store,
     private config: GatewayConfig,
     private settings: () => AppSettings,
+    // 可缺省：多个测试直接三参构造，事件总线只是通知通道，没有它功能照常。
+    private events?: GatewayEvents,
   ) {
     this.txIdleMs = config.txIdleMs && config.txIdleMs > 0 ? config.txIdleMs : ConnectionManager.TX_IDLE_MS;
     this.txTimer = setInterval(() => {
@@ -422,7 +429,7 @@ export class ConnectionManager {
     }
     const started = Date.now();
     const result = await driver.deleteKeys(names, opts.database ?? conn.database);
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -451,7 +458,7 @@ export class ConnectionManager {
     }
     const started = Date.now();
     const result = await driver.dropIndex(name.trim(), opts.database ?? conn.database);
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -488,7 +495,7 @@ export class ConnectionManager {
       { ...input, collection: input.collection.trim() },
       { database: opts.database, timeoutMs: opts.timeoutMs },
     );
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -523,7 +530,7 @@ export class ConnectionManager {
       database: opts.database,
       timeoutMs: opts.timeoutMs,
     });
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -562,7 +569,7 @@ export class ConnectionManager {
       { object: input.object.trim(), name: input.name.trim(), type: input.type?.trim() || 'text' },
       { database: opts.database, timeoutMs: opts.timeoutMs },
     );
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -612,7 +619,7 @@ export class ConnectionManager {
     if (!to.trim()) throw new DbError('目标键名不能为空', { code: 'REDIS_RENAME' });
     const started = Date.now();
     const result = await driver.renameKey(from, to, opts.database ?? conn.database);
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -629,7 +636,7 @@ export class ConnectionManager {
     if (!input.key?.trim()) throw new DbError('键名不能为空', { code: 'REDIS_KEY' });
     const started = Date.now();
     const result = await driver.createKey(input, opts.database ?? conn.database);
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -659,7 +666,7 @@ export class ConnectionManager {
     const { conn, driver } = await this.keyDriver(connectionId);
     const started = Date.now();
     const result = await driver.deleteHashField(key, field, opts.database ?? conn.database);
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -689,7 +696,7 @@ export class ConnectionManager {
     const { conn, driver } = await this.keyDriver(connectionId);
     const started = Date.now();
     const result = await driver.removeKeyMember(key, member, opts.database ?? conn.database);
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -748,7 +755,7 @@ export class ConnectionManager {
     }
     const started = Date.now();
     const result = await driver.writeLineProtocol(lines, opts.database ?? conn.database, opts.timeoutMs);
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -787,7 +794,7 @@ export class ConnectionManager {
       { name: input.name.trim(), dimension: input.dimension, distance: input.distance, fields: input.fields ?? [], edge: input.edge },
       { database: opts.database, timeoutMs: opts.timeoutMs },
     );
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -815,7 +822,7 @@ export class ConnectionManager {
     }
     const started = Date.now();
     const result = await driver.dropObject(name, { database: opts.database, timeoutMs: opts.timeoutMs });
-    this.invalidate(connectionId);
+    this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
       database: opts.database ?? conn.database,
@@ -1034,13 +1041,15 @@ export class ConnectionManager {
     return { sessionId, database };
   }
 
-  async commitTransaction(sessionId: string): Promise<{ sessionId: string; committed: true }> {
+  async commitTransaction(sessionId: string, actor: SchemaChangeCause = 'user'): Promise<{ sessionId: string; committed: true }> {
     const session = this.txSessions.get(sessionId);
     if (!session) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
     const driver = await this.driverFor(session.connectionId);
     if (!supportsTransaction(driver)) throw new DbError('驱动不再支持事务', { code: 'UNSUPPORTED_ENGINE' });
     await driver.commitTransaction(sessionId);
     this.txSessions.delete(sessionId);
+    // 事务里的 DDL 到这一刻才对别的会话可见，所以事件也到这一刻才发。
+    if (session.schemaDirty) this.invalidate(session.connectionId, actor);
     this.store.addHistory({
       connectionId: session.connectionId,
       database: session.database,
@@ -1051,13 +1060,16 @@ export class ConnectionManager {
     return { sessionId, committed: true };
   }
 
-  async rollbackTransaction(sessionId: string): Promise<{ sessionId: string; rolledBack: true }> {
+  async rollbackTransaction(sessionId: string, actor: SchemaChangeCause = 'user'): Promise<{ sessionId: string; rolledBack: true }> {
     const session = this.txSessions.get(sessionId);
     if (!session) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
     const driver = await this.driverFor(session.connectionId);
     if (!supportsTransaction(driver)) throw new DbError('驱动不再支持事务', { code: 'UNSUPPORTED_ENGINE' });
     await driver.rollbackTransaction(sessionId);
     this.txSessions.delete(sessionId);
+    // 回滚可能把结构改回去（DDL 是否可回滚取决于引擎），客户端必须重读，
+    // 否则会一直显示一个从未提交过的表。
+    if (session.schemaDirty) this.invalidate(session.connectionId, actor);
     this.store.addHistory({
       connectionId: session.connectionId,
       database: session.database,
@@ -1118,6 +1130,9 @@ export class ConnectionManager {
     const sets: QueryResult[] = [];
     const messages: string[] = [];
     let failure: Error | undefined;
+    // 已成功执行并落库的语句。用于判断结构是否真的变了：脚本第 3 条失败时
+    // 第 1 条 DDL 已经生效，按「整段成功」判定就等于永远不通知。
+    const applied: string[] = [];
     try {
       for (const [index, statement] of statements.entries()) {
         const prepared = opts.autoLimit !== false && opts.maxRows ? applyLimit(statement, opts.maxRows, conn.engine) : statement;
@@ -1126,6 +1141,7 @@ export class ConnectionManager {
             ? await txDriver.runInTransaction(opts.sessionId, prepared, [], { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs })
             : await driver.run(prepared, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs });
           sets.push(result);
+          applied.push(statement);
           messages.push(
             result.columns.length
               ? `[${index + 1}] ${result.rowCount} 行 · ${result.durationMs}ms`
@@ -1157,6 +1173,27 @@ export class ConnectionManager {
           durationMs: Date.now() - started,
           rowCount: sets.reduce((a, s) => a + s.rowCount, 0),
         });
+      }
+
+      // 结构变更必须清 schema 缓存并广播。
+      //
+      // 判定放在这里而不是各个路由：/query（SQL 窗口）与 commands/* 此前根本没清缓存，
+      // 建完表 30 秒内服务端一直返回旧结构，客户端刷新也没用。逐个路由补是 N 个会再漏的点，
+      // 而这里是所有 SQL 执行的唯一咽喉。
+      //
+      // 用 applied（已执行成功并落库的语句）而不是 statements 判定：脚本第 3 条失败时
+      // 第 1 条 DDL 已经生效，按整段失败跳过就等于永远不通知。
+      //
+      // 已经由调用方显式 invalidate 的路径必须删掉它们自己那处（见计划 Task 3 Step 4），
+      // 否则一次操作发两遍事件、客户端刷两遍全库。
+      const touchesSchema = applied.some((statement) => {
+        const kind = classifyStatement(statement).kind;
+        return kind === 'ddl' || kind === 'destructive';
+      });
+      if (touchesSchema) {
+        // 事务内还没提交，别的会话看不到，先记账等 COMMIT。
+        if (txSession) txSession.schemaDirty = true;
+        else this.invalidate(connectionId, opts.actor);
       }
     }
   }
@@ -1193,7 +1230,13 @@ export class ConnectionManager {
     await Promise.all([...this.clients.entries()].map(async ([id]) => this.close(id)));
   }
 
-  invalidate(connectionId: string): void {
+  invalidate(connectionId: string, cause: SchemaChangeCause = 'user'): void {
     this.store.clearSchemaCache(connectionId);
+    this.events?.emitSchemaChanged({
+      type: 'schema_changed',
+      connectionId,
+      cause,
+      at: new Date().toISOString(),
+    });
   }
 }

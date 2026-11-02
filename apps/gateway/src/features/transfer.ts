@@ -129,7 +129,6 @@ export async function transferData(
           actor: 'user',
         });
         created = true;
-        manager.invalidate(opts.targetId);
         await emit({
           type: 'phase-done',
           table: srcTable.name,

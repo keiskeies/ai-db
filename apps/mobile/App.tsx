@@ -305,6 +305,9 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
 
   const wsRef = useRef<WebSocket | null>(null);
   const sessionIdRef = useRef<string | undefined>(undefined);
+  const activeConnectionIdRef = useRef<string | undefined>(undefined);
+  const schemaInFlightRef = useRef(false);
+  const schemaPendingRef = useRef(false);
   const handlerRef = useRef<(event: any) => void>(() => undefined);
   const scrollRef = useRef<ScrollView>(null);
 
@@ -314,6 +317,10 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
   useEffect(() => {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
+
+  useEffect(() => {
+    activeConnectionIdRef.current = activeConnectionId;
+  }, [activeConnectionId]);
 
   const refreshSessions = async () => {
     try {
@@ -341,11 +348,24 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
       setTables([]);
       return;
     }
+    if (schemaInFlightRef.current) {
+      // 在飞请求可能早于 invalidate 发出、回来的是旧结构。丢掉这次事件就永久丢了，
+      // 所以只记账，等它结束后补跑一次。
+      schemaPendingRef.current = true;
+      return;
+    }
+    schemaInFlightRef.current = true;
     try {
       const result = await client.schema(connectionId);
       setTables(result.schemas.flatMap((schema) => schema.tables));
     } catch {
       setTables([]);
+    } finally {
+      schemaInFlightRef.current = false;
+      if (schemaPendingRef.current) {
+        schemaPendingRef.current = false;
+        void loadSchema(connectionId);
+      }
     }
   };
 
@@ -385,6 +405,10 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
 
   const handleWsEvent = (event: any) => {
     if (event.type === 'ping' || event.type === 'pong') return;
+    if (event.type === 'schema_changed') {
+      if (event.connectionId === activeConnectionIdRef.current) void loadSchema(event.connectionId);
+      return;
+    }
     if (event.type === 'turn_end') {
       const sid = sessionIdRef.current;
       if (sid) {
@@ -470,7 +494,12 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
       try {
         const ws = new WebSocket(client.wsUrl);
         wsRef.current = ws;
-        ws.onopen = () => !disposed && setConnected(true);
+        ws.onopen = () => {
+          if (disposed) return;
+          setConnected(true);
+          // 断线期间的事件不会补发；重连后补刷一次当前连接。
+          if (activeConnectionIdRef.current) void loadSchema(activeConnectionIdRef.current);
+        };
         ws.onmessage = (event) => {
           try {
             handlerRef.current(JSON.parse(String(event.data)));
