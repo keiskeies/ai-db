@@ -74,7 +74,8 @@ export async function replaceData(store: Store, manager: ConnectionManager, inpu
       actor: 'user',
     });
     affected = result.affected ?? 0;
-    manager.invalidate(input.connectionId);
+    // 纯数据替换：结构没变，只需丢掉缓存里过期的 rowEstimate，不广播。
+    manager.invalidate(input.connectionId, 'user', false);
   }
 
   store.addAudit({

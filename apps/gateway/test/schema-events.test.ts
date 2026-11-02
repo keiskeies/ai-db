@@ -330,3 +330,47 @@ test('清缓存失败不能把已经成功的 DDL 报成失败', async () => {
   const after = await fetch(`${base}/api/connections/${conn.id}/schema?refresh=1`, { headers: { authorization: `Bearer ${TOKEN}` } }).then((r) => r.json());
   assert.ok(JSON.stringify(after).includes('resilient_probe'), '表应已建好');
 });
+
+test('纯数据变更只清缓存、不广播结构变更事件', async () => {
+  const conn = gateway.store.listConnections()[0];
+  // 准备一张有数据的表
+  await api('/query', { method: 'POST', body: JSON.stringify({ connectionId: conn.id, sql: 'CREATE TABLE quiet_probe (id INTEGER PRIMARY KEY, note TEXT)' }) });
+  await api('/query', { method: 'POST', body: JSON.stringify({ connectionId: conn.id, sql: "INSERT INTO quiet_probe (id, note) VALUES (1, 'aa')" }) });
+  await new Promise((r) => setTimeout(r, 200));
+
+  // 路径 1：CSV 导入（纯写数据）
+  const importEvents = await collect(async () => {
+    const res = await api('/import', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: conn.id, table: 'quiet_probe', csv: 'id,note\n2,bb\n', hasHeader: true }),
+    });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+  });
+  assert.equal(importEvents.length, 0, `CSV 导入不该广播，实际 ${importEvents.length}`);
+
+  // 路径 2：数据替换（纯 UPDATE）
+  const replaceEvents = await collect(async () => {
+    const res = await api('/data/replace', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: conn.id, table: 'quiet_probe', column: 'note', find: 'aa', replace: 'zz' }),
+    });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+  });
+  assert.equal(replaceEvents.length, 0, `数据替换不该广播，实际 ${replaceEvents.length}`);
+});
+
+test('纯数据变更仍然清掉 schema 缓存（行数估算要能刷新）', async () => {
+  const conn = gateway.store.listConnections()[0];
+  // 先让缓存就位
+  await fetch(`${base}/api/connections/${conn.id}/schema`, { headers: { authorization: `Bearer ${TOKEN}` } });
+  const before = gateway.store.getSchemaCache(conn.id, gateway.store.getConnection(conn.id).database ?? 'main');
+  assert.ok(before, '前提：缓存应已写入');
+
+  await api('/import', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: conn.id, table: 'quiet_probe', csv: 'id,note\n3,cc\n', hasHeader: true }),
+  });
+
+  const after = gateway.store.getSchemaCache(conn.id, gateway.store.getConnection(conn.id).database ?? 'main');
+  assert.equal(after, undefined, '不广播不等于可以留脏缓存：缓存必须被清掉');
+});

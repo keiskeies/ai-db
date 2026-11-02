@@ -1257,7 +1257,15 @@ export class ConnectionManager {
     await Promise.all([...this.clients.entries()].map(async ([id]) => this.close(id)));
   }
 
-  invalidate(connectionId: string, cause: SchemaChangeCause = 'user'): void {
+  /**
+   * 让 schema 缓存失效。
+   *
+   * @param cause 事件归因，只影响 UI 文案
+   * @param broadcast 是否广播结构变更事件。纯数据变更（改值、导数据）只需要
+   *   丢掉缓存里过期的 rowEstimate，不该让所有客户端白跑一次全库 describe：
+   *   结构没变，它们要刷的东西不存在。默认广播。
+   */
+  invalidate(connectionId: string, cause: SchemaChangeCause = 'user', broadcast = true): void {
     // 清缓存失败不能连累已经落库的 DDL：这个方法在 query() 的 finally 里调用，
     // 往上抛会把"表已经建好了"报成失败，调用方据此重试反而制造重复错误。
     // 代价是缓存可能残留旧结构，最多 30s TTL 后自然恢复，比误报失败轻得多。
@@ -1266,6 +1274,7 @@ export class ConnectionManager {
     } catch (err) {
       console.error(`[schema] 清理连接 ${connectionId} 的 schema 缓存失败`, err);
     }
+    if (!broadcast) return;
     this.events?.emitSchemaChanged({
       type: 'schema_changed',
       connectionId,

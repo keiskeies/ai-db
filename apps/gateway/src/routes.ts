@@ -1990,7 +1990,8 @@ export function createApiRouter(deps: ApiDeps): Router {
         delimiter: str(body.delimiter),
         mapping: Array.isArray(body.mapping) ? (body.mapping as Array<{ column: string; sourceIndex?: number }>) : undefined,
       });
-      manager.invalidate(connectionId);
+      // CSV 导入只写数据、不动结构（目标表必须已存在）：丢掉过期的 rowEstimate 即可，不广播。
+      manager.invalidate(connectionId, 'user', false);
       store.addAudit({ actor: 'user', connectionId, tool: 'import', risk: 'write', approval: 'manual', status: 'ok', meta: { table: body.table, inserted: result.inserted } });
       res.json({ result });
     }),
