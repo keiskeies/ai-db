@@ -17,6 +17,7 @@ import type {
 } from '@aidb/core';
 import { DEFAULT_SETTINGS, engineMeta } from '@aidb/core';
 import { ApiError, api, streamTurn, type BootstrapData } from './lib/api';
+import { startSchemaEvents } from './lib/schemaEvents';
 import { translate, type I18nKey, type Locale } from './i18n';
 export type Tab =
   | { id: string; kind: 'welcome'; title: string }
@@ -291,6 +292,8 @@ interface AppStore {
 
   openBackup: () => Promise<void>;
   refreshAllSchemas: () => Promise<void>;
+  applySchemaChange: (connectionId: string) => void;
+  flushSchemaChanges: () => Promise<void>;
 }
 
 /**
@@ -307,6 +310,52 @@ const WELCOME: Tab = { id: 'welcome', kind: 'welcome', title: '欢迎' };
 let tabSeq = 1;
 let currentAbort: AbortController | undefined;
 const toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+// 结构变更合并用的模块级状态。放 state 里会让每次事件都触发订阅者重渲染，
+// 而这些值只被下面几个函数读。
+const schemaPending = new Map<string, true>();
+const schemaInFlight = new Set<string>();
+const schemaLastRefresh = new Map<string, number>();
+const schemaThrottle = new Map<string, ReturnType<typeof setTimeout>>();
+const SCHEMA_THROTTLE_MS = 1000;
+// 手动刷新后这个窗口内到达的事件跳过：用户自己刚刷过，事件是回声。
+const SCHEMA_ECHO_WINDOW_MS = 1500;
+let schemaEventsStop: (() => void) | undefined;
+
+function requestSchemaReload(connectionId: string, immediate = false): void {
+  const run = () => {
+    schemaThrottle.delete(connectionId);
+    if (schemaInFlight.has(connectionId)) {
+      // 在飞请求可能早于 invalidate 发出，回来的是旧结构。丢掉这次事件就永久丢了，
+      // 所以只记账，等它结束后补跑一次。
+      schemaPending.set(connectionId, true);
+      return;
+    }
+    schemaInFlight.add(connectionId);
+    void useApp
+      .getState()
+      .loadSchema(connectionId, true)
+      .catch(() => undefined)
+      .finally(() => {
+        schemaInFlight.delete(connectionId);
+        if (schemaPending.get(connectionId)) {
+          schemaPending.delete(connectionId);
+          requestSchemaReload(connectionId, true);
+        }
+      });
+  };
+
+  if (immediate) {
+    const timer = schemaThrottle.get(connectionId);
+    if (timer) clearTimeout(timer);
+    run();
+    return;
+  }
+  // 尾沿合并：窗口内已有一次排队就不再加。这是节流不是防抖——
+  // Agent 每 2 秒改一张表时，防抖会一直往后推、永远不刷。
+  if (schemaThrottle.has(connectionId)) return;
+  schemaThrottle.set(connectionId, setTimeout(run, SCHEMA_THROTTLE_MS));
+}
 
 function errorText(err: unknown): string {
   if (err instanceof ApiError) return err.message;
@@ -398,12 +447,25 @@ export const useApp = create<AppStore>((set, get) => ({
         homeDatabase: prefs.homeDatabaseByConnection?.[target.id] ?? '',
       });
       await get().loadSchema(target.id);
+
+      if (!schemaEventsStop) {
+        schemaEventsStop = startSchemaEvents({
+          onChange: (event) => get().applySchemaChange(event.connectionId),
+          // 断线期间的事件不会补发，重连后对已知连接各刷一次。
+          onReconnect: () => {
+            for (const conn of get().connections) requestSchemaReload(conn.id, true);
+          },
+        });
+      }
     } catch (err) {
       set({ booted: false, bootError: errorText(err) });
     }
   },
 
   loadSchema: async (connectionId, refresh = false, database) => {
+    // 记在拉取开始而不是结束：用户点刷新到数据回来之间的这段时间到达的事件，
+    // 也算"用户刚刷过"，不该再触发一次。
+    if (refresh) schemaLastRefresh.set(connectionId, Date.now());
     const conn = get().connections.find((c) => c.id === connectionId);
     if (database) {
       const key = `${connectionId}:${database}`;
@@ -1100,6 +1162,8 @@ export const useApp = create<AppStore>((set, get) => ({
         }
       }
       await get().refreshSessions();
+      // 回合内积攒的结构变更必须在这里一次性落地，否则用户回答完看到的结构还是旧的。
+      await get().flushSchemaChanges();
     }
   },
 
@@ -1228,6 +1292,26 @@ export const useApp = create<AppStore>((set, get) => ({
     const conns = get().connections;
     for (const conn of conns) await get().loadSchema(conn.id, true);
     get().notify('success', get().t('refresh'));
+  },
+
+  applySchemaChange: (connectionId) => {
+    const last = schemaLastRefresh.get(connectionId) ?? 0;
+    if (Date.now() - last < SCHEMA_ECHO_WINDOW_MS) return;
+
+    // 本客户端正在跑 Agent 回合：先记账，等回合收尾一次性刷新。
+    // 否则 Agent 每改一张表就全量 describe 一次，一回合改 5 张就是 5 次。
+    const live = get().live;
+    if (live?.status === 'streaming' || live?.status === 'awaiting') {
+      schemaPending.set(connectionId, true);
+      return;
+    }
+    requestSchemaReload(connectionId);
+  },
+
+  flushSchemaChanges: async () => {
+    const ids = [...schemaPending.keys()];
+    schemaPending.clear();
+    for (const connectionId of ids) requestSchemaReload(connectionId, true);
   },
 }));
 
