@@ -298,3 +298,35 @@ test('事务超时被回收时，schemaDirty 的连接仍然发事件', async ()
   });
   assert.equal(events.length, 1, `回收带结构变更的事务必须发事件，实际 ${events.length}`);
 });
+
+test('清缓存失败不能把已经成功的 DDL 报成失败', async () => {
+  // 场景：DDL 已经在数据库里落地了，紧接着清 schema 缓存时 sqlite 出错
+  // （锁冲突、磁盘满、库文件被移走等）。此时抛出会让调用方以为 DDL 失败
+  // 并重试，而实际已经生效 —— 比"缓存没清干净"严重得多。
+  const conn = gateway.store.listConnections()[0];
+  const original = gateway.store.clearSchemaCache.bind(gateway.store);
+  const boom = () => {
+    throw new Error('clearSchemaCache: database is locked');
+  };
+  (gateway.store as any).clearSchemaCache = boom;
+
+  let result: any;
+  let thrown: any;
+  try {
+    result = await api('/query', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: conn.id, sql: 'CREATE TABLE resilient_probe (id INTEGER PRIMARY KEY)' }),
+    });
+  } catch (err) {
+    thrown = err;
+  } finally {
+    (gateway.store as any).clearSchemaCache = original;
+  }
+
+  assert.equal(thrown, undefined, `清缓存失败不该让请求抛错：${thrown?.message}`);
+  assert.equal(result.status, 200, `DDL 应报成功，实际 ${result.status} ${JSON.stringify(result.body)}`);
+
+  // 表确实建出来了，证明"DDL 成功但清缓存失败"这个组合是真实存在的。
+  const after = await fetch(`${base}/api/connections/${conn.id}/schema?refresh=1`, { headers: { authorization: `Bearer ${TOKEN}` } }).then((r) => r.json());
+  assert.ok(JSON.stringify(after).includes('resilient_probe'), '表应已建好');
+});

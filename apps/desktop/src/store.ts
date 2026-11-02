@@ -1170,7 +1170,9 @@ export const useApp = create<AppStore>((set, get) => ({
         }
       }
       await get().refreshSessions();
-      // 回合内积攒的结构变更必须在这里一次性落地，否则用户回答完看到的结构还是旧的。
+      // 把回合内积攒的结构变更派发出去。注意 flushSchemaChanges 里全是
+      // fire-and-forget 的 loadSchema：这里 await 到的是"派发完成"，不是"拉取完成"。
+      // 结构展示由 schemaLoading 状态驱动，不需要在这一行等它。
       await get().flushSchemaChanges();
     }
   },

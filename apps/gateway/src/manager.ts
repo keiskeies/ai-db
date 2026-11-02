@@ -1258,7 +1258,14 @@ export class ConnectionManager {
   }
 
   invalidate(connectionId: string, cause: SchemaChangeCause = 'user'): void {
-    this.store.clearSchemaCache(connectionId);
+    // 清缓存失败不能连累已经落库的 DDL：这个方法在 query() 的 finally 里调用，
+    // 往上抛会把"表已经建好了"报成失败，调用方据此重试反而制造重复错误。
+    // 代价是缓存可能残留旧结构，最多 30s TTL 后自然恢复，比误报失败轻得多。
+    try {
+      this.store.clearSchemaCache(connectionId);
+    } catch (err) {
+      console.error(`[schema] 清理连接 ${connectionId} 的 schema 缓存失败`, err);
+    }
     this.events?.emitSchemaChanged({
       type: 'schema_changed',
       connectionId,
