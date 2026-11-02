@@ -245,3 +245,35 @@ test('没有 DDL 的事务提交不发事件', async () => {
   });
   assert.equal(afterCommit.length, 0);
 });
+
+test('一个客户端发送失败不影响其它客户端收到同一事件', async () => {
+  // 两个健康客户端 + 一个"坏"客户端。坏的那个用 readyState=1 但 send 抛错来模拟。
+  const good = [await connectWs(), await connectWs()];
+  const seen: any[][] = good.map(() => []);
+  good.forEach((ws, i) => ws.on('message', (raw) => seen[i].push(JSON.parse(String(raw)))));
+
+  // 直接往 wss.clients 里塞一个坏 socket，验证广播循环不会因为它中断。
+  const broken = {
+    readyState: 1,
+    send: () => {
+      throw new Error('socket closed mid-send');
+    },
+  } as any;
+  // 关键：把坏客户端排在最前面。广播是同一个监听器里的 for 循环，
+  // 如果循环体没有逐项保护，它抛错就会中断后面所有客户端的投递。
+  const healthy = [...gateway.wss.clients];
+  gateway.wss.clients.clear();
+  gateway.wss.clients.add(broken);
+  for (const ws of healthy) gateway.wss.clients.add(ws);
+
+  try {
+    gateway.manager.invalidate(gateway.store.listConnections()[0].id, 'user');
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  } finally {
+    gateway.wss.clients.delete(broken);
+    for (const ws of good) ws.close();
+  }
+
+  const counts = seen.map((list) => list.filter((m) => m.type === 'schema_changed').length);
+  assert.deepEqual(counts, [1, 1], `两个健康客户端都应收到，实际 ${JSON.stringify(counts)}`);
+});

@@ -210,8 +210,16 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
   // 客户端可能通过 /api/query、/api/ddl/execute、Agent 工具或工具箱改结构，
   // 关心的是「结构变了」这个事实，与谁改的无关。
   events.onSchemaChanged((event) => {
+    const frame = JSON.stringify(event);
     for (const client of wss.clients) {
-      if (client.readyState === 1) client.send(JSON.stringify(event));
+      if (client.readyState !== 1) continue;
+      // 逐项保护：一个半死的连接（send 抛错）不能中断后面客户端的投递，
+      // 否则它前面的客户端刚收到、后面的一律收不到，症状取决于连接顺序。
+      try {
+        client.send(frame);
+      } catch {
+        /* 这个客户端已不可写；它自己的 onclose 会走清理。 */
+      }
     }
   });
 
