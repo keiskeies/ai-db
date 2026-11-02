@@ -49,7 +49,7 @@ const filesystemTools: BuiltinMcpToolDefinition[] = [
   {
     name: 'read_file',
     description:
-      'Read a UTF-8 text file line by line. Use offset/limit for large files instead of re-reading from the start. Binary files are rejected.',
+      'Read a UTF-8 text file line by line. Pass path (or file_path). For several files use read_multiple_files, which takes a paths array. Use offset/limit for large files instead of re-reading from the start. Binary files are rejected.',
     risk: 'read',
     inputSchema: {
       type: 'object',

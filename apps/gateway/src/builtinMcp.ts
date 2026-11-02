@@ -250,6 +250,92 @@ function globToRegExp(pattern: string, flags = 'i'): RegExp {
  * 代价是 glob 的字符类 [abc] 不被支持，但这与本文件 globToRegExp 的既有语义一致
  * （它把方括号转义成字面量），不会产生「看着像生效其实没生效」的错觉。
  */
+/**
+ * 判定 grep_files 的 pattern 有没有灾难性回溯（ReDoS）风险。
+ *
+ * 旧实现用「长度 > 200」一刀切，但长度不等于危险：`a|b|c|…` 这种字面量交替
+ * 匹配是线性的，271 字符和 27 字符一样安全——真实事故正是模型想在一批 Java
+ * 实体里找 20 个字段名，写了 271 字符的交替，被这条长度规则误杀。
+ * 真正危险的是可被输入反复吞入的结构，它们往往很短。所以这里按结构判定：
+ *
+ *   1. 嵌套量词：(a+)+ (a*)* (a+)* — 经典的灾难性回溯形状；
+ *   2. 量词作用在「可空或已带量词」的分组上，如 (a*)+ (a?){2,}；
+ *   3. 相邻的同类量词，如 a+a+ a*a*。
+ *
+ * 宁可漏判也不误杀：内置扫描器一次只跑一行文本（readText 已按行切分），
+ * 单行长度受文件大小约束，且外部 rg 路径完全不经过这里。
+ */
+function hasCatastrophicBacktracking(pattern: string): boolean {
+  // 把转义字符与字符类内容替换成占位符，避免把 "[a+]+" 这类字面量误判成量词。
+  let stripped = '';
+  for (let i = 0; i < pattern.length; i += 1) {
+    const ch = pattern[i];
+    if (ch === '\\') {
+      stripped += '_';
+      i += 1;
+      continue;
+    }
+    if (ch === '[') {
+      let j = i + 1;
+      while (j < pattern.length && pattern[j] !== ']') {
+        if (pattern[j] === '\\') j += 1;
+        j += 1;
+      }
+      if (j >= pattern.length) return false;
+      stripped += '_';
+      i = j;
+      continue;
+    }
+    stripped += ch;
+  }
+
+  const closeOf = (open: number): number => {
+    let depth = 0;
+    for (let i = open; i < stripped.length; i += 1) {
+      if (stripped[i] === '(') depth += 1;
+      else if (stripped[i] === ')') {
+        depth -= 1;
+        if (depth === 0) return i;
+      }
+    }
+    return -1;
+  };
+
+  const quantifierEnd = (i: number): number => {
+    if (stripped[i] === '*' || stripped[i] === '+') return i;
+    if (stripped[i] === '{') {
+      let j = i + 1;
+      while (j < stripped.length && /[0-9,]/.test(stripped[j])) j += 1;
+      if (j < stripped.length && stripped[j] === '}') return j;
+    }
+    return -1;
+  };
+
+  for (let i = 0; i < stripped.length; i += 1) {
+    const ch = stripped[i];
+    // 规则 1/3：分组后跟量词，且组内以量词或可空 ? 结尾 → 嵌套量词。
+    if (ch === '(') {
+      const close = closeOf(i);
+      if (close === -1) continue;
+      if (quantifierEnd(close + 1) === -1) continue;
+      const inner = stripped.slice(i + 1, close);
+      if (inner && /[*+}?]$/.test(inner)) return true;
+    }
+    // 规则 2：同一字符在很近的距离内连续带量词，如 a+a+ / a*a+。
+    if (ch === '*' || ch === '+') {
+      const prevChar = stripped[i - 1];
+      if (!prevChar || prevChar === '(' || prevChar === '|' || prevChar === '*' || prevChar === '+') continue;
+      for (let k = i + 1; k <= i + 3 && k + 1 < stripped.length; k += 1) {
+        if (stripped[k] === prevChar && (stripped[k + 1] === '*' || stripped[k + 1] === '+')) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** pattern 的硬上限。只防「拿超长字符串打爆内存」，与 ReDoS 无关。 */
+const MAX_PATTERN_LENGTH = 20_000;
+
 function globLiteralOf(pattern: string): string | undefined {
   if (!/[*?]/.test(pattern)) return undefined;
   if (/[()[\]{}|^$+\\]/.test(pattern)) return undefined;
@@ -355,6 +441,36 @@ function argStringAny(input: Record<string, unknown>, keys: string[]): string {
     if (typeof value === 'string' && value.trim()) return value.trim();
   }
   return '';
+}
+
+/**
+ * 把 `paths: ["…"]` 这种「数组里只有一个元素」的写法当成那一个路径。
+ *
+ * `paths` 是 `read_multiple_files` 的参数，但模型经常把它用在 `read_file` / `write_file` 上。
+ * 单元素时意图毫无歧义（就是这一个文件），容忍它比让模型白跑一步更有价值；
+ * 多元素时不能猜，交给调用点报错并指路 `read_multiple_files`。
+ */
+function singlePathOf(input: Record<string, unknown>): string {
+  for (const key of ['paths', 'files']) {
+    const value = input[key];
+    if (Array.isArray(value)) {
+      const items = value.map((item) => String(item ?? '').trim()).filter(Boolean);
+      if (items.length === 1) return items[0];
+    }
+  }
+  return '';
+}
+
+/** 参数里带了多元素 paths 时，用于把错误指向 read_multiple_files。 */
+function hasMultiplePaths(input: Record<string, unknown>): boolean {
+  for (const key of ['paths', 'files']) {
+    const value = input[key];
+    if (Array.isArray(value)) {
+      const items = value.map((item) => String(item ?? '').trim()).filter(Boolean);
+      if (items.length > 1) return true;
+    }
+  }
+  return false;
 }
 
 function argIntAny(input: Record<string, unknown>, keys: string[], fallback: number, min: number, max: number): number {
@@ -561,14 +677,32 @@ async function runFilesystemTool(
   input: Record<string, unknown>,
 ): Promise<{ summary: string; data: unknown }> {
   const roots = rootsOf(serverArgs, argStringAny(input, ['path', 'file_path']));
-  const target = (keys: string[] = ['path', 'file_path']) => {
-    const raw = argStringAny(input, keys);
-    if (!raw) return roots[0];
+  /**
+   * 取本次要操作的路径。
+   *
+   * `optionalDefault` 只有目录类工具（list_directory / search_files / grep_files）才该开：
+   * 省略路径即「从头号授权目录开始」是有意义的默认。文件类工具绝不能这样回落——
+   * 真实事故里 `read_file` 收到 `paths:[文件]`（参数名写错），取不到路径就静默回落到
+   * 授权根目录，最终报「不是文件：C:\server\kbook」：既没说是哪个参数错了，也没说
+   * 正确参数名是什么，模型只能原样重试。
+   */
+  const target = (keys: string[] = ['path', 'file_path'], optionalDefault = false) => {
+    const raw = argStringAny(input, keys) || singlePathOf(input);
+    if (!raw) {
+      if (optionalDefault) return roots[0];
+      const multi = hasMultiplePaths(input);
+      failure(
+        multi
+          ? `一次读/写多个文件请改用 read_multiple_files，它接受 paths 数组：${keys[0]} 只接受单个路径`
+          : `缺少 ${keys[0]}（也可用 file_path）。要读取多个文件请用 read_multiple_files，它接受 paths 数组`,
+        'MCP_INVALID_ARGS',
+      );
+    }
     return resolveGrantedPath(raw, roots, keys[0]);
   };
 
   if (tool === 'list_directory') {
-    const dir = target();
+    const dir = target(undefined, true);
     const stat = statSync(dir);
     if (!stat.isDirectory()) failure(`不是目录：${dir}`, 'MCP_INVALID_ARGS');
     const depth = argBool(input, 'recursive', false) ? 8 : argInt(input, 'depth', 1, 1, 8);
@@ -669,7 +803,7 @@ async function runFilesystemTool(
   if (tool === 'search_files') {
     const query = argStringAny(input, ['query', 'pattern']);
     if (!query) failure('缺少 query 或 pattern（Glob 模式可传 **/*.java）', 'MCP_INVALID_ARGS');
-    const base = target();
+    const base = target(undefined, true);
     const baseStat = statSync(base);
     const root = baseStat.isDirectory() ? base : dirname(base);
     const wildcard = /[*?]/.test(query);
@@ -696,7 +830,18 @@ async function runFilesystemTool(
   if (tool === 'grep_files') {
     const pattern = argString(input, 'pattern');
     if (!pattern) failure('缺少 pattern', 'MCP_INVALID_ARGS');
-    if (pattern.length > 200) failure('正则过长（最多 200 字符）', 'MCP_INVALID_ARGS');
+    // 按长度一刀切会把「长但安全」的交替误杀（事故：271 字符的 20 个字段名交替）。
+    // 危险来自结构，不来自长度：这里只挡真正会回溯的写法，外加一个防内存的硬上限。
+    if (pattern.length > MAX_PATTERN_LENGTH) {
+      failure(`pattern 过长（${pattern.length} 字符，上限 ${MAX_PATTERN_LENGTH}）`, 'MCP_INVALID_ARGS');
+    }
+    if (hasCatastrophicBacktracking(pattern)) {
+      failure(
+        `pattern 含灾难性回溯结构（嵌套量词，如 (a+)+），在实际文件上可能长时间不返回。` +
+          `建议改用字面量交替（a|b|c）或去掉嵌套分组后重试；多个关键词也可以分批 grep。`,
+        'MCP_INVALID_ARGS',
+      );
+    }
     const caseSensitive =
       typeof input.caseSensitive === 'boolean'
         ? input.caseSensitive
@@ -705,7 +850,7 @@ async function runFilesystemTool(
           : typeof input['-i'] === 'boolean'
             ? !input['-i']
             : false;
-    const base = target();
+    const base = target(undefined, true);
     const root = statSync(base).isDirectory() ? base : dirname(base);
     const include = argStringAny(input, ['include', 'glob']) || (typeof input.type === 'string' && input.type.trim() ? `*.${input.type.trim().replace(/^\./, '')}` : '');
     const maxMatches = argIntAny(input, ['maxMatches', 'head_limit'], 100, 1, 500);
