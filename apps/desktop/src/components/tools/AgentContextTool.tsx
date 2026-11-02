@@ -11,6 +11,8 @@ import {
 } from '@aidb/core';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
+import { askConfirm } from '../AskDialog';
+import { Select, Option } from '../ui';
 
 type Tab = 'tables' | 'columns' | 'relations' | 'terms';
 
@@ -182,8 +184,16 @@ export function AgentContextTool() {
   };
 
   const clearAll = () => {
-    if (!window.confirm(`清空「${conn?.name ?? connId}${database ? ` / ${database}` : ''}」的全部业务上下文配置？Agent 将回到默认行为。`)) return;
-    void save(() => api.clearAgentContext(connId, database), '已清空');
+    void (async () => {
+      const ok = await askConfirm({
+        message: `清空「${conn?.name ?? connId}${database ? ` / ${database}` : ''}」的全部业务上下文配置？`,
+        detail: 'Agent 将回到默认行为。',
+        danger: true,
+        confirmLabel: '清空',
+      });
+      if (!ok) return;
+      void save(() => api.clearAgentContext(connId, database), '已清空');
+    })();
   };
 
   const addMemory = (kind: 'glossary' | 'sql_example', draft: { title: string; content: string }, reset: () => void) => {
@@ -226,16 +236,16 @@ export function AgentContextTool() {
       </div>
 
       <div className="tool-row">
-        <select className="select" value={connId} onChange={(e) => { setConnId(e.target.value); setDatabase(''); }} data-testid="ctx-connection">
+        <Select className="select" value={connId} onChange={(e) => { setConnId(e.target.value); setDatabase(''); }} data-testid="ctx-connection">
           {connections.map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
+            <Option key={c.id} value={c.id}>{c.name}</Option>
           ))}
-        </select>
-        <select className="select" value={database} onChange={(e) => setDatabase(e.target.value)} data-testid="ctx-database">
+        </Select>
+        <Select className="select" value={database} onChange={(e) => setDatabase(e.target.value)} data-testid="ctx-database">
           {databases.map((d) => (
-            <option key={d.name} value={d.name}>{d.name}{d.tables.length ? '' : '（未加载）'}</option>
+            <Option key={d.name} value={d.name}>{d.name}{d.tables.length ? '' : '（未加载）'}</Option>
           ))}
-        </select>
+        </Select>
         <span className="spacer" />
         <span className="badge">{tables.length ? `启用 ${enabledCount}/${tables.length} 表` : '表未加载'}</span>
         <span className="badge agent" data-testid="ctx-tokens">上下文 ≈ {tokens.toLocaleString()} tokens</span>
@@ -323,12 +333,12 @@ export function AgentContextTool() {
       {tab === 'columns' ? (
         <>
           <div className="tool-row">
-            <select className="select" value={selectedTable} onChange={(e) => setSelectedTable(e.target.value)} data-testid="ctx-column-table">
-              <option value="">选择表…</option>
+            <Select className="select" value={selectedTable} onChange={(e) => setSelectedTable(e.target.value)} data-testid="ctx-column-table">
+              <Option value="">选择表…</Option>
               {tables.map((t) => (
-                <option key={t.name} value={t.name}>{t.name}</option>
+                <Option key={t.name} value={t.name}>{t.name}</Option>
               ))}
-            </select>
+            </Select>
             {currentTable ? <span className="muted" style={{ fontSize: 10.5 }}>{currentTable.columns?.length ?? 0} 列</span> : null}
           </div>
           <div className="tool-scroll">
@@ -408,16 +418,16 @@ export function AgentContextTool() {
           <div className="ctx-section">
             <div className="ctx-section-head">手工维护的关系（注入 prompt，指导 JOIN）</div>
             <div className="tool-row">
-              <select className="select" value={draftRelation.table} onChange={(e) => setDraftRelation({ ...draftRelation, table: e.target.value })}>
-                <option value="">左表…</option>
-                {tables.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
-              </select>
+              <Select className="select" value={draftRelation.table} onChange={(e) => setDraftRelation({ ...draftRelation, table: e.target.value })}>
+                <Option value="">左表…</Option>
+                {tables.map((t) => <Option key={t.name} value={t.name}>{t.name}</Option>)}
+              </Select>
               <input className="input" style={{ width: 120 }} placeholder="左列" value={draftRelation.column} onChange={(e) => setDraftRelation({ ...draftRelation, column: e.target.value })} />
               <span className="muted">→</span>
-              <select className="select" value={draftRelation.refTable} onChange={(e) => setDraftRelation({ ...draftRelation, refTable: e.target.value })}>
-                <option value="">右表…</option>
-                {tables.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
-              </select>
+              <Select className="select" value={draftRelation.refTable} onChange={(e) => setDraftRelation({ ...draftRelation, refTable: e.target.value })}>
+                <Option value="">右表…</Option>
+                {tables.map((t) => <Option key={t.name} value={t.name}>{t.name}</Option>)}
+              </Select>
               <input className="input" style={{ width: 120 }} placeholder="右列" value={draftRelation.refColumn} onChange={(e) => setDraftRelation({ ...draftRelation, refColumn: e.target.value })} />
               <input className="input" style={{ width: 180 }} placeholder="备注（可选）" value={draftRelation.description} onChange={(e) => setDraftRelation({ ...draftRelation, description: e.target.value })} />
               <button className="btn small primary" onClick={addRelation} disabled={busy} data-testid="ctx-add-relation"><Plus size={11} /> 添加</button>

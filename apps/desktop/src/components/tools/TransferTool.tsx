@@ -14,6 +14,8 @@ import {
 import { api, streamTransfer, type TransferEvent, type TransferPhase } from '../../lib/api';
 import { useApp } from '../../store';
 import { DatabaseSelect } from '../DatabaseSelect';
+import { askConfirm } from '../AskDialog';
+import { Select, Option } from '../ui';
 
 const PHASE_LABEL: Record<TransferPhase, string> = {
   create: '创建目标表',
@@ -374,7 +376,7 @@ export function TransferTool() {
   const startTransfer = async () => {
     if (!sourceId || !targetId || !selected.size || targetReadonly) return;
     if (sourceId === targetId && sourceDb === targetDb && mode === 'replace') {
-      if (!window.confirm('源与目标是同一库，替换模式会清空目标表后再从自身复制。继续？')) return;
+      if (!(await askConfirm({ message: '源与目标是同一库，替换模式会清空目标表后再从自身复制。继续？', danger: true }))) return;
     }
     const names = tables.filter((table) => selected.has(table.name)).map((table) => table.name);
     const controller = new AbortController();
@@ -485,9 +487,9 @@ export function TransferTool() {
         <div className="field" style={{ flex: 1, minWidth: 240 }}>
           <label>源连接 / 数据库</label>
           <div className="row gap-6">
-            <select className="select" style={{ flex: 1 }} value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
-              {connections.map((conn) => <option key={conn.id} value={conn.id}>{conn.name} · {conn.engine}</option>)}
-            </select>
+            <Select className="select" style={{ flex: 1 }} value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
+              {connections.map((conn) => <Option key={conn.id} value={conn.id}>{conn.name} · {conn.engine}</Option>)}
+            </Select>
             <DatabaseSelect connectionId={sourceId} value={sourceDb} onChange={setSourceDb} testId="transfer-source-db" />
           </div>
         </div>
@@ -495,18 +497,18 @@ export function TransferTool() {
         <div className="field" style={{ flex: 1, minWidth: 240 }}>
           <label>目标连接 / 数据库</label>
           <div className="row gap-6">
-            <select className="select" style={{ flex: 1 }} value={targetId} onChange={(e) => setTargetId(e.target.value)}>
-              {connections.map((conn) => <option key={conn.id} value={conn.id}>{conn.name} · {conn.engine}{conn.readonly ? '（只读）' : ''}</option>)}
-            </select>
+            <Select className="select" style={{ flex: 1 }} value={targetId} onChange={(e) => setTargetId(e.target.value)}>
+              {connections.map((conn) => <Option key={conn.id} value={conn.id}>{conn.name} · {conn.engine}{conn.readonly ? '（只读）' : ''}</Option>)}
+            </Select>
             <DatabaseSelect connectionId={targetId} value={targetDb} onChange={setTargetDb} testId="transfer-target-db" />
           </div>
         </div>
         <div className="field" style={{ width: 140 }}>
           <label>写入模式</label>
-          <select className="select" value={mode} onChange={(e) => setMode(e.target.value as 'append' | 'replace')}>
-            <option value="append">追加</option>
-            <option value="replace">清空后写入</option>
-          </select>
+          <Select className="select" value={mode} onChange={(e) => setMode(e.target.value as 'append' | 'replace')}>
+            <Option value="append">追加</Option>
+            <Option value="replace">清空后写入</Option>
+          </Select>
         </div>
       </div>
 

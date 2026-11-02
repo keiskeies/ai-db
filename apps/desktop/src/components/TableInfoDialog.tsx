@@ -3,7 +3,7 @@ import type { Engine, TableInfo } from '@aidb/core';
 import { fieldTypeOptions } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp } from '../store';
-import { Modal, Spinner } from './ui';
+import { Modal, Option, Select, Spinner } from './ui';
 
 interface Props {
   table: TableInfo;
@@ -167,13 +167,13 @@ export function TableInfoDialog({
               <label>字段名</label>
               <input className="input" value={fieldName} onChange={(event) => setFieldName(event.target.value)} placeholder="message" data-testid="field-name" />
               <label>类型</label>
-              <select className="select" value={fieldType || fieldTypes[0] || 'text'} onChange={(event) => setFieldType(event.target.value)} data-testid="field-type">
+              <Select className="select" value={fieldType || fieldTypes[0] || 'text'} onChange={(event) => setFieldType(event.target.value)} data-testid="field-type">
                 {fieldTypes.map((type) => (
-                  <option key={type} value={type}>
+                  <Option key={type} value={type}>
                     {type}
-                  </option>
+                  </Option>
                 ))}
-              </select>
+              </Select>
               <label />
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn primary" onClick={() => void submitField()} disabled={busy} data-testid="field-submit">
@@ -221,13 +221,13 @@ export function TableInfoDialog({
               {singleField ? (
                 <>
                   <label>索引类型</label>
-                  <select className="select" value={payloadType} onChange={(event) => setPayloadType(event.target.value)} data-testid="index-type">
+                  <Select className="select" value={payloadType} onChange={(event) => setPayloadType(event.target.value)} data-testid="index-type">
                     {['keyword', 'integer', 'float', 'text', 'bool', 'geo'].map((type) => (
-                      <option key={type} value={type}>
+                      <Option key={type} value={type}>
                         {type}
-                      </option>
+                      </Option>
                     ))}
-                  </select>
+                  </Select>
                 </>
               ) : mongoOptions ? (
                 <>
@@ -236,11 +236,11 @@ export function TableInfoDialog({
                   <label>TTL（秒）</label>
                   <input className="input" value={ttl} onChange={(event) => setTtl(event.target.value.replace(/\D/g, ''))} placeholder="留空则不过期" data-testid="index-ttl" />
                   <label>选项</label>
-                  <div style={{ display: 'flex', gap: 12, fontSize: 12 }}>
-                    <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <div className="row gap-12">
+                    <label className="checkbox">
                       <input type="checkbox" checked={unique} onChange={(event) => setUnique(event.target.checked)} data-testid="index-unique" /> 唯一
                     </label>
-                    <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    <label className="checkbox">
                       <input type="checkbox" checked={sparse} onChange={(event) => setSparse(event.target.checked)} data-testid="index-sparse" /> 稀疏
                     </label>
                   </div>

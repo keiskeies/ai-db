@@ -3,6 +3,8 @@ import { Clock, ListTodo, Loader2, Play, Plus, RefreshCw, Trash2 } from 'lucide-
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
 import { DatabaseSelect } from '../DatabaseSelect';
+import { askConfirm } from '../AskDialog';
+import { Select, Option } from '../ui';
 
 interface Job {
   id: string;
@@ -98,9 +100,9 @@ export function JobsTool() {
             </div>
             <div className="field">
               <label>连接</label>
-              <select className="select" value={connectionId} onChange={(e) => setConnectionId(e.target.value)}>
-                {connections.map((conn) => <option key={conn.id} value={conn.id}>{conn.name}</option>)}
-              </select>
+              <Select className="select" value={connectionId} onChange={(e) => setConnectionId(e.target.value)}>
+                {connections.map((conn) => <Option key={conn.id} value={conn.id}>{conn.name}</Option>)}
+              </Select>
             </div>
             <div className="field">
               <label>数据库</label>
@@ -108,10 +110,10 @@ export function JobsTool() {
             </div>
             <div className="field">
               <label>类型</label>
-              <select className="select" value={type} onChange={(e) => setType(e.target.value as 'query' | 'backup')}>
-                <option value="query">SQL 查询</option>
-                <option value="backup">数据库备份</option>
-              </select>
+              <Select className="select" value={type} onChange={(e) => setType(e.target.value as 'query' | 'backup')}>
+                <Option value="query">SQL 查询</Option>
+                <Option value="backup">数据库备份</Option>
+              </Select>
             </div>
             <div className="field">
               <label>间隔（分钟）</label>
@@ -164,7 +166,7 @@ export function JobsTool() {
               <button
                 className="icon-btn danger"
                 onClick={async () => {
-                  if (!window.confirm(`删除任务「${job.name}」？`)) return;
+                  if (!(await askConfirm({ message: `删除任务「${job.name}」？`, danger: true, confirmLabel: '删除' }))) return;
                   await api.deleteJob(job.id);
                   await load();
                 }}

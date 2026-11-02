@@ -18,6 +18,8 @@ import type { ColumnInfo, ForeignKeyInfo, IndexInfo, TableInfo } from '@aidb/cor
 import { api } from '../lib/api';
 import { tableSignature } from '../lib/schemaSignature';
 import { useApp, type Tab } from '../store';
+import { askConfirm } from './AskDialog';
+import { Select, Option } from './ui';
 
 type DesignTab = Extract<Tab, { kind: 'design' }>;
 type DesignerTab = 'fields' | 'indexes' | 'foreignKeys' | 'triggers' | 'options' | 'comments' | 'sql';
@@ -557,7 +559,19 @@ export function DesignView({ tab }: { tab: DesignTab }) {
         notify('info', '保存', '没有需要执行的变更');
         return;
       }
-      if (preview.some((sql) => /\b(drop|alter)\b/i.test(sql)) && !window.confirm('即将执行包含 DROP / ALTER 的结构变更，是否继续？')) return;
+      const destructive = preview.some((sql) => /\b(drop|alter)\b/i.test(sql));
+      if (destructive) {
+        const ok = await askConfirm({
+          message: '即将执行包含 DROP / ALTER 的结构变更。',
+          detail: '已被删除的列与索引及其数据无法恢复。',
+          danger: true,
+          confirmLabel: '继续执行',
+        });
+        if (!ok) {
+          setBusy(false);
+          return;
+        }
+      }
       await api.ddlExecute({ connectionId: tab.connectionId, database: tab.database, statements: preview });
       notify('success', tab.table ? '表结构已更新' : `表 ${tableName} 已创建`);
       await loadSchema(tab.connectionId, true, tab.database);
@@ -1006,7 +1020,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
                     <input value={idx.columns} disabled={idx.primary} onChange={(e) => setIndexes((prev) => prev.map((i) => (i.id === idx.id ? { ...i, columns: e.target.value } : i)))} />
                   </td>
                   <td>
-                    <select
+                    <Select
                       value={idx.primary ? 'PRIMARY' : idx.unique ? 'UNIQUE' : idx.method === 'FULLTEXT' ? 'FULLTEXT' : 'NORMAL'}
                       disabled={idx.primary}
                       onChange={(e) => {
@@ -1024,21 +1038,21 @@ export function DesignView({ tab }: { tab: DesignTab }) {
                         );
                       }}
                     >
-                      <option value="NORMAL">NORMAL</option>
-                      <option value="UNIQUE">UNIQUE</option>
-                      <option value="PRIMARY">PRIMARY</option>
-                      <option value="FULLTEXT">FULLTEXT</option>
-                    </select>
+                      <Option value="NORMAL">NORMAL</Option>
+                      <Option value="UNIQUE">UNIQUE</Option>
+                      <Option value="PRIMARY">PRIMARY</Option>
+                      <Option value="FULLTEXT">FULLTEXT</Option>
+                    </Select>
                   </td>
                   <td>
-                    <select value={idx.method} disabled={idx.primary} onChange={(e) => setIndexes((prev) => prev.map((i) => (i.id === idx.id ? { ...i, method: e.target.value } : i)))}>
-                      <option value="">（默认）</option>
+                    <Select value={idx.method} disabled={idx.primary} onChange={(e) => setIndexes((prev) => prev.map((i) => (i.id === idx.id ? { ...i, method: e.target.value } : i)))}>
+                      <Option value="">（默认）</Option>
                       {INDEX_METHODS.map((method) => (
-                        <option key={method} value={method}>
+                        <Option key={method} value={method}>
                           {method}
-                        </option>
+                        </Option>
                       ))}
-                    </select>
+                    </Select>
                   </td>
                   <td>
                     <input value={idx.comment} disabled={idx.primary} onChange={(e) => setIndexes((prev) => prev.map((i) => (i.id === idx.id ? { ...i, comment: e.target.value } : i)))} />
@@ -1090,24 +1104,24 @@ export function DesignView({ tab }: { tab: DesignTab }) {
                     <input value={fk.refColumns} onChange={(e) => setForeignKeys((prev) => prev.map((f) => (f.id === fk.id ? { ...f, refColumns: e.target.value } : f)))} />
                   </td>
                   <td>
-                    <select value={fk.onDelete} onChange={(e) => setForeignKeys((prev) => prev.map((f) => (f.id === fk.id ? { ...f, onDelete: e.target.value } : f)))}>
-                      <option value="">（默认）</option>
+                    <Select value={fk.onDelete} onChange={(e) => setForeignKeys((prev) => prev.map((f) => (f.id === fk.id ? { ...f, onDelete: e.target.value } : f)))}>
+                      <Option value="">（默认）</Option>
                       {FK_ACTIONS.map((action) => (
-                        <option key={action} value={action}>
+                        <Option key={action} value={action}>
                           {action}
-                        </option>
+                        </Option>
                       ))}
-                    </select>
+                    </Select>
                   </td>
                   <td>
-                    <select value={fk.onUpdate} onChange={(e) => setForeignKeys((prev) => prev.map((f) => (f.id === fk.id ? { ...f, onUpdate: e.target.value } : f)))}>
-                      <option value="">（默认）</option>
+                    <Select value={fk.onUpdate} onChange={(e) => setForeignKeys((prev) => prev.map((f) => (f.id === fk.id ? { ...f, onUpdate: e.target.value } : f)))}>
+                      <Option value="">（默认）</Option>
                       {FK_ACTIONS.map((action) => (
-                        <option key={action} value={action}>
+                        <Option key={action} value={action}>
                           {action}
-                        </option>
+                        </Option>
                       ))}
-                    </select>
+                    </Select>
                   </td>
                 </tr>
               ))}

@@ -1,5 +1,5 @@
 import { BarChart3, Download, Grid3x3, Layers, LineChart, Maximize2, PieChart, Radar, ScatterChart } from 'lucide-react';
-import { CopyButton } from './ui';
+import { CopyButton, Option, Select } from './ui';
 
 /**
  * 只包含图形类型：明细/表格是 AgentPanel 与 QueryView 自己的结果 tab，
@@ -71,17 +71,17 @@ export function ChartToolbar({ type, onType, columns, x, y, onX, onY, sql, onExp
         <>
           <label className="chart-axis-pick">
             <span>X</span>
-            <select className="select" value={x ?? ''} onChange={(e) => onX?.(e.target.value)} data-testid="chart-x">
-              <option value="">自动</option>
-              {columns!.map((column) => <option key={column} value={column}>{column}</option>)}
-            </select>
+            <Select className="select" value={x ?? ''} onChange={(e) => onX?.(e.target.value)} data-testid="chart-x">
+              <Option value="">自动</Option>
+              {columns!.map((column) => <Option key={column} value={column}>{column}</Option>)}
+            </Select>
           </label>
           <label className="chart-axis-pick">
             <span>Y</span>
-            <select className="select" value={y ?? ''} onChange={(e) => onY?.(e.target.value)} data-testid="chart-y">
-              <option value="">自动</option>
-              {columns!.map((column) => <option key={column} value={column}>{column}</option>)}
-            </select>
+            <Select className="select" value={y ?? ''} onChange={(e) => onY?.(e.target.value)} data-testid="chart-y">
+              <Option value="">自动</Option>
+              {columns!.map((column) => <Option key={column} value={column}>{column}</Option>)}
+            </Select>
           </label>
         </>
       ) : null}

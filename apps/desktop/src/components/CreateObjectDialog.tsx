@@ -4,7 +4,7 @@ import type { ConnectionConfig } from '@aidb/core';
 import { engineMeta, fieldTypeOptions } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp } from '../store';
-import { Modal, Spinner } from './ui';
+import { Modal, Option, Select, Spinner } from './ui';
 
 export function CreateObjectDialog({
   connection,
@@ -104,12 +104,12 @@ export function CreateObjectDialog({
             {connection.engine === 'qdrant' ? (
               <>
                 <label>距离函数</label>
-                <select className="select" value={distance} onChange={(event) => setDistance(event.target.value)} data-testid="create-object-distance">
-                  <option value="Cosine">Cosine</option>
-                  <option value="Euclid">Euclid</option>
-                  <option value="Dot">Dot</option>
-                  <option value="Manhattan">Manhattan</option>
-                </select>
+                <Select className="select" value={distance} onChange={(event) => setDistance(event.target.value)} data-testid="create-object-distance">
+                  <Option value="Cosine">Cosine</Option>
+                  <Option value="Euclid">Euclid</Option>
+                  <Option value="Dot">Dot</Option>
+                  <Option value="Manhattan">Manhattan</Option>
+                </Select>
               </>
             ) : null}
           </>
@@ -117,15 +117,15 @@ export function CreateObjectDialog({
         {isAql ? (
           <>
             <label>集合类型</label>
-            <select
+            <Select
               className="select"
               value={edge ? 'edge' : 'document'}
               onChange={(event) => setEdge(event.target.value === 'edge')}
               data-testid="create-object-kind"
             >
-              <option value="document">文档集合</option>
-              <option value="edge">边集合</option>
-            </select>
+              <Option value="document">文档集合</Option>
+              <Option value="edge">边集合</Option>
+            </Select>
           </>
         ) : null}
       </div>
@@ -148,7 +148,7 @@ export function CreateObjectDialog({
                 }}
                 data-testid={`create-object-field-${index}`}
               />
-              <select
+              <Select
                 className="select"
                 style={{ width: 130 }}
                 value={field.type}
@@ -159,11 +159,11 @@ export function CreateObjectDialog({
                 }}
               >
                 {typeOptions.map((type) => (
-                  <option key={type} value={type}>
+                  <Option key={type} value={type}>
                     {type}
-                  </option>
+                  </Option>
                 ))}
-              </select>
+              </Select>
               <button className="icon-btn" title="删除字段" onClick={() => setFields(fields.filter((_, i) => i !== index))}>
                 ×
               </button>

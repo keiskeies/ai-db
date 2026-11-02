@@ -245,4 +245,4 @@
   flex: 1;
   min-width: 0;
 }
-.dash-favorite input { margin-top: 3px; accent-color: var(--accent); }
+.dash-favorite input { margin-top: 3px; }

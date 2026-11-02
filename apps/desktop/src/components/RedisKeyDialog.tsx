@@ -322,11 +322,11 @@ export function RedisKeyDialog({
           {detail.type === 'string' && conn && !conn.readonly ? (
             <div>
               <textarea
-                className="textarea"
+                className="textarea grow"
                 value={valueText}
                 onChange={(event) => setValueText(event.target.value)}
                 spellCheck={false}
-                style={{ width: '100%', minHeight: 120, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                style={{ minHeight: 120 }}
                 data-testid="key-value-input"
               />
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
@@ -381,11 +381,11 @@ export function RedisKeyDialog({
                     />
                   </div>
                   <textarea
-                    className="textarea"
+                    className="textarea grow"
                     value={editField.value}
                     onChange={(event) => setEditField({ ...editField, value: event.target.value })}
                     spellCheck={false}
-                    style={{ width: '100%', minHeight: 90, marginTop: 8, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                    style={{ minHeight: 90, marginTop: 8 }}
                     data-testid="hash-field-value"
                   />
                   <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>

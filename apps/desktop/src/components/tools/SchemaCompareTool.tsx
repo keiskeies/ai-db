@@ -3,6 +3,8 @@ import { AlertTriangle, ArrowLeftRight, Loader2, Play } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
 import { DatabaseSelect } from '../DatabaseSelect';
+import { askConfirm } from '../AskDialog';
+import { Select, Option } from '../ui';
 
 interface DiffChange {
   kind: string;
@@ -54,10 +56,16 @@ export function SchemaCompareTool() {
   const sync = async () => {
     if (!diff?.sql?.length) return;
     const destructive = diff.tables.some((table: DiffTable) => table.changes.some((change) => change.destructive));
-    const text = destructive
-      ? `包含 ${diff.summary.statements} 条语句，其中存在删除表/列/索引的破坏性变更。确认同步到目标库？\n\n建议先备份目标库。`
-      : `将执行 ${diff.summary.statements} 条变更语句到目标库，确认继续？`;
-    if (!window.confirm(text)) return;
+    const ok = await askConfirm({
+      title: '同步结构到目标库',
+      message: destructive
+        ? `共 ${diff.summary.statements} 条语句，其中存在删除表/列/索引的破坏性变更。`
+        : `将执行 ${diff.summary.statements} 条变更语句到目标库。`,
+      detail: destructive ? '建议先备份目标库。' : undefined,
+      danger: destructive,
+      confirmLabel: '同步',
+    });
+    if (!ok) return;
     setSyncing(true);
     try {
       await api.syncSchema({ connectionId: targetId, database: targetDatabase || undefined, statements: diff.sql });
@@ -80,9 +88,9 @@ export function SchemaCompareTool() {
       <div className="tool-row" style={{ flexWrap: 'wrap' }}>
         <div className="field" style={{ flex: 1, minWidth: 150 }}>
           <label>源连接</label>
-          <select className="select" value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
-            {connections.map((conn) => <option key={conn.id} value={conn.id}>{conn.name} · {conn.engine}</option>)}
-          </select>
+          <Select className="select" value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
+            {connections.map((conn) => <Option key={conn.id} value={conn.id}>{conn.name} · {conn.engine}</Option>)}
+          </Select>
         </div>
         <div className="field" style={{ flex: 1, minWidth: 150 }}>
           <label>源数据库</label>
@@ -90,9 +98,9 @@ export function SchemaCompareTool() {
         </div>
         <div className="field" style={{ flex: 1, minWidth: 150 }}>
           <label>目标连接</label>
-          <select className="select" value={targetId} onChange={(e) => setTargetId(e.target.value)}>
-            {connections.map((conn) => <option key={conn.id} value={conn.id}>{conn.name} · {conn.engine}</option>)}
-          </select>
+          <Select className="select" value={targetId} onChange={(e) => setTargetId(e.target.value)}>
+            {connections.map((conn) => <Option key={conn.id} value={conn.id}>{conn.name} · {conn.engine}</Option>)}
+          </Select>
         </div>
         <div className="field" style={{ flex: 1, minWidth: 150 }}>
           <label>目标数据库</label>

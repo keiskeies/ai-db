@@ -263,6 +263,13 @@
 .skill-card-main { flex: 1; min-width: 0; cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
 .skill-card-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .skill-card-actions { display: flex; align-items: center; gap: 6px; padding-top: 2px; }
+.badge.pickable { cursor: pointer; }
+.badge.pickable:hover { color: var(--accent); border-color: var(--accent); }
+.skill-question { margin: 10px; padding: 10px; border: 1px solid var(--accent); border-radius: var(--radius-md); background: var(--accent-soft); }
+.skill-answer { flex: 1; }
+.skill-out { padding: 10px; border-bottom: 1px solid var(--border-subtle); }
+.skill-events { max-height: 260px; overflow: auto; padding: 10px; font-size: 10px; border-bottom: 1px solid var(--border-subtle); white-space: pre-wrap; }
+.skill-log { max-height: 320px; }
 
 /* 能力契约驱动的表单容器。
    用 display:contents 让每个 .field 直接成为外层 .tool-row 的 flex 子项——

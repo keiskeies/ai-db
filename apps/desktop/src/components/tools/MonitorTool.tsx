@@ -3,6 +3,7 @@ import { Activity, Loader2, RefreshCw, Skull } from 'lucide-react';
 import { applyCapabilityDefaults, CAPABILITIES, getCapability, type Capability } from '@aidb/core';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
+import { askConfirm } from '../AskDialog';
 import { CapabilityForm } from './CapabilityForm';
 
 /**
@@ -51,7 +52,7 @@ export function MonitorTool() {
   }, [auto, load]);
 
   const kill = async (sessionId: string) => {
-    if (!window.confirm(`终止会话 ${sessionId}？该操作不可撤销。`)) return;
+    if (!(await askConfirm({ message: `终止会话 ${sessionId}？`, detail: '该操作不可撤销，会话会被服务端强制断开。', danger: true, confirmLabel: '终止' }))) return;
     try {
       await api.killSession({ connectionId, sessionId });
       notify('success', '会话已终止');

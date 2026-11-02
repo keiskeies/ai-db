@@ -8,7 +8,7 @@ import { useApp, type Tab } from '../store';
 import { ChartView } from './ChartView';
 import { buildChartSpec, numericColumnNames, type ChartDataset } from './buildChartSpec';
 import { DatabaseSelect } from './DatabaseSelect';
-import { Spinner } from './ui';
+import { Option, Select, Spinner } from './ui';
 
 type DashboardTab = Extract<Tab, { kind: 'dashboard' }>;
 
@@ -190,20 +190,20 @@ function DashboardCardView({
         ) : null}
         <span className="dash-foot-space" />
         {columns.length > 1 ? (
-          <select
+          <Select
             className="select dash-time"
             value={card.timeColumn ?? ''}
             title="时间列：板级时间范围只作用于标了时间列的卡片"
             onChange={(event) => onPatch({ timeColumn: event.target.value })}
             data-testid="dashboard-card-time"
           >
-            <option value="">不参与时间筛选</option>
+            <Option value="">不参与时间筛选</Option>
             {columns.map((name) => (
-              <option key={name} value={name}>
+              <Option key={name} value={name}>
                 时间列：{name}
-              </option>
+              </Option>
             ))}
-          </select>
+          </Select>
         ) : null}
         <button className="icon-btn" title="刷新此卡片" onClick={onRefresh} disabled={busy} data-testid="dashboard-card-refresh">
           {busy ? <Spinner /> : <RefreshCw size={12} />}
@@ -601,7 +601,7 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
             {cards.length} / {limit}
           </span>
           {cards.some((card) => card.timeColumn) ? (
-            <select
+            <Select
               className="select"
               value={rangeValue}
               title="板级时间范围：只作用于标了时间列的卡片"
@@ -611,13 +611,13 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
               data-testid="dashboard-range"
             >
               {RANGES.map((item) => (
-                <option key={item.value} value={item.value}>
+                <Option key={item.value} value={item.value}>
                   {item.label}
-                </option>
+                </Option>
               ))}
-            </select>
+            </Select>
           ) : null}
-          <select
+          <Select
             className="select"
             value={String(schedule?.intervalSeconds ?? 0)}
             title={
@@ -641,11 +641,11 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
             data-testid="dashboard-schedule"
           >
             {SCHEDULES.map((item) => (
-              <option key={item.value} value={item.value}>
+              <Option key={item.value} value={item.value}>
                 {item.label}
-              </option>
+              </Option>
             ))}
-          </select>
+          </Select>
           <button className="btn small" onClick={() => void refresh()} disabled={refreshing || !cards.length} data-testid="dashboard-refresh">
             {refreshing ? <Spinner /> : <RefreshCw size={12} />} 刷新
           </button>
@@ -758,13 +758,13 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
             </div>
           ) : null}
           <div className="dash-composer-foot">
-            <select className="select" value={draft.chartType} onChange={(event) => setDraft({ ...draft, chartType: event.target.value as DashboardChartType })} data-testid="dashboard-card-type">
+            <Select className="select" value={draft.chartType} onChange={(event) => setDraft({ ...draft, chartType: event.target.value as DashboardChartType })} data-testid="dashboard-card-type">
               {DASHBOARD_CHART_TYPES.map((type) => (
-                <option key={type} value={type}>
+                <Option key={type} value={type}>
                   {CHART_LABELS[type]}
-                </option>
+                </Option>
               ))}
-            </select>
+            </Select>
             <span className="dash-foot-space" />
             <button className="btn small" onClick={() => void previewCard()} disabled={previewing || !draft.sql.trim()} data-testid="dashboard-card-preview-btn">
               {previewing ? <Spinner /> : <Eye size={12} />} 预览

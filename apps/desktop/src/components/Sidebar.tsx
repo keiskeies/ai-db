@@ -41,6 +41,7 @@ import { TableOpsDialog, type TableDialogKind } from './TableOpsDialog';
 import { DatabaseOpsDialog, type DatabaseDialogKind } from './DatabaseOpsDialog';
 import { CreateObjectDialog } from './CreateObjectDialog';
 import { DropObjectDialog } from './DropObjectDialog';
+import { askConfirm, askPrompt } from './AskDialog';
 import { TableInfoDialog } from './TableInfoDialog';
 
 const COLORS: Record<string, string> = {
@@ -154,7 +155,7 @@ export function Sidebar() {
   };
 
   const renameGroup = async (group: string) => {
-    const next = window.prompt(`分组「${group}」重命名为：`, group);
+    const next = await askPrompt({ title: '重命名分组', message: `分组「${group}」重命名为：`, value: group, confirmLabel: '重命名' });
     if (!next || !next.trim() || next.trim() === group) return;
     try {
       await api.renameGroup(group, next.trim());
@@ -190,7 +191,7 @@ export function Sidebar() {
   };
 
   const removeGroup = async (group: string) => {
-    if (!window.confirm(`删除分组「${group}」？组内连接会移动到「默认」。`)) return;
+    if (!(await askConfirm({ message: `删除分组「${group}」？`, detail: '组内连接会移动到「默认」，不会删除连接本身。', danger: true, confirmLabel: '删除' }))) return;
     try {
       await api.deleteGroup(group);
       await useApp.getState().boot();
@@ -228,7 +229,7 @@ export function Sidebar() {
       : isTruncate
         ? `截断表「${table.name}」并重置自增计数？此操作不可恢复。`
         : `清空表「${table.name}」中的全部数据？自增计数不会重置。`;
-    if (!window.confirm(message)) return;
+    if (!(await askConfirm({ message, danger: true, confirmLabel: isDrop ? '删除' : isTruncate ? '截断' : '清空' }))) return;
     try {
       await api.tableOps({ connectionId: conn.id, database: schema.name, table: table.name, op: kind });
       notify('success', isDrop ? `${label}已删除` : isTruncate ? '表已截断' : '表已清空', table.name);
@@ -652,8 +653,8 @@ export function Sidebar() {
                           label: t('delete'),
                           icon: <Trash2 size={13} />,
                           danger: true,
-                          onClick: () => {
-                            if (window.confirm(`删除连接「${conn.name}」？仅移除配置，不会删除数据库。`)) void deleteConnection(conn.id);
+                          onClick: async () => {
+                            if (await askConfirm({ message: `删除连接「${conn.name}」？`, detail: '仅移除配置，不会删除数据库。', danger: true, confirmLabel: t('delete') })) void deleteConnection(conn.id);
                           },
                         },
                       ])
@@ -683,8 +684,8 @@ export function Sidebar() {
                             label: t('delete'),
                             icon: <Trash2 size={13} />,
                             danger: true,
-                            onClick: () => {
-                              if (window.confirm(`删除连接「${conn.name}」？`)) void deleteConnection(conn.id);
+                            onClick: async () => {
+                              if (await askConfirm({ message: `删除连接「${conn.name}」？`, detail: '仅移除配置，不会删除数据库。', danger: true, confirmLabel: t('delete') })) void deleteConnection(conn.id);
                             },
                           },
                         ]);

@@ -63,12 +63,12 @@ export function LineProtocolPanel({
         InfluxDB 的 SQL 接口只读；这里按行协议写入，格式 <code>measurement,tag=v field=v 时间戳</code>，时间戳用纳秒。
       </div>
       <textarea
-        className="textarea"
+        className="textarea grow"
         value={text}
         onChange={(event) => setText(event.target.value)}
         placeholder={SAMPLE}
         spellCheck={false}
-        style={{ width: '100%', minHeight: 200, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+        style={{ minHeight: 200 }}
         data-testid="line-protocol-input"
       />
       {error ? <div style={{ color: 'var(--danger)', fontSize: 12, marginTop: 10 }} data-testid="line-protocol-error">{error}</div> : null}

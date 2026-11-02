@@ -276,14 +276,14 @@ export function GraphView({ graph }: { graph: GraphData }) {
   const showAllEdgeLabels = graph.edges.length <= 24 || isFiltering;
 
   return (
-    <div data-testid="graph-view" data-zoom={`${Math.round(view.scale * 100)}%`} style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface-2, var(--surface))', overflow: 'hidden' }}>
-      <div className="graph-toolbar" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderBottom: '1px solid var(--border)' }}>
+    <div className="graph-view" data-testid="graph-view" data-zoom={`${Math.round(view.scale * 100)}%`}>
+      <div className="graph-toolbar">
         <input
+          className="input graph-search"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="搜索节点 / 标签 / 属性"
           aria-label="搜索图节点"
-          style={{ width: 200, height: 24, fontSize: 11, padding: '0 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text-primary)' }}
         />
         {isFiltering ? <span className="muted" style={{ fontSize: 11 }}>{matched.size} 个匹配</span> : null}
         <div style={{ flex: 1 }} />
@@ -366,7 +366,7 @@ export function GraphView({ graph }: { graph: GraphData }) {
                     <title>{JSON.stringify({ id: node.id, labels: node.labels, ...node.properties }, null, 2)}</title>
                     {selectedId === node.id ? <circle cx={position.x} cy={position.y} r={radius + 5} fill="none" stroke="var(--accent, #45c8c3)" strokeWidth={2} /> : null}
                     {isFiltering && matched.has(node.id) ? <circle cx={position.x} cy={position.y} r={radius + 7} fill={color} fillOpacity={0.18} /> : null}
-                    <circle cx={position.x} cy={position.y} r={radius} fill={color} fillOpacity={0.92} stroke="var(--surface, #0b0d0d)" strokeWidth={2} />
+                    <circle cx={position.x} cy={position.y} r={radius} fill={color} fillOpacity={0.92} stroke="var(--bg-app, #0b0d0d)" strokeWidth={2} />
                     <text x={position.x} y={position.y + radius + 12} textAnchor="middle" fontSize={11} fill="var(--text-primary, #f1f3f1)" style={{ pointerEvents: 'none' }}>
                       {label}
                     </text>
@@ -385,7 +385,7 @@ export function GraphView({ graph }: { graph: GraphData }) {
         {selected ? (
           <aside
             data-testid="graph-detail"
-            style={{ width: 250, flexShrink: 0, borderLeft: '1px solid var(--border)', padding: '10px 12px', overflow: 'auto', maxHeight: 420 }}
+            style={{ width: 250, flexShrink: 0, borderLeft: '1px solid var(--border-panel)', padding: '10px 12px', overflow: 'auto', maxHeight: 420 }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ width: 10, height: 10, borderRadius: 5, background: colorFor(selected.labels), flexShrink: 0 }} />
@@ -412,7 +412,7 @@ export function GraphView({ graph }: { graph: GraphData }) {
           </aside>
         ) : null}
       </div>
-      <div style={{ padding: '6px 10px', fontSize: 11, color: 'var(--text-muted)', borderTop: '1px solid var(--border)' }}>
+      <div style={{ padding: '6px 10px', fontSize: 11, color: 'var(--text-muted)', borderTop: '1px solid var(--border-panel)' }}>
         {graph.nodes.length} 节点 · {graph.edges.length} 关系 · 缩放 {Math.round(view.scale * 100)}%
       </div>
     </div>

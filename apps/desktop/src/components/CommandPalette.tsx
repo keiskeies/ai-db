@@ -101,9 +101,9 @@ export function CommandPalette() {
           <Search size={15} style={{ marginLeft: 14, color: 'var(--text-muted)' }} />
           <input
             ref={inputRef}
+            className="palette-search"
             value={query}
             placeholder={t('typeCommand')}
-            style={{ border: 'none', flex: 1 }}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'ArrowDown') {

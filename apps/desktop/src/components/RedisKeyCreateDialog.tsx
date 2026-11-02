@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Plus } from 'lucide-react';
 import { api } from '../lib/api';
 import { useApp } from '../store';
-import { Modal, Spinner } from './ui';
+import { Modal, Option, Select, Spinner } from './ui';
 
 const TYPES = ['string', 'hash', 'list', 'set', 'zset'] as const;
 type KeyType = (typeof TYPES)[number];
@@ -115,11 +115,11 @@ export function RedisKeyCreateDialog({
           data-testid="key-create-name"
         />
         <label>类型</label>
-        <select className="select" value={type} onChange={(event) => setType(event.target.value as KeyType)} data-testid="key-create-type">
+        <Select className="select" value={type} onChange={(event) => setType(event.target.value as KeyType)} data-testid="key-create-type">
           {TYPES.map((item) => (
-            <option key={item} value={item}>{item}</option>
+            <Option key={item} value={item}>{item}</Option>
           ))}
-        </select>
+        </Select>
         <label>TTL（秒）</label>
         <input
           className="input"
@@ -132,12 +132,12 @@ export function RedisKeyCreateDialog({
       </div>
       <div className="muted" style={{ fontSize: 11, margin: '12px 0 6px' }}>{HINT[type]}</div>
       <textarea
-        className="textarea"
+        className="textarea grow"
         value={valueText}
         onChange={(event) => setValueText(event.target.value)}
         placeholder={PLACEHOLDER[type]}
         spellCheck={false}
-        style={{ width: '100%', minHeight: 140, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+        style={{ minHeight: 140 }}
         data-testid="key-create-value"
       />
       {error ? <div style={{ color: 'var(--danger)', fontSize: 12, marginTop: 10 }} data-testid="key-create-error">{error}</div> : null}

@@ -91,11 +91,11 @@ export function DocumentEditDialog({
       {error ? <div style={{ color: 'var(--danger)', fontSize: 12, marginBottom: 6 }} data-testid="doc-edit-error">{error}</div> : null}
       {!loading ? (
         <textarea
-          className="textarea"
+          className="textarea grow"
           value={text}
           onChange={(event) => setText(event.target.value)}
           spellCheck={false}
-          style={{ width: '100%', minHeight: 320, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+          style={{ minHeight: 320 }}
           data-testid="doc-edit-json"
         />
       ) : null}

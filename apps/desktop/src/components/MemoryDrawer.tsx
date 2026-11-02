@@ -3,6 +3,8 @@ import { Brain, Pencil, Pin, PinOff, Plus, Search, Trash2, X } from 'lucide-reac
 import { MEMORY_KINDS, MEMORY_KIND_LABELS, type MemoryKind } from '@aidb/core';
 import { formatRelative } from '../lib/format';
 import { useApp } from '../store';
+import { askConfirm } from './AskDialog';
+import { Select, Option } from './ui';
 
 export function MemoryDrawer() {
   const open = useApp((s) => s.memoryOpen);
@@ -70,16 +72,16 @@ export function MemoryDrawer() {
         {showForm ? (
           <div className="memory-form">
             <div className="row gap-6">
-              <select className="select" style={{ height: 26, fontSize: 11 }} value={kind} onChange={(e) => setKind(e.target.value as MemoryKind)}>
+              <Select className="select" style={{ height: 26, fontSize: 11 }} value={kind} onChange={(e) => setKind(e.target.value as MemoryKind)}>
                 {MEMORY_KINDS.map((k) => (
-                  <option key={k} value={k}>{MEMORY_KIND_LABELS[k][locale]}</option>
+                  <Option key={k} value={k}>{MEMORY_KIND_LABELS[k][locale]}</Option>
                 ))}
-              </select>
-              <select className="select" style={{ height: 26, fontSize: 11 }} value={scope} onChange={(e) => setScope(e.target.value)}>
-                <option value="global">全局</option>
-                <option value="connection">当前连接</option>
-                <option value="database">当前库</option>
-              </select>
+              </Select>
+              <Select className="select" style={{ height: 26, fontSize: 11 }} value={scope} onChange={(e) => setScope(e.target.value)}>
+                <Option value="global">全局</Option>
+                <Option value="connection">当前连接</Option>
+                <Option value="database">当前库</Option>
+              </Select>
               <div className="spacer" />
               <input
                 className="input"
@@ -159,7 +161,7 @@ export function MemoryDrawer() {
                   >
                     <Pencil size={11} />
                   </button>
-                  <button className="icon-btn danger" onClick={() => window.confirm('删除这条记忆？') && void remove(memory.id)}>
+                  <button className="icon-btn danger" onClick={async () => { if (await askConfirm({ message: '删除这条记忆？', danger: true, confirmLabel: '删除' })) void remove(memory.id); }}>
                     <Trash2 size={11} />
                   </button>
                 </div>

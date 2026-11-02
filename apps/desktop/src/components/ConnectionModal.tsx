@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Cable, Check, Loader2, PlugZap, X } from 'lucide-react';
 import type { ConnectionConfig, Engine, EngineMeta } from '@aidb/core';
 import { ENGINES, engineMeta } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp } from '../store';
-import { Modal } from './ui';
+import type { ConnectionEditorState } from '../store';
+import { Modal, OptGroup, Option, Select } from './ui';
 
 const COLORS = ['blue', 'green', 'orange', 'red', 'purple', 'cyan', 'gray'];
 
@@ -54,63 +55,41 @@ const GROUPED_ENGINES = GROUP_ORDER.map((label) => [label, ENGINES.filter((meta)
 
 export function ConnectionModal() {
   const editor = useApp((s) => s.connectionEditor);
+  if (!editor) return null;
+  return <ConnectionForm key={`${editor.mode}:${editor.connection?.id ?? 'new'}`} editor={editor} />;
+}
+
+/** 表单只在打开时存在，状态直接从 editor 初始化：关闭后不再留状态，重开不会先闪出上一次的引擎。 */
+function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
   const close = useApp((s) => s.closeConnectionEditor);
   const save = useApp((s) => s.saveConnection);
   const t = useApp((s) => s.t);
 
-  const existing = editor?.connection;
-  const [name, setName] = useState('');
-  const [engine, setEngine] = useState<Engine>('sqlite');
-  const [color, setColor] = useState('blue');
-  const [environment, setEnvironment] = useState<ConnectionConfig['environment']>('dev');
-  const [groupName, setGroupName] = useState('默认');
-  const [note, setNote] = useState('');
-  const [host, setHost] = useState('127.0.0.1');
-  const [port, setPort] = useState('3306');
-  const [database, setDatabase] = useState('');
-  const [username, setUsername] = useState('root');
+  const c = editor.connection;
+  const meta = engineMeta(c?.engine ?? 'sqlite');
+  const [name, setName] = useState(c?.name ?? '');
+  const [engine, setEngine] = useState<Engine>(c?.engine ?? 'sqlite');
+  const [color, setColor] = useState<string>(c?.color ?? 'blue');
+  const [environment, setEnvironment] = useState<ConnectionConfig['environment']>(c?.environment ?? 'dev');
+  const [groupName, setGroupName] = useState(c?.groupName ?? '默认');
+  const [note, setNote] = useState(c?.note ?? '');
+  const [host, setHost] = useState(c?.host ?? '127.0.0.1');
+  const [port, setPort] = useState(String(c?.port ?? meta.defaultPort ?? ''));
+  const [database, setDatabase] = useState(c?.database ?? meta.defaultDatabase ?? '');
+  const [username, setUsername] = useState(c?.username ?? meta.defaultUsername ?? '');
   const [password, setPassword] = useState('');
-  const [ssl, setSsl] = useState(false);
-  const [readonly, setReadonly] = useState(false);
-  const [sshEnabled, setSshEnabled] = useState(false);
-  const [sshHost, setSshHost] = useState('');
-  const [sshPort, setSshPort] = useState('22');
-  const [sshUser, setSshUser] = useState('');
-  const [sshAuth, setSshAuth] = useState<'password' | 'key'>('password');
+  const [ssl, setSsl] = useState(Boolean(c?.ssl));
+  const [readonly, setReadonly] = useState(Boolean(c?.readonly));
+  const [sshEnabled, setSshEnabled] = useState(Boolean(c?.ssh?.enabled));
+  const [sshHost, setSshHost] = useState(c?.ssh?.host ?? '');
+  const [sshPort, setSshPort] = useState(String(c?.ssh?.port ?? 22));
+  const [sshUser, setSshUser] = useState(c?.ssh?.user ?? '');
+  const [sshAuth, setSshAuth] = useState<'password' | 'key'>(c?.ssh?.authMethod ?? 'password');
   const [sshPassword, setSshPassword] = useState('');
-  const [sshKeyPath, setSshKeyPath] = useState('');
+  const [sshKeyPath, setSshKeyPath] = useState(c?.ssh?.privateKeyPath ?? '');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; version?: string; latencyMs: number; message?: string } | null>(null);
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!editor) return;
-    const c = editor.connection;
-    setName(c?.name ?? '');
-    setEngine(c?.engine ?? 'sqlite');
-    setColor(c?.color ?? 'blue');
-    setEnvironment(c?.environment ?? 'dev');
-    setGroupName(c?.groupName ?? '默认');
-    setNote(c?.note ?? '');
-    setHost(c?.host ?? '127.0.0.1');
-    const meta = engineMeta(c?.engine ?? 'sqlite');
-    setPort(String(c?.port ?? meta.defaultPort ?? ''));
-    setDatabase(c?.database ?? meta.defaultDatabase ?? '');
-    setUsername(c?.username ?? meta.defaultUsername ?? '');
-    setPassword('');
-    setSsl(Boolean(c?.ssl));
-    setReadonly(Boolean(c?.readonly));
-    setSshEnabled(Boolean(c?.ssh?.enabled));
-    setSshHost(c?.ssh?.host ?? '');
-    setSshPort(String(c?.ssh?.port ?? 22));
-    setSshUser(c?.ssh?.user ?? '');
-    setSshAuth(c?.ssh?.authMethod ?? 'password');
-    setSshPassword('');
-    setSshKeyPath(c?.ssh?.privateKeyPath ?? '');
-    setTestResult(null);
-  }, [editor]);
-
-  if (!editor) return null;
 
   const changeEngine = (next: Engine) => {
     const meta = engineMeta(next);
@@ -205,23 +184,23 @@ export function ConnectionModal() {
           </div>
           <div className="field">
             <label>{t('engine')}</label>
-            <select className="select" data-testid="connection-engine" value={engine} onChange={(e) => changeEngine(e.target.value as Engine)} disabled={editor.mode === 'edit'}>
+            <Select className="select" data-testid="connection-engine" value={engine} onChange={(e) => changeEngine(e.target.value as Engine)} disabled={editor.mode === 'edit'}>
               {GROUPED_ENGINES.map(([label, items]) => (
-                <optgroup key={label} label={label}>
+                <OptGroup key={label} label={label}>
                   {items.map((item) => (
-                    <option key={item.id} value={item.id}>{item.label}</option>
+                    <Option key={item.id} value={item.id}>{item.label}</Option>
                   ))}
-                </optgroup>
+                </OptGroup>
               ))}
-            </select>
+            </Select>
           </div>
           <div className="field">
             <label>{t('environment')}</label>
-            <select className="select" value={environment} onChange={(e) => setEnvironment(e.target.value as ConnectionConfig['environment'])}>
-              <option value="dev">{t('dev')}</option>
-              <option value="staging">{t('staging')}</option>
-              <option value="prod">{t('prod')}</option>
-            </select>
+            <Select className="select" value={environment} onChange={(e) => setEnvironment(e.target.value as ConnectionConfig['environment'])}>
+              <Option value="dev">{t('dev')}</Option>
+              <Option value="staging">{t('staging')}</Option>
+              <Option value="prod">{t('prod')}</Option>
+            </Select>
           </div>
           <div className="field">
             <label>{t('color')}</label>
@@ -353,10 +332,10 @@ export function ConnectionModal() {
                 </div>
                 <div className="field">
                   <label>认证方式</label>
-                  <select className="select" value={sshAuth} onChange={(e) => setSshAuth(e.target.value as 'password' | 'key')} data-testid="ssh-auth">
-                    <option value="password">{t('authByPassword')}</option>
-                    <option value="key">{t('authByKey')}</option>
-                  </select>
+                  <Select className="select" value={sshAuth} onChange={(e) => setSshAuth(e.target.value as 'password' | 'key')} data-testid="ssh-auth">
+                    <Option value="password">{t('authByPassword')}</Option>
+                    <Option value="key">{t('authByKey')}</Option>
+                  </Select>
                 </div>
                 {sshAuth === 'password' ? (
                   <div className="field full">

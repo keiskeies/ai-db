@@ -175,6 +175,24 @@ async function openDemoTable(page) {
   await page.click('[data-testid="welcome-table-orders"]');
 }
 
+/** 自定义 Select：点触发器 → 点弹层里对应 value 的项（原生 selectOption 只认真 select）。 */
+async function pick(scope, selector, value) {
+  await scope.click(selector);
+  const menu = scope.locator('.select-menu').first();
+  await menu.waitFor({ state: 'visible', timeout: 5000 });
+  await menu.locator(`[data-value=${JSON.stringify(String(value))}]`).first().click();
+}
+
+async function pickByLabel(scope, selector, label) {
+  await scope.click(selector);
+  const menu = scope.locator('.select-menu').first();
+  await menu.waitFor({ state: 'visible', timeout: 5000 });
+  await menu.locator('.select-menu-item', { hasText: label }).first().click();
+}
+
+/** 触发器把当前值挂在 data-value 上，读它比展开菜单便宜。 */
+const selectedValue = (scope, selector) => scope.locator(selector).first().getAttribute('data-value');
+
 async function waitHealth(url, timeout = 25000) {
   const started = Date.now();
   while (Date.now() - started < timeout) {
@@ -534,9 +552,19 @@ await page.waitForTimeout(150);
 
 await page.click('[data-testid="sidebar-new-connection"]');
 await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
-const engineOptions = await page.locator('[data-testid="connection-engine"] option').count();
+await page.click('[data-testid="connection-engine"]');
+await page.waitForSelector('.select-menu', { timeout: 5000 });
+const engineMenu = page.locator('.select-menu').first();
+const engineOptions = await engineMenu.locator('[data-value]').count();
 check('connection form lists 41 engines', engineOptions === 41, String(engineOptions));
-const engineGroups = await page.locator('[data-testid="connection-engine"]').evaluate((el) => [...el.querySelectorAll('optgroup')].map((group) => ({ label: group.label, ids: [...group.querySelectorAll('option')].map((option) => option.value) })));
+const engineGroups = await engineMenu.evaluate((el) => {
+  const groups = [];
+  for (const node of el.children) {
+    if (node.classList.contains('select-group')) groups.push({ label: node.textContent ?? '', ids: [] });
+    else if (node.dataset.value !== undefined && groups.length) groups[groups.length - 1].ids.push(node.dataset.value);
+  }
+  return groups;
+});
 check(
   'engine picker groups engines by model and family',
   engineGroups.length >= 8
@@ -548,6 +576,8 @@ check(
   engineGroups.map((group) => group.label).join(' / '),
 );
 await page.screenshot({ path: join(shots, 'desktop-connection-engines.png') });
+await page.keyboard.press('Escape');
+await page.waitForTimeout(150);
 await page.locator('.modal-head .icon-btn').click();
 await page.waitForTimeout(200);
 
@@ -555,7 +585,7 @@ if (MONGO_PORT) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
   await page.fill('[data-testid="connection-name"]', 'Mongo E2E');
-  await page.selectOption('[data-testid="connection-engine"]', 'mongodb');
+  await pick(page, '[data-testid="connection-engine"]', 'mongodb');
   await page.fill('[data-testid="connection-host"]', '127.0.0.1');
   await page.fill('[data-testid="connection-port"]', String(MONGO_PORT));
   await page.fill('[data-testid="connection-database"]', 'aidb_e2e');
@@ -581,6 +611,24 @@ if (MONGO_PORT) {
 
   await page.click('[data-testid="open-document-write"]');
   await page.waitForSelector('[data-testid="document-write-json"]', { timeout: 10000 });
+  // 集合名支持自由输入，建议列表也归应用画：datalist 的下拉由系统绘制，暗色面板上会弹白底
+  await page.click('[data-testid="document-write-collection"]');
+  await page.waitForSelector('.combo-menu', { timeout: 5000 });
+  const comboProbe = await page.evaluate(() => {
+    const menu = document.querySelector('.combo-menu');
+    if (!menu) return { missing: true };
+    const nums = (getComputedStyle(menu).backgroundColor.match(/\d+/g) ?? []).map(Number);
+    return {
+      avg: nums.length >= 3 ? (nums[0] + nums[1] + nums[2]) / 3 : null,
+      bg: getComputedStyle(menu).backgroundColor,
+      items: menu.querySelectorAll('.select-menu-item').length,
+      nativeOptions: document.querySelectorAll('datalist option, select').length,
+    };
+  });
+  check('集合输入的建议列表由应用绘制（无 datalist/原生 select）', comboProbe && !comboProbe.missing && comboProbe.nativeOptions === 0 && comboProbe.items > 0, `items=${comboProbe?.items} native=${comboProbe?.nativeOptions}`);
+  check('集合建议列表跟暗色面板底色', comboProbe && comboProbe.avg !== null && comboProbe.avg < 90, comboProbe?.bg);
+  await page.locator('.combo-menu .select-menu-item').first().click();
+  check('点建议会填进输入框', (await page.inputValue('[data-testid="document-write-collection"]')).length > 0);
   await page.fill('[data-testid="document-write-collection"]', 'widgets');
   await page.fill('[data-testid="document-write-json"]', JSON.stringify([{ _id: '64b0c0d0e0f0a0b0c0d0e0f0', name: 'Gamma', weight: 9 }]));
   await page.click('[data-testid="document-write-submit"]');
@@ -655,7 +703,7 @@ if (TIMESCALE_PORT) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
   await page.fill('[data-testid="connection-name"]', 'Timescale E2E');
-  await page.selectOption('[data-testid="connection-engine"]', 'timescale');
+  await pick(page, '[data-testid="connection-engine"]', 'timescale');
   await page.fill('[data-testid="connection-host"]', '127.0.0.1');
   await page.fill('[data-testid="connection-port"]', String(TIMESCALE_PORT));
   await page.fill('[data-testid="connection-username"]', 'postgres');
@@ -675,7 +723,7 @@ if (REDIS_PORT) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
   await page.fill('[data-testid="connection-name"]', 'Redis E2E');
-  await page.selectOption('[data-testid="connection-engine"]', 'redis');
+  await pick(page, '[data-testid="connection-engine"]', 'redis');
   await page.fill('[data-testid="connection-host"]', '127.0.0.1');
   await page.fill('[data-testid="connection-port"]', String(REDIS_PORT));
   await page.fill('[data-testid="connection-database"]', '0');
@@ -755,7 +803,7 @@ if (REDIS_PORT) {
   await page.click('[data-testid="open-key-create"]');
   await page.waitForSelector('[data-testid="key-create-name"]', { timeout: 10000 });
   await page.fill('[data-testid="key-create-name"]', 'aidb:e2e:created');
-  await page.selectOption('[data-testid="key-create-type"]', 'hash');
+  await pick(page, '[data-testid="key-create-type"]', 'hash');
   await page.fill('[data-testid="key-create-value"]', '{"name":"Ada"}');
   await page.click('[data-testid="key-create-submit"]');
   await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
@@ -791,7 +839,7 @@ if (REDIS_PORT) {
   await page.click('[data-testid="open-key-create"]');
   await page.waitForSelector('[data-testid="key-create-name"]', { timeout: 10000 });
   await page.fill('[data-testid="key-create-name"]', 'aidb:e2e:members');
-  await page.selectOption('[data-testid="key-create-type"]', 'set');
+  await pick(page, '[data-testid="key-create-type"]', 'set');
   await page.fill('[data-testid="key-create-value"]', '["alpha"]');
   await page.click('[data-testid="key-create-submit"]');
   await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
@@ -824,7 +872,7 @@ if (REDIS_PORT) {
   await page.click('[data-testid="open-key-create"]');
   await page.waitForSelector('[data-testid="key-create-name"]', { timeout: 10000 });
   await page.fill('[data-testid="key-create-name"]', 'aidb:e2e:list');
-  await page.selectOption('[data-testid="key-create-type"]', 'list');
+  await pick(page, '[data-testid="key-create-type"]', 'list');
   await page.fill('[data-testid="key-create-value"]', '["one"]');
   await page.click('[data-testid="key-create-submit"]');
   await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
@@ -872,7 +920,7 @@ if (NEO4J_PORT) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
   await page.fill('[data-testid="connection-name"]', 'Neo4j E2E');
-  await page.selectOption('[data-testid="connection-engine"]', 'neo4j');
+  await pick(page, '[data-testid="connection-engine"]', 'neo4j');
   await page.fill('[data-testid="connection-host"]', '127.0.0.1');
   await page.fill('[data-testid="connection-port"]', String(NEO4J_PORT));
   await page.fill('[data-testid="connection-database"]', 'neo4j');
@@ -903,7 +951,7 @@ if (DM_PORT) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
   await page.fill('[data-testid="connection-name"]', 'DM E2E');
-  await page.selectOption('[data-testid="connection-engine"]', 'dm');
+  await pick(page, '[data-testid="connection-engine"]', 'dm');
   await page.fill('[data-testid="connection-host"]', '127.0.0.1');
   await page.fill('[data-testid="connection-port"]', String(DM_PORT));
   await page.fill('[data-testid="connection-password"]', DM_PASSWORD);
@@ -922,7 +970,7 @@ if (QDRANT_PORT) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
   await page.fill('[data-testid="connection-name"]', 'Qdrant E2E');
-  await page.selectOption('[data-testid="connection-engine"]', 'qdrant');
+  await pick(page, '[data-testid="connection-engine"]', 'qdrant');
   await page.fill('[data-testid="connection-host"]', '127.0.0.1');
   await page.fill('[data-testid="connection-port"]', String(QDRANT_PORT));
   await page.fill('[data-testid="connection-database"]', 'default');
@@ -1040,7 +1088,7 @@ if (QDRANT_PORT) {
   check('Qdrant payload index shows in object info', true);
   await page.click('[data-testid="create-index-open"]');
   await page.fill('[data-testid="index-fields"]', 'weight');
-  await page.selectOption('[data-testid="index-type"]', 'integer');
+  await pick(page, '[data-testid="index-type"]', 'integer');
   await page.click('[data-testid="index-submit"]');
   await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
   await openVectorInfo();
@@ -1070,7 +1118,7 @@ if (TDENGINE_PORT) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
   await page.fill('[data-testid="connection-name"]', 'TDengine E2E');
-  await page.selectOption('[data-testid="connection-engine"]', 'tdengine');
+  await pick(page, '[data-testid="connection-engine"]', 'tdengine');
   await page.fill('[data-testid="connection-host"]', '127.0.0.1');
   await page.fill('[data-testid="connection-port"]', String(TDENGINE_PORT));
   await page.fill('[data-testid="connection-password"]', 'taosdata');
@@ -1090,7 +1138,7 @@ if (FALKORDB_PORT) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
   await page.fill('[data-testid="connection-name"]', 'FalkorDB E2E');
-  await page.selectOption('[data-testid="connection-engine"]', 'falkordb');
+  await pick(page, '[data-testid="connection-engine"]', 'falkordb');
   await page.fill('[data-testid="connection-host"]', '127.0.0.1');
   await page.fill('[data-testid="connection-port"]', String(FALKORDB_PORT));
   await page.fill('[data-testid="connection-database"]', FALKORDB_GRAPH);
@@ -1115,7 +1163,7 @@ if (ARANGO_PORT) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
   await page.fill('[data-testid="connection-name"]', 'ArangoDB E2E');
-  await page.selectOption('[data-testid="connection-engine"]', 'arangodb');
+  await pick(page, '[data-testid="connection-engine"]', 'arangodb');
   await page.fill('[data-testid="connection-host"]', '127.0.0.1');
   await page.fill('[data-testid="connection-port"]', String(ARANGO_PORT));
   await page.fill('[data-testid="connection-database"]', ARANGO_DB);
@@ -1164,7 +1212,7 @@ if (ARANGO_PORT) {
   await page.click('text=新建集合…');
   await page.waitForSelector('[data-testid="create-object-kind"]', { timeout: 10000 });
   await page.fill('[data-testid="create-object-name"]', 'aidb_ui_col');
-  await page.selectOption('[data-testid="create-object-kind"]', 'edge');
+  await pick(page, '[data-testid="create-object-kind"]', 'edge');
   await page.click('[data-testid="create-object-submit"]');
   await page.waitForSelector('[title="边集合 aidb_ui_col"]', { timeout: 20000 });
   check('ArangoDB edge collection created from the tree menu', true);
@@ -1251,7 +1299,7 @@ if (ES_PORT) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
   await page.fill('[data-testid="connection-name"]', 'Elasticsearch E2E');
-  await page.selectOption('[data-testid="connection-engine"]', 'elasticsearch');
+  await pick(page, '[data-testid="connection-engine"]', 'elasticsearch');
   await page.fill('[data-testid="connection-host"]', '127.0.0.1');
   await page.fill('[data-testid="connection-port"]', String(ES_PORT));
   await page.click('[data-testid="connection-save"]');
@@ -1282,7 +1330,7 @@ if (ES_PORT) {
   await openEsInfo();
   await page.click('[data-testid="create-field-open"]');
   await page.fill('[data-testid="field-name"]', 'extra_ui');
-  await page.selectOption('[data-testid="field-type"]', 'keyword');
+  await pick(page, '[data-testid="field-type"]', 'keyword');
   await page.click('[data-testid="field-submit"]');
   await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
   await openEsInfo();
@@ -1308,7 +1356,7 @@ if (WEAVIATE_PORT) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
   await page.fill('[data-testid="connection-name"]', 'Weaviate E2E');
-  await page.selectOption('[data-testid="connection-engine"]', 'weaviate');
+  await pick(page, '[data-testid="connection-engine"]', 'weaviate');
   await page.fill('[data-testid="connection-host"]', '127.0.0.1');
   await page.fill('[data-testid="connection-port"]', String(WEAVIATE_PORT));
   await page.click('[data-testid="connection-save"]');
@@ -1336,7 +1384,7 @@ if (WEAVIATE_PORT) {
   await page.locator('[data-testid="object-info-column-name"]', { hasText: 'title' }).first().waitFor({ timeout: 10000 });
   await page.click('[data-testid="create-field-open"]');
   await page.fill('[data-testid="field-name"]', 'views_ui');
-  await page.selectOption('[data-testid="field-type"]', 'int');
+  await pick(page, '[data-testid="field-type"]', 'int');
   await page.click('[data-testid="field-submit"]');
   await page.waitForFunction(() => !document.querySelector('.overlay'), null, { timeout: 20000 });
   await page.locator('[title="向量集合 AidbUiClass"]').click({ button: 'right' });
@@ -1363,7 +1411,7 @@ if (INFLUXDB_PORT) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
   await page.fill('[data-testid="connection-name"]', 'InfluxDB E2E');
-  await page.selectOption('[data-testid="connection-engine"]', 'influxdb');
+  await pick(page, '[data-testid="connection-engine"]', 'influxdb');
   await page.fill('[data-testid="connection-host"]', '127.0.0.1');
   await page.fill('[data-testid="connection-port"]', String(INFLUXDB_PORT));
   await page.fill('[data-testid="connection-database"]', INFLUXDB_DB);
@@ -1410,7 +1458,7 @@ if (MYSQL_TX_PORT) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
   await page.fill('[data-testid="connection-name"]', 'MySQL TX E2E');
-  await page.selectOption('[data-testid="connection-engine"]', 'mysql');
+  await pick(page, '[data-testid="connection-engine"]', 'mysql');
   await page.fill('[data-testid="connection-host"]', '127.0.0.1');
   await page.fill('[data-testid="connection-port"]', String(MYSQL_TX_PORT));
   await page.fill('[data-testid="connection-username"]', 'root');
@@ -1482,12 +1530,12 @@ if (MYSQL_TX_PORT) {
   const statementHeader = await page.locator('[data-testid="query-result-grid"] thead').innerText();
   check('Ctrl+Shift+Enter runs the statement under the cursor', statementHeader.includes('b') && !statementHeader.includes('a'), statementHeader.replace(/\s+/g, ' ').slice(0, 40));
 
-  await page.selectOption('[data-testid="query-limit"]', '100');
+  await pick(page, '[data-testid="query-limit"]', '100');
   await page.fill('.cm-content', 'WITH RECURSIVE seq AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM seq WHERE n < 150) SELECT n FROM seq');
   await page.locator('[data-testid="query-run"]').last().click();
   await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 100, null, { timeout: 15000 });
   check('query row limit caps at 100', true);
-  await page.selectOption('[data-testid="query-limit"]', '500');
+  await pick(page, '[data-testid="query-limit"]', '500');
   await page.locator('[data-testid="query-run"]').last().click();
   await page.waitForFunction(() => document.querySelectorAll('[data-testid="query-result-grid"] tbody tr').length === 150, null, { timeout: 15000 });
   check('query row limit can be raised to 500', true);
@@ -1510,7 +1558,7 @@ if (MYSQL_TX_PORT) {
   await page.waitForFunction(() => document.querySelector('[data-testid="grid-row-499"]') !== null, null, { timeout: 8000 });
   check('scrolling to the end renders the last row', true);
 
-  await page.selectOption('[data-testid="query-export-format"]', 'xlsx');
+  await pick(page, '[data-testid="query-export-format"]', 'xlsx');
   const queryExportPromise = page.waitForResponse((res) => res.url().includes('/api/export') && (res.request().postData() ?? '').includes('"format":"xlsx"'), { timeout: 20000 }).catch(() => null);
   await page.click('[data-testid="query-export"]');
   const queryExportResponse = await queryExportPromise;
@@ -1537,7 +1585,7 @@ if (SSH_PORT && SSH_TARGET_HOST) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
   await page.fill('[data-testid="connection-name"]', 'MySQL over SSH');
-  await page.selectOption('[data-testid="connection-engine"]', 'mysql');
+  await pick(page, '[data-testid="connection-engine"]', 'mysql');
   await page.fill('[data-testid="connection-host"]', SSH_TARGET_HOST);
   await page.fill('[data-testid="connection-port"]', String(SSH_TARGET_PORT));
   await page.fill('[data-testid="connection-username"]', 'root');
@@ -1558,8 +1606,8 @@ if (SSH_PORT && SSH_TARGET_HOST) {
   await page.click('.tab-add');
   await page.waitForSelector('[data-testid="query-run"]', { timeout: 20000 });
   // 多标签场景下显式绑定到隧道连接，避免标签页复用上一个连接的上下文
-  await page.selectOption('[data-testid="query-connection"]', { label: 'MySQL over SSH' });
-  const sshBound = await page.locator('[data-testid="query-connection"]').last().evaluate((el) => el.selectedOptions[0]?.textContent ?? '');
+  await pickByLabel(page, '[data-testid="query-connection"]', 'MySQL over SSH');
+  const sshBound = await page.locator('[data-testid="query-connection"]').last().evaluate((el) => el.querySelector('.select-label')?.textContent ?? '');
   check('SSH query tab is bound to the tunnel connection', sshBound.includes('MySQL over SSH'), sshBound);
   await page.fill('.cm-content', 'SELECT 1 AS n');
   await page.locator('[data-testid="query-run"]').last().click();
@@ -1578,7 +1626,7 @@ if (DUCKDB_E2E) {
   await page.click('[data-testid="sidebar-new-connection"]');
   await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
   await page.fill('[data-testid="connection-name"]', 'DuckDB E2E');
-  await page.selectOption('[data-testid="connection-engine"]', 'duckdb');
+  await pick(page, '[data-testid="connection-engine"]', 'duckdb');
   await page.fill('[data-testid="connection-database"]', duckdbPath);
   await page.click('[data-testid="connection-save"]');
   const duckRow = page.locator('.conn-row', { hasText: 'DuckDB E2E' });
@@ -1636,20 +1684,20 @@ await page.waitForTimeout(1500);
 const generateTable = page.locator('[data-testid="generate-table"]');
 await page.waitForFunction(
   () => {
-    const select = document.querySelector('[data-testid="generate-table"]');
-    return select instanceof HTMLSelectElement && select.options.length > 1 && !select.disabled;
+    const trigger = document.querySelector('[data-testid="generate-table"]');
+    return trigger instanceof HTMLButtonElement && !trigger.disabled && Boolean(trigger.dataset.value);
   },
   null,
   { timeout: 15000 },
 );
-const generateTableValue = await generateTable.inputValue();
+const generateTableValue = await generateTable.getAttribute('data-value');
 check('generate panel auto-selects a table', Boolean(generateTableValue), `value=${generateTableValue}`);
 const generateButtons = page.locator('.tools-content button').filter({ hasText: /预览|生成并插入/ });
 check('generate panel actions are enabled', (await generateButtons.count()) === 2 && !(await generateButtons.first().isDisabled()));
 
 // 数据生成面板的「库」字段在单库引擎下应被隐藏，不能留下只有标签的空字段（对应 §12.6 的回归 #3 / #4）
 const emptyFields = await page.locator('.tools-content .capability-form .field').evaluateAll((nodes) =>
-  nodes.filter((node) => !node.querySelector('select, input, textarea') && getComputedStyle(node).display !== 'none').length,
+  nodes.filter((node) => !node.querySelector('.select, select, input, textarea') && getComputedStyle(node).display !== 'none').length,
 );
 check('generate panel has no label-only fields', emptyFields === 0, `empty=${emptyFields}`);
 
@@ -1701,6 +1749,41 @@ check(
   'agent tool catalog is expanded by default',
   (await toolCatalog.evaluate((el) => (el instanceof HTMLDetailsElement ? el.open : false))) === true,
 );
+// 折叠块的三角由系统绘制，颜色/位置都不吃主题：断言 marker 撤掉、箭头换成应用自己的 ::before。
+// 页面上展开/收起的折叠块取决于跑到的状态，所以插一个临时 details 量两种态，测完删掉。
+const detailsProbe = await page.evaluate(() => {
+  // ::before 带 .15s 过渡，刚改完 open 读到的还是补间中间值，两个状态会读出同一个矩阵
+  const reset = document.createElement('style');
+  reset.textContent = 'details.e2e-arrow > summary::before { transition: none !important; }';
+  document.head.appendChild(reset);
+  const host = document.createElement('details');
+  host.className = 'e2e-arrow';
+  const summary = document.createElement('summary');
+  summary.textContent = 'probe';
+  host.appendChild(summary);
+  document.body.appendChild(host);
+  const shot = () => {
+    const cs = getComputedStyle(summary);
+    const arrow = getComputedStyle(summary, '::before');
+    return {
+      listStyle: cs.listStyleType,
+      display: cs.display,
+      arrowContent: arrow.content,
+      arrowSide: arrow.borderRightWidth,
+      transform: arrow.transform,
+    };
+  };
+  host.open = true;
+  const open = shot();
+  host.open = false;
+  const closed = shot();
+  host.remove();
+  reset.remove();
+  return { open, closed };
+});
+check('折叠块不吃系统三角（list-style 关掉、改成 flex 排布）', detailsProbe.open && detailsProbe.open.listStyle === 'none' && detailsProbe.open.display === 'flex', `${detailsProbe?.open?.listStyle} / ${detailsProbe?.open?.display}`);
+check('折叠箭头由应用绘制（::before 画出边框角）', detailsProbe.open && detailsProbe.open.arrowContent !== 'none' && parseFloat(detailsProbe.open.arrowSide) > 0, `${detailsProbe?.open?.arrowContent} ${detailsProbe?.open?.arrowSide}`);
+check('展开态箭头与收起态角度不同', detailsProbe.open && detailsProbe.closed && detailsProbe.open.transform !== detailsProbe.closed.transform, `open=${detailsProbe?.open?.transform} closed=${detailsProbe?.closed?.transform}`);
 // 只在被收起时才点开（点击 summary 是 toggle 语义）
 if (!(await toolCatalog.evaluate((el) => el instanceof HTMLDetailsElement && el.open))) {
   await toolCatalog.locator('.panel-head').click();
@@ -1862,10 +1945,10 @@ check('column visibility restores a column', headersShown.includes('status'), he
 
 await page.click('[data-testid="data-sort"]');
 await page.waitForSelector('[data-testid="sort-row-0"]', { timeout: 5000 });
-await page.selectOption('[data-testid="sort-column-0"]', 'status');
+await pick(page, '[data-testid="sort-column-0"]', 'status');
 await page.click('[data-testid="sort-add"]');
-await page.selectOption('[data-testid="sort-column-1"]', 'total_cents');
-await page.selectOption('[data-testid="sort-dir-1"]', 'desc');
+await pick(page, '[data-testid="sort-column-1"]', 'total_cents');
+await pick(page, '[data-testid="sort-dir-1"]', 'desc');
 const sortRequestPromise = page.waitForRequest((req) => req.url().includes('/api/data?')
   && req.url().includes('orderBy=status%2Ctotal_cents')
   && req.url().includes('orderDir=asc%2Cdesc'), { timeout: 10000 });
@@ -1962,7 +2045,7 @@ await page.waitForTimeout(900);
 const legacyXlsResult = await api(`/data?connectionId=${demo.id}&table=orders&limit=5&where=${encodeURIComponent("channel='legacy-xls-e2e'")}`);
 check('legacy XLS import inserts a row', legacyXlsResult.status === 200 && legacyXlsResult.body.total >= 1, `total=${legacyXlsResult.body?.total}`);
 
-await page.selectOption('[data-testid="data-page-size"]', '500');
+await pick(page, '[data-testid="data-page-size"]', '500');
 await page.waitForFunction(() => (document.querySelector('.grid-foot')?.textContent ?? '').includes('1-500'), null, { timeout: 20000 });
 await page.evaluate(() => {
   let el = document.querySelector('[data-testid="data-grid"]');
@@ -1980,7 +2063,7 @@ await page.keyboard.press('Enter');
 await page.waitForTimeout(1000);
 const deepEdit = await api(`/data?connectionId=${demo.id}&table=orders&limit=5&where=${encodeURIComponent("channel='deep-edit'")}`);
 check('editing a deep row persists after windowed render', deepEdit.status === 200 && deepEdit.body.total >= 1, `total=${deepEdit.body?.total}`);
-await page.selectOption('[data-testid="data-page-size"]', '100');
+await pick(page, '[data-testid="data-page-size"]', '100');
 await page.waitForTimeout(600);
 
 await page.screenshot({ path: join(shots, 'desktop-data.png') });
@@ -2028,7 +2111,8 @@ await page.locator('[data-testid="grid-row-0"] input[type="checkbox"]').click();
 
 await page.click('[data-testid="data-filter-builder"]');
 await page.waitForSelector('.filter-rule', { timeout: 5000 });
-await page.locator('.filter-rule select').first().selectOption('status');
+await page.locator('.filter-rule .select').first().click();
+await page.locator('.select-menu').first().locator('[data-value="status"]').first().click();
 await page.locator('.filter-rule .input').fill('completed');
 await page.click('[data-testid="filter-apply"]');
 await page.waitForTimeout(1200);
@@ -2445,6 +2529,49 @@ await page.locator('[data-testid="session-rename-input"]').press('Enter');
 await page.waitForTimeout(600);
 const renamedOnServer = (await api('/agent/sessions')).body.sessions.some((s) => s.title === renamed);
 check('会话重命名已落库', renamedOnServer, renamed);
+
+// ---------------- 应用自绘的确认弹层（原生 window.confirm 曾一直是系统弹窗） ----------------
+const beforeDelete = await page.locator('.session-item').count();
+await page.locator('.session-item').last().locator('[data-testid="session-delete"]').click();
+await page.waitForSelector('[data-testid="ask-dialog"]', { timeout: 5000 });
+const askTheme = await page.evaluate(() => {
+  const dialog = document.querySelector('.ask-modal');
+  const confirm = document.querySelector('[data-testid="ask-confirm"]');
+  const cancel = document.querySelector('[data-testid="ask-cancel"]');
+  if (!dialog || !confirm || !cancel) return { bg: 'rgba(255, 255, 255, 1)', color: '', label: '', cancel: '' };
+  return {
+    bg: getComputedStyle(dialog).backgroundColor,
+    color: getComputedStyle(confirm).backgroundColor,
+    label: (confirm.textContent ?? '').trim(),
+    cancel: (cancel.textContent ?? '').trim(),
+  };
+});
+const rgbOfCss = (css) => {
+  const m = /\d+/.exec(css) ? (css.match(/\d+/g) ?? []).map(Number) : [255, 255, 255];
+  return m.slice(0, 3);
+};
+const rgbAvg = (css) => {
+  const [r, g, b] = rgbOfCss(css);
+  return (r + g + b) / 3;
+};
+const [cr, cg, cb] = rgbOfCss(askTheme.color);
+check('确认框由应用绘制并跟随暗色面板', rgbAvg(askTheme.bg) < 60, `avg ${Math.round(rgbAvg(askTheme.bg))}`);
+check('危险确认按钮用危险色而非系统蓝', cr > cg + 30 && cr > cb + 30, askTheme.color);
+check('确认按钮写的是动作本身', askTheme.label === '删除' && askTheme.cancel === '取消', `${askTheme.label}/${askTheme.cancel}`);
+await page.screenshot({ path: join(shots, 'desktop-confirm.png') });
+await page.keyboard.press('Escape');
+await page.waitForFunction(() => !document.querySelector('[data-testid="ask-dialog"]'), null, { timeout: 5000 });
+check('关掉确认框不会删除会话', (await page.locator('.session-item').count()) === beforeDelete, `${beforeDelete} kept`);
+await page.locator('.session-item').first().locator('[data-testid="session-delete"]').click();
+await page.waitForSelector('[data-testid="ask-confirm"]', { timeout: 5000 });
+await page.click('[data-testid="ask-confirm"]');
+await page.waitForFunction(
+  (total) => document.querySelectorAll('.session-item').length === total - 1,
+  beforeDelete,
+  { timeout: 8000 },
+);
+check('确认后会话被删除', (await page.locator('.session-item').count()) === beforeDelete - 1, `${beforeDelete} -> ${await page.locator('.session-item').count()}`);
+check('确认框关闭后不留残余', (await page.locator('[data-testid="ask-dialog"]').count()) === 0);
 await page.screenshot({ path: join(shots, 'desktop-sessions.png') });
 await page.click('.sessions-head .icon-btn');
 
@@ -2453,15 +2580,15 @@ await page.click('[data-testid="ribbon"] button[title="视图"]');
 await page.waitForSelector('.tools-modal', { timeout: 10000 });
 await page.locator('.tools-nav button').filter({ hasText: 'Agent 上下文' }).click();
 await page.waitForSelector('[data-testid="ctx-connection"]', { timeout: 8000 });
-if ((await page.locator('[data-testid="ctx-connection"]').inputValue()) !== demo.id) {
-  await page.selectOption('[data-testid="ctx-connection"]', demo.id);
+if ((await selectedValue(page, '[data-testid="ctx-connection"]')) !== demo.id) {
+  await pick(page, '[data-testid="ctx-connection"]', demo.id);
 }
 // schema 是异步加载的，必须等表格真的出行，否则拿不到任何 ctx-enable-* 开关
 await page.waitForSelector('[data-testid="ctx-table-grid"] tbody tr', { timeout: 25000 });
 const ctxToggle = page.locator('[data-testid^="ctx-enable-"]').first();
 const ctxTable = (await ctxToggle.getAttribute('data-testid')).replace('ctx-enable-', '');
 // /agent/context 对 database 是精确过滤，不带就会查到空列表
-const ctxDb = encodeURIComponent(await page.locator('[data-testid="ctx-database"]').inputValue());
+const ctxDb = encodeURIComponent((await selectedValue(page, '[data-testid="ctx-database"]')) ?? '');
 const ctxUrl = `/agent/context?connectionId=${demo.id}&database=${ctxDb}`;
 await ctxToggle.click();
 await page.waitForTimeout(700);
@@ -2471,12 +2598,14 @@ await ctxToggle.click();
 await page.waitForTimeout(700);
 const ctxRestored = await api(ctxUrl);
 check('重新启用同样落库', ctxRestored.body.entries.some((e) => e.table === ctxTable && e.enabled === true), ctxTable);
-// 清空是破坏性操作，UI 用 window.confirm 二次确认；Playwright 默认会自动 dismiss
-let confirmText = '';
-page.once('dialog', async (dialog) => { confirmText = dialog.message(); await dialog.accept(); });
+// 清空是破坏性操作，由应用自绘的确认框二次确认（以前是 window.confirm，Playwright 只能靠 dialog 兜）
 await page.click('[data-testid="ctx-clear"]');
-await page.waitForTimeout(700);
+await page.waitForSelector('[data-testid="ask-dialog"]', { timeout: 5000 });
+const confirmText = (await page.locator('[data-testid="ask-dialog"] .ask-message').textContent()) ?? '';
 check('清空业务上下文前二次确认', /清空/.test(confirmText), confirmText.slice(0, 50));
+check('破坏性操作用危险样式', (await page.locator('.ask-modal.danger').count()) === 1);
+await page.click('[data-testid="ask-confirm"]');
+await page.waitForTimeout(700);
 check('清空业务上下文', ((await api(ctxUrl)).body.entries ?? []).length === 0);
 await page.locator('.tools-modal .icon-btn').first().click();
 await page.waitForTimeout(400);
@@ -2501,16 +2630,29 @@ await page.screenshot({ path: join(shots, 'desktop-settings.png') });
 await page.locator('.settings-modal .modal-head .icon-btn').click();
 await page.waitForTimeout(300);
 
-const optionAvg = () => page.evaluate(() => {
-  const opt = document.querySelector('option');
-  if (!opt) return 255;
-  const m = /rgba?\(([^)]+)\)/.exec(getComputedStyle(opt).backgroundColor);
-  if (!m) return 255;
-  const [r, g, b] = m[1].split(',').map((v) => Number(v.trim()));
-  return (r + g + b) / 3;
-});
-const darkOption = await optionAvg();
-check('native select options follow the dark surface', darkOption < 60, `avg ${Math.round(darkOption)}`);
+// 弹层由应用自绘，两个主题下都必须跟着面板色走（原生 select 的弹层曾一直是系统白）
+const menuAvg = async () => {
+  await page.locator('.agent-sub .select-trigger').first().click();
+  await page.waitForSelector('.select-menu', { timeout: 5000 });
+  const avg = await page.evaluate(() => {
+    const menu = document.querySelector('.select-menu');
+    if (!menu) return 255;
+    const m = /rgba?\(([^)]+)\)/.exec(getComputedStyle(menu).backgroundColor);
+    if (!m) return 255;
+    const [r, g, b] = m[1].split(',').map((v) => Number(v.trim()));
+    return (r + g + b) / 3;
+  });
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(150);
+  return avg;
+};
+const bundleText = await readFile(join(desktopDist, 'assets', (await readdirSync(join(desktopDist, 'assets'))).find((f) => f.endsWith('.js')) ?? ''), 'utf8');
+for (const native of ['window.confirm(', 'window.prompt(', 'window.alert(']) {
+  check(`桌面端不再调用系统弹窗 ${native.slice(7)}`, !bundleText.includes(native));
+}
+
+const darkMenu = await menuAvg();
+check('dropdown menu follows the dark surface', darkMenu < 60, `avg ${Math.round(darkMenu)}`);
 await page.click('[data-testid="theme-toggle"]');
 await page.waitForTimeout(800);
 check('theme toggles to light', (await page.evaluate(() => document.documentElement.dataset.theme)) === 'light');
@@ -2533,13 +2675,164 @@ const readPalette = () => page.evaluate(() => {
 });
 const lightPalette = await readPalette();
 check('light palette is neutral paper with cyan accent', neutralHex(lightPalette.bg) && cyanHex(lightPalette.accent), `${lightPalette.bg} / ${lightPalette.accent}`);
-const lightOption = await optionAvg();
-check('native select options follow the light surface too', lightOption > 180, `avg ${Math.round(lightOption)}`);
+const lightMenu = await menuAvg();
+check('dropdown menu follows the light surface too', lightMenu > 180, `avg ${Math.round(lightMenu)}`);
 await page.screenshot({ path: join(shots, 'desktop-light.png') });
 await page.click('[data-testid="theme-toggle"]');
 await page.waitForTimeout(600);
 const darkPalette = await readPalette();
 check('dark surface is neutral graphite, accent is cyan', neutralHex(darkPalette.bg) && cyanHex(darkPalette.accent), `${darkPalette.bg} / ${darkPalette.accent}`);
+
+// ---------------- 输入控件全量换肤审计：任何可见 input 都不该露出系统白底 ----------------
+const surfaceAudit = () => page.evaluate(() => {
+  const lum = (css) => {
+    const nums = (css.match(/\d+(\.\d+)?/g) ?? []).map(Number);
+    if (nums.length < 3) return null;
+    const [r, g, b, a] = nums;
+    if (a === 0) return null;
+    return (r + g + b) / 3;
+  };
+  const effective = (el) => {
+    for (let node = el; node; node = node.parentElement) {
+      const value = lum(getComputedStyle(node).backgroundColor);
+      if (value !== null) return value;
+    }
+    return null;
+  };
+  const offenders = [];
+  let checked = 0;
+  for (const el of document.querySelectorAll('input, textarea, select')) {
+    if (el.type === 'file' || el.type === 'hidden') continue;
+    if (el.matches(':checked')) continue; // 勾上的复选框是故意涂品牌青
+    const rect = el.getBoundingClientRect();
+    if (!rect.width || !rect.height) continue;
+    checked += 1;
+    const own = lum(getComputedStyle(el).backgroundColor);
+    const surface = effective(el);
+    if (surface === null) continue;
+    if (Math.abs(surface - (own ?? surface)) > 118) offenders.push(`${el.tagName.toLowerCase()}[${el.getAttribute('data-testid') ?? el.className ?? ''}] own=${Math.round(own ?? -1)} surface=${Math.round(surface)}`);
+  }
+  return { checked, offenders };
+});
+// ssh-enabled 只在非 sqlite 引擎下渲染，比 connection-port 更能证明表单真的停在 mysql；
+// 换肤后偶尔会回到默认引擎，所以关掉重开一次，还不行就直接失败，别让后面的断言摸黑跑。
+const openConnectionForm = async (wantEngine = 'mysql') => {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await page.click('[data-testid="sidebar-new-connection"]');
+    await page.waitForSelector('[data-testid="connection-engine"]', { timeout: 10000 });
+    // 默认引擎是 sqlite，没有端口/SSH 字段，拿不到 number 输入
+    if ((await selectedValue(page, '[data-testid="connection-engine"]')) !== wantEngine) {
+      await pick(page, '[data-testid="connection-engine"]', wantEngine);
+    }
+    if (await page.waitForSelector('[data-testid="ssh-enabled"]', { timeout: 8000 }).then(() => true).catch(() => false)) return;
+    // 停在错误的引擎上时，把引擎值和表单里实际存在的控件一起报出来，省得再猜
+    const wherefore = await page.evaluate(() => ({
+      engine: document.querySelector('[data-testid="connection-engine"]')?.getAttribute('data-value') ?? null,
+      ids: [...document.querySelectorAll('.modal input, .modal .select')].map((el) => el.getAttribute('data-testid') ?? el.tagName),
+      modals: document.querySelectorAll('.modal').length,
+    })).catch(() => null);
+    await page.locator('.modal .modal-head .icon-btn').click().catch(() => undefined);
+    await page.waitForTimeout(400);
+    if (attempt === 1) throw new Error(`连接表单没能停在 ${wantEngine} 引擎：${JSON.stringify(wherefore)}`);
+  }
+  throw new Error(`连接表单没能停在 ${wantEngine} 引擎`);
+};
+const auditScreens = async () => {
+  const total = { checked: 0, offenders: [] };
+  const tabCount = await page.locator('.tabs .tab').count();
+  for (let index = 0; index < tabCount; index++) {
+    await page.locator('.tabs .tab').nth(index).click();
+    await page.waitForTimeout(500);
+    const one = await surfaceAudit();
+    total.checked += one.checked;
+    total.offenders.push(...one.offenders.map((o) => `tab${index}: ${o}`));
+  }
+  await page.click('[data-testid="open-settings"]');
+  await page.waitForSelector('[data-testid="settings-save"]', { timeout: 10000 });
+  const settings = await surfaceAudit();
+  total.checked += settings.checked;
+  total.offenders.push(...settings.offenders.map((o) => `设置: ${o}`));
+  await page.locator('.settings-modal .modal-head .icon-btn').click();
+  await page.waitForTimeout(300);
+  await openConnectionForm();
+  const conn = await surfaceAudit();
+  total.checked += conn.checked;
+  total.offenders.push(...conn.offenders.map((o) => `连接: ${o}`));
+  await page.locator('.modal .modal-head .icon-btn').click();
+  await page.waitForTimeout(300);
+  return total;
+};
+const darkAudit = await auditScreens();
+check(`夜间模式下所有输入控件都跟面板色一致（${darkAudit.checked} 个）`, darkAudit.offenders.length === 0, darkAudit.offenders.slice(0, 4).join(' | '));
+await page.click('[data-testid="theme-toggle"]');
+await page.waitForTimeout(800);
+const lightAudit = await auditScreens();
+check(`浅色模式下所有输入控件都跟面板色一致（${lightAudit.checked} 个）`, lightAudit.offenders.length === 0, lightAudit.offenders.slice(0, 4).join(' | '));
+await page.click('[data-testid="theme-toggle"]');
+await page.waitForTimeout(800);
+
+// ---------------- 复选框 / 数字输入：系统控件只染 accent，底色和描边归系统，换肤跟不上 ----------------
+// 复选框的选中态在弹层重开后仍然保留，所以不靠“点几下”构造状态：
+// 直接按每个框的 checked 分组，断言两种状态各自跟对颜色。
+const controlProbe = () => page.evaluate(() => {
+  // 页面上可能同时挂着多个 .modal（旧的没卸载干净），锚定在含 ssh-enabled 的那一个再读数
+  const anchor = document.querySelector('.modal [data-testid="ssh-enabled"]');
+  const modal = anchor?.closest('.modal');
+  if (!modal) return { missing: true };
+  const num = modal.querySelector('input[type="number"]');
+  const boxes = [...modal.querySelectorAll('input[type="checkbox"]')];
+  const one = boxes.find((b) => b.checked);
+  const idle = boxes.find((b) => !b.checked);
+  const boxStyle = one ? getComputedStyle(one) : null;
+  const idleStyle = idle ? getComputedStyle(idle) : null;
+  const numStyle = num ? getComputedStyle(num) : null;
+  return {
+    boxes: boxes.length,
+    title: modal.querySelector('.modal-head h2')?.textContent ?? null,
+    hasChecked: Boolean(one),
+    hasIdle: Boolean(idle),
+    boxBg: boxStyle?.backgroundColor,
+    boxBorder: boxStyle?.borderTopColor,
+    appearance: boxStyle?.appearance || boxStyle?.webkitAppearance,
+    size: boxStyle?.width,
+    mark: one ? getComputedStyle(one, '::after').content : 'none',
+    idleBg: idleStyle?.backgroundColor,
+    idleBorder: idleStyle?.borderTopColor,
+    numberAppearance: numStyle ? numStyle.appearance || numStyle.webkitAppearance : undefined,
+  };
+});
+// 选中态在弹层重开后可能保留，点固定次数会漂；按当前状态补齐，保证两种状态都在场
+const setCheck = async (testId, want) => {
+  const box = page.locator(`[data-testid="${testId}"]`);
+  if ((await box.isChecked()) !== want) await box.click();
+  await page.waitForTimeout(150);
+};
+await openConnectionForm();
+await setCheck('connection-readonly', true);
+await setCheck('ssh-enabled', false);
+const darkControls = await controlProbe();
+check('复选框由应用绘制（appearance 关掉系统控件）', darkControls && darkControls.appearance === 'none', `${darkControls?.appearance}`);
+check('未勾选的复选框底色跟随暗色面板而非系统白', darkControls && darkControls.hasIdle && rgbAvg(darkControls.idleBg) < 90, `${darkControls?.idleBg} / ${darkControls?.idleBorder}`);
+check('勾选后涂品牌色并画出对勾', darkControls && darkControls.hasChecked && darkControls.mark !== 'none' && parseFloat(darkControls.size) >= 12, `${darkControls?.size} ${darkControls?.mark} ${darkControls?.boxBg}`);
+check('数字输入不吃系统 spinner', darkControls && ['none', 'textfield'].includes(darkControls.numberAppearance), `${darkControls?.numberAppearance}`);
+await page.screenshot({ path: join(shots, 'desktop-controls.png') });
+await page.locator('.modal .modal-head .icon-btn').click();
+await page.waitForTimeout(300);
+await page.click('[data-testid="theme-toggle"]');
+await page.waitForTimeout(800);
+// 换肤重开：复选框两种状态都显式摆好，不依赖上一次留下的状态
+await openConnectionForm();
+await setCheck('connection-readonly', true);
+await setCheck('ssh-enabled', false);
+const lightControls = await controlProbe();
+check('浅色主题下复选框仍由应用绘制', lightControls && lightControls.appearance === 'none', `${lightControls?.appearance} title=${lightControls?.title}`);
+check('浅色主题下未勾选的复选框跟面板走', lightControls && lightControls.hasIdle && rgbAvg(lightControls.idleBg) > 180, `${lightControls?.idleBg} / ${lightControls?.idleBorder}`);
+check('浅色主题下勾选态涂品牌色', lightControls && lightControls.hasChecked && rgbAvg(lightControls.boxBg) < 200, `${lightControls?.boxBg} boxes=${lightControls?.boxes}`);
+await page.screenshot({ path: join(shots, 'desktop-controls-light.png') });
+await page.locator('.modal .modal-head .icon-btn').click();
+await page.waitForTimeout(300);
+await page.click('[data-testid="theme-toggle"]');
+await page.waitForTimeout(600);
 
 await page.click('[data-testid="agent-memory"]');
 await page.waitForSelector('[data-testid="memory-drawer"]', { timeout: 10000 });
@@ -2618,10 +2911,10 @@ if (composedCard) await api(`/dashboards/cards/${composedCard.id}`, { method: 'D
 const rangeCount = await page.locator('[data-testid="dashboard-range"]').count();
 check('board time range appears once a card declares a time column', rangeCount === 1, `${rangeCount}`);
 if (rangeCount) {
-  await page.selectOption('[data-testid="dashboard-range"]', '7d');
+  await pick(page, '[data-testid="dashboard-range"]', '7d');
   await page.waitForTimeout(1500);
   check('range switch keeps the board alive', (await page.locator('[data-testid="dashboard-card"]').count()) >= 1);
-  await page.selectOption('[data-testid="dashboard-range"]', 'all');
+  await pick(page, '[data-testid="dashboard-range"]', 'all');
   await page.waitForTimeout(800);
 }
 await page.click('[data-testid="dashboard-generate"]');
@@ -2731,10 +3024,16 @@ async function electronPngExport(app, window) {
     }
     await window.waitForSelector('[data-testid="query-run"]', { timeout: 15000 });
     const conn = window.locator('[data-testid="query-connection"]');
-    const options = await conn.locator('option').allTextContents();
+    await conn.click();
+    const connMenu = window.locator('.select-menu').first();
+    await connMenu.waitFor({ state: 'visible', timeout: 5000 });
+    const options = await connMenu.locator('.select-menu-item').allTextContents();
     const demo = options.findIndex((text) => /demo/i.test(text));
-    if (demo < 0) return `FAIL no demo connection (options: ${options.join(' | ')})`;
-    await conn.selectOption({ index: demo });
+    if (demo < 0) {
+      await window.keyboard.press('Escape');
+      return `FAIL no demo connection (options: ${options.join(' | ')})`;
+    }
+    await connMenu.locator('.select-menu-item').nth(demo).click();
     await window.waitForTimeout(1500);
     await window.click('.cm-content');
     await window.keyboard.type('SELECT status, COUNT(*) AS cnt FROM orders GROUP BY status');
@@ -3002,14 +3301,18 @@ await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
 await page.waitForSelector('[data-testid="group-toggle-组A"]', { timeout: 20000 });
 await page.locator('[data-testid="group-toggle-组A"]').click({ button: 'right' });
 await page.waitForSelector('.context-menu', { timeout: 5000 });
-page.once('dialog', (dialog) => dialog.accept('组B'));
 await page.locator('.context-menu').getByText('重命名分组').click();
+await page.waitForSelector('[data-testid="ask-input"]', { timeout: 5000 });
+check('重命名分组用自绘输入框而非系统 prompt', (await page.locator('[data-testid="ask-input"]').inputValue()) === '组A');
+await page.fill('[data-testid="ask-input"]', '组B');
+await page.keyboard.press('Enter');
 await page.waitForSelector('[data-testid="group-toggle-组B"]', { timeout: 15000 });
 check('group rename from the sidebar persists', true);
 await page.locator('[data-testid="group-toggle-组B"]').click({ button: 'right' });
 await page.waitForSelector('.context-menu', { timeout: 5000 });
-page.once('dialog', (dialog) => dialog.accept());
 await page.locator('.context-menu').getByText('删除分组').click();
+await page.waitForSelector('[data-testid="ask-confirm"]', { timeout: 5000 });
+await page.click('[data-testid="ask-confirm"]');
 await page.waitForFunction(() => !document.querySelector('[data-testid="group-toggle-组B"]'), null, { timeout: 15000 });
 const movedConn = (await api('/connections')).body.connections.find((item) => item.name === 'Group E2E');
 check('group delete moves connections to 默认', movedConn?.groupName === '默认', movedConn?.groupName ?? 'missing');

@@ -86,10 +86,7 @@ export function FixView({ result, onExecute }: { result: FixResult; onExecute?: 
               </label>
             ))}
           </div>
-          <pre
-            className="mono"
-            style={{ margin: 0, padding: 8, maxHeight: 220, overflow: 'auto', background: 'var(--bg-inset)', fontSize: 10 }}
-          >
+          <pre className="code-block" style={{ maxHeight: 220 }}>
             {result.plan.map((step) => `-- ${step.title}${step.requiresBackup ? '（需备份）' : ''}\n${step.sql}`).join('\n\n')}
           </pre>
         </div>

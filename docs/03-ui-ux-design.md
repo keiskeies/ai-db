@@ -107,6 +107,22 @@ App
 | 命令面板 | 顶部居中 640px；分组（导航/查询/Agent/设置）；模糊搜索；↑↓ 选择 |
 | 状态栏 | 26px；左：连接/环境/只读；中：延迟/行数；右：编码/AI 模型/版本 |
 
+### 5.1 表单控件由应用绘制，不用系统控件
+
+系统控件只染 accent，底色 / 描边 / 弹层都归系统画，换肤跟不上——暗色面板上会出现系统白底。规则是：凡是用户能操作的表单控件，绘制权都在应用手里。
+
+| 控件 | 实现 | 说明 |
+|---|---|---|
+| 下拉 | 共享 `Select`（`components/ui.tsx`） | 触发器沿用 `.select` 形态与 `data-testid`；菜单 portal 到 body、`--bg-elevated` 底 + `--shadow-pop`、按视口收边、下方放不下时向上翻、选中项打勾。`Option` / `OptGroup` 只是给 `Select` 读取的声明式标记，不产生 DOM。键盘：`↑↓` 移动、`Enter`/空格选中、`Esc` 关闭并把焦点还给触发器 |
+| 可输入下拉 | 共享 `Combo` | 保留自由输入，建议列表复用 `.select-menu` 的主题；`datalist` 的建议弹层由系统绘制，不用 |
+| 复选 / 单选 | `app.css` 全局接管 | `appearance: none` + `--bg-elevated` 底 + `--border-strong` 描边，选中态涂 `--accent`，对勾和圆点用 `::after` 画；`:indeterminate` 画横杠 |
+| 数字输入 | `app.css` 全局接管 | `appearance: textfield` 杀掉系统 spinner（它是浅色的，跟暗色输入框对不上），数值直接键入 |
+| 折叠块 | `details > summary` 全局接管 | `list-style: none` 撤掉系统三角，箭头换成 `::before` 画的边框角，随 `[open]` 旋转；自带 chevron 的折叠块（`.thinking` / `.execution` / `.memory-refs`）不再叠加 |
+| 确认 / 输入框 | `AskDialog`（`askConfirm` / `askPrompt`） | 取代 `window.confirm` / `window.prompt`：系统对话框会把主题和语言整个甩开。返回 Promise，`Esc` 取消，压在右键菜单与下拉之上（`z-index 105`） |
+
+- 面板内嵌的只读代码块统一用 `.code-block`（`--code-bg` 底，比面板暗一档），不再各处写内联样式。
+- 防回归：`npm run verify:controls`（`scripts/audit-form-controls.mjs`）静态检查四件事——所有 `var(--x)` 都有定义、CSS 里不留失效的 `select` 元素选择器、上述四类接管规则在场、`.tsx` 里没有 `alert(` / `confirm(` / `prompt(` 与原生 `select`/`option`/`optgroup`/`datalist` 标签。这些漂移只在运行时表现为“某个控件突然变回系统样式”，e2e 覆盖不到的面板（如表设计器）更是完全静默，所以必须有静态门。
+
 ## 6. Agent 面板（Claude Code 风格）
 
 ### 6.1 结构

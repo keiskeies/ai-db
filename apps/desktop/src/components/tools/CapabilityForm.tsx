@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { applyCapabilityDefaults, type Capability, type CapabilityField } from '@aidb/core';
 import { useApp } from '../../store';
 import { DatabaseSelect, useDatabaseTables } from '../DatabaseSelect';
+import { Select, Option } from '../ui';
 
 /**
  * 由能力契约驱动的表单渲染器。
@@ -114,20 +115,20 @@ function TableField({
     );
   }
   return (
-    <select
+    <Select
       className="select"
       value={String(values[field.key] ?? '')}
       disabled={disabled || !tables.length}
       onChange={(event) => onChange(field.key, event.target.value)}
       data-testid={testId}
     >
-      <option value="">（未选择）</option>
+      <Option value="">（未选择）</Option>
       {tables.map((table) => (
-        <option key={table.name} value={table.name}>
+        <Option key={table.name} value={table.name}>
           {table.name} · {table.columns?.length ?? 0} 列
-        </option>
+        </Option>
       ))}
-    </select>
+    </Select>
   );
 }
 
@@ -216,19 +217,19 @@ export function CapabilityForm({
           return (
             <div className="field" key={field.key}>
               <label>{label}</label>
-              <select
+              <Select
                 className="select"
                 value={String(values[field.key] ?? field.default ?? '')}
                 onChange={(event) => onChange(field.key, event.target.value)}
                 {...common}
               >
                 {(field.options ?? []).map((option) => (
-                  <option key={option.value} value={option.value}>
+                  <Option key={option.value} value={option.value}>
                     {option.label.zh}
                     {option.risk && option.risk !== 'read' ? `（${option.risk}）` : ''}
-                  </option>
+                  </Option>
                 ))}
-              </select>
+              </Select>
               {field.hint ? <span className="muted" style={{ fontSize: 10 }}>{field.hint}</span> : null}
             </div>
           );
@@ -318,20 +319,20 @@ function ConnectionField({
 }) {
   const connections = useApp((state) => state.connections);
   return (
-    <select
+    <Select
       className="select"
       value={String(values[field.key] ?? '')}
       disabled={disabled}
       onChange={(event) => onChange(field.key, event.target.value)}
       data-testid={testId}
     >
-      <option value="">（未选择）</option>
+      <Option value="">（未选择）</Option>
       {connections.map((connection) => (
-        <option key={connection.id} value={connection.id}>
+        <Option key={connection.id} value={connection.id}>
           {connection.name}
           {connection.readonly ? '（只读）' : ''}
-        </option>
+        </Option>
       ))}
-    </select>
+    </Select>
   );
 }

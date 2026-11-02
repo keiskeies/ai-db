@@ -5,7 +5,7 @@ import { engineMeta } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp } from '../store';
 import { DataGrid } from './DataGrid';
-import { Modal, Spinner } from './ui';
+import { Modal, Option, Select, Spinner } from './ui';
 
 export function VectorSearchPanel({
   connection,
@@ -118,21 +118,21 @@ export function VectorSearchPanel({
       <div className="form-grid">
         <div className="field">
           <label>{isPg ? '表' : '集合'}</label>
-          <select className="select" value={collection} onChange={(e) => setCollection(e.target.value)} data-testid="vector-search-collection">
+          <Select className="select" value={collection} onChange={(e) => setCollection(e.target.value)} data-testid="vector-search-collection">
             {candidates.map((table) => (
-              <option key={table.name} value={table.name}>{table.name}</option>
+              <Option key={table.name} value={table.name}>{table.name}</Option>
             ))}
-          </select>
+          </Select>
           {!candidates.length ? <span className="hint">{isPg ? '当前库没有 vector 列；请先安装 pgvector 并创建 vector 列。' : '没有可用的集合。'}</span> : null}
         </div>
         <div className="field">
           <label>向量字段 {isPg ? '（必填）' : '（命名向量，可留空）'}</label>
           {isPg ? (
-            <select className="select" value={field} onChange={(e) => setField(e.target.value)} data-testid="vector-search-field">
+            <Select className="select" value={field} onChange={(e) => setField(e.target.value)} data-testid="vector-search-field">
               {vectorColumns.map((column) => (
-                <option key={column.name} value={column.name}>{column.name} · {column.type}</option>
+                <Option key={column.name} value={column.name}>{column.name} · {column.type}</Option>
               ))}
-            </select>
+            </Select>
           ) : (
             <input className="input mono" value={field} onChange={(e) => setField(e.target.value)} placeholder="如 image_vector" data-testid="vector-search-field" />
           )}

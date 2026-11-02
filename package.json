@@ -26,8 +26,9 @@
     "build:mobile": "npm --workspace apps/mobile run export:web",
     "e2e": "node scripts/e2e.mjs",
     "bench": "node --import tsx scripts/accuracy-bench.mjs",
+    "verify:controls": "node scripts/audit-form-controls.mjs",
     "verify:docs": "node scripts/verify-docs.mjs",
-    "verify": "npm run verify:docs && npm run typecheck && npm test && npm run build && npm run e2e"
+    "verify": "npm run verify:docs && npm run verify:controls && npm run typecheck && npm test && npm run build && npm run e2e"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

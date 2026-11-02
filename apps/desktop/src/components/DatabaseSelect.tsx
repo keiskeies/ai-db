@@ -1,6 +1,7 @@
 import { useEffect, useMemo, type CSSProperties } from 'react';
 import type { TableInfo } from '@aidb/core';
 import { useApp } from '../store';
+import { Select, Option } from './ui';
 
 interface DatabaseSelectProps {
   connectionId?: string;
@@ -40,7 +41,7 @@ export function DatabaseSelect({ connectionId, value, onChange, allowAll, allLab
 
   if (options.length <= 1) return null;
   return (
-    <select
+    <Select
       className={className}
       data-testid={testId}
       value={value}
@@ -49,11 +50,11 @@ export function DatabaseSelect({ connectionId, value, onChange, allowAll, allLab
       title={conn?.database ? `数据库（连接默认：${conn.database}）` : '数据库'}
       onChange={(e) => onChange(e.target.value)}
     >
-      {allowAll ? <option value="">{allLabel}</option> : null}
+      {allowAll ? <Option value="">{allLabel}</Option> : null}
       {options.map((name) => (
-        <option key={name} value={name}>{name}</option>
+        <Option key={name} value={name}>{name}</Option>
       ))}
-    </select>
+    </Select>
   );
 }
 

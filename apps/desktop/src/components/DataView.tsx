@@ -26,8 +26,9 @@ import { api, type DataPage } from '../lib/api';
 import { deliverExport } from '../lib/exportDelivery';
 import { useApp, type Tab } from '../store';
 import { DataGrid } from './DataGrid';
+import { askConfirm } from './AskDialog';
 import { LineProtocolPanel } from './LineProtocolPanel';
-import { EmptyState, Modal } from './ui';
+import { EmptyState, Modal, Option, Select } from './ui';
 import { formatDuration } from '../lib/format';
 import { jsonToCsv, xmlToCsv } from '../lib/importConvert';
 import { xlsxToCsv } from '../lib/xlsx';
@@ -342,7 +343,7 @@ export function DataView({ tab }: { tab: DataTab }) {
       notify('warning', '所选行缺少主键，无法安全批量删除');
       return;
     }
-    if (!window.confirm(`删除所选 ${keys.length} 行？此操作不可恢复。`)) return;
+    if (!(await askConfirm({ message: `删除所选 ${keys.length} 行？`, detail: '此操作不可恢复。', danger: true, confirmLabel: '删除' }))) return;
     try {
       const { result } = await api.rows({ connectionId: tab.connectionId, database: tab.database, table: tab.table, op: 'deleteMany', keys });
       notify('success', `已删除 ${result.affected ?? keys.length} 行`);
@@ -410,7 +411,7 @@ export function DataView({ tab }: { tab: DataTab }) {
         setReplacePreview(result.affected);
         notify('info', `匹配 ${result.affected} 行`, result.sql);
       } else {
-        if (!window.confirm(`将修改 ${replacePreview ?? '匹配'} 行，继续？`)) return;
+        if (!(await askConfirm({ message: `将修改 ${replacePreview ?? '匹配'} 行。`, detail: '替换会直接写入，不保留原值。', danger: true, confirmLabel: '替换' }))) return;
         notify('success', `已替换 ${result.affected} 行`);
         setReplaceOpen(false);
         setReplacePreview(null);
@@ -511,7 +512,7 @@ export function DataView({ tab }: { tab: DataTab }) {
       notify('warning', '该表没有主键，无法安全删除');
       return;
     }
-    if (!window.confirm(`删除这一行？\n${JSON.stringify(key)}`)) return;
+    if (!(await askConfirm({ message: '删除这一行？', detail: JSON.stringify(key), danger: true, confirmLabel: '删除' }))) return;
     try {
       await api.rows({ connectionId: tab.connectionId, database: tab.database, table: tab.table, op: 'delete', key });
       notify('success', '已删除 1 行');
@@ -857,13 +858,13 @@ export function DataView({ tab }: { tab: DataTab }) {
         </span>
         {page?.batch.sets[0]?.truncated ? <span className="badge write">结果已截断</span> : null}
         <div className="pager">
-          <select className="select" style={{ height: 24, fontSize: 11 }} value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setOffset(0); }} data-testid="data-page-size">
+          <Select className="select" style={{ height: 24, fontSize: 11 }} value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setOffset(0); }} data-testid="data-page-size">
             {[50, 100, 200, 500].map((n) => (
-              <option key={n} value={n}>
+              <Option key={n} value={n}>
                 {n} / 页
-              </option>
+              </Option>
             ))}
-          </select>
+          </Select>
           <button className="btn ghost" disabled={offset <= 0} onClick={() => setOffset(Math.max(0, offset - limit))}>
             ‹
           </button>
@@ -902,7 +903,7 @@ export function DataView({ tab }: { tab: DataTab }) {
                 /> 首行为表头
               </label>
               <div className="field" style={{ width: 150 }}>
-                <select
+                <Select
                   className="select"
                   value={importDraft.delimiter === '\t' ? '\t' : importDraft.delimiter}
                   onChange={(e) => {
@@ -910,10 +911,10 @@ export function DataView({ tab }: { tab: DataTab }) {
                     setImportDraft({ ...importDraft, delimiter, rows: parseCsvPreview(importDraft.csv, delimiter) });
                   }}
                 >
-                  <option value=",">逗号 ,</option>
-                  <option value=";">分号 ;</option>
-                  <option value="\t">Tab</option>
-                </select>
+                  <Option value=",">逗号 ,</Option>
+                  <Option value=";">分号 ;</Option>
+                  <Option value="\t">Tab</Option>
+                </Select>
               </div>
             </div>
             <div className="mini-table-wrap" style={{ maxHeight: 160 }}>
@@ -943,16 +944,16 @@ export function DataView({ tab }: { tab: DataTab }) {
                   <div key={column.name} className="mapping-row">
                     <span className="mono">{column.name}</span>
                     <span className="muted">←</span>
-                    <select
+                    <Select
                       className="select"
                       value={importDraft.mapping[column.name] ?? -1}
                       onChange={(e) => setImportDraft({ ...importDraft, mapping: { ...importDraft.mapping, [column.name]: Number(e.target.value) } })}
                     >
-                      <option value={-1}>不导入</option>
+                      <Option value={-1}>不导入</Option>
                       {(importDraft.hasHeader ? importDraft.rows[0] : importDraft.rows[0]?.map((_, index) => `列 ${index + 1}`) ?? []).map((header, index) => (
-                        <option key={index} value={index}>{header} (#{index + 1})</option>
+                        <Option key={index} value={index}>{header} (#{index + 1})</Option>
                       ))}
-                    </select>
+                    </Select>
                   </div>
                 ))}
               </div>
@@ -976,7 +977,7 @@ export function DataView({ tab }: { tab: DataTab }) {
             title="print-preview"
             data-testid="print-frame"
             srcDoc={printHtml}
-            style={{ width: '100%', height: 420, border: '1px solid var(--border)', borderRadius: 6, background: '#fff' }}
+            style={{ width: '100%', height: 420, border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-md)', background: '#fff' }}
           />
         </Modal>
       ) : null}
@@ -1041,24 +1042,24 @@ export function DataView({ tab }: { tab: DataTab }) {
           <div className="sort-rules">
             {sortDraft.map((rule, index) => (
               <div className="row gap-8" key={index} data-testid={`sort-row-${index}`}>
-                <select
+                <Select
                   className="select"
                   value={rule.column}
                   onChange={(e) => setSortDraft((prev) => prev.map((item, i) => (i === index ? { ...item, column: e.target.value } : item)))}
                   data-testid={`sort-column-${index}`}
                 >
-                  <option value="">选择排序列</option>
-                  {columns.map((column) => <option key={column.name} value={column.name}>{column.name}</option>)}
-                </select>
-                <select
+                  <Option value="">选择排序列</Option>
+                  {columns.map((column) => <Option key={column.name} value={column.name}>{column.name}</Option>)}
+                </Select>
+                <Select
                   className="select"
                   value={rule.dir}
                   onChange={(e) => setSortDraft((prev) => prev.map((item, i) => (i === index ? { ...item, dir: e.target.value as 'asc' | 'desc' } : item)))}
                   data-testid={`sort-dir-${index}`}
                 >
-                  <option value="asc">升序 ASC</option>
-                  <option value="desc">降序 DESC</option>
-                </select>
+                  <Option value="asc">升序 ASC</Option>
+                  <Option value="desc">降序 DESC</Option>
+                </Select>
                 {sortDraft.length > 1 ? (
                   <button className="icon-btn" title="移除该排序条件" onClick={() => setSortDraft((prev) => prev.filter((_, i) => i !== index))} data-testid={`sort-remove-${index}`}>
                     <X size={12} />
@@ -1094,32 +1095,32 @@ export function DataView({ tab }: { tab: DataTab }) {
                 {index === 0 ? (
                   <span className="filter-kw">WHERE</span>
                 ) : (
-                  <select
+                  <Select
                     className="select"
                     value={condition.connector}
                     onChange={(e) => setConditions((prev) => prev.map((item, i) => (i === index ? { ...item, connector: e.target.value as 'AND' | 'OR' } : item)))}
                   >
-                    <option value="AND">AND</option>
-                    <option value="OR">OR</option>
-                  </select>
+                    <Option value="AND">AND</Option>
+                    <Option value="OR">OR</Option>
+                  </Select>
                 )}
-                <select
+                <Select
                   className="select"
                   value={condition.column}
                   onChange={(e) => setConditions((prev) => prev.map((item, i) => (i === index ? { ...item, column: e.target.value } : item)))}
                 >
-                  <option value="">选择列</option>
-                  {columns.map((column) => <option key={column.name} value={column.name}>{column.name}</option>)}
-                </select>
-                <select
+                  <Option value="">选择列</Option>
+                  {columns.map((column) => <Option key={column.name} value={column.name}>{column.name}</Option>)}
+                </Select>
+                <Select
                   className="select"
                   value={condition.op}
                   onChange={(e) => setConditions((prev) => prev.map((item, i) => (i === index ? { ...item, op: e.target.value } : item)))}
                 >
                   {['=', '!=', '>', '>=', '<', '<=', 'LIKE', 'NOT LIKE', 'IN', 'IS NULL', 'IS NOT NULL'].map((op) => (
-                    <option key={op} value={op}>{op}</option>
+                    <Option key={op} value={op}>{op}</Option>
                   ))}
-                </select>
+                </Select>
                 <input
                   className="input mono"
                   placeholder={condition.op === 'IN' ? 'a, b, c' : condition.op.includes('NULL') ? '—' : '值'}
@@ -1157,13 +1158,13 @@ export function DataView({ tab }: { tab: DataTab }) {
         >
           <div className="col gap-10">
             <div className="row gap-8">
-              <select
+              <Select
                 className="select"
                 value={replaceDraft.column}
                 onChange={(e) => { setReplaceDraft({ ...replaceDraft, column: e.target.value }); setReplacePreview(null); }}
               >
-                {columns.map((column) => <option key={column.name} value={column.name}>{column.name}</option>)}
-              </select>
+                {columns.map((column) => <Option key={column.name} value={column.name}>{column.name}</Option>)}
+              </Select>
               <input
                 className="input mono"
                 placeholder="查找内容"
@@ -1216,8 +1217,8 @@ export function DataView({ tab }: { tab: DataTab }) {
               支持从 Excel / Navicat 复制的制表符分隔文本；首行若为列名会自动映射，否则按列顺序写入。
             </p>
             <textarea
-              className="input mono"
-              style={{ minHeight: 180, resize: 'vertical' }}
+              className="textarea grow"
+              style={{ minHeight: 180 }}
               value={pasteText}
               onChange={(e) => setPasteText(e.target.value)}
               placeholder={'id\tname\n1\tAlpha\n2\tBeta'}

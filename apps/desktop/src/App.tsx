@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { useApp } from './store';
 import { CommandPalette } from './components/CommandPalette';
+import { AskHost } from './components/AskDialog';
 import { ContextMenuHost } from './components/ContextMenu';
 import { PaneSplitter } from './components/PaneSplitter';
 import { ConnectionModal } from './components/ConnectionModal';
@@ -403,6 +404,7 @@ export default function App() {
       <ConnectionModal />
       <CommandPalette />
       <ContextMenuHost />
+      <AskHost />
       <Toasts />
     </div>
   );

@@ -14,6 +14,7 @@ import { deliverExport } from '../lib/exportDelivery';
 import { formatDuration } from '../lib/format';
 import { formatSql } from '../lib/sqlFormat';
 import { useApp, type Tab } from '../store';
+import { askPrompt } from './AskDialog';
 import { ChartView, type ChartSpec } from './ChartView';
 import type { ChartType } from './ChartToolbar';
 import { buildChartSpec, numericColumnNames } from './buildChartSpec';
@@ -25,7 +26,7 @@ import { DocumentEditDialog } from './DocumentEditDialog';
 import { RedisKeyDialog } from './RedisKeyDialog';
 import { RedisKeyCreateDialog } from './RedisKeyCreateDialog';
 import { LineProtocolPanel } from './LineProtocolPanel';
-import { Spinner } from './ui';
+import { Option, Select, Spinner } from './ui';
 
 type QueryTab = Extract<Tab, { kind: 'query' }>;
 
@@ -513,7 +514,7 @@ ${text}
       notify('warning', '编辑器为空');
       return;
     }
-    const name = window.prompt('片段名称', tab.title);
+    const name = await askPrompt({ title: '保存 SQL 片段', message: '片段名称', value: tab.title, placeholder: '未命名片段', confirmLabel: '保存' });
     if (!name) return;
     try {
       await api.createSnippet({ name, sql });
@@ -597,7 +598,7 @@ ${text}
           </span>
         </span>
         <Database size={12} className="muted" />
-        <select
+        <Select
           className="select query-select"
           value={tab.connectionId}
           onChange={(e) => {
@@ -607,19 +608,19 @@ ${text}
           }}
           data-testid="query-connection"
         >
-          {connections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-        </select>
-        <select
+          {connections.map((item) => <Option key={item.id} value={item.id}>{item.name}</Option>)}
+        </Select>
+        <Select
           className="select query-select"
           value={tab.database ?? ''}
           onChange={(e) => updateTab(tab.id, { database: e.target.value || undefined })}
           data-testid="query-database"
         >
-          <option value="">默认数据库</option>
-          {databases.map((database) => <option key={database} value={database}>{database}</option>)}
-        </select>
+          <Option value="">默认数据库</Option>
+          {databases.map((database) => <Option key={database} value={database}>{database}</Option>)}
+        </Select>
         <div className="spacer" />
-        <select
+        <Select
           className="select"
           style={{ width: 96 }}
           value={String(queryLimit)}
@@ -627,8 +628,8 @@ ${text}
           title="本次查询的行数上限"
           data-testid="query-limit"
         >
-          {limitOptions.map((value) => <option key={value} value={value}>{value} 行</option>)}
-        </select>
+          {limitOptions.map((value) => <Option key={value} value={value}>{value} 行</Option>)}
+        </Select>
         <button className="btn primary small" onClick={() => void run()} disabled={running} data-testid="query-run">
           {running ? <Spinner /> : <Play size={12} />} {t('run')}
         </button>
@@ -709,7 +710,7 @@ ${text}
             <button className="btn small" onClick={() => void startTx()} data-testid="tx-begin">开始事务</button>
           )
         ) : null}
-        <select
+        <Select
           className="select"
           style={{ height: 23, width: 72, fontSize: 10 }}
           value={queryExportFormat}
@@ -717,12 +718,12 @@ ${text}
           title="导出当前语句结果的格式"
           data-testid="query-export-format"
         >
-          <option value="csv">CSV</option>
-          <option value="json">JSON</option>
-          {isSql ? <option value="sql">SQL</option> : null}
-          <option value="xml">XML</option>
-          <option value="xlsx">XLSX</option>
-        </select>
+          <Option value="csv">CSV</Option>
+          <Option value="json">JSON</Option>
+          {isSql ? <Option value="sql">SQL</Option> : null}
+          <Option value="xml">XML</Option>
+          <Option value="xlsx">XLSX</Option>
+        </Select>
         <button className="icon-btn" title="导出当前语句结果" onClick={() => void exportResult()} data-testid="query-export">
           <Download size={13} />
         </button>

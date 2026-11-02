@@ -3,6 +3,7 @@ import { Braces, Play } from 'lucide-react';
 import type { TableInfo } from '@aidb/core';
 import { useApp } from '../../store';
 import { DatabaseSelect, useDatabaseTables } from '../DatabaseSelect';
+import { Select, Option } from '../ui';
 
 function quote(name: string, engine: string): string {
   if (engine === 'mysql' || engine === 'mariadb' || engine === 'clickhouse') return '`' + name.replace(/`/g, '``') + '`';
@@ -107,36 +108,36 @@ export function QueryBuilderTool() {
           <div className="form-grid" style={{ gap: 8 }}>
             <div className="field">
               <label>主表</label>
-              <select className="select" value={t1} onChange={(e) => { setT1(e.target.value); setSelected(new Set()); }}>
-                {tables.map((table) => <option key={table.name} value={table.name}>{table.name}</option>)}
-              </select>
+              <Select className="select" value={t1} onChange={(e) => { setT1(e.target.value); setSelected(new Set()); }}>
+                {tables.map((table) => <Option key={table.name} value={table.name}>{table.name}</Option>)}
+              </Select>
             </div>
             <div className="field">
               <label>连接表（可选）</label>
-              <select className="select" value={t2} onChange={(e) => setT2(e.target.value)}>
-                <option value="">— 不连接 —</option>
-                {tables.filter((table) => table.name !== t1).map((table) => <option key={table.name} value={table.name}>{table.name}</option>)}
-              </select>
+              <Select className="select" value={t2} onChange={(e) => setT2(e.target.value)}>
+                <Option value="">— 不连接 —</Option>
+                {tables.filter((table) => table.name !== t1).map((table) => <Option key={table.name} value={table.name}>{table.name}</Option>)}
+              </Select>
             </div>
             {table2 ? (
               <>
                 <div className="field">
                   <label>连接类型</label>
-                  <select className="select" value={joinType} onChange={(e) => setJoinType(e.target.value as 'INNER' | 'LEFT')}>
-                    <option value="LEFT">LEFT JOIN</option>
-                    <option value="INNER">INNER JOIN</option>
-                  </select>
+                  <Select className="select" value={joinType} onChange={(e) => setJoinType(e.target.value as 'INNER' | 'LEFT')}>
+                    <Option value="LEFT">LEFT JOIN</Option>
+                    <Option value="INNER">INNER JOIN</Option>
+                  </Select>
                 </div>
                 <div className="field">
                   <label>连接条件</label>
                   <div className="row gap-4">
-                    <select className="select" value={joinLeft} onChange={(e) => setJoinLeft(e.target.value)} style={{ flex: 1 }}>
-                      {columnOptions.filter((option) => option.table === t1).map((option) => <option key={option.key} value={option.key}>{option.key}</option>)}
-                    </select>
+                    <Select className="select" value={joinLeft} onChange={(e) => setJoinLeft(e.target.value)} style={{ flex: 1 }}>
+                      {columnOptions.filter((option) => option.table === t1).map((option) => <Option key={option.key} value={option.key}>{option.key}</Option>)}
+                    </Select>
                     <span className="muted">=</span>
-                    <select className="select" value={joinRight} onChange={(e) => setJoinRight(e.target.value)} style={{ flex: 1 }}>
-                      {columnOptions.filter((option) => option.table === t2).map((option) => <option key={option.key} value={option.key}>{option.key}</option>)}
-                    </select>
+                    <Select className="select" value={joinRight} onChange={(e) => setJoinRight(e.target.value)} style={{ flex: 1 }}>
+                      {columnOptions.filter((option) => option.table === t2).map((option) => <Option key={option.key} value={option.key}>{option.key}</Option>)}
+                    </Select>
                   </div>
                 </div>
               </>
@@ -147,18 +148,18 @@ export function QueryBuilderTool() {
             </div>
             <div className="field">
               <label>排序</label>
-              <select className="select" value={orderBy} onChange={(e) => setOrderBy(e.target.value)}>
-                <option value="">— 不排序 —</option>
-                {columnOptions.map((option) => <option key={option.key} value={option.key}>{option.table}.{option.column}</option>)}
-              </select>
+              <Select className="select" value={orderBy} onChange={(e) => setOrderBy(e.target.value)}>
+                <Option value="">— 不排序 —</Option>
+                {columnOptions.map((option) => <Option key={option.key} value={option.key}>{option.table}.{option.column}</Option>)}
+              </Select>
             </div>
             <div className="field">
               <label>方向 / 行数</label>
               <div className="row gap-4">
-                <select className="select" value={direction} onChange={(e) => setDirection(e.target.value as 'ASC' | 'DESC')} style={{ width: 80 }}>
-                  <option value="DESC">DESC</option>
-                  <option value="ASC">ASC</option>
-                </select>
+                <Select className="select" value={direction} onChange={(e) => setDirection(e.target.value as 'ASC' | 'DESC')} style={{ width: 80 }}>
+                  <Option value="DESC">DESC</Option>
+                  <Option value="ASC">ASC</Option>
+                </Select>
                 <input className="input" type="number" min={1} max={10000} value={limit} onChange={(e) => setLimit(Number(e.target.value))} />
               </div>
             </div>

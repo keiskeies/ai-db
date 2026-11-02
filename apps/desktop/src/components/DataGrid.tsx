@@ -162,7 +162,6 @@ export function DataGrid({
                 <td key={`new_${col.name}`} className="new-row">
                   <input
                     className="mono"
-                    style={{ width: '100%', border: 'none', background: 'transparent', outline: 'none', height: 26, fontSize: 11.5 }}
                     value={newRowValues[index] ?? ''}
                     placeholder={col.name}
                     onChange={(e) => onNewRowChange?.(index, e.target.value)}

@@ -3,6 +3,7 @@ import { Loader2, Plug, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react'
 import { AGENT_TOOL_GROUPS, agentToolCatalog, builtinMcpServer, type McpServerInfo } from '@aidb/core';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
+import { askConfirm } from '../AskDialog';
 
 const BUILTIN_ORDER = { filesystem: 0, git: 1, web: 2 } as const;
 
@@ -128,7 +129,7 @@ export function McpTool() {
   };
 
   const remove = async (server: McpServerInfo) => {
-    if (!window.confirm(`删除 MCP Server「${server.name}」？`)) return;
+    if (!(await askConfirm({ message: `删除 MCP Server「${server.name}」？`, detail: '该服务器的授权与工具批准记录会一并移除。', danger: true, confirmLabel: '删除' }))) return;
     try {
       await api.deleteMcpServer(server.id);
       await load();

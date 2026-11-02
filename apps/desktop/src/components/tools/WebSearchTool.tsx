@@ -3,6 +3,7 @@ import { CheckCircle2, Clock, ExternalLink, Globe2, Loader2, Play, RefreshCw, Se
 import type { SearchBackendId, SearchSettings } from '@aidb/core';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
+import { Select, Option } from '../ui';
 
 interface BackendInfo {
   id: SearchBackendId;
@@ -287,9 +288,9 @@ export function WebSearchTool() {
             <div className="search-grid">
               <div className="field">
                 <label>时间范围</label>
-                <select className="input" value={form.timeRange} onChange={(e) => setForm({ ...form, timeRange: e.target.value as SearchSettings['timeRange'] })}>
-                  {TIME_RANGE.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-                </select>
+                <Select className="input" value={form.timeRange} onChange={(e) => setForm({ ...form, timeRange: e.target.value as SearchSettings['timeRange'] })}>
+                  {TIME_RANGE.map((item) => <Option key={item.value} value={item.value}>{item.label}</Option>)}
+                </Select>
               </div>
               <div className="field">
                 <label>搜索语言</label>
@@ -297,31 +298,31 @@ export function WebSearchTool() {
               </div>
               <div className="field">
                 <label>去重策略</label>
-                <select className="input" value={form.dedupe} onChange={(e) => setForm({ ...form, dedupe: e.target.value as SearchSettings['dedupe'] })}>
-                  <option value="url">按链接</option>
-                  <option value="none">不去重</option>
-                </select>
+                <Select className="input" value={form.dedupe} onChange={(e) => setForm({ ...form, dedupe: e.target.value as SearchSettings['dedupe'] })}>
+                  <Option value="url">按链接</Option>
+                  <Option value="none">不去重</Option>
+                </Select>
               </div>
               <div className="field">
                 <label>相关性重排</label>
-                <select className="input" value={form.rerank ? 'on' : 'off'} onChange={(e) => setForm({ ...form, rerank: e.target.value === 'on' })}>
-                  <option value="off">关</option>
-                  <option value="on">开</option>
-                </select>
+                <Select className="input" value={form.rerank ? 'on' : 'off'} onChange={(e) => setForm({ ...form, rerank: e.target.value === 'on' })}>
+                  <Option value="off">关</Option>
+                  <Option value="on">开</Option>
+                </Select>
               </div>
               <div className="field">
                 <label>安全搜索</label>
-                <select className="input" value={form.safeSearch ? 'on' : 'off'} onChange={(e) => setForm({ ...form, safeSearch: e.target.value === 'on' })}>
-                  <option value="on">开</option>
-                  <option value="off">关</option>
-                </select>
+                <Select className="input" value={form.safeSearch ? 'on' : 'off'} onChange={(e) => setForm({ ...form, safeSearch: e.target.value === 'on' })}>
+                  <Option value="on">开</Option>
+                  <Option value="off">关</Option>
+                </Select>
               </div>
               <div className="field">
                 <label>结果健康遥测</label>
-                <select className="input" value={form.healthTelemetry ? 'on' : 'off'} onChange={(e) => setForm({ ...form, healthTelemetry: e.target.value === 'on' })}>
-                  <option value="on">开</option>
-                  <option value="off">关</option>
-                </select>
+                <Select className="input" value={form.healthTelemetry ? 'on' : 'off'} onChange={(e) => setForm({ ...form, healthTelemetry: e.target.value === 'on' })}>
+                  <Option value="on">开</Option>
+                  <Option value="off">关</Option>
+                </Select>
               </div>
             </div>
           </div>

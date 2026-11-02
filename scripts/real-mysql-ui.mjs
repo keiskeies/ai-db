@@ -16,6 +16,14 @@ const check = (name, cond, detail = '') => {
   console.log(`${cond ? 'PASS' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`);
 };
 
+/** 自定义 Select：点触发器 → 点弹层里对应 value 的项（原生 selectOption 只认真 select）。 */
+async function pick(scope, selector, value) {
+  await scope.click(selector);
+  const menu = scope.locator('.select-menu').first();
+  await menu.waitFor({ state: 'visible', timeout: 5000 });
+  await menu.locator(`[data-value=${JSON.stringify(String(value))}]`).first().click();
+}
+
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
 const errors = [];
@@ -74,7 +82,7 @@ try {
   const firstRowNo = await page.locator('[data-testid="grid-row-0"] .grid-rowno').first().innerText();
   check('翻到第 2 页行号从 101 开始', firstRowNo.trim() === '101', `行号 ${firstRowNo} · ${await footer()}`);
 
-  await page.selectOption('[data-testid="data-page-size"]', '50');
+  await pick(page, '[data-testid="data-page-size"]', '50');
   await page.waitForFunction(() => /第\s*1-50\s*条记录/.test(document.querySelector('.grid-foot')?.textContent ?? ''), null, { timeout: 20000 });
   check('切换每页 50 行生效', true, await footer());
 
@@ -111,8 +119,8 @@ try {
   // 7) 查询 + 图表：真实月度 GMV × 支付渠道
   await page.click('.tab-add');
   await page.waitForSelector('[data-testid="query-editor"] .cm-content', { timeout: 20000 });
-  await page.selectOption('[data-testid="query-connection"]', conn.id);
-  await page.selectOption('[data-testid="query-database"]', BIZ_DB);
+  await pick(page, '[data-testid="query-connection"]', conn.id);
+  await pick(page, '[data-testid="query-database"]', BIZ_DB);
   const sql = "SELECT DATE_FORMAT(created_timestamp, '%Y-%m') AS month, pay_channel, ROUND(SUM(money), 2) AS gmv FROM t_order WHERE created_timestamp >= '2024-01-01' GROUP BY month, pay_channel ORDER BY month";
   await page.click('[data-testid="query-editor"] .cm-content');
   await page.keyboard.insertText(sql);
@@ -130,7 +138,7 @@ try {
   await page.click('[data-testid="query-editor"] .cm-content');
   await page.keyboard.press('Control+A');
   await page.keyboard.insertText('SELECT id, CHAR_LENGTH(body) AS len, body FROM oc_news_items ORDER BY len DESC LIMIT 5');
-  await page.selectOption('[data-testid="query-database"]', BIG_DB);
+  await pick(page, '[data-testid="query-database"]', BIG_DB);
   await page.click('[data-testid="query-run"]');
   await page.waitForSelector('[data-testid="query-result-grid"] [data-testid^="grid-row-"]', { timeout: 60000 });
   const maxCell = await page.evaluate(() => {

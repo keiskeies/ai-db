@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { KeyRound, Loader2, Plus, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
+import { askConfirm } from '../AskDialog';
+import { Select, Option } from '../ui';
 
 export function UsersTool() {
   const connections = useApp((s) => s.connections);
@@ -51,9 +53,9 @@ export function UsersTool() {
         <span className="muted">账号、角色与授权（需要数据库管理员权限）</span>
       </div>
       <div className="tool-row">
-        <select className="select" value={connectionId} onChange={(e) => setConnectionId(e.target.value)} style={{ width: 240 }}>
-          {connections.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.engine}</option>)}
-        </select>
+        <Select className="select" value={connectionId} onChange={(e) => setConnectionId(e.target.value)} style={{ width: 240 }}>
+          {connections.map((item) => <Option key={item.id} value={item.id}>{item.name} · {item.engine}</Option>)}
+        </Select>
         <button className="btn" onClick={() => void load()} disabled={loading}>
           {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <RefreshCw size={12} />} 刷新
         </button>
@@ -73,10 +75,10 @@ export function UsersTool() {
             <div className="tool-row" style={{ flexWrap: 'wrap', padding: 8 }}>
               <div className="field" style={{ width: 130 }}>
                 <label>动作</label>
-                <select className="select" value={form.action} onChange={(e) => setForm({ ...form, action: e.target.value })}>
-                  <option value="create">创建</option>
-                  <option value="grant">授权</option>
-                </select>
+                <Select className="select" value={form.action} onChange={(e) => setForm({ ...form, action: e.target.value })}>
+                  <Option value="create">创建</Option>
+                  <Option value="grant">授权</Option>
+                </Select>
               </div>
               <div className="field" style={{ flex: 1, minWidth: 120 }}>
                 <label>用户名</label>
@@ -125,7 +127,7 @@ export function UsersTool() {
                     className="icon-btn danger"
                     title="删除用户"
                     onClick={async () => {
-                      if (!window.confirm(`删除账户 ${user.name}？`)) return;
+                      if (!(await askConfirm({ message: `删除账户 ${user.name}？`, detail: '会执行 DROP USER，该操作不可撤销。', danger: true, confirmLabel: '删除' }))) return;
                       try {
                         await api.userAction({ connectionId, action: 'drop', name: user.name, host: user.host });
                         notify('success', '账户已删除');

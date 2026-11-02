@@ -3,6 +3,7 @@ import { Loader2, Sparkles, Wand2 } from 'lucide-react';
 import { applyCapabilityDefaults, CAPABILITIES, getCapability, type Capability } from '@aidb/core';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
+import { askConfirm } from '../AskDialog';
 import { useDatabaseTables } from '../DatabaseSelect';
 import { CapabilityForm } from './CapabilityForm';
 
@@ -95,8 +96,8 @@ export function GeneratorTool() {
         </button>
         <button
           className="btn primary"
-          onClick={() => {
-            if (!window.confirm(`向 ${table} 插入 ${rows} 行生成数据？`)) return;
+          onClick={async () => {
+            if (!(await askConfirm({ message: `向 ${table} 插入 ${rows} 行生成数据？`, detail: '数据会直接写入表，不经过预览。', confirmLabel: '生成' }))) return;
             void generate(false);
           }}
           disabled={loading || !table}

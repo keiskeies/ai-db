@@ -38,7 +38,8 @@ import {
 import { api, TOKEN } from '../lib/api';
 import { formatBytes, formatRelative } from '../lib/format';
 import { useApp, type SettingsTab } from '../store';
-import { RiskBadge } from './ui';
+import { Option, RiskBadge, Select } from './ui';
+import { askConfirm } from './AskDialog';
 import { SkillsTool } from './tools/SkillsTool';
 import { WebSearchTool } from './tools/WebSearchTool';
 import { McpTool } from './tools/McpTool';
@@ -520,17 +521,17 @@ export function SettingsModal() {
           </div>
           <div className="field">
             <label>API 协议</label>
-            <select
+            <Select
               className="select"
               value={draft.provider}
               onChange={(e) => changeDraftKind(e.target.value as ProviderKind)}
               data-testid="settings-provider"
             >
-              <option value="openai">OpenAI Chat Completions</option>
-              <option value="anthropic">Anthropic Messages</option>
-              <option value="ollama">Ollama</option>
-              <option value="local">{t('providerLocal')}</option>
-            </select>
+              <Option value="openai">OpenAI Chat Completions</Option>
+              <Option value="anthropic">Anthropic Messages</Option>
+              <Option value="ollama">Ollama</Option>
+              <Option value="local">{t('providerLocal')}</Option>
+            </Select>
           </div>
           {draft.provider !== 'local' ? (
             <div className="field full">
@@ -718,18 +719,18 @@ export function SettingsModal() {
                 <div className="form-grid">
                   <div className="field">
                     <label>{t('theme')}</label>
-                    <select className="select" value={form.theme} onChange={(e) => setForm({ ...form, theme: e.target.value as AppSettings['theme'] })}>
-                      <option value="dark">{t('dark')}</option>
-                      <option value="light">{t('light')}</option>
-                      <option value="system">跟随系统</option>
-                    </select>
+                    <Select className="select" value={form.theme} onChange={(e) => setForm({ ...form, theme: e.target.value as AppSettings['theme'] })}>
+                      <Option value="dark">{t('dark')}</Option>
+                      <Option value="light">{t('light')}</Option>
+                      <Option value="system">跟随系统</Option>
+                    </Select>
                   </div>
                   <div className="field">
                     <label>{t('language')}</label>
-                    <select className="select" value={form.locale} onChange={(e) => setForm({ ...form, locale: e.target.value as AppSettings['locale'] })}>
-                      <option value="zh">中文</option>
-                      <option value="en">English</option>
-                    </select>
+                    <Select className="select" value={form.locale} onChange={(e) => setForm({ ...form, locale: e.target.value as AppSettings['locale'] })}>
+                      <Option value="zh">中文</Option>
+                      <Option value="en">English</Option>
+                    </Select>
                   </div>
                 </div>
                 <p className="desc">主题与语言即时生效；移动端使用同一套设计令牌。</p>
@@ -866,16 +867,16 @@ export function SettingsModal() {
                   </div>
                   <div className="field">
                     <label>大 schema 候选表检索</label>
-                    <select
+                    <Select
                       className="select"
                       value={form.agent.schemaFocus ?? 'auto'}
                       onChange={(e) => setAgent({ schemaFocus: e.target.value as 'auto' | 'on' | 'off' })}
                       data-testid="settings-schema-focus"
                     >
-                      <option value="auto">自动（超过 150 表或 2500 列）</option>
-                      <option value="on">总是开启</option>
-                      <option value="off">关闭</option>
-                    </select>
+                      <Option value="auto">自动（超过 150 表或 2500 列）</Option>
+                      <Option value="on">总是开启</Option>
+                      <Option value="off">关闭</Option>
+                    </Select>
                   </div>
                 </div>
                 <label className="checkbox">
@@ -903,11 +904,11 @@ export function SettingsModal() {
                   <div className="form-grid">
                     <div className="field">
                       <label>Provider</label>
-                      <select className="select" value={form.embedding.provider} onChange={(e) => setEmbedding({ provider: e.target.value as AppSettings['embedding']['provider'] })} data-testid="settings-embedding-provider">
-                        <option value="none">未配置</option>
-                        <option value="openai">OpenAI 兼容 /embeddings</option>
-                        <option value="ollama">Ollama /api/embeddings</option>
-                      </select>
+                      <Select className="select" value={form.embedding.provider} onChange={(e) => setEmbedding({ provider: e.target.value as AppSettings['embedding']['provider'] })} data-testid="settings-embedding-provider">
+                        <Option value="none">未配置</Option>
+                        <Option value="openai">OpenAI 兼容 /embeddings</Option>
+                        <Option value="ollama">Ollama /api/embeddings</Option>
+                      </Select>
                     </div>
                     <div className="field">
                       <label>Model</label>
@@ -1054,7 +1055,7 @@ export function SettingsModal() {
                   <button
                     className="btn small danger"
                     onClick={async () => {
-                      if (!window.confirm('清空全部查询历史？')) return;
+                      if (!(await askConfirm({ message: '清空全部查询历史？', detail: '历史与审计列表会被清空，无法撤销。', danger: true, confirmLabel: '清空' }))) return;
                       await api.clearHistory();
                       notify('success', '查询历史已清空');
                     }}
@@ -1094,10 +1095,7 @@ export function SettingsModal() {
                         <button
                           className="btn ghost small"
                           onClick={async () => {
-                            if (!window.confirm(`从备份恢复将执行 SQL 并可能覆盖现有结构/数据：
-${backup.path}
-
-继续？`)) return;
+                            if (!(await askConfirm({ message: '从备份恢复会执行备份里的 SQL。', detail: `现有结构/数据可能被覆盖：\n${backup.path}`, danger: true, confirmLabel: '恢复' }))) return;
                             try {
                               await api.restoreBackup(backup.id);
                               notify('success', '备份已恢复', backup.path);
@@ -1279,15 +1277,15 @@ function ModelProfileEditor({
           </div>
           {tiers.map((tier, index) => (
             <div className="tier-row" key={`${tier.level}_${index}`}>
-              <select
+              <Select
                 className="select"
                 value={tier.level}
                 onChange={(e) => setTiers(tiers.map((item, i) => (i === index ? { ...item, level: e.target.value } : item)))}
               >
                 {levels.map((level) => (
-                  <option key={level} value={level}>{level}</option>
+                  <Option key={level} value={level}>{level}</Option>
                 ))}
-              </select>
+              </Select>
               <input
                 className="input mono"
                 value={tier.value}

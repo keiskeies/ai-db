@@ -4,7 +4,7 @@ import type { ConnectionConfig } from '@aidb/core';
 import { engineMeta } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp } from '../store';
-import { Modal, Spinner } from './ui';
+import { Combo, Modal, Spinner } from './ui';
 
 const TEMPLATES: Record<string, Record<string, unknown>> = {
   mongodb: { name: 'hello', kind: 'demo' },
@@ -150,18 +150,13 @@ export function DocumentWritePanel({
     >
       <div className="form-grid">
         <label>集合 / 索引</label>
-        <input
-          list={`document-write-collections-${connection.id}`}
+        <Combo
           value={collection}
           onChange={(event) => setCollection(event.target.value)}
+          options={tables.map((table) => table.name)}
           placeholder={isSearch ? '例如 logs' : '例如 docs'}
           data-testid="document-write-collection"
         />
-        <datalist id={`document-write-collections-${connection.id}`}>
-          {tables.map((table) => (
-            <option key={table.name} value={table.name} />
-          ))}
-        </datalist>
       </div>
       {mode === 'write' ? (
         <>
@@ -177,11 +172,11 @@ export function DocumentWritePanel({
                   : '按集合 schema 提供字段；向量库需要 vector 字段。'}
           </div>
           <textarea
-            className="textarea"
+            className="textarea grow"
             value={text}
             onChange={(event) => setText(event.target.value)}
             spellCheck={false}
-            style={{ width: '100%', minHeight: 220, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+            style={{ minHeight: 220 }}
             data-testid="document-write-json"
           />
         </>
@@ -191,12 +186,12 @@ export function DocumentWritePanel({
             输入要删除的 {isSearch || connection.engine === 'mongodb' ? '_id' : connection.engine === 'arangodb' ? '_key' : 'id'}，用逗号或空格分隔。删除不可撤销，请先用查询确认范围。
           </div>
           <textarea
-            className="textarea"
+            className="textarea grow"
             value={idsText}
             onChange={(event) => setIdsText(event.target.value)}
             spellCheck={false}
             placeholder="1, 2, 3"
-            style={{ width: '100%', minHeight: 120, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+            style={{ minHeight: 120 }}
             data-testid="document-delete-ids"
           />
         </>
@@ -206,12 +201,12 @@ export function DocumentWritePanel({
             粘贴 CSV（含表头）。列名即字段名；id 列写入文档主键，向量列支持 <code>[0.1, 0.2]</code> 或 <code>0.1 0.2</code> 写法。
           </div>
           <textarea
-            className="textarea"
+            className="textarea grow"
             value={csvText}
             onChange={(event) => setCsvText(event.target.value)}
             spellCheck={false}
             placeholder={'id,vector,title\n1,"[0.1, 0.2]",hello'}
-            style={{ width: '100%', minHeight: 150, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+            style={{ minHeight: 150 }}
             data-testid="document-csv"
           />
           <div className="form-grid" style={{ marginTop: 10 }}>
@@ -224,7 +219,7 @@ export function DocumentWritePanel({
                 style={{ width: 60 }}
                 aria-label="CSV 分隔符"
               />
-              <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
+              <label className="checkbox">
                 <input type="checkbox" checked={hasHeader} onChange={(event) => setHasHeader(event.target.checked)} />
                 首行为表头
               </label>

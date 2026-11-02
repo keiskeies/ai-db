@@ -10,7 +10,7 @@ body {
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }
-button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+button, input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 button { cursor: pointer; }
 a { color: var(--accent); text-decoration: none; }
 ::selection { background: var(--accent-soft); }
@@ -18,10 +18,60 @@ a { color: var(--accent); text-decoration: none; }
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; border: 2px solid var(--bg-panel); }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 ::-webkit-scrollbar-track { background: transparent; }
-/* 原生下拉的弹出列表不吃页面底色：显式给 option 上色，否则暗色主题里会白底浅字 */
-option, optgroup { background-color: var(--bg-elevated); color: var(--text-primary); }
-option:disabled { color: var(--text-muted); }
-input[type='checkbox'], input[type='radio'], input[type='range'], progress { accent-color: var(--accent); }
+input[type='range'], progress { accent-color: var(--accent); }
+/* 复选/单选：accent-color 只染选中态，未选中的白底和描边都由系统画，暗色面板上格外刺眼 */
+input[type='checkbox'], input[type='radio'] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: var(--bg-elevated);
+  color: var(--on-solid);
+  cursor: pointer;
+  vertical-align: -2px;
+  transition: border-color .12s ease, background-color .12s ease;
+}
+input[type='radio'] { border-radius: 50%; }
+input[type='checkbox']:hover:not(:disabled), input[type='radio']:hover:not(:disabled) { border-color: var(--accent); }
+input[type='checkbox']:checked, input[type='radio']:checked { border-color: var(--accent); background: var(--accent); }
+input[type='checkbox']:checked::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 1px;
+  width: 7px;
+  height: 4px;
+  border-left: 1.6px solid currentColor;
+  border-bottom: 1.6px solid currentColor;
+  transform: rotate(-45deg);
+}
+input[type='radio']:checked::after {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: currentColor;
+}
+input[type='checkbox']:indeterminate { border-color: var(--accent); background: var(--accent); }
+input[type='checkbox']:indeterminate::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: 5px;
+  height: 1.6px;
+  background: currentColor;
+}
+input[type='checkbox']:disabled, input[type='radio']:disabled { opacity: .45; cursor: not-allowed; }
+input[type='checkbox']:focus-visible, input[type='radio']:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* 系统 spinner 是浅色的，跟暗色输入框对不上；数值靠直接键入 */
+input[type='number'] { appearance: textfield; -moz-appearance: textfield; }
+input[type='number']::-webkit-inner-spin-button, input[type='number']::-webkit-outer-spin-button { appearance: none; -webkit-appearance: none; margin: 0; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .mono { font-family: var(--font-mono); }
@@ -176,17 +226,51 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 
 .field { display: flex; flex-direction: column; gap: 5px; }
 .field > label { font-size: 11px; color: var(--text-secondary); letter-spacing: .2px; }
+/* 面板里嵌的只读代码块：背景必须比面板暗一档，否则 pre 和面板糊成一片 */
+.code-block { margin: 0; padding: 8px 10px; overflow: auto; background: var(--code-bg); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); font-family: var(--font-mono); font-size: 10.5px; line-height: 1.55; color: var(--text-secondary); white-space: pre-wrap; }
 .input, .select, .textarea {
   height: 30px; border-radius: var(--radius-md); border: 1px solid var(--border-strong);
   background: var(--bg-elevated); padding: 0 9px; outline: none; min-width: 0;
 }
 .textarea { height: auto; padding: 8px 9px; resize: vertical; line-height: 1.5; font-family: var(--font-mono); font-size: 12px; }
+/* 少数地方直接给 textarea 挂 .input：高度必须让位给 rows 和行高，否则内容会被 30px 裁掉 */
+textarea.input { height: auto; padding: 6px 9px; line-height: 1.5; font-family: var(--font-mono); }
+.textarea.grow { width: 100%; }
 .input:focus, .select:focus, .textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
-.select { appearance: none; padding-right: 24px; background-image: linear-gradient(45deg, transparent 50%, var(--text-muted) 50%), linear-gradient(135deg, var(--text-muted) 50%, transparent 50%); background-position: calc(100% - 13px) 12px, calc(100% - 9px) 12px; background-size: 4px 4px; background-repeat: no-repeat; }
+.select { appearance: none; }
+/* 触发器 + 自绘弹层：原生 select 的下拉列表由系统绘制，主题和暗色面板对不上 */
+.select.select-trigger { display: inline-flex; align-items: center; gap: 5px; padding: 0 6px 0 9px; text-align: left; white-space: nowrap; cursor: pointer; }
+.select.select-trigger:hover:not(:disabled) { border-color: var(--border-panel); background: var(--bg-hover); }
+.select.select-trigger.open { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.select.select-trigger:disabled { opacity: .45; cursor: not-allowed; }
+.select-trigger .select-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.select-trigger .select-caret { flex: 0 0 11px; opacity: .55; }
+.select-menu {
+  position: fixed; z-index: 95; min-width: 150px; max-width: 400px; max-height: 320px; overflow: auto;
+  padding: 4px; background: var(--bg-elevated); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-pop);
+}
+.select-group { padding: 6px 8px 3px; font-size: 9.5px; letter-spacing: .4px; color: var(--text-muted); }
+.select-menu-item {
+  display: flex; align-items: center; gap: 6px; width: 100%; min-height: 25px; padding: 0 8px;
+  border: 0; border-radius: var(--radius-sm); background: transparent;
+  color: var(--text-secondary); font: inherit; font-size: 11.5px; text-align: left; white-space: nowrap;
+}
+.select-menu-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.select-menu-item.cursor { background: var(--bg-active); color: var(--text-primary); }
+.select-menu-item.active { color: var(--text-primary); }
+.select-menu-item.active .select-item-label { color: var(--accent); }
+.select-menu-item:disabled { opacity: .4; cursor: not-allowed; }
+.select-menu-item svg { flex: 0 0 auto; margin-left: auto; color: var(--accent); }
+/* 可输入下拉：输入框带一个箭头，建议列表复用 .select-menu 的主题 */
+.combo { position: relative; display: flex; align-items: center; min-width: 0; }
+.combo > .input { width: 100%; padding-right: 22px; }
+.combo .combo-caret { position: absolute; right: 7px; opacity: .55; pointer-events: none; }
+.combo.open > .input { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.combo-menu { min-width: 0; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .form-grid .full { grid-column: 1 / -1; }
 .checkbox { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-secondary); cursor: pointer; }
-.checkbox input { accent-color: var(--accent); }
 .sort-rules { display: grid; gap: 8px; }
 .column-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 7px 12px; max-height: 320px; overflow: auto; }
 .hint { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
@@ -220,7 +304,7 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .data-grid td.null { color: var(--text-muted); font-style: italic; }
 .data-grid td.num { text-align: right; }
 .data-grid td.editing { outline: 1px solid var(--accent); outline-offset: -1px; background: var(--bg-app); padding: 0 4px; }
-.data-grid td.editing input { width: 100%; height: 25px; border: none; background: transparent; outline: none; font-family: var(--font-mono); font-size: 11.5px; }
+.data-grid td.editing input, .data-grid td.new-row input { width: 100%; height: 25px; border: none; background: transparent; outline: none; font-family: var(--font-mono); font-size: 11.5px; }
 .data-grid .row-actions { position: sticky; right: 0; background: var(--bg-elevated); text-align: center; width: 40px; }
 .data-grid .row-actions .icon-btn { width: 22px; height: 22px; }
 .data-grid td.new-row { background: var(--success-soft); }
@@ -324,13 +408,14 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 .designer-grid th:last-child { border-right: none; }
 .designer-grid td { padding: 2px 4px; border-bottom: 1px solid var(--border-subtle); border-right: 1px solid var(--border-subtle); }
 .designer-grid td:last-child { border-right: none; }
-.designer-grid td input, .designer-grid td select {
+.designer-grid td input:not([type='checkbox']), .designer-grid td .select {
   width: 100%; height: 25px; border: 1px solid transparent; border-radius: 3px;
   background: transparent; color: var(--text-primary); padding: 0 5px; outline: none;
   font-family: var(--font-mono); font-size: 11px;
 }
-.designer-grid td input:hover:not(:disabled), .designer-grid td select:hover { border-color: var(--border-subtle); }
-.designer-grid td input:focus, .designer-grid td select:focus { border-color: var(--accent); background: var(--bg-app); }
+.designer-grid td input:not([type='checkbox']):hover:not(:disabled), .designer-grid td .select:hover { border-color: var(--border-subtle); }
+.designer-grid td input:not([type='checkbox']):focus, .designer-grid td .select.open { border-color: var(--accent); background: var(--bg-app); }
+.designer-grid td .select { min-width: 84px; }
 .designer-grid tbody tr:hover td { background: var(--bg-hover); }
 /* 选中行用淡色底 + 左侧色条，避免整行高饱和色压过表格内容 */
 .designer-grid tr.selected td,
@@ -347,7 +432,6 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 .designer-grid tr.selected .type-cell .type-pick:hover { background: var(--bg-hover); color: var(--text-primary); }
 .designer-grid tr.removed { opacity: .45; text-decoration: line-through; }
 .designer-grid .cell-center { text-align: center; }
-.designer-grid .cell-center input[type='checkbox'] { width: auto; accent-color: var(--accent); }
 .designer-grid .col-mark { width: 26px; text-align: center; color: var(--text-muted); }
 .designer-grid .designer-empty { padding: 18px; color: var(--text-muted); text-align: center; font-size: 11.5px; }
 .designer-key { display: inline-flex; align-items: center; gap: 2px; color: var(--warning); font-size: 10.5px; }
@@ -636,7 +720,11 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 .send-btn:disabled { opacity: .35; cursor: not-allowed; }
 
 /* agent 顶部连接/库选择器沿用的紧凑下拉 */
-.mode-select { height: 23px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-panel); color: var(--text-secondary); font-size: 10.5px; padding: 0 4px; outline: none; }
+.select.select-trigger.mode-select {
+  height: 21px; max-width: 168px; gap: 4px; padding: 0 5px; outline: none;
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+  background: var(--bg-panel); color: var(--text-secondary); font-size: 10px;
+}
 
 /* 卡外一行：左边运行状态（轮次·步数·tok/s ｜ 累计 token·缓存命中 ｜ 上下文占比），右边风险提示 */
 .composer-stats {
@@ -703,6 +791,25 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 .code-copy { position: absolute; top: 4px; right: 4px; opacity: 0; transition: opacity .12s; }
 .prose pre:hover .code-copy { opacity: 1; }
 
+/* ---------- 折叠块：原生 details 的三角由系统绘制，颜色/位置都不吃主题 ---------- */
+details > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::marker { content: ''; }
+details > summary::before {
+  content: '';
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  border-right: 1.4px solid currentColor;
+  border-bottom: 1.4px solid currentColor;
+  opacity: .5;
+  transform: rotate(-45deg);
+  transition: transform .15s ease, opacity .15s ease;
+}
+details[open] > summary::before { transform: rotate(45deg); opacity: .7; }
+/* 自带图标/chevron 的折叠块不再叠加 */
+.thinking > summary::before, .execution > summary::before, .memory-refs > summary::before { content: none; }
+
 /* ---------- memory / modal ---------- */
 .overlay { position: fixed; inset: 0; z-index: 60; background: var(--bg-overlay); display: flex; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(2px); }
 .modal { width: min(600px, 94vw); max-height: 88vh; background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: var(--shadow-pop); display: flex; flex-direction: column; overflow: hidden; }
@@ -711,6 +818,16 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 .modal-head h2 { margin: 0; font-size: 13.5px; flex: 1; display: flex; align-items: center; gap: 8px; }
 .modal-body { padding: 14px; overflow: auto; flex: 1; min-height: 0; }
 .modal-foot { display: flex; align-items: center; gap: 8px; justify-content: flex-end; padding: 10px 14px; border-top: 1px solid var(--border-subtle); background: var(--bg-panel); }
+/* 确认/输入框压在右键菜单和下拉之上：它可能在任意菜单项里触发 */
+.overlay.ask { z-index: 105; }
+.ask-modal { width: min(400px, 92vw); }
+.ask-body { display: flex; gap: 11px; padding: 16px 15px; }
+.ask-icon { flex: 0 0 30px; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--danger-soft); color: var(--danger); }
+.ask-text { flex: 1; min-width: 0; }
+.ask-text h2 { margin: 0 0 5px; font-size: 13px; }
+.ask-message { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-primary); white-space: pre-wrap; word-break: break-word; }
+.ask-detail { margin: 7px 0 0; font-size: 11.5px; line-height: 1.5; color: var(--text-muted); white-space: pre-wrap; word-break: break-word; }
+.ask-input { width: 100%; margin-top: 10px; }
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(470px, 96vw); z-index: 55; background: var(--bg-panel); border-left: 1px solid var(--border-strong); box-shadow: var(--shadow-pop); display: flex; flex-direction: column; animation: slideIn .18s ease-out; }
 .drawer-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border-subtle); }
 .drawer-head h2 { font-size: 13px; margin: 0; flex: 1; display: flex; align-items: center; gap: 7px; }
@@ -818,6 +935,8 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 
 .palette { position: fixed; z-index: 80; top: 12vh; left: 50%; transform: translateX(-50%); width: min(620px, 92vw); background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: var(--shadow-pop); overflow: hidden; }
 .palette input { width: 100%; height: 46px; border: none; border-bottom: 1px solid var(--border-subtle); background: transparent; padding: 0 14px; font-size: 13.5px; outline: none; }
+/* 搜索行自带下划线，输入框不再叠一条 */
+.palette input.palette-search { flex: 1; width: auto; border-bottom: 0; padding-left: 8px; }
 .palette-list { max-height: 380px; overflow: auto; padding: 6px; }
 .palette-item { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: none; border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); text-align: left; }
 .palette-item.active, .palette-item:hover { background: var(--bg-hover); color: var(--text-primary); }
@@ -902,6 +1021,10 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 [data-density='comfortable'] .conn-row { height: 34px; }
 
 /* ---------- ER / relationships ---------- */
+/* 图视图：以前整块靠内联样式，且引用了不存在的 --border/--surface，等于没底色 */
+.graph-view { border: 1px solid var(--border-panel); border-radius: 10px; background: var(--bg-app); overflow: hidden; }
+.graph-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border-subtle); }
+.graph-view .graph-search { width: 200px; height: 25px; font-size: 11px; }
 .erd-wrap {
   flex: 1; min-height: 0; overflow: auto;
   background-color: var(--bg-app);
@@ -954,7 +1077,7 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
   white-space: pre-wrap;
 }
 .data-grid th.grid-select, .data-grid td.grid-select { width: 30px; min-width: 30px; text-align: center; padding: 0 4px; }
-.data-grid th.grid-select input, .data-grid td.grid-select input { width: 12px; height: 12px; accent-color: var(--accent); cursor: pointer; }
+.data-grid th.grid-select input, .data-grid td.grid-select input { width: 13px; height: 13px; }
 .data-grid tbody tr.selected td { background: var(--accent-soft); }
 .filter-rule { display: flex; align-items: center; gap: 6px; }
 .filter-rule .select { min-width: 110px; }
@@ -1040,7 +1163,7 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 /* ---------- settings grouped navigation ---------- */
 .settings-nav { overflow: auto; }
 .settings-back { margin-bottom: 8px; color: var(--text-muted); }
-.settings-nav-search { display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 9px; margin-bottom: 4px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-inset); color: var(--text-muted); }
+.settings-nav-search { display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 9px; margin-bottom: 4px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-elevated); color: var(--text-muted); }
 .settings-nav-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text-primary); font-size: 11px; }
 .settings-nav-search input::placeholder { color: var(--text-muted); }
 .nav-search-clear { border: none; background: transparent; color: var(--text-muted); font-size: 13px; line-height: 1; padding: 0 1px; cursor: pointer; }

@@ -3,6 +3,8 @@ import { ArrowLeftRight, Loader2, RefreshCw } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
 import { DatabaseSelect } from '../DatabaseSelect';
+import { askConfirm } from '../AskDialog';
+import { Select, Option } from '../ui';
 
 export function DataCompareTool() {
   const connections = useApp((s) => s.connections);
@@ -33,7 +35,7 @@ export function DataCompareTool() {
 
   const sync = async () => {
     if (!selected.size) return;
-    if (!window.confirm(`将用源数据替换目标中 ${selected.size} 张表（清空后写入），确认继续？`)) return;
+    if (!(await askConfirm({ title: '替换目标数据', message: `将用源数据替换目标中 ${selected.size} 张表。`, detail: '目标表会先清空再写入，原数据不可恢复。', danger: true, confirmLabel: '替换' }))) return;
     setLoading(true);
     try {
       const { result: transferred } = await api.transfer({ sourceId, sourceDatabase: sourceDb || undefined, targetId, targetDatabase: targetDb || undefined, tables: [...selected], mode: 'replace', createMissing: true });
@@ -56,18 +58,18 @@ export function DataCompareTool() {
         <div className="field" style={{ flex: 1, minWidth: 220 }}>
           <label>源连接 / 数据库</label>
           <div className="row gap-6">
-            <select className="select" style={{ flex: 1 }} value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
-              {connections.map((conn) => <option key={conn.id} value={conn.id}>{conn.name}</option>)}
-            </select>
+            <Select className="select" style={{ flex: 1 }} value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
+              {connections.map((conn) => <Option key={conn.id} value={conn.id}>{conn.name}</Option>)}
+            </Select>
             <DatabaseSelect connectionId={sourceId} value={sourceDb} onChange={setSourceDb} testId="compare-source-db" />
           </div>
         </div>
         <div className="field" style={{ flex: 1, minWidth: 220 }}>
           <label>目标连接 / 数据库</label>
           <div className="row gap-6">
-            <select className="select" style={{ flex: 1 }} value={targetId} onChange={(e) => setTargetId(e.target.value)}>
-              {connections.map((conn) => <option key={conn.id} value={conn.id}>{conn.name}</option>)}
-            </select>
+            <Select className="select" style={{ flex: 1 }} value={targetId} onChange={(e) => setTargetId(e.target.value)}>
+              {connections.map((conn) => <Option key={conn.id} value={conn.id}>{conn.name}</Option>)}
+            </Select>
             <DatabaseSelect connectionId={targetId} value={targetDb} onChange={setTargetDb} testId="compare-target-db" />
           </div>
         </div>

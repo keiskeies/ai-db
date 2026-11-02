@@ -44,9 +44,10 @@ import { deliverExport } from '../lib/exportDelivery';
 import { desktopBridge } from '../lib/desktop';
 import { formatBytes, formatCell, formatDuration, formatRelative } from '../lib/format';
 import { useApp, type LiveTool, type LiveTurn } from '../store';
+import { askConfirm } from './AskDialog';
 import { ChartView, type ChartSpec } from './ChartView';
 import { DatabaseSelect } from './DatabaseSelect';
-import { CopyButton, Markdown, RiskBadge } from './ui';
+import { CopyButton, Markdown, Option, RiskBadge, Select } from './ui';
 
 const MODE_OPTIONS: Array<{ value: PermissionMode; zh: string; en: string }> = [
   { value: 'readonly', zh: '只读', en: 'Read-only' },
@@ -1193,7 +1194,6 @@ export function AgentPanel() {
   const activeModelLabel =
     modelOptions.find((item) => item.configId === settings.agent.activeModelId && item.model === settings.agent.model)?.label ??
     settings.agent.model;
-  const providerLabel = settings.agent.provider === 'local' ? 'Local' : activeModelLabel;
   const modeLabel = MODE_OPTIONS.find((m) => m.value === agentMode);
   // 先按「当前连接的当前库」收窄，再按搜索词过滤。
   // 未绑定连接/库的历史会话在 sessionsForScope 里一律放行，不会被藏掉。
@@ -1353,7 +1353,6 @@ export function AgentPanel() {
           <span className="agent-dot">AI</span>
           <span>AI 助手</span>
         </div>
-        <span className="badge agent" style={{ fontSize: 9 }}>{providerLabel}</span>
         <div className="spacer" />
         <button className="icon-btn" title={t('sessions')} onClick={() => setSessionsOpen(!sessionsOpen)} data-testid="agent-sessions">
           <History size={14} />
@@ -1374,32 +1373,26 @@ export function AgentPanel() {
 
       <div className="agent-sub">
         <Database size={11} />
-        <select
+        <Select
           className="mode-select"
-          style={{ border: 'none', background: 'transparent', maxWidth: 150 }}
           value={activeConnectionId ?? ''}
           onChange={(e) => setActiveConnection(e.target.value || undefined)}
           title={t('connections')}
         >
-          <option value="">未选择连接</option>
+          <Option value="">未选择连接</Option>
           {connections.map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
+            <Option key={c.id} value={c.id}>{c.name}</Option>
           ))}
-        </select>
+        </Select>
         <DatabaseSelect
           connectionId={activeConnectionId}
           value={agentDatabase}
           onChange={(db) => void setAgentDatabase(db)}
           testId="agent-db"
           className="mode-select"
-          style={{ border: 'none', background: 'transparent', maxWidth: 130 }}
         />
         <span>·</span>
         <span>{sessionMeta?.title ?? t('emptyAgentTitle')}</span>
-        <div className="spacer" />
-        <span title={settings.agent.hasApiKey ? 'API key configured' : t('noApiKey')} style={{ color: settings.agent.provider !== 'local' && !settings.agent.hasApiKey ? 'var(--warning)' : undefined }}>
-          {settings.agent.provider === 'local' ? 'offline' : activeModelLabel}
-        </span>
       </div>
 
       {/* 首页与 Agent 已经解耦：两边库不一致时必须说清楚，否则用户会以为
@@ -1957,9 +1950,10 @@ export function AgentPanel() {
                   </button>
                   <button
                     className="icon-btn danger"
-                    onClick={(e) => {
+                    data-testid="session-delete"
+                    onClick={async (e) => {
                       e.stopPropagation();
-                      if (window.confirm('删除该会话？')) void deleteAgentSession(session.id);
+                      if (await askConfirm({ message: '删除该会话？', detail: '会话里的消息与执行过程会一并删除。', danger: true, confirmLabel: '删除' })) void deleteAgentSession(session.id);
                     }}
                   >
                     <Trash2 size={12} />

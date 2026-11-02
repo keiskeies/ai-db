@@ -4,6 +4,7 @@ import type { SkillDetail, SkillSummary } from '@aidb/core';
 import { api, streamSkillRun, type SkillWorkerEvent, type SkillWorkerRun } from '../../lib/api';
 import { deliverExportedFile } from '../../lib/desktop';
 import { useApp } from '../../store';
+import { askConfirm } from '../AskDialog';
 
 interface PendingQuestion {
   id: string;
@@ -229,7 +230,7 @@ export function SkillsTool() {
   };
 
   const remove = async (skill: SkillSummary) => {
-    if (!window.confirm(`卸载 Skill「${skill.name}」？文件会移到备份目录。`)) return;
+    if (!(await askConfirm({ message: `卸载 Skill「${skill.name}」？`, detail: '文件会移到备份目录。', danger: true, confirmLabel: '卸载' }))) return;
     try {
       await api.deleteSkill(skill.id);
       if (detail?.id === skill.id) setDetail(null);
@@ -529,8 +530,7 @@ export function SkillsTool() {
                     {group.names.slice(0, 40).map((name) => (
                       <button
                         key={name}
-                        className="badge"
-                        style={{ cursor: 'pointer', border: '1px solid var(--border)', background: 'var(--bg-inset)' }}
+                        className="badge pickable"
                         onClick={() => setPrompt((current) => `使用 templates/${group.kind}/${name} 模板。\n${current}`.trim())}
                         title={`填入：${name}`}
                       >
@@ -548,12 +548,7 @@ export function SkillsTool() {
                 </div>
               ))}
             </div>
-            <pre
-              className="mono"
-              style={{ margin: 0, padding: 8, maxHeight: 320, overflow: 'auto', background: 'var(--bg-inset)', fontSize: 10, whiteSpace: 'pre-wrap' }}
-            >
-              {detail.body ?? ''}
-            </pre>
+            <pre className="code-block" style={{ maxHeight: 320 }}>{detail.body ?? ''}</pre>
           </div>
         ) : null}
         {run ? (
@@ -568,7 +563,7 @@ export function SkillsTool() {
               ) : null}
             </div>
             {question ? (
-              <div style={{ margin: 10, padding: 10, border: '1px solid var(--accent)', borderRadius: 6, background: 'var(--bg-inset)' }}>
+              <div className="skill-question">
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>{question.question}</div>
                 {question.options?.length ? (
                   <div className="tool-row" style={{ padding: '0 0 6px', border: 0, flexWrap: 'wrap' }}>
@@ -581,7 +576,7 @@ export function SkillsTool() {
                 ) : null}
                 <div className="tool-row" style={{ padding: 0, border: 0 }}>
                   <input
-                    className="input"
+                    className="input skill-answer"
                     value={answerText}
                     onChange={(e) => setAnswerText(e.target.value)}
                     onKeyDown={(e) => {
@@ -594,7 +589,7 @@ export function SkillsTool() {
               </div>
             ) : null}
             {outputFiles.length ? (
-              <div style={{ padding: 10, borderBottom: '1px solid var(--border)' }}>
+              <div className="skill-out">
                 <div className="muted" style={{ fontSize: 10, marginBottom: 4 }}>产物</div>
                 {outputFiles.map((file) => (
                   <div key={`${file.area}/${file.path}`} className="tool-row" style={{ padding: '2px 0', border: 0 }}>
@@ -606,7 +601,7 @@ export function SkillsTool() {
                 ))}
               </div>
             ) : null}
-            <div className="mono" style={{ maxHeight: 260, overflow: 'auto', padding: 10, fontSize: 10, whiteSpace: 'pre-wrap', borderBottom: '1px solid var(--border)' }}>
+            <div className="mono skill-events">
               {events.length ? events.map((event, index) => {
                 const summary = eventSummary(event);
                 if (!summary) return null;
@@ -618,10 +613,7 @@ export function SkillsTool() {
                 );
               }) : <span className="muted">等待事件…</span>}
             </div>
-            <pre
-              className="mono"
-              style={{ margin: 0, padding: 10, maxHeight: 320, overflow: 'auto', background: 'var(--bg-inset)', fontSize: 10, whiteSpace: 'pre-wrap' }}
-            >
+            <pre className="code-block skill-log">
               {text || run.text || '（最终答复会显示在这里）'}
             </pre>
           </div>

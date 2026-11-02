@@ -3,6 +3,8 @@ import { Bell, Loader2, Plus, Send, Trash2 } from 'lucide-react';
 import type { NotificationChannelInfo, NotificationChannelType } from '@aidb/core';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
+import { askConfirm } from '../AskDialog';
+import { Select, Option } from '../ui';
 
 const TYPE_LABEL: Record<NotificationChannelType, string> = {
   feishu: '飞书群机器人',
@@ -154,7 +156,7 @@ export function NotificationsTool() {
   };
 
   const remove = async (channel: NotificationChannelInfo) => {
-    if (!window.confirm(`删除通知渠道「${channel.name}」？`)) return;
+    if (!(await askConfirm({ message: `删除通知渠道「${channel.name}」？`, danger: true, confirmLabel: '删除' }))) return;
     try {
       await api.deleteNotificationChannel(channel.id);
       await load();
@@ -240,10 +242,10 @@ export function NotificationsTool() {
                 </div>
                 <div className="field" style={{ width: 110 }}>
                   <label>目标</label>
-                  <select className="select" value={targetType} onChange={(e) => setTargetType(e.target.value as 'group' | 'private')}>
-                    <option value="group">群</option>
-                    <option value="private">私聊</option>
-                  </select>
+                  <Select className="select" value={targetType} onChange={(e) => setTargetType(e.target.value as 'group' | 'private')}>
+                    <Option value="group">群</Option>
+                    <Option value="private">私聊</Option>
+                  </Select>
                 </div>
                 <div className="field" style={{ width: 140 }}>
                   <label>群号 / QQ</label>
@@ -269,10 +271,10 @@ export function NotificationsTool() {
                   </div>
                   <div className="field" style={{ width: 170 }}>
                     <label>绑定连接</label>
-                    <select className="select" value={connectionId} onChange={(e) => setConnectionId(e.target.value)}>
-                      <option value="">请选择</option>
-                      {connections.map((connection) => <option key={connection.id} value={connection.id}>{connection.name}</option>)}
-                    </select>
+                    <Select className="select" value={connectionId} onChange={(e) => setConnectionId(e.target.value)}>
+                      <Option value="">请选择</Option>
+                      {connections.map((connection) => <Option key={connection.id} value={connection.id}>{connection.name}</Option>)}
+                    </Select>
                   </div>
                   <div className="field" style={{ width: 130 }}>
                     <label>默认库（可选）</label>
