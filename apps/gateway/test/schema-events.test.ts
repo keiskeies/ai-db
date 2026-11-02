@@ -196,3 +196,52 @@ test('工具箱改名只发一次事件（tableOps 不得与 query() 双发）',
   });
   assert.equal(events.length, 1, `期望恰好 1 次，实际 ${events.length}`);
 });
+
+test('事务内 DDL 提交前不发事件，提交后发一次', async () => {
+  const conn = gateway.store.listConnections()[0];
+  const sessionId = 'schema-tx-1';
+  await api('/tx/begin', { method: 'POST', body: JSON.stringify({ connectionId: conn.id, sessionId }) });
+
+  const beforeCommit = await collect(async () => {
+    const result = await api('/query', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: conn.id, sql: 'CREATE TABLE tx_probe (id INTEGER PRIMARY KEY)', sessionId }),
+    });
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+  });
+  assert.equal(beforeCommit.length, 0, '未提交时别发事件：别的会话还看不到');
+
+  const afterCommit = await collect(async () => {
+    const result = await api('/tx/commit', { method: 'POST', body: JSON.stringify({ sessionId }) });
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+  });
+  assert.equal(afterCommit.length, 1, `提交后应发一次，实际 ${afterCommit.length}`);
+});
+
+test('事务内 DDL 回滚后发事件（结构可能已回退，客户端要重读）', async () => {
+  const conn = gateway.store.listConnections()[0];
+  const sessionId = 'schema-tx-2';
+  await api('/tx/begin', { method: 'POST', body: JSON.stringify({ connectionId: conn.id, sessionId }) });
+  await api('/query', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: conn.id, sql: 'CREATE TABLE tx_probe2 (id INTEGER PRIMARY KEY)', sessionId }),
+  });
+
+  const afterRollback = await collect(async () => {
+    const result = await api('/tx/rollback', { method: 'POST', body: JSON.stringify({ sessionId }) });
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+  });
+  assert.equal(afterRollback.length, 1);
+});
+
+test('没有 DDL 的事务提交不发事件', async () => {
+  const conn = gateway.store.listConnections()[0];
+  const sessionId = 'schema-tx-3';
+  await api('/tx/begin', { method: 'POST', body: JSON.stringify({ connectionId: conn.id, sessionId }) });
+  await api('/query', { method: 'POST', body: JSON.stringify({ connectionId: conn.id, sql: 'SELECT 1', sessionId }) });
+
+  const afterCommit = await collect(async () => {
+    await api('/tx/commit', { method: 'POST', body: JSON.stringify({ sessionId }) });
+  });
+  assert.equal(afterCommit.length, 0);
+});

@@ -1041,13 +1041,15 @@ export class ConnectionManager {
     return { sessionId, database };
   }
 
-  async commitTransaction(sessionId: string): Promise<{ sessionId: string; committed: true }> {
+  async commitTransaction(sessionId: string, actor: SchemaChangeCause = 'user'): Promise<{ sessionId: string; committed: true }> {
     const session = this.txSessions.get(sessionId);
     if (!session) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
     const driver = await this.driverFor(session.connectionId);
     if (!supportsTransaction(driver)) throw new DbError('驱动不再支持事务', { code: 'UNSUPPORTED_ENGINE' });
     await driver.commitTransaction(sessionId);
     this.txSessions.delete(sessionId);
+    // 事务里的 DDL 到这一刻才对别的会话可见，所以事件也到这一刻才发。
+    if (session.schemaDirty) this.invalidate(session.connectionId, actor);
     this.store.addHistory({
       connectionId: session.connectionId,
       database: session.database,
@@ -1058,13 +1060,16 @@ export class ConnectionManager {
     return { sessionId, committed: true };
   }
 
-  async rollbackTransaction(sessionId: string): Promise<{ sessionId: string; rolledBack: true }> {
+  async rollbackTransaction(sessionId: string, actor: SchemaChangeCause = 'user'): Promise<{ sessionId: string; rolledBack: true }> {
     const session = this.txSessions.get(sessionId);
     if (!session) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
     const driver = await this.driverFor(session.connectionId);
     if (!supportsTransaction(driver)) throw new DbError('驱动不再支持事务', { code: 'UNSUPPORTED_ENGINE' });
     await driver.rollbackTransaction(sessionId);
     this.txSessions.delete(sessionId);
+    // 回滚可能把结构改回去（DDL 是否可回滚取决于引擎），客户端必须重读，
+    // 否则会一直显示一个从未提交过的表。
+    if (session.schemaDirty) this.invalidate(session.connectionId, actor);
     this.store.addHistory({
       connectionId: session.connectionId,
       database: session.database,

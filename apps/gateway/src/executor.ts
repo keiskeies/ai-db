@@ -382,16 +382,16 @@ export class ToolExecutor {
       }
 
       case 'commit_transaction': {
-        const conn = this.requireConnection(call, ctx);
-        const result = await this.manager.commitTransaction(agentTxKey(ctx));
-        this.manager.invalidate(conn.id);
+        // requireConnection 仍要调：它负责校验连接存在并把连接 id 补进 ctx，
+        // 删掉会改变错误行为。只是不再需要它的返回值。
+        this.requireConnection(call, ctx);
+        const result = await this.manager.commitTransaction(agentTxKey(ctx), 'agent');
         return ok(started, '事务已提交', result);
       }
 
       case 'rollback_transaction': {
-        const conn = this.requireConnection(call, ctx);
-        const result = await this.manager.rollbackTransaction(agentTxKey(ctx));
-        this.manager.invalidate(conn.id);
+        this.requireConnection(call, ctx);
+        const result = await this.manager.rollbackTransaction(agentTxKey(ctx), 'agent');
         return ok(started, '事务已回滚', result);
       }
 
