@@ -64,6 +64,89 @@ const checks = [];
 const consoleErrors = [];
 const gatewayLogs = [];
 
+// ---------------- 资源登记与清理 ----------------
+//
+// 这些资源（临时目录、网关子进程、静态服务器、浏览器、Electron）必须无论
+// 怎么退出都收干净。旧实现把清理写成文件末尾的一串直接 await：中途任何一步
+// 抛错或卡住，后面的清理全部跳过，于是临时目录和子进程留在系统里累积，
+// 下一轮再跑就可能撞端口、撞资源，表现成"偶发超时"。实测曾留下 33 个
+// 临时目录（76 MB），就是这么来的。
+//
+// 所以清理必须满足三条：
+//   1. 每步独立 try/catch —— 一步失败不拖累其它步骤；
+//   2. 不依赖被测系统还活着 —— 网络清理失败也要继续本地清理；
+//   3. 幂等 —— 正常收尾、异常收尾、信号中断可能都会调，重复调用无害。
+let cleanedUp = false;
+
+// 句柄提前声明：cleanup 在上面就定义了，必须能在它们赋值之前安全引用。
+let gateway;
+let mobileServer;
+let browser;
+let desktopContext;
+let mobileContext;
+let demo;
+
+const quiet = async (label, fn) => {
+  try {
+    await fn();
+  } catch (err) {
+    console.log(`WARN cleanup ${label}: ${err?.message ?? err}`);
+  }
+};
+
+async function cleanup() {
+  if (cleanedUp) return;
+  cleanedUp = true;
+
+  // 远端清理尽量做，但网关可能已经挂了 —— 失败只记日志，绝不阻断本地清理。
+  if (demo?.id) {
+    await quiet('restore readonly', () => api(`/connections/${demo.id}`, { method: 'PUT', body: JSON.stringify({ readonly: false }) }));
+    await quiet('drop e2e table', () =>
+      api('/ddl/execute', { method: 'POST', body: JSON.stringify({ connectionId: demo.id, statements: ['DROP TABLE IF EXISTS "e2e_tasks"'] }) }),
+    );
+  }
+
+  await quiet('desktop context', () => desktopContext?.close());
+  await quiet('mobile context', () => mobileContext?.close());
+  await quiet('browser', () => browser?.close());
+  await quiet('mobile server', () => new Promise((resolve) => (mobileServer?.listening ? mobileServer.close(() => resolve()) : resolve())));
+
+  // kill() 在 POSIX 上只发 SIGTERM，进程可能不理会；补一次 SIGKILL 兜底。
+  await quiet('gateway', () => {
+    if (!gateway || gateway.exitCode !== null || gateway.signalCode !== null) return;
+    gateway.kill('SIGTERM');
+    setTimeout(() => {
+      try {
+        if (gateway.exitCode === null && gateway.signalCode === null) gateway.kill('SIGKILL');
+      } catch {
+        /* 已经退了 */
+      }
+    }, 1000).unref?.();
+  });
+  // 给子进程一点时间真正退出，再删它正在用的目录。
+  await new Promise((r) => setTimeout(r, 400));
+  await quiet('temp home', () => rmSync(home, { recursive: true, force: true }));
+}
+
+// 信号中断（Ctrl+C、CI 超时）也要走同一套清理，否则清理代码根本轮不到执行。
+// once 防止连按两次 Ctrl+C 造成重入。
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.once(signal, () => {
+    console.log(`
+收到 ${signal}，开始清理…`);
+    void cleanup().finally(() => process.exit(1));
+  });
+}
+// 未捕获异常 / 未处理拒绝：先清理，再让 Node 以非零码退出。
+process.once('uncaughtException', (err) => {
+  console.error('UNCAUGHT', err);
+  void cleanup().finally(() => process.exit(1));
+});
+process.once('unhandledRejection', (err) => {
+  console.error('UNHANDLED REJECTION', err);
+  void cleanup().finally(() => process.exit(1));
+});
+
 const check = (name, condition, detail = '') => {
   checks.push({ name, ok: Boolean(condition), detail });
   console.log(`${condition ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`);
@@ -109,7 +192,7 @@ async function waitHealth(url, timeout = 25000) {
 const port = await freePort();
 const gatewayEnv = { ...process.env, NODE_OPTIONS: [process.env.NODE_OPTIONS, '--openssl-legacy-provider'].filter(Boolean).join(' '), AIDB_HOME: home, AIDB_HOST: '127.0.0.1', AIDB_PORT: String(port), AIDB_TOKEN: TOKEN, AIDB_SECRET: 'e2e-secret', AIDB_STATIC_DIR: desktopDist, NODE_ENV: 'production' };
 delete gatewayEnv.ELECTRON_RUN_AS_NODE;
-const gateway = spawn(process.execPath, [gatewayEntry], { env: gatewayEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+gateway = spawn(process.execPath, [gatewayEntry], { env: gatewayEnv, stdio: ['ignore', 'pipe', 'pipe'] });
 gateway.stdout.on('data', (d) => gatewayLogs.push(String(d)));
 gateway.stderr.on('data', (d) => gatewayLogs.push(String(d)));
 const bridge = `http://127.0.0.1:${port}`;
@@ -128,8 +211,12 @@ const api = async (path, init = {}) => {
   return { status: res.status, body };
 };
 
+// ---------------- 受保护的执行区起点 ----------------
+// 整段用例跑在 try 里，finally 无条件收尾。旧实现没有这层保护：中途任何
+// 异常或卡住都会跳过文件末尾那串清理，临时目录与子进程就留在系统里累积。
+try {
 const boot = (await api('/bootstrap')).body;
-const demo = boot.connections.find((c) => c.engine === 'sqlite');
+demo = boot.connections.find((c) => c.engine === 'sqlite');
 check('bridge bootstrap', Boolean(demo), demo?.name);
 check('52 agent tools', boot.tools.length === 52, String(boot.tools.length));
 const builtinMcp = (await api('/mcp/servers')).body.servers.filter((server) => server.builtin);
@@ -383,7 +470,7 @@ if (DUCKDB_E2E) {
 
 // Mobile static server
 const mime = { '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ttf': 'font/ttf' };
-const mobileServer = createServer((req, res) => {
+mobileServer = createServer((req, res) => {
   const pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://local').pathname);
   let file = resolve(join(mobileDist, pathname));
   if (!file.startsWith(mobileDist) || !existsSync(file) || statSync(file).isDirectory()) file = join(mobileDist, 'index.html');
@@ -394,10 +481,10 @@ const mobilePort = await freePort();
 await new Promise((r) => mobileServer.listen(mobilePort, '127.0.0.1', r));
 const mobileBase = `http://127.0.0.1:${mobilePort}`;
 
-const browser = await chromium.launch({ channel: 'chrome', headless: true });
+browser = await chromium.launch({ channel: 'chrome', headless: true });
 
 // ---------------- Desktop (browser, production build) ----------------
-const desktopContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+desktopContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 const page = await desktopContext.newPage();
 {
   const rawShot = page.screenshot.bind(page);
@@ -2569,7 +2656,7 @@ if (reportId) {
 await page.screenshot({ path: join(shots, 'desktop-dashboard.png') }).catch(() => undefined);
 
 // ---------------- Mobile (Expo web build) ----------------
-const mobileContext = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
+mobileContext = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
 const mobile = await mobileContext.newPage();
 {
   const rawShot = mobile.screenshot.bind(mobile);
@@ -2948,16 +3035,11 @@ await page.locator('[data-testid="grid-row-0"] td').nth(2).dblclick();
 await page.waitForTimeout(300);
 check('readonly connection keeps cells non-editable', (await page.locator('[data-testid="grid-row-0"] td.editing').count()) === 0);
 
-// ---------------- Cleanup & report ----------------
-await api(`/connections/${demo.id}`, { method: 'PUT', body: JSON.stringify({ readonly: false }) });
-await api('/ddl/execute', { method: 'POST', body: JSON.stringify({ connectionId: demo.id, statements: ['DROP TABLE IF EXISTS "e2e_tasks"'] }) });
-await desktopContext.close();
-await mobileContext.close();
-await browser.close();
-await new Promise((r) => mobileServer.close(() => r()));
-gateway.kill();
-await new Promise((r) => setTimeout(r, 400));
-rmSync(home, { recursive: true, force: true });
+// ---------------- 用例结束：收尾与报告 ----------------
+} finally {
+  // 无论上面是正常跑完、抛错还是被信号中断，这里都会执行。
+  await cleanup();
+}
 
 if (consoleErrors.length) {
   check('no browser console errors', false, consoleErrors.slice(0, 3).join(' | '));
