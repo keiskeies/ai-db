@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowDown,
+  ArrowLeft,
   ArrowUp,
   ArrowUpRight,
   AtSign,
@@ -967,20 +968,26 @@ export function AgentPanel() {
   const [sessionQuery, setSessionQuery] = useState('');
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
-  /** 输入卡左下角的胶囊菜单：权限 / 推理档位 / 模型都走同一个弹层。 */
-  const [pillMenu, setPillMenu] = useState<'none' | 'permission' | 'reasoning' | 'model' | 'more'>('none');
+  /** 输入卡左下角的胶囊菜单：权限 / 「模型 · 推理档位」合并胶囊 / 更多 走同一个弹层。 */
+  const [pillMenu, setPillMenu] = useState<'none' | 'permission' | 'model' | 'more'>('none');
+  /** 合并胶囊里展开的子列表：模型列表或推理档位列表，两者不会同时打开。 */
+  const [modelSub, setModelSub] = useState<'none' | 'model' | 'tier'>('none');
   const pillBarRef = useRef<HTMLDivElement>(null);
   const renameSession = useApp((s) => s.renameAgentSession);
 
   // 点卡片外面或按 Esc 收起胶囊弹层；模型选择仍沿用原生的切换与设置跳转逻辑
   useEffect(() => {
     if (pillMenu === 'none') return;
+    const close = () => {
+      setPillMenu('none');
+      setModelSub('none');
+    };
     const onPointerDown = (event: MouseEvent) => {
       if (pillBarRef.current?.contains(event.target as Node)) return;
-      setPillMenu('none');
+      close();
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setPillMenu('none');
+      if (event.key === 'Escape') close();
     };
     document.addEventListener('mousedown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);
@@ -1028,7 +1035,10 @@ export function AgentPanel() {
   }, [input]);
   const busy = live?.status === 'streaming' || live?.status === 'awaiting';
   const profile = getModelProfile(settings.agent);
-  const tierLevels = profile?.reasoning ? [...new Set((profile.reasoningTiers ?? []).map((tier) => tier.level))] : [];
+  /** 可下发的档位：value 为空的档位（如 off）与 Default 完全等价（都不带推理参数），不再重复列出。 */
+  const tierLevels = profile?.reasoning
+    ? [...new Set((profile.reasoningTiers ?? []).filter((tier) => tier.value?.trim()).map((tier) => tier.level))]
+    : [];
   const canAttachImage = supportsInput(profile, 'image');
   const modelConfigs = settings.agent.modelConfigs ?? [];
   const modelOptions = useMemo(() => {
@@ -1194,6 +1204,8 @@ export function AgentPanel() {
   const activeModelLabel =
     modelOptions.find((item) => item.configId === settings.agent.activeModelId && item.model === settings.agent.model)?.label ??
     settings.agent.model;
+  /** 未单独选档位时显示 Default：不下发推理参数，用服务商自己的默认。 */
+  const tierLabel = settings.agent.reasoningTier ?? 'Default';
   const modeLabel = MODE_OPTIONS.find((m) => m.value === agentMode);
   // 先按「当前连接的当前库」收窄，再按搜索词过滤。
   // 未绑定连接/库的历史会话在 sessionsForScope 里一律放行，不会被藏掉。
@@ -1707,25 +1719,22 @@ export function AgentPanel() {
             <div className="spacer" />
             <button
               className={`composer-pill composer-model ${pillMenu === 'model' ? 'open' : ''}`}
-              title="切换模型（在 设置 → 模型 里管理模型源和模型）"
+              title="模型与思考档位：点开后分别选择（在 设置 → 模型 里管理模型源和模型）"
               data-testid="agent-model-select"
-              onClick={() => setPillMenu(pillMenu === 'model' ? 'none' : 'model')}
+              onClick={() => {
+                setModelSub('none');
+                setPillMenu(pillMenu === 'model' ? 'none' : 'model');
+              }}
             >
               <span className="truncate">{modelOptions.length ? activeModelLabel : '配置模型'}</span>
+              {tierLevels.length ? (
+                <>
+                  <span className="composer-model-sep" aria-hidden="true">·</span>
+                  <span className="composer-model-tier">{tierLabel}</span>
+                </>
+              ) : null}
               <ChevronDown size={10} className="pill-caret" />
             </button>
-            {tierLevels.length ? (
-              <button
-                className={`composer-pill ${pillMenu === 'reasoning' ? 'open' : ''}`}
-                title="思考档位：按模型档案里的映射下发给服务商"
-                data-testid="agent-reasoning-tier"
-                onClick={() => setPillMenu(pillMenu === 'reasoning' ? 'none' : 'reasoning')}
-              >
-                <Brain size={12} />
-                <span>{settings.agent.reasoningTier ?? '跟随'}</span>
-                <ChevronDown size={10} className="pill-caret" />
-              </button>
-            ) : null}
             {busy ? (
               <button className="send-btn stop" onClick={() => void abortAgent()} title={t('stop')} data-testid="agent-stop">
                 <Square size={12} />
@@ -1757,72 +1766,110 @@ export function AgentPanel() {
               </div>
             ) : null}
 
-            {pillMenu === 'reasoning' ? (
-              <div className="pill-menu pill-menu-right" role="menu" data-testid="agent-reasoning-menu">
-                <button
-                  role="menuitemradio"
-                  aria-checked={!settings.agent.reasoningTier}
-                  className={`pill-menu-item ${!settings.agent.reasoningTier ? 'active' : ''}`}
-                  onClick={() => {
-                    // 传 null 而不是 undefined：undefined 会在 JSON 里整个消失，
-                    // 服务端是浅合并，会把旧档位原样留下来，导致「跟随服务商」清不掉。
-                    void saveSettings({ ...settings, agent: { ...settings.agent, reasoningTier: null } });
-                    setPillMenu('none');
-                    textareaRef.current?.focus();
-                  }}
-                >
-                  <span>跟随服务商</span>
-                  {!settings.agent.reasoningTier ? <Check size={11} /> : null}
-                </button>
-                {tierLevels.map((level) => (
-                  <button
-                    key={level}
-                    role="menuitemradio"
-                    aria-checked={settings.agent.reasoningTier === level}
-                    className={`pill-menu-item ${settings.agent.reasoningTier === level ? 'active' : ''}`}
-                    onClick={() => {
-                      void saveSettings({ ...settings, agent: { ...settings.agent, reasoningTier: level } });
-                      setPillMenu('none');
-                      textareaRef.current?.focus();
-                    }}
-                  >
-                    <span>{level}</span>
-                    {settings.agent.reasoningTier === level ? <Check size={11} /> : null}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-
             {pillMenu === 'model' ? (
               <div className="pill-menu pill-menu-model" role="menu" data-testid="agent-model-menu">
-                {modelOptions.length ? (
-                  modelOptions.map((item, index) => (
+                {modelSub === 'none' ? (
+                  <>
                     <button
-                      key={`${item.configId}::${item.model}`}
-                      role="menuitemradio"
-                      aria-checked={index === activeModelIndex}
-                      className={`pill-menu-item ${index === activeModelIndex ? 'active' : ''}`}
-                      title={`${item.label} · ${item.provider}`}
-                      onClick={() => {
-                        switchModel(index);
-                        setPillMenu('none');
-                        // 选完模型接着就能打字，不用再点一次输入框
-                        textareaRef.current?.focus();
-                      }}
+                      className="pill-menu-row"
+                      role="menuitem"
+                      onClick={() => setModelSub('model')}
+                      data-testid="agent-model-sub"
                     >
-                      <span className="truncate">{item.label}</span>
-                      {index === activeModelIndex ? <Check size={11} /> : null}
+                      <span className="pill-menu-label">模型</span>
+                      <span className="pill-menu-value truncate">{modelOptions.length ? activeModelLabel : '未配置'}</span>
+                      <ChevronRight size={11} />
                     </button>
-                  ))
+                    {tierLevels.length ? (
+                      <button
+                        className="pill-menu-row"
+                        role="menuitem"
+                        onClick={() => setModelSub('tier')}
+                        data-testid="agent-reasoning-tier"
+                      >
+                        <span className="pill-menu-label">推理等级</span>
+                        <span className="pill-menu-value">{tierLabel}</span>
+                        <ChevronRight size={11} />
+                      </button>
+                    ) : null}
+                    <div className="pill-menu-sep" aria-hidden="true" />
+                    <button className="pill-menu-item" onClick={() => { setSettingsOpen(true, 'agent'); setPillMenu('none'); }}>
+                      <span>管理模型…</span>
+                    </button>
+                  </>
                 ) : (
-                  <button className="pill-menu-item" onClick={() => { setSettingsOpen(true, 'agent'); setPillMenu('none'); }} data-testid="agent-model-manage">
-                    <span>去设置里添加模型</span>
-                  </button>
+                  <>
+                    <button className="pill-menu-item pill-menu-back" onClick={() => setModelSub('none')}>
+                      <ArrowLeft size={11} />
+                      <span>{modelSub === 'model' ? '模型' : '推理等级'}</span>
+                    </button>
+                    <div className="pill-menu-sep" aria-hidden="true" />
+                    {modelSub === 'model' ? (
+                      modelOptions.length ? (
+                        modelOptions.map((item, index) => (
+                          <button
+                            key={`${item.configId}::${item.model}`}
+                            role="menuitemradio"
+                            aria-checked={index === activeModelIndex}
+                            className={`pill-menu-item ${index === activeModelIndex ? 'active' : ''}`}
+                            title={`${item.label} · ${item.provider}`}
+                            onClick={() => {
+                              switchModel(index);
+                              setModelSub('none');
+                              setPillMenu('none');
+                              // 选完模型接着就能打字，不用再点一次输入框
+                              textareaRef.current?.focus();
+                            }}
+                          >
+                            <span className="truncate">{item.label}</span>
+                            {index === activeModelIndex ? <Check size={11} /> : null}
+                          </button>
+                        ))
+                      ) : (
+                        <button className="pill-menu-item" onClick={() => { setSettingsOpen(true, 'agent'); setPillMenu('none'); }} data-testid="agent-model-manage">
+                          <span>去设置里添加模型</span>
+                        </button>
+                      )
+                    ) : (
+                      <>
+                        <button
+                          role="menuitemradio"
+                          aria-checked={!settings.agent.reasoningTier}
+                          className={`pill-menu-item ${!settings.agent.reasoningTier ? 'active' : ''}`}
+                          title="Default：不下发推理参数，用服务商自己的默认档位"
+                          onClick={() => {
+                            // 传 null 而不是 undefined：undefined 会在 JSON 里整个消失，
+                            // 服务端是浅合并，会把旧档位原样留下来，Default 就切不回去。
+                            void saveSettings({ ...settings, agent: { ...settings.agent, reasoningTier: null } });
+                            setModelSub('none');
+                            setPillMenu('none');
+                            textareaRef.current?.focus();
+                          }}
+                        >
+                          <span>Default</span>
+                          {!settings.agent.reasoningTier ? <Check size={11} /> : null}
+                        </button>
+                        {tierLevels.map((level) => (
+                          <button
+                            key={level}
+                            role="menuitemradio"
+                            aria-checked={settings.agent.reasoningTier === level}
+                            className={`pill-menu-item ${settings.agent.reasoningTier === level ? 'active' : ''}`}
+                            onClick={() => {
+                              void saveSettings({ ...settings, agent: { ...settings.agent, reasoningTier: level } });
+                              setModelSub('none');
+                              setPillMenu('none');
+                              textareaRef.current?.focus();
+                            }}
+                          >
+                            <span>{level}</span>
+                            {settings.agent.reasoningTier === level ? <Check size={11} /> : null}
+                          </button>
+                        ))}
+                      </>
+                    )}
+                  </>
                 )}
-                <div className="pill-menu-sep" aria-hidden="true" />
-                <button className="pill-menu-item" onClick={() => { setSettingsOpen(true, 'agent'); setPillMenu('none'); }}>
-                  <span>管理模型…</span>
-                </button>
               </div>
             ) : null}
 

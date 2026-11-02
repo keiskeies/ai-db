@@ -124,7 +124,7 @@
 
 ### 4.4 截图（docs/screenshots/）
 
-`desktop-welcome` `desktop-data` `desktop-query` `desktop-query-chart` `desktop-toolbox` `desktop-table-menu` `desktop-agent` `desktop-chart` `desktop-audit` `desktop-approval` `desktop-agent-ddl` `desktop-settings` `desktop-search-settings` `desktop-agent-tools` `desktop-light` `desktop-memory` `desktop-relations` `desktop-connection-engines` `mobile-pairing` `mobile-chat` `mobile-agent` `mobile-data` `mobile-memory` `mobile-settings` `electron-desktop` `packaged-windows`。
+`desktop-welcome` `desktop-data` `desktop-query` `desktop-query-chart` `desktop-toolbox` `desktop-table-menu` `desktop-agent` `desktop-agent-model-menu` `desktop-agent-model-tiers` `desktop-agent-model-tiers-light` `desktop-chart` `desktop-audit` `desktop-approval` `desktop-agent-ddl` `desktop-settings` `desktop-search-settings` `desktop-agent-tools` `desktop-light` `desktop-memory` `desktop-relations` `desktop-connection-engines` `mobile-pairing` `mobile-chat` `mobile-agent` `mobile-data` `mobile-memory` `mobile-settings` `electron-desktop` `packaged-windows`。
 
 ## 5. 关键缺陷与修复（真实发生）
 
@@ -408,3 +408,21 @@ Expo Web 构建在 390×844 视口通过：配对页、配对码真实兑换、A
 顺带修掉一个真 bug：`ConnectionModal` 关闭后组件仍挂载、状态留在上一次尝试上，重开「新建连接」会先渲染出上次的引擎（如 mysql + 只读已勾选）再退回默认，造成可见闪烁。改成外壳读 editor、内部 `ConnectionForm` 用 `key` 直接从 editor 初始化，删掉那段 `useEffect` 重置。
 
 回归：`verify:controls` 通过、docs 契约 382/382、typecheck 全绿、E2E 基线 254/254（配 `AIDB_TEST_MONGO_PORT` 追加为 265/265），控制台错误 0。
+
+## 16. 模型与推理等级合并为一枚胶囊（2026-11-02）
+
+输入卡右下原本是两枚胶囊（`qwen3.8-flash-next` + `跟随`）。档位是「这个模型的档位」，拆成两枚会被读成两个互不相干的开关，且「跟随服务商」这个档名要读完整句才知道它是什么。改为：胶囊显示 `模型名 · 档位`，点开后第一层是 `模型 <当前值> ›` / `推理等级 <当前值> ›` 两行，点进去才是各自的取值列表；缺省档改叫 `Default`。
+
+| 验证项 | 方式 | 结果 |
+|---|---|---|
+| 合并胶囊 | E2E：胶囊文案为 `Demo Reasoner · Default`，工具行只剩 3 枚胶囊（`＋` / 权限 / 模型） | ✅ |
+| 两层菜单 | E2E：第一层两行类别行（`.pill-menu-row`）各带当前值与进入箭头；点 `推理等级` 才出现取值列表，顶部 `‹ 返回` 回到类别层 | ✅ |
+| 档位菜单 | E2E：`Default` 列在第一位并打勾；`value` 为空的档位（如 `off`）不再重复列出——它与 Default 一样都不下发推理参数 | ✅ |
+| 选中即生效 | E2E：选 `high` 后弹层关闭、胶囊变成 `… · high`；选回 `Default` 后 `/settings` 里 `reasoningTier` 为未设置（走 `null`，不是留空） | ✅ |
+| 关闭语义 | E2E：`Esc` 一次关到底，不留半开的子列表；点卡片外收起 | ✅ |
+| 浅色主题 | E2E：浅色下 `.pill-menu` 底色 avg > 180（与 `.select-menu` 是两套样式，暗色通过不代表浅色通过） | ✅ |
+| 档案缺失时 | 代码：`profile.reasoning` 为假或无有效档位时，胶囊只显示模型名，菜单里不出 `推理等级` 行 | ✅ |
+
+`data-testid` 语义随之调整：`agent-model-select` 现在是合并胶囊，`agent-reasoning-tier` 从「第二枚胶囊」变成菜单里的「推理等级」行，`agent-model-sub` 是「模型」行；E2E 相应改断言，不保留旧 testid 的空壳。截图 `desktop-agent-model-menu.png`（第一层）、`desktop-agent-model-tiers.png`（档位列表）、`desktop-agent-model-tiers-light.png`（浅色）。
+
+回归：typecheck 全绿、core 206/206、gateway 381 个用例（316 通过 / 65 跳过）、E2E 基线 263/263（原 254，追加 9 项），控制台错误 0。

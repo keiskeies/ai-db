@@ -530,6 +530,22 @@ const mobilePort = await freePort();
 await new Promise((r) => mobileServer.listen(mobilePort, '127.0.0.1', r));
 const mobileBase = `http://127.0.0.1:${mobilePort}`;
 
+// 输入卡右侧那枚胶囊现在同时显示「模型 · 推理等级」，档位列表来自模型档案。
+// 默认设置里没有推理档案（胶囊只剩模型名），所以先给离线推理模型一份档位表，
+// 让「合并胶囊 + 两层菜单」这条路径在基线里就被覆盖。
+const tierSeed = await api('/settings', {
+  method: 'PUT',
+  body: JSON.stringify({
+    agent: {
+      modelConfigs: [{ id: 'default', name: 'Demo', provider: 'local', preset: 'local', baseUrl: 'https://api.anthropic.com', models: [{ id: 'local', name: 'Demo Reasoner' }] }],
+      activeModelId: 'default',
+      model: 'local',
+      modelProfiles: { local: { reasoning: true, reasoningTiers: [{ level: 'off', value: '' }, { level: 'low', value: 'low' }, { level: 'medium', value: 'medium' }, { level: 'high', value: 'high' }] } },
+    },
+  }),
+});
+check('reasoning profile seeded for the composer capsule', tierSeed.status === 200 && tierSeed.body.settings.agent.model === 'local', `HTTP ${tierSeed.status}`);
+
 browser = await chromium.launch({ channel: 'chrome', headless: true });
 
 // ---------------- Desktop (browser, production build) ----------------
@@ -2314,15 +2330,58 @@ await page.waitForSelector('[data-testid="agent-mode-menu"]', { timeout: 5000 })
 check('permission capsule opens a menu with all four modes', (await page.locator('[data-testid="agent-mode-menu"] .pill-menu-item').count()) === 4);
 await page.keyboard.press('Escape');
 check('Escape closes the capsule menu', (await page.locator('[data-testid="agent-mode-menu"]').count()) === 0);
-// 思考档位必须排在模型右边，且只渲染一次
-const modelBox = await page.locator('[data-testid="agent-model-select"]').boundingBox();
-const tierCount = await page.locator('[data-testid="agent-reasoning-tier"]').count();
-check('reasoning tier renders once', tierCount <= 1, tierCount);
-if (modelBox && tierCount === 1) {
-  const tierBox = await page.locator('[data-testid="agent-reasoning-tier"]').boundingBox();
-  check('reasoning tier sits right of the model capsule', Boolean(tierBox) && tierBox.x > modelBox.x + modelBox.width - 1, { modelRight: Math.round(modelBox.x + modelBox.width), tierLeft: Math.round(tierBox?.x ?? 0) });
-}
+// 思考档位不再单独占一枚胶囊：模型名和档位合在一处，档位用「·」分隔，缺省档显示 Default
+const pillText = (await page.locator('[data-testid="agent-model-select"]').innerText()).replace(/\s+/g, ' ').trim();
+check('model capsule merges model name and reasoning tier', pillText.includes('·') && pillText.includes('Default') && pillText.includes('Demo Reasoner'), pillText);
+check('reasoning tier no longer occupies its own capsule', (await page.locator('.composer-tools .composer-pill').count()) === 3, `${await page.locator('.composer-tools .composer-pill').count()} pills`);
+await page.locator('[data-testid="agent-model-select"]').click();
+await page.waitForSelector('[data-testid="agent-model-menu"]', { timeout: 5000 });
+const firstLevel = await page.locator('[data-testid="agent-model-menu"] .pill-menu-row').allInnerTexts();
+check('model capsule opens category rows for 模型 and 推理等级', firstLevel.length === 2 && firstLevel[0].includes('模型') && firstLevel[0].includes('Demo Reasoner') && firstLevel[1].includes('推理等级') && firstLevel[1].includes('Default'), firstLevel.join(' | '));
+await page.locator('[data-testid="agent-reasoning-tier"]').click();
+await page.waitForFunction(() => [...document.querySelectorAll('.pill-menu-item')].some((el) => el.textContent?.includes('Default')), null, { timeout: 5000 });
+const tierMenu = await page.locator('[data-testid="agent-model-menu"]').innerText();
+check('推理等级列表把 Default 列为第一项，且不重复列 off 这类空值档', /Default/.test(tierMenu) && !/\boff\b/.test(tierMenu) && tierMenu.includes('high'), tierMenu.replace(/\s+/g, ' ').slice(0, 90));
+await page.locator('[data-testid="agent-model-menu"] .pill-menu-item').filter({ hasText: 'high' }).click();
+await page.waitForFunction(() => !document.querySelector('[data-testid="agent-model-menu"]'), null, { timeout: 5000 });
+await page.waitForFunction(() => document.querySelector('[data-testid="agent-model-select"]')?.textContent?.includes('high'), null, { timeout: 5000 });
+check('choosing a tier closes the menu and updates the capsule', (await page.locator('[data-testid="agent-model-select"]').innerText()).replace(/\s+/g, ' ').includes('high'));
+await page.locator('[data-testid="agent-model-select"]').click();
+await page.waitForSelector('[data-testid="agent-model-menu"]', { timeout: 5000 });
+await page.locator('[data-testid="agent-reasoning-tier"]').click();
+await page.waitForFunction(() => [...document.querySelectorAll('.pill-menu-item')].some((el) => el.textContent?.includes('Default')), null, { timeout: 5000 });
+await page.locator('[data-testid="agent-model-menu"] .pill-menu-item').filter({ hasText: 'Default' }).click();
+await page.waitForFunction(() => document.querySelector('[data-testid="agent-model-select"]')?.textContent?.includes('Default'), null, { timeout: 5000 });
+const tierAfterDefault = await api('/settings');
+check('Default 传 null 而不是留空，档位真的清回未设置', tierAfterDefault.body.settings.agent.reasoningTier === undefined, JSON.stringify(tierAfterDefault.body.settings.agent.reasoningTier));
+await page.locator('[data-testid="agent-model-select"]').click();
+await page.waitForSelector('[data-testid="agent-model-menu"]', { timeout: 5000 });
+await page.locator('[data-testid="agent-model-sub"]').click();
+const modelList = await page.locator('[data-testid="agent-model-menu"] .pill-menu-item:not(.pill-menu-back)').allInnerTexts();
+const backRow = await page.locator('[data-testid="agent-model-menu"] .pill-menu-back').innerText();
+check('模型取值在第二层，第一层的类别行退到返回行', modelList.length === 1 && modelList[0].includes('Demo Reasoner') && backRow.includes('模型'), `${backRow} / ${modelList.join(' | ')}`);
+await page.keyboard.press('Escape');
+check('Esc 一次关到底，不留半开的子列表', (await page.locator('[data-testid="agent-model-menu"]').count()) === 0);
 await page.screenshot({ path: join(shots, 'desktop-agent.png') });
+// 胶囊太小，整窗截图看不清：把输入卡 + 当前打开的弹层一起裁出来
+const composerClip = async () => {
+  const card = await page.locator('[data-testid="agent-panel"] .composer').boundingBox();
+  const menu = await page.locator('.pill-menu').boundingBox().catch(() => null);
+  if (!card) return undefined;
+  const left = Math.min(card.x, menu?.x ?? card.x) - 8;
+  const top = Math.min(card.y, menu?.y ?? card.y) - 8;
+  const right = Math.max(card.x + card.width, menu ? menu.x + menu.width : card.x + card.width) + 8;
+  const bottom = Math.max(card.y + card.height, menu ? menu.y + menu.height : card.y + card.height) + 8;
+  return { x: left, y: top, width: right - left, height: bottom - top };
+};
+await page.locator('[data-testid="agent-model-select"]').click();
+await page.waitForSelector('[data-testid="agent-reasoning-tier"]', { timeout: 5000 });
+await page.screenshot({ path: join(shots, 'desktop-agent-model-menu.png'), clip: await composerClip() });
+await page.locator('[data-testid="agent-reasoning-tier"]').click();
+await page.waitForFunction(() => [...document.querySelectorAll('.pill-menu-item')].some((el) => el.textContent?.includes('high')), null, { timeout: 5000 });
+await page.screenshot({ path: join(shots, 'desktop-agent-model-tiers.png'), clip: await composerClip() });
+await page.keyboard.press('Escape');
+await page.waitForTimeout(150);
 await page.fill('[data-testid="agent-input"]', '/chart');
 await page.waitForFunction(() => document.querySelector('.popover')?.textContent?.includes('/chart'), null, { timeout: 10000 });
 await page.locator('[data-testid="agent-input"]').press('Tab');
@@ -2710,6 +2769,31 @@ const lightPalette = await readPalette();
 check('light palette is neutral paper with cyan accent', neutralHex(lightPalette.bg) && cyanHex(lightPalette.accent), `${lightPalette.bg} / ${lightPalette.accent}`);
 const lightMenu = await menuAvg();
 check('dropdown menu follows the light surface too', lightMenu > 180, `avg ${Math.round(lightMenu)}`);
+// 合并胶囊的两层弹层也在浅色下走一遍：它和 .select-menu 是两套样式，暗色通过不代表浅色通过
+const openTierSub = async () => {
+  await page.locator('[data-testid="agent-model-select"]').click();
+  await page.waitForSelector('[data-testid="agent-reasoning-tier"]', { timeout: 5000 });
+  await page.locator('[data-testid="agent-reasoning-tier"]').click();
+  await page.waitForFunction(() => [...document.querySelectorAll('.pill-menu-item')].some((el) => el.textContent?.includes('Default')), null, { timeout: 5000 });
+};
+const pillLight = await (async () => {
+  await openTierSub();
+  const avg = await page.evaluate(() => {
+    const menu = document.querySelector('.pill-menu');
+    const m = menu ? /rgba?\(([^)]+)\)/.exec(getComputedStyle(menu).backgroundColor) : null;
+    if (!m) return 255;
+    const [r, g, b] = m[1].split(',').map((v) => Number(v.trim()));
+    return (r + g + b) / 3;
+  });
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(150);
+  return avg;
+})();
+check('胶囊弹层在浅色主题下也跟面板色', pillLight > 180, `avg ${Math.round(pillLight)}`);
+await openTierSub();
+await page.screenshot({ path: join(shots, 'desktop-agent-model-tiers-light.png'), clip: await composerClip() });
+await page.keyboard.press('Escape');
+await page.waitForTimeout(200);
 await page.screenshot({ path: join(shots, 'desktop-light.png') });
 await page.click('[data-testid="theme-toggle"]');
 await page.waitForTimeout(600);

@@ -187,8 +187,8 @@ test('migrates string model lists and old single-model configs', async () => {
   assert.deepEqual(models, ['flat-only', 'flat-second'], '旧式直接改 model 会补进当前模型源');
 });
 
-test('reasoningTier 传 null 会真正清空，回到跟随服务商', async () => {
-  // 这是输入卡思考档位胶囊「跟随服务商」依赖的契约：前端只能传 null，
+test('reasoningTier 传 null 会真正清空，回到 Default', async () => {
+  // 这是输入卡档位菜单里「Default」依赖的契约：前端只能传 null，
   // undefined 会在 JSON 里消失、被浅合并当成「没改」，档位就清不掉了。
   const setHigh = await api('/settings', { method: 'PUT', body: JSON.stringify({ agent: { reasoningTier: 'high' } }) });
   assert.equal(setHigh.body.settings.agent.reasoningTier, 'high');
