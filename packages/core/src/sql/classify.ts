@@ -187,6 +187,15 @@ export function classifyStatement(sql: string): StatementInfo {
     return { sql, kind: 'ddl', verb };
   }
 
+  // SQL Server 改表名/列名走 EXEC sp_rename —— 这是结构变更，不是普通存储过程调用。
+  // 以前它落到 unknown，任何"只认 ddl/destructive"的下游判定（例如结构缓存失效）
+  // 都会漏掉它：改完表名既不广播也不清缓存，客户端一直显示旧表名。
+  // 其余 EXEC（usp_xxx 之类）仍归 unknown，不跟着一起算。
+  // 注意 code 已被 toUpperCase，这里的正则必须用大写。
+  if (/^EXEC(UTE)?\b/.test(code) && /\bSP_RENAME\b/.test(code)) {
+    return { sql, kind: 'ddl', verb: 'EXEC', reason: 'sp_rename 会改表名或列名' };
+  }
+
   // 会话级语句：只改当前连接的上下文或事务边界，不动数据。
   //
   // 以前它们没有规则覆盖，落到下面的 unknown，而 unknown 一律当 ddl ——

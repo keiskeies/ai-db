@@ -81,3 +81,13 @@ test('applies limits only to unbounded reads', () => {
   assert.equal(applyLimit('SELECT 1; SELECT 2', 50), 'SELECT 1; SELECT 2');
   assert.equal(applyLimit('EXPLAIN SELECT * FROM t', 50), 'EXPLAIN SELECT * FROM t');
 });
+
+test('SQL Server 的 sp_rename 是结构变更，不是 unknown', () => {
+  // 回归：SQL Server 改表名/列名走 EXEC sp_rename。归为 unknown 时，
+  // 任何"只认 ddl/destructive"的下游判定都会漏掉它 —— 结构变更
+  // 既不广播事件也不清 schema 缓存，客户端一直显示旧表名。
+  assert.equal(classifyStatement("EXEC sp_rename 'dbo.orders','orders_v2'").kind, 'ddl');
+  assert.equal(classifyStatement("EXEC sp_rename 'dbo.orders.total','amount','COLUMN'").kind, 'ddl');
+  // 其它 EXEC 不一定是结构变更，不能被一起归成 ddl。
+  assert.equal(classifyStatement('EXEC usp_rebuild_indexes').kind, 'unknown');
+});

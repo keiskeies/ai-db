@@ -320,6 +320,9 @@ const schemaThrottle = new Map<string, ReturnType<typeof setTimeout>>();
 const SCHEMA_THROTTLE_MS = 1000;
 // 手动刷新后这个窗口内到达的事件跳过：用户自己刚刷过，事件是回声。
 const SCHEMA_ECHO_WINDOW_MS = 1500;
+// 事件驱动的重拉不应该给 echo 窗口续期：否则重拉一开始就给自己开了一个
+// 1.5s 的"丢事件"窗口，期间真到达的变更会被当成回声丢掉且永不纠正。
+let schemaReloadByEvent = false;
 let schemaEventsStop: (() => void) | undefined;
 
 function requestSchemaReload(connectionId: string, immediate = false): void {
@@ -332,11 +335,14 @@ function requestSchemaReload(connectionId: string, immediate = false): void {
       return;
     }
     schemaInFlight.add(connectionId);
+    // 标记这次 loadSchema 是事件驱动的，别让它写 echo 时间戳（见 loadSchema 里那行）。
+    schemaReloadByEvent = true;
     void useApp
       .getState()
       .loadSchema(connectionId, true)
       .catch(() => undefined)
       .finally(() => {
+        schemaReloadByEvent = false;
         schemaInFlight.delete(connectionId);
         if (schemaPending.get(connectionId)) {
           schemaPending.delete(connectionId);
@@ -465,7 +471,9 @@ export const useApp = create<AppStore>((set, get) => ({
   loadSchema: async (connectionId, refresh = false, database) => {
     // 记在拉取开始而不是结束：用户点刷新到数据回来之间的这段时间到达的事件，
     // 也算"用户刚刷过"，不该再触发一次。
-    if (refresh) schemaLastRefresh.set(connectionId, Date.now());
+    // 但事件驱动的重拉不能记：那会让重拉给自己开一个丢事件窗口，
+    // 期间到达的真变更被当回声丢掉，而且没有后续事件来纠正。
+    if (refresh && !schemaReloadByEvent) schemaLastRefresh.set(connectionId, Date.now());
     const conn = get().connections.find((c) => c.id === connectionId);
     if (database) {
       const key = `${connectionId}:${database}`;
@@ -1295,16 +1303,28 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 
   applySchemaChange: (connectionId) => {
-    const last = schemaLastRefresh.get(connectionId) ?? 0;
-    if (Date.now() - last < SCHEMA_ECHO_WINDOW_MS) return;
-
     // 本客户端正在跑 Agent 回合：先记账，等回合收尾一次性刷新。
     // 否则 Agent 每改一张表就全量 describe 一次，一回合改 5 张就是 5 次。
+    // 这条要排在 echo 判断之前：回合内的事件一律记账，不能因为用户刚手动
+    // 刷过就把它丢掉——回合结束时那次 flush 才是它的归宿。
     const live = get().live;
     if (live?.status === 'streaming' || live?.status === 'awaiting') {
       schemaPending.set(connectionId, true);
       return;
     }
+
+    // 有拉取在飞时同样只记账：在飞请求可能早于这次 invalidate 发出，
+    // 回来的是旧结构；丢弃事件等于永久丢变更，而 pending 会在结束后补跑。
+    // 这条也必须在 echo 判断之前，否则一次"用户刚刷新过"就会把它变成永久丢失。
+    if (schemaInFlight.has(connectionId)) {
+      schemaPending.set(connectionId, true);
+      return;
+    }
+
+    // 只有在没有任何拉取在飞的情况下，才把"用户刚刚手动刷过"当作回声跳过。
+    const last = schemaLastRefresh.get(connectionId) ?? 0;
+    if (Date.now() - last < SCHEMA_ECHO_WINDOW_MS) return;
+
     requestSchemaReload(connectionId);
   },
 

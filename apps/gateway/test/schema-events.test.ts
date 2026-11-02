@@ -277,3 +277,24 @@ test('一个客户端发送失败不影响其它客户端收到同一事件', as
   const counts = seen.map((list) => list.filter((m) => m.type === 'schema_changed').length);
   assert.deepEqual(counts, [1, 1], `两个健康客户端都应收到，实际 ${JSON.stringify(counts)}`);
 });
+
+test('事务超时被回收时，schemaDirty 的连接仍然发事件', async () => {
+  const conn = gateway.store.listConnections()[0];
+  const sessionId = 'schema-tx-reap';
+  await api('/tx/begin', { method: 'POST', body: JSON.stringify({ connectionId: conn.id, sessionId }) });
+  await api('/query', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: conn.id, sql: 'CREATE TABLE reap_probe (id INTEGER PRIMARY KEY)', sessionId }),
+  });
+
+  // 把 lastUsedAt 推远古，让 reaper 认定它超时。
+  const sessions = (gateway.manager as any).txSessions as Map<string, { lastUsedAt: number }>;
+  const entry = sessions.get(sessionId);
+  assert.ok(entry, '前提：事务会话存在');
+  entry.lastUsedAt = Date.now() - 60 * 60 * 1000;
+
+  const events = await collect(async () => {
+    await gateway.manager.reapIdleTransactions();
+  });
+  assert.equal(events.length, 1, `回收带结构变更的事务必须发事件，实际 ${events.length}`);
+});

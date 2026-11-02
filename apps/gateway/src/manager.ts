@@ -8,6 +8,7 @@ import {
   classifyRedis,
   classifySearch,
   classifyStatement,
+  dialectOf,
   classifyVector,
   editsRecords,
   engineMeta,
@@ -31,6 +32,7 @@ import {
   type CqlQuery,
   type CypherQuery,
   type DatabaseSchema,
+  type Engine,
   type MqlQuery,
   type QueryBatchResult,
   type QueryResult,
@@ -62,6 +64,20 @@ interface CachedDriver {
  * 上限保护的是「一次误粘贴几百条语句」这类规模事故，不是权限——权限见 resolveRisk。
  */
 export const MAX_SCRIPT_STATEMENTS = 200;
+
+/**
+ * 这些引擎的 DDL 会**隐式提交**当前事务：在 BEGIN 里执行完 ALTER/CREATE，
+ * 变更立刻对别的会话可见，事务边界不再保护它。
+ *
+ * 用来决定结构变更事件什么时候发：隐式提交的引擎必须当场发，否则用户会
+ * 一直看着旧结构，直到他敲 COMMIT 或手动刷新；其余引擎推迟到 COMMIT 才对，
+ * 提前发等于通知一个别处还看不到的结构。
+ */
+function implicitCommitDdl(engine: Engine): boolean {
+  const dialect = dialectOf(engine);
+  return dialect === 'mysql' || dialect === 'oracle' || dialect === 'dm';
+}
+
 
 export interface QueryOptions {
   database?: string;
@@ -1019,6 +1035,10 @@ export class ConnectionManager {
         status: 'ok',
         durationMs: now - session.startedAt,
       });
+      // 事务里改过结构就必须通知：MySQL/Oracle 的 DDL 是隐式提交，这些变更
+      // 早已对别的会话可见；即使是可回滚的引擎，回滚也让结构回到未提交前的样子，
+      // 客户端同样需要重读。不通知就等于永久丢掉这次变更。
+      if (session.schemaDirty) this.invalidate(session.connectionId);
       reaped.push(sessionId);
     }
     return reaped;
@@ -1191,8 +1211,12 @@ export class ConnectionManager {
         return kind === 'ddl' || kind === 'destructive';
       });
       if (touchesSchema) {
-        // 事务内还没提交，别的会话看不到，先记账等 COMMIT。
-        if (txSession) txSession.schemaDirty = true;
+        // 事务内的 DDL 分两种情况，不能一概"等 COMMIT"：
+        // - PostgreSQL / SQLite / SQL Server：DDL 参与事务，未提交前别的会话看不到，
+        //   推迟到 COMMIT 才对。
+        // - MySQL / MariaDB / Oracle / DM：DDL 会**隐式提交**，BEGIN 里执行完就已对
+        //   别的会话可见。推迟到 COMMIT 会让用户一直看着旧结构，所以立刻发。
+        if (txSession && !implicitCommitDdl(conn.engine)) txSession.schemaDirty = true;
         else this.invalidate(connectionId, opts.actor);
       }
     }
@@ -1221,7 +1245,10 @@ export class ConnectionManager {
     }
     // 驱动已关，它的固定连接也被回滚了；留着事务会话只会变成孤儿并阻塞同名会话。
     for (const [sessionId, session] of [...this.txSessions]) {
-      if (session.connectionId === connectionId) this.txSessions.delete(sessionId);
+      if (session.connectionId !== connectionId) continue;
+      this.txSessions.delete(sessionId);
+      // 与 reaper 同理：隐式提交引擎的结构变更已经落地，客户端必须知道。
+      if (session.schemaDirty) this.invalidate(connectionId);
     }
   }
 
