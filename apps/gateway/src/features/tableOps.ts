@@ -184,7 +184,6 @@ export async function runTableOp(store: Store, manager: ConnectionManager, input
     timeoutMs: store.getSettings().queryTimeoutMs,
     actor: 'user',
   });
-  manager.invalidate(input.connectionId);
   store.addAudit({
     actor: 'user',
     connectionId: input.connectionId,

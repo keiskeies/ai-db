@@ -85,6 +85,5 @@ export async function runDatabaseOp(store: Store, manager: ConnectionManager, in
     durationMs: Date.now() - started,
     meta: { newName: input.newName, sets: batch.sets.length },
   });
-  manager.invalidate(input.connectionId);
   return { supported: true, statements };
 }

@@ -7,6 +7,7 @@ import {
   classifyMql,
   classifyRedis,
   classifySearch,
+  classifyStatement,
   classifyVector,
   editsRecords,
   engineMeta,
@@ -76,7 +77,10 @@ export interface QueryOptions {
 export class ConnectionManager {
   private clients = new Map<string, CachedDriver>();
   /** 跨请求事务会话：会话 id → 连接与开始时间（用于超时回收）。 */
-  private txSessions = new Map<string, { connectionId: string; database?: string; startedAt: number; lastUsedAt: number }>();
+  private txSessions = new Map<
+    string,
+    { connectionId: string; database?: string; startedAt: number; lastUsedAt: number; schemaDirty?: boolean }
+  >();
   private readonly txIdleMs: number;
   private txTimer?: NodeJS.Timeout;
 
@@ -1121,6 +1125,9 @@ export class ConnectionManager {
     const sets: QueryResult[] = [];
     const messages: string[] = [];
     let failure: Error | undefined;
+    // 已成功执行并落库的语句。用于判断结构是否真的变了：脚本第 3 条失败时
+    // 第 1 条 DDL 已经生效，按「整段成功」判定就等于永远不通知。
+    const applied: string[] = [];
     try {
       for (const [index, statement] of statements.entries()) {
         const prepared = opts.autoLimit !== false && opts.maxRows ? applyLimit(statement, opts.maxRows, conn.engine) : statement;
@@ -1129,6 +1136,7 @@ export class ConnectionManager {
             ? await txDriver.runInTransaction(opts.sessionId, prepared, [], { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs })
             : await driver.run(prepared, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs });
           sets.push(result);
+          applied.push(statement);
           messages.push(
             result.columns.length
               ? `[${index + 1}] ${result.rowCount} 行 · ${result.durationMs}ms`
@@ -1160,6 +1168,27 @@ export class ConnectionManager {
           durationMs: Date.now() - started,
           rowCount: sets.reduce((a, s) => a + s.rowCount, 0),
         });
+      }
+
+      // 结构变更必须清 schema 缓存并广播。
+      //
+      // 判定放在这里而不是各个路由：/query（SQL 窗口）与 commands/* 此前根本没清缓存，
+      // 建完表 30 秒内服务端一直返回旧结构，客户端刷新也没用。逐个路由补是 N 个会再漏的点，
+      // 而这里是所有 SQL 执行的唯一咽喉。
+      //
+      // 用 applied（已执行成功并落库的语句）而不是 statements 判定：脚本第 3 条失败时
+      // 第 1 条 DDL 已经生效，按整段失败跳过就等于永远不通知。
+      //
+      // 已经由调用方显式 invalidate 的路径必须删掉它们自己那处（见计划 Task 3 Step 4），
+      // 否则一次操作发两遍事件、客户端刷两遍全库。
+      const touchesSchema = applied.some((statement) => {
+        const kind = classifyStatement(statement).kind;
+        return kind === 'ddl' || kind === 'destructive';
+      });
+      if (touchesSchema) {
+        // 事务内还没提交，别的会话看不到，先记账等 COMMIT。
+        if (txSession) txSession.schemaDirty = true;
+        else this.invalidate(connectionId, opts.actor);
       }
     }
   }

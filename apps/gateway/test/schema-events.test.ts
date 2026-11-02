@@ -134,3 +134,65 @@ test('错 token 的 ws 以 4401 被拒', async () => {
   });
   assert.equal(code, 4401);
 });
+
+test('SQL 窗口执行 CREATE TABLE 会发事件（本轮修掉的漏清缓存缺陷）', async () => {
+  const conn = gateway.store.listConnections()[0];
+  const events = await collect(async () => {
+    const result = await api('/query', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: conn.id, sql: 'CREATE TABLE wq_probe (id INTEGER PRIMARY KEY)' }),
+    });
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+  });
+  assert.equal(events.length, 1, `期望恰好 1 次，实际 ${events.length}`);
+  assert.equal(events[0].cause, 'user');
+});
+
+test('纯 SELECT 不发事件', async () => {
+  const conn = gateway.store.listConnections()[0];
+  const events = await collect(async () => {
+    await api('/query', { method: 'POST', body: JSON.stringify({ connectionId: conn.id, sql: 'SELECT 1' }) });
+  });
+  assert.equal(events.length, 0);
+});
+
+test('/ddl/execute 只发一次事件（不得与路由层重复）', async () => {
+  const conn = gateway.store.listConnections()[0];
+  const events = await collect(async () => {
+    const result = await api('/ddl/execute', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: conn.id, statements: ['CREATE TABLE ddl_probe (id INTEGER PRIMARY KEY)'] }),
+    });
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+  });
+  assert.equal(events.length, 1, `期望恰好 1 次，实际 ${events.length}`);
+});
+
+test('Agent 的 run_sql 跑 DDL 只发一次事件且 cause 为 agent', async () => {
+  const conn = gateway.store.listConnections()[0];
+  const events = await collect(async () => {
+    const result = await executor.execute(
+      { id: 'call-run-sql', name: 'run_sql', args: { sql: 'CREATE TABLE agent_probe (id INTEGER PRIMARY KEY)' } } as any,
+      { sessionId: 'schema-event-session', connectionId: conn.id },
+    );
+    assert.equal(result.ok, true, JSON.stringify(result));
+  });
+  assert.equal(events.length, 1, `期望恰好 1 次，实际 ${events.length}`);
+  assert.equal(events[0].cause, 'agent');
+});
+
+test('工具箱改名只发一次事件（tableOps 不得与 query() 双发）', async () => {
+  const conn = gateway.store.listConnections()[0];
+  await api('/query', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: conn.id, sql: 'CREATE TABLE toolbox_probe (id INTEGER PRIMARY KEY)' }),
+  });
+  const events = await collect(async () => {
+    const result = await api('/tables/ops', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: conn.id, table: 'toolbox_probe', op: 'rename', newName: 'toolbox_probe_renamed' }),
+    });
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+  });
+  assert.equal(events.length, 1, `期望恰好 1 次，实际 ${events.length}`);
+});

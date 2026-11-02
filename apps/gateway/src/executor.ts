@@ -421,11 +421,6 @@ export class ToolExecutor {
           // 事务已开启时让语句走被固定的那条连接，否则提交/回滚作用不到。
           sessionId: this.manager.transactionOf(agentTxKey(ctx))?.connectionId === conn.id ? agentTxKey(ctx) : undefined,
         });
-        // 不能用行首正则判断 DDL：脚本以注释或空白开头是模型写 DDL 的常态，
-        // 那样会漏掉建表，导致 schema 缓存不失效、下一步 inspect_schema 看到旧结构。
-        if (classifySql(sql).statements.some((s) => s.kind === 'ddl' || s.kind === 'destructive')) {
-          this.manager.invalidate(conn.id);
-        }
         const last = batch.sets[batch.sets.length - 1];
         const summary = last
           ? last.columns.length
@@ -861,7 +856,6 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
           timeoutMs: settings.queryTimeoutMs,
           actor: 'agent',
         });
-        this.manager.invalidate(conn.id);
         return ok(started, `已创建表 ${tableName}`, { table: tableName, ddl, statements: batch.sets.length, messages: batch.messages });
       }
 
@@ -902,7 +896,6 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
           timeoutMs: settings.queryTimeoutMs,
           actor: 'agent',
         });
-        this.manager.invalidate(conn.id);
         return ok(started, `已修改表 ${tableName}（${statements.length} 条语句）`, { table: tableName, statements });
       }
 
@@ -922,7 +915,6 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
         }
         const sql = buildDropObject(conn.engine, kind, found.name, Boolean(a.cascade), this.schemaFor(conn, found));
         await this.manager.query(conn.id, sql, { database, allowMulti: false, autoLimit: false, timeoutMs: settings.queryTimeoutMs, actor: 'agent' });
-        this.manager.invalidate(conn.id);
         return ok(started, `已删除${kind === 'view' ? '视图' : '表'} ${found.name}`, { name: found.name, kind, sql, backupPath }, { backupPath });
       }
 
@@ -978,7 +970,6 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
         }
         const settings = this.getSettings();
         await this.manager.query(conn.id, sql, { database, allowMulti: false, autoLimit: false, timeoutMs: settings.queryTimeoutMs, actor: 'agent' });
-        this.manager.invalidate(conn.id);
         return ok(started, action === 'drop' ? '索引已删除' : '索引已创建', { table: table.name, sql });
       }
 
@@ -1345,7 +1336,6 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
             }
           },
         });
-        this.manager.invalidate(String(a.targetConnectionId ?? ''));
         const failed = result.results.filter((item) => item.status === 'error');
         const state = failed.length === 0 ? 'ok' : failed.length === result.results.length ? 'failed' : 'partial';
         const summary = failed.length
