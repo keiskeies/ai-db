@@ -49,6 +49,17 @@ export const COMMANDS: CommandDefinition[] = [
       { key: 'sources', kind: 'sources', label: { zh: '数据源', en: 'Sources' }, required: true },
       { key: 'topic', kind: 'text', label: { zh: '报告主题', en: 'Topic' }, required: true, placeholder: '例如：本周订单与履约情况' },
       { key: 'period', kind: 'period', label: { zh: '时间范围', en: 'Period' } },
+      {
+        key: 'audience',
+        kind: 'enum',
+        label: { zh: '阅读对象', en: 'Audience' },
+        default: 'business',
+        options: [
+          { value: 'executive', label: { zh: '管理层', en: 'Executive' } },
+          { value: 'business', label: { zh: '业务', en: 'Business' } },
+          { value: 'technical', label: { zh: '技术', en: 'Technical' } },
+        ],
+      },
       { key: 'tables', kind: 'tables', label: { zh: '关注表', en: 'Tables' }, advanced: true },
       {
         key: 'format',
@@ -59,12 +70,11 @@ export const COMMANDS: CommandDefinition[] = [
         options: [
           { value: 'screen', label: { zh: '屏幕', en: 'Screen' } },
           { value: 'xlsx', label: { zh: 'Excel', en: 'Excel' } },
-          { value: 'pdf', label: { zh: 'PDF', en: 'PDF' } },
           { value: 'pptx', label: { zh: 'PPT', en: 'PPT' } },
         ],
       },
     ],
-    prompt: '按用户语义选择 sections / comparison / merged / mixed 布局；数字必须来自工具结果引用，不得手写。',
+    prompt: '先给结论再给证据：摘要、2–5 个章节、每节一句结论；数字必须带同口径基线（环比/同比）并来自工具结果引用，不得手写；标题与结论里不出现表名、列名和 SQL。',
   },
   {
     id: 'compare',

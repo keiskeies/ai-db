@@ -53,8 +53,8 @@ const FAKE_TOOLS = [
 
 // ---------- 契约自检 ----------
 
-test('12 个内置契约全部通过自检', () => {
-  assert.equal(CAPABILITIES.length, 12);
+test('13 个内置契约全部通过自检', () => {
+  assert.equal(CAPABILITIES.length, 13);
   assert.doesNotThrow(() => assertCapabilities(CAPABILITIES, TOOLS));
 });
 
@@ -154,7 +154,7 @@ test('getCapability / listCapabilities', () => {
   assert.equal(getCapability('transfer')?.title.zh, '数据传输');
   assert.equal(getCapability('nope'), undefined);
   const list = listCapabilities();
-  assert.equal(list.length, 12);
+  assert.equal(list.length, 13);
   assert.deepEqual(list.map((item) => item.id), CAPABILITIES.map((item) => item.id));
 });
 
@@ -163,7 +163,7 @@ test('isCallable 反映 tools 是否为空', () => {
   assert.equal(isCallable(getCapability('jobs')!), false);
 });
 
-test('12 个契约的 route.path 互不重复', () => {
+test('13 个契约的 route.path 互不重复', () => {
   const paths = CAPABILITIES.map((item) => item.route?.path).filter(Boolean);
   assert.equal(new Set(paths).size, paths.length);
 });

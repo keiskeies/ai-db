@@ -48,7 +48,7 @@ export interface GenerateDraftResult {
   notes: string[];
 }
 
-interface Candidate {
+export interface Candidate {
   title: string;
   sql: string;
   chartType: DashboardChartType;
@@ -62,7 +62,7 @@ function normalized(sql: string): string {
   return sql.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
-function tableRef(fact: TableFact, engine: Engine): string {
+export function tableRef(fact: TableFact, engine: Engine): string {
   return fact.displayName
     .replace(/["`\[\]]/g, '')
     .split('.')
@@ -72,17 +72,17 @@ function tableRef(fact: TableFact, engine: Engine): string {
 }
 
 /** 「订单表 / 退款订单信息表」→「订单」「退款订单」：卡片标题里不出现库名和表名。 */
-function tableLabel(fact: TableFact): string {
+export function tableLabel(fact: TableFact): string {
   const comment = (fact.table.comment ?? '').trim();
   const base = comment || fact.name.replace(/^t_/i, '');
   return base.replace(/(信息表|记录表|数据表|明细表|表)$/u, '').trim() || base;
 }
 
-function columnsOf(fact: TableFact) {
+export function columnsOf(fact: TableFact) {
   return (fact.table.columns ?? []).filter((column) => !column.generated);
 }
 
-function businessTimeOf(fact: TableFact): string | undefined {
+export function businessTimeOf(fact: TableFact): string | undefined {
   const all = columnsOf(fact).filter((column) => !SKIP_TIME.test(column.name));
   const typed = all.filter((column) => TIME_TYPE.test(column.type ?? ''));
   // SQLite / 部分 ORM 把日期存成 TEXT，只认类型会把整张订单表判成「没有时间列」
@@ -94,7 +94,7 @@ function businessTimeOf(fact: TableFact): string | undefined {
   return pick(typed) ?? pick(texty);
 }
 
-function moneyOf(fact: TableFact): string | undefined {
+export function moneyOf(fact: TableFact): string | undefined {
   const numeric = columnsOf(fact).filter(
     (column) => NUMERIC_TYPE.test(column.type ?? '') && !column.primaryKey && !/(_id$|^id$|version|sort|level|score|_num$|count$|_type$)/i.test(column.name),
   );
@@ -105,7 +105,7 @@ function moneyOf(fact: TableFact): string | undefined {
   );
 }
 
-function dimensionOf(fact: TableFact, exclude: string[] = []): string | undefined {
+export function dimensionOf(fact: TableFact, exclude: string[] = []): string | undefined {
   const columns = columnsOf(fact).filter(
     (column) => !exclude.includes(column.name) && !SKIP_DIM.test(column.name) && !AUDIT_COLUMN.test(column.name),
   );
@@ -114,19 +114,19 @@ function dimensionOf(fact: TableFact, exclude: string[] = []): string | undefine
   return (commented.find((column) => /(状态|类型|渠道|分类|城市|名称|方式|等级|品牌)/u.test(column.comment ?? '')) ?? commented[0] ?? dimensional[0])?.name;
 }
 
-function dimensionLabel(fact: TableFact, column: string): string {
+export function dimensionLabel(fact: TableFact, column: string): string {
   const info = columnsOf(fact).find((item) => item.name === column);
   const label = (info?.comment ?? column).replace(/(表|字段)$/u, '').trim();
   // 「此次流水变动的类型」这种长备注当标题会毁掉整块板
   return label.length <= 8 ? label : column;
 }
 
-function softDeleteFilter(fact: TableFact, engine: Engine): string {
+export function softDeleteFilter(fact: TableFact, engine: Engine): string {
   const column = columnsOf(fact).find((item) => SOFT_DELETE.test(item.name) && /int|tiny|bool|bit/i.test(item.type ?? ''));
   return column ? `WHERE ${quoteIdent(column.name, engine)} = 0` : '';
 }
 
-function factScore(fact: TableFact, ranked: string[]): number {
+export function factScore(fact: TableFact, ranked: string[]): number {
   let score = 0;
   const time = businessTimeOf(fact);
   const money = moneyOf(fact);

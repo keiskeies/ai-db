@@ -12,6 +12,7 @@ import advancedObjects from './advanced-objects.json' with { type: 'json' };
 import search from './search.json' with { type: 'json' };
 import queryBuilder from './query-builder.json' with { type: 'json' };
 import agentContext from './agent-context.json' with { type: 'json' };
+import reports from './reports.json' with { type: 'json' };
 
 /**
  * 全部能力契约。顺序即 Agent 提示里的展示顺序：按工具箱的常见使用频率排列，
@@ -30,6 +31,7 @@ export const CAPABILITIES: Capability[] = [
   search,
   queryBuilder,
   agentContext,
+  reports,
 ] as Capability[];
 
 const BY_ID = new Map<string, Capability>(CAPABILITIES.map((capability) => [capability.id, capability]));

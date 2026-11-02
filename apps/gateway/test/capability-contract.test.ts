@@ -43,7 +43,7 @@ async function api(path: string): Promise<{ status: number; body: any }> {
 
 // ---------- 提示块 ----------
 
-test('能力目录注入 12 条功能，含 id / 标题 / 工具 / 字段 / 状态', () => {
+test('能力目录注入全部功能，含 id / 标题 / 工具 / 字段 / 状态', () => {
   const block = capabilityPromptBlock();
   assert.match(block, /^## Capabilities/);
   for (const capability of CAPABILITIES) {
@@ -80,10 +80,10 @@ test('提示块体量在预算内（≤ 2000 字符 ≈ 1.3k token）', () => {
 
 // ---------- API ----------
 
-test('GET /capabilities 返回 12 条', async () => {
+test('GET /capabilities 返回全部契约（13 条）', async () => {
   const response = await api('/api/capabilities');
   assert.equal(response.status, 200);
-  assert.equal(response.body.capabilities.length, 12);
+  assert.equal(response.body.capabilities.length, 13);
   const transfer = response.body.capabilities.find((item: any) => item.id === 'transfer');
   assert.deepEqual(transfer.tools, ['transfer_data']);
 });
@@ -124,6 +124,7 @@ test('无工具的功能集中在需要人工确认的模块上', () => {
     'jobs',
     'monitor',
     'query-builder',
+    'reports',
     'users',
   ]);
 });

@@ -143,4 +143,5 @@ export type CapabilityId =
   | 'advanced-objects'
   | 'search'
   | 'query-builder'
-  | 'agent-context';
+  | 'agent-context'
+  | 'reports';

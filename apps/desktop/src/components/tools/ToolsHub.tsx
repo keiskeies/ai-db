@@ -6,6 +6,7 @@ import {
   BookMarked,
   Code2,
   Database,
+  FileChartColumn,
   FileSearch,
   Gauge,
   KeyRound,
@@ -29,8 +30,10 @@ import { DictionaryTool } from './DictionaryTool';
 import { DataCompareTool } from './DataCompareTool';
 import { AdvancedObjectsTool } from './AdvancedObjectsTool';
 import { AgentContextTool } from './AgentContextTool';
+import { ReportsTool } from './ReportsTool';
 
 const TOOL_LIST = [
+  { id: 'reports', label: '报告', desc: '结论先行 / 可导出 Excel · PPT', icon: <FileChartColumn size={14} /> },
   { id: 'search', label: '数据库搜索', desc: '对象与数据全文查找', icon: <FileSearch size={14} /> },
   { id: 'builder', label: '查询构建器', desc: '可视化选表 / 连接 / 条件', icon: <Braces size={14} /> },
   { id: 'compare', label: '结构对比同步', desc: '两个库的 DDL diff', icon: <ArrowLeftRight size={14} /> },
@@ -83,6 +86,7 @@ export function ToolsHub() {
             {!visible.length ? <div className="dash-empty">没有匹配的工具</div> : null}
           </div>
           <div className="tools-content">
+            {active === 'reports' ? <ReportsTool /> : null}
             {active === 'search' ? <SearchTool /> : null}
             {active === 'builder' ? <QueryBuilderTool /> : null}
             {active === 'compare' ? <SchemaCompareTool /> : null}

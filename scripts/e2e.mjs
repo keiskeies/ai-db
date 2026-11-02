@@ -1864,7 +1864,7 @@ await page.locator('.settings-nav button').filter({ hasText: '功能能力' }).c
 await page.waitForSelector('[data-testid="capability-catalog"]', { timeout: 10000 });
 await page.waitForFunction(() => document.querySelectorAll('.capability-card').length > 0, null, { timeout: 10000 });
 const capCards = await page.locator('.capability-card').count();
-check('capability page lists every toolbox module', capCards === 12, `cards=${capCards}`);
+check('capability page lists every toolbox module', capCards === 13, `cards=${capCards}`);
 
 const capText = await page.locator('[data-testid="capability-catalog"]').evaluate((el) => el.textContent ?? '');
 check(
@@ -1888,11 +1888,15 @@ check(
 const fieldRows = await page.locator('.capability-card[data-capability="transfer"] .capability-field-row').count();
 check('capability detail lists every field row', fieldRows === 8, `fields=${fieldRows}`);
 
-// 「展开全部字段」把 12 个功能全部打开
+// 「展开全部字段」把每个功能都打开（能力数量随工具箱模块增长，从 CAPABILITIES 里取）
 await page.locator('input[aria-label="过滤功能能力"]').fill('');
 await page.locator('label:has-text("展开全部字段") input').check();
-await page.waitForFunction(() => document.querySelectorAll('.capability-field-table').length === 12, null, { timeout: 5000 });
-check('expand-all opens every capability', (await page.locator('.capability-field-table').count()) === 12);
+await page.waitForFunction(() => {
+  const cards = document.querySelectorAll('.capability-card').length;
+  return cards > 0 && document.querySelectorAll('.capability-field-table').length === cards;
+}, null, { timeout: 5000 });
+const expandedTables = await page.locator('.capability-field-table').count();
+check('expand-all opens every capability', expandedTables === capCards, `tables=${expandedTables} cards=${capCards}`);
 await page.locator('label:has-text("展开全部字段") input').uncheck();
 await page.waitForTimeout(300);
 

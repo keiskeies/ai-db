@@ -95,18 +95,27 @@ Deliver a short findings table (severity | problem | evidence | repair SQL), ord
     id: 'report',
     defaultTask: '围绕当前库生成一份数据报告；如果用户没有给主题，就做整体数据概览。',
     timeoutMs: 15 * 60_000,
-    instruction: `## Command mode: /report — data report
+    instruction: `## Command mode: /report — data report for a business reader
 
 ${COMMON}
 
-Goal: deliver a readable report, not a wall of SQL.
-Workflow:
-1. Infer the topic and time range from the user's words and session context. If a topic is genuinely absent, produce a useful overview of the current database.
-2. Inspect the schema, then gather numbers with bounded aggregate SQL, analyze_chart and render_chart. All figures must come from tools.
-3. Structure the answer: a short top-line summary, 2–5 sections, metric cards/tables where useful, and charts. Use line for ordered trends, grouped/stacked bars for category comparisons/composition, scatter/heatmap/radar only when the data shape supports them.
-4. Call out the metric definitions and data caveats. Do not paste raw result sets; link SQL in the transcript and show the conclusion.
+Goal: the user wants something they can send to their boss. Deliver a decision-ready report, not a wall of SQL and not a database inventory.
+The system prompt already carries the resolved statistical window (本期 / 基线 / 今天). Query exactly that window; if the user names a different period, follow the user and say which dates you used.
 
-No form, no asking the user to pick a template. If a chart would not add information, explain the numbers instead.`,
+Workflow:
+1. Infer the topic and audience from the user's words and session context. If a topic is genuinely absent, produce a useful overview of the current database rather than asking for a form.
+2. Inspect the schema, then gather numbers with bounded aggregate SQL. Every metric needs its previous-period (or year-over-year) value from the same filters — run the baseline query, do not do the subtraction by hand.
+3. Pick charts by data shape: line for ordered trends, grouped bars for category comparison, pie only for the composition of one total. Call render_chart; a chart that repeats the sentence above it is noise.
+4. Structure the answer conclusion-first: a top-line summary of 2–3 sentences with the numbers that matter (each paired with its baseline), then 2–5 sections. Each section opens with a one-sentence conclusion, then its evidence.
+5. Finish with what to watch next and 1–3 concrete next actions (owner/timeframe only when the data or the user says so). Mark anything you have not proven as a hypothesis.
+
+Wording rules:
+- Write for a business reader: no table names, column names, SQL verbs or row-count jargon in titles and conclusions; keep those in a short 口径 footnote.
+- Use 万/亿 for large readable numbers, but never change the underlying value.
+- If the data cannot answer the question (missing time column, empty tables, disabled tables), say so plainly and offer what you can report instead.
+
+Do not paste raw result sets into the answer; link the SQL in the transcript and show the conclusion.
+No form, no asking the user to pick a template.`,
   },
 };
 

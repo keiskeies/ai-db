@@ -452,15 +452,79 @@ export function buildTableMaintenance(
   return null;
 }
 
-export function buildMonthlySeriesExpr(engine: Engine, column: string): string {
+/** 时间分桶粒度：报告与仪表板的趋势查询都必须分桶，按原始时间戳分组每个点都是 1。 */
+export type TimeBucketGrain = 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year';
+
+/**
+ * 各方言的时间分桶表达式。返回一个可分组、可排序的字符串标签（如 `2026-11`）。
+ * 周用 `%Y-W%V` / ISO 周，保证跨年时排序仍然正确。
+ */
+export function buildTimeBucketExpr(engine: Engine, column: string, grain: TimeBucketGrain = 'month'): string {
   const d = dialectOf(engine);
   const col = quoteIdent(column, engine);
-  if (d === 'sqlite') return `strftime('%Y-%m', ${col})`;
-  if (isMysqlLike(d)) return `DATE_FORMAT(${col}, '%Y-%m')`;
-  if (isPgLike(d)) return `to_char(${col}, 'YYYY-MM')`;
-  if (d === 'oracle' || d === 'dm') return `to_char(${col}, 'YYYY-MM')`;
-  if (d === 'tdengine') return `TO_CHAR(${col}, 'YYYY-MM')`;
-  if (d === 'influxdb') return `date_format(${col}, '%Y-%m')`;
-  if (d === 'clickhouse') return `formatDateTime(${col}, '%Y-%m')`;
+  if (d === 'sqlite') {
+    if (grain === 'hour') return `strftime('%Y-%m-%d %H:00', ${col})`;
+    if (grain === 'day') return `strftime('%Y-%m-%d', ${col})`;
+    if (grain === 'week') return `strftime('%Y-W%W', ${col})`;
+    if (grain === 'quarter') return `strftime('%Y-Q', ${col}) || CAST((CAST(strftime('%m', ${col}) AS INTEGER) + 2) / 3 AS TEXT)`;
+    if (grain === 'year') return `strftime('%Y', ${col})`;
+    return `strftime('%Y-%m', ${col})`;
+  }
+  if (isMysqlLike(d)) {
+    if (grain === 'hour') return `DATE_FORMAT(${col}, '%Y-%m-%d %H:00')`;
+    if (grain === 'day') return `DATE_FORMAT(${col}, '%Y-%m-%d')`;
+    if (grain === 'week') return `DATE_FORMAT(${col}, '%x-W%v')`;
+    if (grain === 'quarter') return `CONCAT(YEAR(${col}), '-Q', QUARTER(${col}))`;
+    if (grain === 'year') return `DATE_FORMAT(${col}, '%Y')`;
+    return `DATE_FORMAT(${col}, '%Y-%m')`;
+  }
+  if (isPgLike(d)) {
+    if (grain === 'hour') return `to_char(${col}, 'YYYY-MM-DD HH24:00')`;
+    if (grain === 'day') return `to_char(${col}, 'YYYY-MM-DD')`;
+    if (grain === 'week') return `to_char(date_trunc('week', ${col}), 'IYYY-IW')`;
+    if (grain === 'quarter') return `to_char(${col}, 'YYYY') || '-Q' || to_char(EXTRACT(QUARTER FROM ${col}))`;
+    if (grain === 'year') return `to_char(${col}, 'YYYY')`;
+    return `to_char(${col}, 'YYYY-MM')`;
+  }
+  if (d === 'oracle' || d === 'dm') {
+    if (grain === 'hour') return `to_char(${col}, 'YYYY-MM-DD HH24')`;
+    if (grain === 'day') return `to_char(${col}, 'YYYY-MM-DD')`;
+    if (grain === 'week') return `to_char(${col}, 'IYYY-IW')`;
+    if (grain === 'quarter') return `to_char(${col}, 'YYYY') || '-Q' || TO_CHAR(${col}, 'Q')`;
+    if (grain === 'year') return `to_char(${col}, 'YYYY')`;
+    return `to_char(${col}, 'YYYY-MM')`;
+  }
+  if (d === 'tdengine') {
+    if (grain === 'hour') return `date_trunc('1h', ${col})`;
+    if (grain === 'day') return `date_trunc('1d', ${col})`;
+    if (grain === 'week') return `date_trunc('1w', ${col})`;
+    if (grain === 'quarter') return `date_trunc('1b', ${col})`;
+    if (grain === 'year') return `date_trunc('1y', ${col})`;
+    return `TO_CHAR(${col}, 'YYYY-MM')`;
+  }
+  if (d === 'influxdb') {
+    if (grain === 'hour') return `date_format(${col}, '%Y-%m-%dT%HZ')`;
+    if (grain === 'day') return `date_format(${col}, '%Y-%m-%d')`;
+    if (grain === 'week') return `date_trunc(time: 1w, v: ${col})`;
+    if (grain === 'year') return `date_format(${col}, '%Y')`;
+    return `date_format(${col}, '%Y-%m')`;
+  }
+  if (d === 'clickhouse') {
+    if (grain === 'hour') return `formatDateTime(${col}, '%Y-%m-%d %H:00')`;
+    if (grain === 'day') return `formatDateTime(${col}, '%Y-%m-%d')`;
+    if (grain === 'week') return `formatDateTime(toMonday(${col}), '%x-%v')`;
+    if (grain === 'quarter') return `concat(toString(toYear(${col})), '-Q', toString(toQuarter(${col})))`;
+    if (grain === 'year') return `formatDateTime(${col}, '%Y')`;
+    return `formatDateTime(${col}, '%Y-%m')`;
+  }
+  if (grain === 'hour') return `FORMAT(${col}, 'yyyy-MM-dd HH:00')`;
+  if (grain === 'day') return `FORMAT(${col}, 'yyyy-MM-dd')`;
+  if (grain === 'week') return `FORMAT(${col}, 'yyyy-ww')`;
+  if (grain === 'quarter') return `CONCAT(FORMAT(${col}, 'yyyy'), '-Q', FORMAT(${col}, 'q'))`;
+  if (grain === 'year') return `FORMAT(${col}, 'yyyy')`;
   return `FORMAT(${col}, 'yyyy-MM')`;
+}
+
+export function buildMonthlySeriesExpr(engine: Engine, column: string): string {
+  return buildTimeBucketExpr(engine, column, 'month');
 }

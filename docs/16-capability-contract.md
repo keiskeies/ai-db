@@ -9,7 +9,7 @@
 
 ## 0. 摘要
 
-AiDB 工具箱现在有 12 个功能模块（自动化任务、数据传输、数据对比、结构对比同步、数据生成、服务器监控、用户与权限、数据字典、高级对象、数据库搜索、查询构建器、Agent 上下文），每个模块都有：一张手写的 React 表单、一个手写的 REST 端点、一段手写的参数校验、一个进程内执行函数。
+AiDB 工具箱现在有 13 个功能模块（报告、自动化任务、数据传输、数据对比、结构对比同步、数据生成、服务器监控、用户与权限、数据字典、高级对象、数据库搜索、查询构建器、Agent 上下文），每个模块都有：一张手写的 React 表单、一个手写的 REST 端点、一段手写的参数校验、一个进程内执行函数。
 
 **这份契约要解决的是：同一份"这个功能需要什么参数"的知识，现在被写了三遍（UI、端点校验、Agent 工具 schema），而且互相不知道对方存在。**
 
@@ -120,6 +120,7 @@ meta: {
 
 | 工具箱模块 | REST 端点 | Agent 工具 |
 |---|---|---|
+| 报告 | `POST /commands/report/runs`（`runner.ts`，异步运行 + SSE） | 对话内用 `/report`（`commandIntents`）；产物导出走 `/artifacts/:id/export` |
 | 数据库搜索 | `POST /search`（`routes.ts:157`） | `search_objects` 只覆盖对象名，**数据全文搜索无工具** |
 | 查询构建器 | 无（纯前端拼 SQL） | 不需要（`run_sql` 等价） |
 | 结构对比同步 | `POST /schema/compare`（`:175`）、`POST /schema/sync`（`:186`） | 对比有 `schema_diff`；**同步执行无工具** |
@@ -186,7 +187,8 @@ packages/core/src/capabilities/
 ├── advanced-objects.json       # 高级对象
 ├── search.json                 # 数据库搜索
 ├── query-builder.json          # 查询构建器
-└── agent-context.json          # Agent 上下文
+├── agent-context.json          # Agent 上下文
+└── reports.json                # 报告
 ```
 
 **为什么放 `packages/core` 而不是 `apps/gateway`**：契约要被三个 workspace 消费——core（Agent 提示）、gateway（端点校验）、desktop（表单渲染）。放 core 是唯一三方都能 import 的位置。

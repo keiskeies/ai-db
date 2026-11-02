@@ -7,11 +7,13 @@ import {
   compactHistory,
   createProvider,
   extractHeuristicMemories,
+  formatPeriodForPrompt,
   getModelProfile,
   getTool,
   historyTokenBudget,
   providerTools,
   maxOutputTokensOf,
+  resolvePeriod,
   suggestFollowUps,
   supportsInput,
   tablesFromSql,
@@ -531,7 +533,21 @@ export class AgentHost {
           focusMode: settings.agent.schemaFocus ?? 'auto',
         });
         const extra: string[] = [];
-        if (intent) extra.push(intent.instruction);
+        if (intent) {
+          extra.push(intent.instruction);
+          // 模型没有时钟：日期话术必须由网关解析成确定边界，否则「本周」「上月」全靠猜。
+          const period = resolvePeriod({ topic: text });
+          if (intent.id === 'report') {
+            extra.push(formatPeriodForPrompt(period));
+            extra.push(
+              `## Report period rules\nEvery query in this report must stay inside ${period.current.from} ~ ${period.current.to}` +
+                (period.previous ? `; the baseline is ${period.previous.from} ~ ${period.previous.to} (${period.previous.label.split('（')[0]?.trim()}).` : '.') +
+                ' If the user explicitly names a different period, follow the user and state the window you used.',
+            );
+          } else {
+            extra.push(`## Clock\nToday is ${period.today}. Resolve relative periods ("this week", "last month", "近 7 天") into exact dates before querying, and state the dates you used.`);
+          }
+        }
         if (brief) extra.push(briefPromptBlock(brief));
         if (sessionForAudit.summary) extra.push(`## Earlier session summary\n${sessionForAudit.summary}`);
         if (schemaError) extra.push(`## Schema loading warning\n${schemaError}`);

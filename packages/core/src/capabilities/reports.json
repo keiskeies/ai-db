@@ -1,0 +1,170 @@
+{
+  "id": "reports",
+  "route": {
+    "method": "POST",
+    "path": "/commands/report/runs"
+  },
+  "title": {
+    "zh": "报告",
+    "en": "Reports"
+  },
+  "description": "按主题与时间窗生成结论先行的业务报告；数字带同口径基线，可保存、刷新并导出 Excel / PPT",
+  "whenToUse": "用户要「给老板看的报表」「月度/周度经营报告」「把数据整理成一份可导出的报告」时",
+  "flow": [
+    "选连接与库",
+    "填报告主题（例如：本月订单与履约情况）",
+    "选时间范围（本周 / 上月 / 近 30 天，或自定义起止日期）",
+    "选阅读对象与输出格式",
+    "生成后可在右侧查看结论、KPI 基线与图表，再刷新或导出"
+  ],
+  "fields": [
+    {
+      "key": "connectionId",
+      "type": "connection",
+      "label": {
+        "zh": "连接",
+        "en": "Connection"
+      },
+      "required": true
+    },
+    {
+      "key": "database",
+      "type": "database",
+      "label": {
+        "zh": "数据库",
+        "en": "Database"
+      }
+    },
+    {
+      "key": "topic",
+      "type": "text",
+      "label": {
+        "zh": "报告主题",
+        "en": "Topic"
+      },
+      "required": true,
+      "hint": "写业务问题，不写 SQL；标题里不会出现表名和列名"
+    },
+    {
+      "key": "period",
+      "type": "text",
+      "label": {
+        "zh": "时间范围",
+        "en": "Period"
+      },
+      "hint": "支持 本周 / 上月 / 近 30 天 / 2026-10-01 ~ 2026-10-31；缺省按近 30 天"
+    },
+    {
+      "key": "audience",
+      "type": "enum",
+      "label": {
+        "zh": "阅读对象",
+        "en": "Audience"
+      },
+      "default": "business",
+      "options": [
+        {
+          "value": "executive",
+          "label": {
+            "zh": "管理层",
+            "en": "Executive"
+          }
+        },
+        {
+          "value": "business",
+          "label": {
+            "zh": "业务",
+            "en": "Business"
+          }
+        },
+        {
+          "value": "technical",
+          "label": {
+            "zh": "技术",
+            "en": "Technical"
+          }
+        }
+      ]
+    },
+    {
+      "key": "format",
+      "type": "enum",
+      "label": {
+        "zh": "输出",
+        "en": "Output"
+      },
+      "default": "screen",
+      "options": [
+        {
+          "value": "screen",
+          "label": {
+            "zh": "屏幕",
+            "en": "Screen"
+          }
+        },
+        {
+          "value": "xlsx",
+          "label": {
+            "zh": "Excel",
+            "en": "Excel"
+          }
+        },
+        {
+          "value": "pptx",
+          "label": {
+            "zh": "PPT",
+            "en": "PPT"
+          }
+        }
+      ]
+    }
+  ],
+  "states": [
+    {
+      "id": "queued",
+      "label": {
+        "zh": "排队中",
+        "en": "Queued"
+      },
+      "phrase": "报告已排队"
+    },
+    {
+      "id": "running",
+      "label": {
+        "zh": "生成中",
+        "en": "Running"
+      },
+      "phrase": "正在生成报告：{label}"
+    },
+    {
+      "id": "succeeded",
+      "label": {
+        "zh": "已完成",
+        "en": "Succeeded"
+      },
+      "terminal": true,
+      "phrase": "报告已生成，共 {sections} 个章节"
+    },
+    {
+      "id": "failed",
+      "label": {
+        "zh": "失败",
+        "en": "Failed"
+      },
+      "terminal": true,
+      "phrase": "报告生成失败：{error}"
+    }
+  ],
+  "progress": {
+    "supported": true,
+    "unit": "step"
+  },
+  "tools": [],
+  "maxRisk": "read",
+  "constraints": [
+    "报告只读：不会写库、不会建表",
+    "没有直接对应的 Agent 工具；对话里用 /report，需要保存为可导出的产物时引导用户到 工具箱 → 报告",
+    "统计区间由网关解析（本周从周一开始），本期未结束时环比按同长度切片对比",
+    "数字必须来自查询结果；应用只做展示层缩写（万 / 亿）与差值计算"
+  ]
+}

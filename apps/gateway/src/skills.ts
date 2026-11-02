@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import type { SkillDetail, SkillEntrypoint, SkillFileEntry, SkillManifest, SkillReadResult, SkillSummary } from '@aidb/core';
+import { REPORT_CRAFT_ZH } from './commands/reportCraft';
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv', 'dist', 'build']);
 const TEXT_EXT = new Set(['', '.md', '.txt', '.json', '.yaml', '.yml', '.py', '.js', '.ts', '.tsx', '.jsx', '.sh', '.ps1', '.cmd', '.svg', '.html', '.css', '.csv', '.xml', '.toml', '.ini', '.env']);
@@ -124,24 +125,7 @@ const BUILTIN_SKILLS: Record<string, { name: string; description: string; body: 
   'aidb-report': {
     name: 'AiDB 报告写作',
     description: '把查询结果组织成结论先行、数字可追溯的报告；适合 /report 与汇报材料。',
-    body: `# AiDB 报告写作
-
-## 原则
-
-1. 结论先行：每节第一句写结论，再给数字和依据。
-2. 数字只来自工具结果或 resultRef；不手写、不四舍五入、不跨口径相加。
-3. 区分事实与推测：推测必须标注“推测”，并说明依据。
-4. 异常优先：先写变化最大、风险最高的指标，再写背景。
-5. 每节至少回答一个问题：发生了什么、为什么、下一步做什么。
-
-## 参考结构
-
-- 概览：3–5 个关键指标，带对比基线与时间范围。
-- 趋势：按时间轴描述拐点，指出最大增幅/降幅。
-- 结构：按分组给出占比与贡献度。
-- 异常：列出异常值、影响面和可能原因。
-- 建议：可执行、可验证，避免空泛表述。
-`,
+    body: REPORT_CRAFT_ZH,
   },
   'aidb-sql-review': {
     name: 'SQL 审查',

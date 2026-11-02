@@ -16,6 +16,7 @@ import type { Store } from '../store';
 import { compareValues } from '../features/compare';
 import { reconcileData, type ReconLevel, type ReconMapping } from '../features/reconcile';
 import { generateReport } from '../features/report';
+import { exportArtifact } from './export';
 import { generateAgentReport } from './reportAgent';
 import { compareSchemas } from '../features/schemaCompare';
 
@@ -49,6 +50,13 @@ interface StepResult {
 const DIFF_STEP = 'schema-diff';
 
 function defaultTitle(command: CommandDefinition, input: CommandRunInput): string {
+  // 报告/对比用主题当标题：产物列表里「生成报告 · <连接 id>」对读者毫无意义。
+  const subject = command.id === 'report' ? String(input.topic ?? '').trim() : command.id === 'compare' ? String(input.metric ?? '').trim() : '';
+  if (subject) {
+    // 报告按天保留：同名报告在同一天重跑还能区分「哪份是刚生成的」。
+    const stamp = new Date().toLocaleDateString('zh-CN');
+    return command.id === 'report' ? `${subject} · ${stamp}` : subject;
+  }
   const labels = (input.sources ?? []).map((source) => source.label || source.connectionId).filter(Boolean);
   return `${command.title.zh}${labels.length ? ` · ${labels.join(' ↔ ')}` : ''}`;
 }
@@ -60,6 +68,10 @@ export class CommandRunner {
     private readonly store: Store,
     private readonly manager: ConnectionManager,
     private readonly executor?: ToolExecutor,
+    /** AIDB_HOME；用于在 Agent 报告里读取 AI_DB.md 的业务口径。 */
+    private readonly home?: string,
+    /** 导出目录；表单选择 Excel / PPT 时，运行成功后直接把文件落盘。 */
+    private readonly exportDir?: string,
   ) {}
 
   start(commandId: string, input: CommandRunInput, options: StartCommandOptions = {}): CommandRunInfo {
@@ -250,13 +262,6 @@ export class CommandRunner {
       step.summary = result.summary;
       step.finishedAt = new Date().toISOString();
       step.durationMs = step.startedAt ? Date.now() - new Date(step.startedAt).getTime() : 0;
-      this.emit(state, {
-        type: 'step_succeeded',
-        runId: state.info.id,
-        stepId: step.id,
-        summary: result.summary,
-        durationMs: step.durationMs,
-      });
       state.info.status = 'succeeded';
       state.info.finishedAt = new Date().toISOString();
       state.info.durationMs = Date.now() - new Date(state.info.startedAt).getTime();
@@ -266,6 +271,19 @@ export class CommandRunner {
         result: result.result,
         finishedAt: state.info.finishedAt,
         durationMs: state.info.durationMs,
+      });
+      // 表单里选了文件格式，就应该真的拿到文件；导出失败只记录，不改变报告本身的结果。
+      const file = await this.exportIfRequested(command, state).catch((err: any) => `导出失败：${err?.message ?? '未知错误'}`);
+      if (file) {
+        step.summary = `${step.summary} · ${file}`;
+        this.store.updateArtifactRun(state.artifactRunId, { steps: state.info.steps });
+      }
+      this.emit(state, {
+        type: 'step_succeeded',
+        runId: state.info.id,
+        stepId: step.id,
+        summary: step.summary,
+        durationMs: step.durationMs,
       });
       this.store.updateArtifact(state.artifactId, { status: 'ready' });
       this.emit(state, {
@@ -304,6 +322,14 @@ export class CommandRunner {
       this.emit(state, { type: 'error', runId: state.info.id, code: step.error.code, message: step.error.message });
       this.finish(state, 'failed');
     }
+  }
+
+  private async exportIfRequested(command: CommandDefinition, state: RunState): Promise<string | undefined> {
+    if (command.id !== 'report' || !this.exportDir) return undefined;
+    const format = state.info.input.format;
+    if (format !== 'xlsx' && format !== 'pptx') return undefined;
+    const exported = await exportArtifact(this.store, { exportDir: this.exportDir }, state.artifactId, format);
+    return `已导出 ${format.toUpperCase()}：${exported.path}`;
   }
 
   private async executeStep(command: CommandDefinition, state: RunState, step: CommandStepInfo): Promise<StepResult> {
@@ -390,18 +416,22 @@ export class CommandRunner {
         const started = Date.now();
         const topic = String(input.topic ?? '数据概览');
         const tables = Array.isArray(input.tables) ? (input.tables as string[]) : undefined;
+        const period = input.period;
+        const audience = ['executive', 'business', 'technical'].includes(String(input.audience))
+          ? (String(input.audience) as 'executive' | 'business' | 'technical')
+          : undefined;
         const settings = this.store.getSettings();
         let spec;
         if (settings.agent.provider !== 'local' && this.executor) {
           try {
-            spec = await generateAgentReport(this.store, this.manager, this.executor, { sources, topic, tables }, state.controller.signal);
+            spec = await generateAgentReport(this.store, this.manager, this.executor, { sources, topic, tables, period, audience, home: this.home }, state.controller.signal);
             spec.meta.notes = [...(spec.meta.notes ?? []), '报告由 Agent 查数并生成；数字经过工具结果来源校验。'];
           } catch (err: any) {
-            spec = await generateReport(this.store, this.manager, { sources, topic, tables }, state.controller.signal);
+            spec = await generateReport(this.store, this.manager, { sources, topic, tables, period, audience }, state.controller.signal);
             spec.meta.notes = [...(spec.meta.notes ?? []), `Agent 报告未生成，已回退确定性统计：${err?.message ?? '未知错误'}`];
           }
         } else {
-          spec = await generateReport(this.store, this.manager, { sources, topic, tables }, state.controller.signal);
+          spec = await generateReport(this.store, this.manager, { sources, topic, tables, period, audience }, state.controller.signal);
         }
         this.store.addAudit({
           actor: 'user',

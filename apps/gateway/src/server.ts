@@ -57,7 +57,7 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
   const skillRunner = new SkillRunner(skills, config.home, (skillId, names) => store.getSkillSecrets(skillId, names));
   const executor = new ToolExecutor(store, manager, config, () => store.getSettings(), skills, skillRunner);
   const host = new AgentHost({ store, manager, executor, config, skills });
-  const commands = new CommandRunner(store, manager, executor);
+  const commands = new CommandRunner(store, manager, executor, config.home, config.exportDir);
   const skillWorker = new SkillWorker(store, skills, skillRunner, executor);
   executor.setSkillWorker(skillWorker);
   const scheduler = new JobScheduler(store, manager, config);

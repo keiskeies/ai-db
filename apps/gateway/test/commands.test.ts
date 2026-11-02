@@ -107,6 +107,38 @@ test('命令注册表可被桌面/移动端读取', async () => {
   assert.ok(body.commands.some((command: any) => command.id === 'diff'));
   assert.ok(body.commands.some((command: any) => command.id === 'recon'));
   assert.ok(body.commands.every((command: any) => typeof command.title.zh === 'string'));
+  const report = body.commands.find((command: any) => command.id === 'report');
+  const slots = new Map<string, any>(report.slots.map((slot: any) => [slot.key, slot]));
+  // 输出格式只列出真正能落盘的：PDF 走桌面端导出，不在命令里假装支持。
+  assert.deepEqual(
+    (slots.get('format') as any).options.map((option: any) => option.value),
+    ['screen', 'xlsx', 'pptx'],
+  );
+  assert.deepEqual(
+    (slots.get('audience') as any).options.map((option: any) => option.value),
+    ['executive', 'business', 'technical'],
+  );
+});
+
+test('/report 选择 Excel 时，运行成功后把文件真正落盘', async () => {
+  const started = await api('/commands/report/runs', {
+    method: 'POST',
+    body: JSON.stringify({
+      input: {
+        sources: [{ connectionId: leftConn.id, label: '左' }],
+        topic: '本月订单概览',
+        format: 'xlsx',
+      },
+    }),
+  });
+  assert.equal(started.status, 202, JSON.stringify(started.body));
+  const events = await streamRun(started.body.run.id);
+  assert.equal(events.find((event) => event.type === 'run_finished').status, 'succeeded');
+  const succeeded = events.find((event) => event.type === 'step_succeeded');
+  assert.match(succeeded.summary, /已导出 XLSX/);
+  const path = /已导出 XLSX：(.+)$/.exec(succeeded.summary)?.[1] ?? '';
+  assert.ok(path && existsSync(path), `导出文件不存在：${path}`);
+  assert.match(path, /\.xlsx$/);
 });
 
 test('/diff 生成差异产物，并可通过 SSE 观察完成', async () => {
@@ -281,9 +313,18 @@ test('/report 生成确定性报告，按语义选择 sections / comparison', as
   assert.ok(sectionsReport.sections.length >= 3);
   const overview = sectionsReport.sections[0];
   assert.equal(overview.id, 'overview');
-  const metrics = overview.blocks.find((block: any) => block.kind === 'metric');
-  assert.ok(metrics.metrics.some((metric: any) => metric.label === '数据源' && metric.value === 2));
+  // 概览先给业务指标，规模指标单独成块；两者都在概览里。
+  const metrics = overview.blocks.filter((block: any) => block.kind === 'metric').flatMap((block: any) => block.metrics);
+  assert.ok(metrics.some((metric: any) => metric.label === '数据源' && metric.value === 2));
+  assert.ok(overview.blocks.some((block: any) => block.kind === 'metric' && block.title === '数据规模'));
   assert.ok(sectionsReport.sections.some((section: any) => section.blocks.some((block: any) => block.kind === 'table')));
+  // 时间窗由网关解析并写进元数据，报告读得出「统计的是哪一段」。
+  assert.match(sectionsReport.meta.period.from, /^\d{4}-\d{2}-\d{2}$/);
+  assert.match(sectionsReport.meta.period.to, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(typeof sectionsReport.executive.headline, 'string');
+  assert.ok(sectionsReport.executive.headline.length > 0);
+  assert.ok(Array.isArray(sectionsReport.executive.takeaways));
+  assert.ok(sectionsReport.meta.assumptions.some((line: string) => /统计区间/.test(line)));
 
   const comparisonReport = await runReport('对比两个库的数据量');
   assert.equal(comparisonReport.layout, 'comparison');
