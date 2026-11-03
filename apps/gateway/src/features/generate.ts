@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { buildInsert, buildSelectTable, quoteIdent, type ColumnInfo, type Engine } from '@aidb/core';
 import type { ConnectionManager } from '../manager';
 import type { Store } from '../store';
+import { DbError } from '../drivers';
 import { sqlLiteral } from '../services';
 import { connectionSchema, tableRef } from './common';
 
@@ -69,8 +70,8 @@ function mockValue(column: ColumnInfo, index: number, engine: Engine): unknown {
 
 export async function generateData(store: Store, manager: ConnectionManager, opts: GenerateOptions): Promise<GenerateResult> {
   const conn = store.getConnection(opts.connectionId);
-  if (!conn) throw new Error('连接不存在');
-  if (conn.readonly && !opts.dryRun) throw new Error('只读连接禁止写入');
+  if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+  if (conn.readonly && !opts.dryRun) throw new DbError('只读连接禁止写入', { code: 'READONLY', status: 403 });
   const { table } = await manager.findTable(opts.connectionId, opts.database, opts.table);
   const rowCount = Math.min(5000, Math.max(1, opts.rows ?? 10));
   const columns = (table.columns ?? []).filter((column) => !column.autoIncrement);

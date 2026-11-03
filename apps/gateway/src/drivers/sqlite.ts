@@ -4,6 +4,19 @@ import { classifyStatement, type ColumnInfo, type ForeignKeyInfo, type IndexInfo
 import type { Driver, DriverTestResult, RunOptions } from './types';
 import { DbError, toRowArray } from './types';
 
+/**
+ * node:sqlite 只接受 null / number / bigint / string / Uint8Array。
+ * 网格编辑与导入会把 BOOLEAN 列原样传成 JS 布尔，必须在绑定前归一化。
+ */
+function normalizeParams(params: unknown[]): unknown[] {
+  return params.map((value) => {
+    if (typeof value === 'boolean') return value ? 1 : 0;
+    if (value === undefined) return null;
+    if (value instanceof Date) return value.toISOString();
+    return value;
+  });
+}
+
 export class SqliteDriver implements Driver {
   engine = 'sqlite' as const;
   private db: DatabaseSync;
@@ -100,8 +113,23 @@ export class SqliteDriver implements Driver {
     return this.runParams(sql, [], opts);
   }
 
+  async execScript(sql: string): Promise<void> {
+    if (this.txSessions.size) throw new DbError('有进行中的事务，无法执行脚本', { code: 'TX_ACTIVE' });
+    try {
+      this.db.exec(sql);
+    } catch (err: any) {
+      try {
+        this.db.exec('ROLLBACK');
+      } catch {
+        /* 脚本没有开启事务时无需回滚 */
+      }
+      throw new DbError(err?.message ?? 'SQLite 脚本执行失败', { code: 'SQLITE_ERROR' });
+    }
+  }
+
   async runParams(sql: string, params: unknown[], opts: RunOptions = {}): Promise<QueryResult> {
     const started = Date.now();
+    const bound = normalizeParams(params);
     try {
       const stmt = this.db.prepare(sql);
       const kind = classifyStatement(sql).kind;
@@ -109,7 +137,7 @@ export class SqliteDriver implements Driver {
       if (isRead) {
         const stmtAny = stmt as unknown as { columns?: () => Array<{ name: string; type?: string }> };
         let columns = (stmtAny.columns?.() ?? []).map((c) => ({ name: c.name, type: c.type || undefined }));
-        const rawRows = (stmt.all as (...args: unknown[]) => Record<string, unknown>[])(...params);
+        const rawRows = (stmt.all as (...args: unknown[]) => Record<string, unknown>[])(...bound);
         if (!columns.length && rawRows.length) {
           columns = Object.keys(rawRows[0]).map((name) => ({ name, type: undefined as string | undefined }));
         }
@@ -124,7 +152,7 @@ export class SqliteDriver implements Driver {
           statement: sql,
         };
       }
-      const result = (stmt.run as (...args: unknown[]) => { changes: number | bigint; lastInsertRowid: number | bigint })(...params);
+      const result = (stmt.run as (...args: unknown[]) => { changes: number | bigint; lastInsertRowid: number | bigint })(...bound);
       return {
         columns: [],
         rows: [],

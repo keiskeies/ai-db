@@ -780,7 +780,21 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
           return ok(started, `读取 ${result?.rowCount ?? 0} 条文档样例`, { collection: table.name, ...result });
         }
         if (!isSqlEngine(conn.engine)) {
-          throw new DbError(`${engineMeta(conn.engine).label} 请使用 run_redis 查看键值`, { code: 'UNSUPPORTED_ENGINE' });
+          const hint =
+            ['qdrant', 'milvus', 'weaviate'].includes(conn.engine)
+              ? '请使用 vector_search 或 run_sql（JSON）查看向量点'
+              : ['elasticsearch', 'opensearch'].includes(conn.engine)
+                ? '请使用 search_index 或 run_sql（JSON DSL）查看文档'
+                : ['redis', 'falkordb'].includes(conn.engine)
+                  ? '请使用 run_redis 查看键值'
+                  : ['neo4j', 'memgraph'].includes(conn.engine)
+                    ? '请使用 run_cypher 查看图数据'
+                    : ['cassandra', 'scylla'].includes(conn.engine)
+                      ? '请使用 run_cql 查看表数据'
+                      : conn.engine === 'arangodb'
+                        ? '请使用 run_aql 查看集合数据'
+                        : '请使用该引擎对应的查询工具查看数据';
+          throw new DbError(`${engineMeta(conn.engine).label} ${hint}`, { code: 'UNSUPPORTED_ENGINE' });
         }
         const sql = buildSelectTable(conn.engine, table.name, { schema: this.schemaFor(conn, table), limit });
         const batch = await this.manager.query(conn.id, sql, { database, maxRows: limit, allowMulti: false, autoLimit: false, actor: 'agent' });

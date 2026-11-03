@@ -379,6 +379,9 @@ export class CommandRunner {
         if (!mapping || typeof mapping !== 'object') {
           throw Object.assign(new Error('需要键与字段映射'), { code: 'RECON_MAPPING_REQUIRED', status: 400 });
         }
+        if (!mapping.mode || !mapping.left?.connectionId || !mapping.right?.connectionId) {
+          throw Object.assign(new Error('对账映射缺少 mode / 左右数据源连接，请重新选择两侧数据源'), { code: 'INVALID_INPUT', status: 400 });
+        }
         const started = Date.now();
         const level = (input.level === 'keys' || input.level === 'fields' ? input.level : 'counts') as ReconLevel;
         const result = await reconcileData(this.store, this.manager, { ...mapping, maxKeys: Number(input.maxKeys) || mapping.maxKeys }, level);

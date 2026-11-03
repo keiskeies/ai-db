@@ -1414,6 +1414,7 @@ export class Store {
     for (const [key, column] of Object.entries(mapping)) {
       if (!(key in patch)) continue;
       let value = (patch as Record<string, unknown>)[key];
+      if (value === undefined) continue;
       if (key === 'tags') value = JSON.stringify(value ?? []);
       if (typeof value === 'boolean') value = value ? 1 : 0;
       sets.push(`${column} = ?`);

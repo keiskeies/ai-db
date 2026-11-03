@@ -1162,6 +1162,10 @@ export class ConnectionManager {
             : await driver.run(prepared, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs });
           sets.push(result);
           applied.push(statement);
+          // applyLimit 已经把 SQL 改写成带 LIMIT 的形式，驱动无法再通过原始行数判断截断。
+          if (prepared !== statement && opts.maxRows && result.rowCount >= opts.maxRows) {
+            result.truncated = true;
+          }
           messages.push(
             result.columns.length
               ? `[${index + 1}] ${result.rowCount} 行 · ${result.durationMs}ms`
@@ -1231,6 +1235,28 @@ export class ConnectionManager {
     if (conn.readonly) throw new DbError('该连接为只读，禁止写入', { code: 'READONLY', status: 403 });
     const driver = await this.driverFor(connectionId);
     return driver.runParams(sql, params, { database: opts.database, timeoutMs: opts.timeoutMs });
+  }
+
+  /**
+   * 一次性执行整段脚本（备份恢复）。只有部分驱动支持；返回 false 时调用方回退到 query()。
+   */
+  async execScript(connectionId: string, sql: string, opts: { database?: string; timeoutMs?: number; actor: 'user' | 'agent' }): Promise<boolean> {
+    const conn = this.store.getConnection(connectionId);
+    if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+    if (conn.readonly) throw new DbError('该连接为只读，禁止写入', { code: 'READONLY', status: 403 });
+    const driver = await this.driverFor(connectionId);
+    if (!driver.execScript) return false;
+    const started = Date.now();
+    await driver.execScript(sql);
+    this.invalidate(connectionId, opts.actor);
+    this.store.addHistory({
+      connectionId,
+      database: opts.database ?? conn.database,
+      sql: '-- script',
+      status: 'ok',
+      durationMs: Date.now() - started,
+    });
+    return true;
   }
 
   async rawDriver(connectionId: string): Promise<Driver> {

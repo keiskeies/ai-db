@@ -6,6 +6,7 @@ import type { GatewayConfig } from '../config';
 import type { ConnectionManager } from '../manager';
 import type { Store } from '../store';
 import type { JobScheduler } from '../scheduler';
+import { restoreDropStatements } from '../services';
 import { compareSchemas } from './schemaCompare';
 import { searchDatabase } from './search';
 import { transferData, TransferAbortedError, type TransferEvent, type TransferResult } from './transfer';
@@ -527,8 +528,19 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
       const backup = store.listBackups().find((item) => item.id === req.params.id);
       if (!backup) throw Object.assign(new Error('备份不存在'), { code: 'NOT_FOUND', status: 404 });
       const sql = readFileSync(backup.path, 'utf8');
+      const conn = store.getConnection(backup.connectionId);
+      if (!conn) throw Object.assign(new Error('备份对应的连接不存在'), { code: 'CONNECTION_NOT_FOUND', status: 404 });
+      const drops = restoreDropStatements(conn.engine, sql);
       const started = Date.now();
-      const batch = await manager.query(backup.connectionId, sql, {
+      // SQLite 走整段脚本：45 万条 INSERT 逐条执行会阻塞事件循环十几分钟。
+      const fast = await manager.execScript(backup.connectionId, [...drops, 'BEGIN;', sql, 'COMMIT;'].join('\n'), {
+        database: backup.database,
+        timeoutMs: store.getSettings().queryTimeoutMs,
+        actor: 'user',
+      });
+      const batch = fast
+        ? { sets: [], messages: ['备份已恢复'], durationMs: Date.now() - started }
+        : await manager.query(backup.connectionId, [...drops, sql].join('\n'), {
         database: backup.database,
         allowMulti: true,
         autoLimit: false,

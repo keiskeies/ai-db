@@ -4,6 +4,7 @@ import {
   buildCreateIndex,
   buildCreateTable,
   buildInsert,
+  dialectOf,
   engineMeta,
   engineUsesSchema,
   isSqlEngine,
@@ -424,14 +425,39 @@ export async function importCsv(
   }
 }
 
-export async function dumpDatabase(
-  store: Store,
+/**
+ * 备份是完整的 DDL + INSERT 脚本，直接重放会撞上“表已存在”。
+ * 恢复前先按脚本里的对象生成 DROP 语句；不支持的方言保持原行为。
+ */
+export function restoreDropStatements(engine: Engine, dump: string): string[] {
+  const dialect = dialectOf(engine);
+  if (!['sqlite', 'mysql', 'postgres', 'mssql'].includes(dialect)) return [];
+  const pattern = /CREATE\s+(?:OR\s+REPLACE\s+)?(TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?("(?:[^"]|"")+"|`(?:[^`]|``)+`|\[[^\]]+\]|[A-Za-z_][\w$#]*(?:\.[A-Za-z_][\w$#]*)?)/gi;
+  const views = new Set<string>();
+  const tables = new Set<string>();
+  for (const match of dump.matchAll(pattern)) {
+    const kind = match[1].toUpperCase();
+    const name = match[2].trim();
+    (kind === 'VIEW' ? views : tables).add(name);
+  }
+  const cascade = dialect === 'postgres' ? ' CASCADE' : '';
+  const drops = [
+    ...[...views].map((name) => `DROP VIEW IF EXISTS ${name}${cascade};`),
+    ...[...tables].map((name) => `DROP TABLE IF EXISTS ${name}${cascade};`),
+  ];
+  if (!drops.length) return [];
+  if (dialect === 'mysql') return ['SET FOREIGN_KEY_CHECKS=0;', ...drops, 'SET FOREIGN_KEY_CHECKS=1;'];
+  if (dialect === 'sqlite') return ['PRAGMA foreign_keys=OFF;', ...drops, 'PRAGMA foreign_keys=ON;'];
+  return drops;
+}
+
+export async function dumpDatabase(  store: Store,
   manager: ConnectionManager,
   config: GatewayConfig,
   connectionId: string,
   database?: string,
   label?: string,
-): Promise<{ path: string; bytes: number; tables: number; rows: number }> {
+): Promise<{ id: string; createdAt: string; path: string; bytes: number; tables: number; rows: number }> {
   const conn = store.getConnection(connectionId);
   if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
   const schemas = await manager.schema(connectionId, database, true);
@@ -463,7 +489,7 @@ export async function dumpDatabase(
         .filter((i) => !i.primary)
         .map((i) => ({ name: i.name, columns: i.columns, unique: i.unique }));
       lines.push(`-- table ${table.name}`);
-      lines.push(buildCreateTable(conn.engine, { table: table.name, columns: columnDefs, indexes: [], schema: engineUsesSchema(conn.engine) ? table.schema : undefined }));
+      lines.push(buildCreateTable(conn.engine, { table: table.name, columns: columnDefs, indexes: [], schema: engineUsesSchema(conn.engine) ? table.schema : undefined }) + ';');
       for (const idx of indexes) {
         lines.push(buildCreateIndex(conn.engine, table.name, idx, engineUsesSchema(conn.engine) ? table.schema : undefined) + ';');
       }
@@ -483,8 +509,8 @@ export async function dumpDatabase(
   const path = join(config.backupDir, `${conn.name.replace(/[^\w\u4e00-\u9fff-]+/g, '_')}-${safeName}-${stamp}.sql`);
   writeFileSync(path, lines.join('\n'), 'utf8');
   const bytes = statSync(path).size;
-  store.addBackup({ connectionId, database, path, format: 'sql', bytes, label });
-  return { path, bytes, tables: tableCount, rows: rowCount };
+  const record = store.addBackup({ connectionId, database, path, format: 'sql', bytes, label });
+  return { id: record.id, createdAt: record.createdAt, path, bytes, tables: tableCount, rows: rowCount };
 }
 
 export function auditCsv(rows: Array<Record<string, unknown>>): string {
