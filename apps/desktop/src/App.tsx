@@ -174,6 +174,7 @@ export default function App() {
   const sidebarWidth = useApp((s) => s.sidebarWidth);
   const setSidebarWidth = useApp((s) => s.setSidebarWidth);
   const agentWidth = useApp((s) => s.agentWidth);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const setSettingsOpen = useApp((s) => s.setSettingsOpen);
   const setPaletteOpen = useApp((s) => s.setPaletteOpen);
   const openTools = useApp((s) => s.openTools);
@@ -188,6 +189,21 @@ export default function App() {
   useEffect(() => {
     void boot();
   }, [boot]);
+
+  useEffect(() => {
+    // ≤720px 侧栏是抽屉：进入窄屏先收起，避免默认遮住主内容；跨断点时同样收起。
+    let wasNarrow = window.innerWidth <= 720;
+    if (wasNarrow && useApp.getState().sidebarOpen) useApp.getState().toggleSidebar();
+    const onResize = () => {
+      const next = window.innerWidth;
+      setViewportWidth(next);
+      const isNarrow = next <= 720;
+      if (isNarrow && !wasNarrow && useApp.getState().sidebarOpen) useApp.getState().toggleSidebar();
+      wasNarrow = isNarrow;
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   useEffect(() => {
     const dark = settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -281,6 +297,25 @@ export default function App() {
   const crumbDatabase = (activeTab && 'database' in activeTab && activeTab.database) || agentDatabase || crumbConn?.database || '';
   const dark = settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
 
+  // 两栏宽度按视口收敛：始终给主工作区留出 MIN_WORKSPACE，窗口回缩时自动让位，放大后恢复用户偏好。
+  const MIN_WORKSPACE = 340;
+  const narrow = viewportWidth <= 720;
+  const agentOverlay = viewportWidth <= 1000;
+  const sidebarInFlow = sidebarOpen && !narrow;
+  const agentInFlow = agentOpen && !agentOverlay;
+  const budget = Math.max(0, viewportWidth - MIN_WORKSPACE - (sidebarInFlow ? 5 : 0) - (agentInFlow ? 5 : 0));
+  let effectiveSidebar = sidebarWidth;
+  let effectiveAgent = agentWidth;
+  if (agentInFlow) {
+    effectiveAgent = Math.min(agentWidth, Math.max(320, budget - (sidebarInFlow ? Math.min(sidebarWidth, 460) : 0)));
+    effectiveSidebar = Math.min(sidebarWidth, Math.max(200, budget - effectiveAgent));
+  } else if (sidebarInFlow) {
+    effectiveSidebar = Math.min(sidebarWidth, Math.min(460, Math.max(200, budget)));
+  }
+  if (narrow) effectiveSidebar = Math.min(sidebarWidth, 300);
+  const sidebarMax = narrow ? 460 : Math.min(460, Math.max(200, budget - (agentInFlow ? effectiveAgent : 0)));
+  const agentMax = Math.min(760, Math.max(320, budget - (sidebarInFlow ? effectiveSidebar : 0)));
+
   return (
     <div className="app" data-testid="app-root">
       <div className="titlebar">
@@ -363,22 +398,22 @@ export default function App() {
         />
       </div>
 
-      <div className="shell" style={{ ['--sidebar-w' as string]: `${sidebarWidth}px`, ['--agent-w' as string]: `${agentWidth}px` }}>
+      <div className="shell" style={{ ['--sidebar-w' as string]: `${effectiveSidebar}px`, ['--agent-w' as string]: `${effectiveAgent}px` }}>
         {sidebarOpen ? (
           <>
             <Sidebar />
             <PaneSplitter
               side="left"
-              width={sidebarWidth}
+              width={effectiveSidebar}
               min={200}
-              max={460}
+              max={sidebarMax}
               onChange={(width) => setSidebarWidth(width)}
               onCommit={(width) => setSidebarWidth(width, true)}
               testId="splitter-sidebar"
             />
           </>
         ) : null}
-        <Workspace />
+        <Workspace viewportWidth={viewportWidth} sidebarFlowWidth={sidebarInFlow ? effectiveSidebar : 0} />
       </div>
 
       <div className="statusbar">
@@ -389,13 +424,13 @@ export default function App() {
         <span className="item">
           <Network size={10} /> {crumbConn?.name ?? '未选择连接'}
         </span>
-        {crumbConn && crumbDatabase ? <span className="item">{crumbDatabase}</span> : null}
+        {crumbConn && crumbDatabase ? <span className="item path">{crumbDatabase}</span> : null}
         <span className="sep" />
         <span className="item">{activeTab?.title ?? ''}</span>
         <div className="spacer" />
-        <span className="item">{settings.agent.provider === 'local' ? 'AI: Local' : `AI: ${settings.agent.model}`}</span>
-        <span className="item">{useApp.getState().connections.length} 连接</span>
-        <span className="item">v0.1.0</span>
+        <span className="item model">{settings.agent.provider === 'local' ? 'AI: Local' : `AI: ${settings.agent.model}`}</span>
+        <span className="item count">{useApp.getState().connections.length} 连接</span>
+        <span className="item version">v0.1.0</span>
       </div>
 
       <MemoryDrawer />

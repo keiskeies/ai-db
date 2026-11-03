@@ -18,7 +18,7 @@ function TabIcon({ kind }: { kind: string }) {
   return <FileCode2 size={12} />;
 }
 
-export function Workspace() {
+export function Workspace({ viewportWidth, sidebarFlowWidth }: { viewportWidth: number; sidebarFlowWidth: number }) {
   const tabs = useApp((s) => s.tabs);
   const activeTabId = useApp((s) => s.activeTabId);
   const setActiveTab = useApp((s) => s.setActiveTab);
@@ -31,6 +31,7 @@ export function Workspace() {
   const t = useApp((s) => s.t);
 
   const active = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
+  const agentMax = Math.max(320, Math.min(760, viewportWidth - 340 - (sidebarFlowWidth > 0 ? sidebarFlowWidth + 5 : 0) - 5));
 
   return (
     <>
@@ -86,7 +87,7 @@ export function Workspace() {
             side="right"
             width={agentWidth}
             min={320}
-            max={760}
+            max={agentMax}
             onChange={(width) => setAgentWidth(width)}
             onCommit={(width) => setAgentWidth(width, true)}
             testId="splitter-agent"

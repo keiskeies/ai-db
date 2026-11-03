@@ -998,9 +998,10 @@ details[open] > summary::before { transform: rotate(45deg); opacity: .7; }
 .statusbar {
   height: var(--statusbar-h); flex: 0 0 var(--statusbar-h); display: flex; align-items: center; gap: 12px;
   padding: 0 10px; border-top: 1px solid var(--border-panel); background: var(--bg-chrome);
-  font-size: 10.5px; color: var(--text-muted); user-select: none;
+  font-size: 10.5px; color: var(--text-muted); user-select: none; overflow: hidden;
 }
-.statusbar .item { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.statusbar .item { display: flex; align-items: center; gap: 5px; white-space: nowrap; min-width: 0; }
+.statusbar .path { max-width: 260px; overflow: hidden; text-overflow: ellipsis; display: block; line-height: var(--statusbar-h); }
 .statusbar .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
 .statusbar .dot.off { background: var(--text-muted); }
 .statusbar .dot.warn { background: var(--warning); }
@@ -1038,11 +1039,24 @@ details[open] > summary::before { transform: rotate(45deg); opacity: .7; }
   .agent-panel.expanded { width: min(440px, 94vw); }
   .pane-splitter[data-testid='splitter-agent'] { display: none; }
 }
+@media (max-width: 900px) {
+  .statusbar .path { max-width: 140px; }
+}
 @media (max-width: 720px) {
-  .sidebar { display: none; }
+  /* 抽屉式侧栏：窄屏不再直接删掉侧栏，否则切换按钮与快捷键都是死键 */
+  .sidebar {
+    position: absolute; top: 0; bottom: 0; left: 0; z-index: 30;
+    width: min(300px, 86vw); min-width: 0; flex-basis: auto;
+    box-shadow: var(--shadow-pop);
+  }
+  .pane-splitter[data-testid='splitter-sidebar'] { display: none; }
   .brand-sub { display: none; }
   .titlebar .cmd-hint { display: none; }
   .agent-panel { width: 100vw; }
+  .statusbar .path, .statusbar .model { display: none; }
+}
+@media (max-width: 480px) {
+  .statusbar .count, .statusbar .version { display: none; }
 }
 
 [data-density='comfortable'] .data-grid td { height: 34px; }
@@ -1118,7 +1132,10 @@ details[open] > summary::before { transform: rotate(45deg); opacity: .7; }
   flex: 0 0 68px; height: 68px; display: flex; align-items: center; gap: 2px;
   padding: 4px 10px; border-bottom: 1px solid var(--border-panel);
   background: var(--bg-ribbon);
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
 }
+.ribbon::-webkit-scrollbar { display: none; }
+.ribbon > * { flex: 0 0 auto; }
 .ribbon-btn {
   --tone: var(--text-muted);
   min-width: 58px; height: 58px; padding: 4px 8px; border-radius: 8px;
