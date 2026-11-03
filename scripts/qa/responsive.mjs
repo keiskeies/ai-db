@@ -189,7 +189,13 @@ async function auditPage(page, label, { screenshot = false, modal = false, skipC
     );
   }
   if (screenshot) {
-    await page.screenshot({ path: join(SHOTS, `${label.replace(/[^\w.-]+/g, '_')}.png`) });
+    const target = join(SHOTS, `${label.replace(/[^\w.-]+/g, '_')}.png`);
+    try {
+      await page.screenshot({ path: target });
+    } catch {
+      await new Promise((r) => setTimeout(r, 250));
+      await page.screenshot({ path: target }).catch((err) => console.log(`[warn] screenshot skipped ${target}: ${err.message}`));
+    }
   }
   return summary;
 }
@@ -553,10 +559,14 @@ async function main() {
             await page.getByTestId('m-tab-data').click();
             await page.waitForTimeout(1200);
             await auditPage(page, `${tag}-data`, { skipControls: true });
-            await page.getByTestId('m-tab-memory').click();
+            record(`${tag} 数据页包含连接选择器`, await page.getByTestId('m-data-connection').isVisible());
+            record(`${tag} 单库连接不显示库选择器`, (await page.getByTestId('m-data-database').count()) === 0);
+            await page.getByTestId('m-tab-me').click();
+            await page.getByTestId('m-me-memory').click();
             await page.waitForTimeout(800);
             await auditPage(page, `${tag}-memory`, { skipControls: true });
-            await page.getByTestId('m-tab-settings').click();
+            await page.getByTestId('m-memory-back').click();
+            await page.getByTestId('m-me-settings').click();
             await page.waitForTimeout(800);
             await auditPage(page, `${tag}-settings`, { screenshot: width === 390, skipControls: true });
           } finally {

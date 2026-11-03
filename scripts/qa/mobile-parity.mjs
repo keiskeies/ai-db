@@ -61,7 +61,8 @@ try {
   await page.waitForTimeout(300);
   check('权限切回只读', (await page.getByTestId('m-mode-select').innerText()).includes('只读'));
 
-  await page.getByTestId('m-tab-memory').click({ force: true });
+  await page.getByTestId('m-tab-me').click({ force: true });
+  await page.getByTestId('m-me-memory').click({ force: true });
   await page.waitForTimeout(800);
   await page.getByTestId('m-memory-new').click({ force: true });
   await page.waitForTimeout(400);
@@ -88,7 +89,8 @@ try {
   await page.getByTestId('m-sessions-close').click({ force: true });
   await page.waitForTimeout(400);
 
-  await page.getByTestId('m-tab-settings').click({ force: true });
+  await page.getByTestId('m-tab-me').click({ force: true });
+  await page.getByTestId('m-me-settings').click({ force: true });
   await page.waitForTimeout(600);
   await page.getByTestId('m-unpair').click({ force: true });
   await page.waitForTimeout(1400);

@@ -21,6 +21,7 @@ export function translate(text: string): string {
   let out = text;
   const rules: Array<[RegExp, string]> = [
     [/^\s*个对象$/, ' objects'],
+    [/^\s*个库$/, ' databases'],
     [/^\s*个会话$/, ' sessions'],
     [/^\s*个账户$/, ' accounts'],
     [/^\s*张表$/, ' tables'],
@@ -30,6 +31,7 @@ export function translate(text: string): string {
     [/^\s*列$/, ' columns'],
     [/^\s*条$/, ' items'],
     [/(\d[\d,]*)\s*个对象/g, '$1 objects'],
+    [/(\d[\d,]*)\s*个库/g, '$1 databases'],
     [/(\d[\d,]*)\s*个会话/g, '$1 sessions'],
     [/(\d[\d,]*)\s*个账户/g, '$1 accounts'],
     [/(\d[\d,]*)\s*张表/g, '$1 tables'],

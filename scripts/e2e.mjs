@@ -3127,18 +3127,58 @@ check('mobile command picker does not open a form', (await mobile.getByPlacehold
 await mobile.screenshot({ path: join(shots, 'mobile-command-report.png') });
 await mobile.getByTestId('m-chat-input').fill('');
 
+await mobile.getByTestId('m-commands').click();
+await mobile.getByTestId('m-command-workflows').click();
+await mobile.waitForTimeout(800);
+check('mobile command workflows open from chat', (await mobile.locator('body').innerText()).includes('命令工作流'));
+await mobile.screenshot({ path: join(shots, 'mobile-command-workflows.png') });
+await mobile.getByTestId('m-command-back').click();
+await mobile.waitForTimeout(400);
+check('mobile command workflow returns to chat', await mobile.getByTestId('m-chat-input').isVisible());
+
+await mobile.getByTestId('m-tab-tools').click();
+await mobile.waitForTimeout(600);
+check(
+  'mobile toolbox keeps DB tools only',
+  (await mobile.getByTestId('m-tool-query').isVisible()) &&
+    (await mobile.getByTestId('m-tool-command-report').count()) === 0 &&
+    (await mobile.getByText('常用任务').count()) === 0,
+);
+await mobile.screenshot({ path: join(shots, 'mobile-tools.png') });
+
 await mobile.getByTestId('m-tab-data').click();
 await mobile.waitForSelector('[data-testid="m-table-orders"]', { timeout: 15000 });
+check('mobile data page exposes connection selector', await mobile.getByTestId('m-data-connection').isVisible());
+check('mobile data connection chip shows engine logo', (await mobile.getByTestId('m-data-connection').locator('svg, img').count()) >= 1);
+check('mobile single-database connection hides database selector', (await mobile.getByTestId('m-data-database').count()) === 0);
+await mobile.getByTestId('m-data-connection').click();
+await mobile.waitForTimeout(500);
+check('mobile connection picker shows engine logos', (await mobile.locator('[data-testid^="m-connection-"] svg, [data-testid^="m-connection-"] img').count()) >= 1);
+await mobile.screenshot({ path: join(shots, 'mobile-connections.png') });
+await mobile.getByTestId('m-connections-close').click();
+await mobile.waitForTimeout(300);
 await mobile.getByTestId('m-table-orders').click();
 await mobile.waitForTimeout(1500);
 check('mobile data exposes row editing on writable connection', (await mobile.locator('body').innerText()).includes('可编辑'));
 check('mobile data offers insert action', (await mobile.getByTestId('m-row-insert').count()) === 1);
+check('mobile data defaults to grid view', await mobile.getByTestId('m-data-view-grid').isVisible());
+check('mobile grid exposes row actions', (await mobile.getByTestId('m-row-edit-0').count()) === 1);
+await mobile.getByTestId('m-row-0').click();
+await mobile.waitForTimeout(400);
+check('mobile grid row opens detail sheet', await mobile.getByTestId('m-row-inspect-close').isVisible());
+await mobile.screenshot({ path: join(shots, 'mobile-row-detail.png') });
+await mobile.getByTestId('m-row-inspect-close').click();
+await mobile.getByTestId('m-data-view-cards').click();
+await mobile.waitForTimeout(400);
+check('mobile data can switch to card view', (await mobile.getByTestId('m-row-edit-0').count()) === 1);
 await mobile.screenshot({ path: join(shots, 'mobile-data.png') });
 
-await mobile.getByTestId('m-tab-memory').click();
+await mobile.getByTestId('m-tab-me').click();
+await mobile.getByTestId('m-me-memory').click();
 await mobile.waitForTimeout(1000);
 await mobile.screenshot({ path: join(shots, 'mobile-memory.png') });
-await mobile.getByTestId('m-tab-settings').click();
+await mobile.getByTestId('m-memory-back').click();
+await mobile.getByTestId('m-me-settings').click();
 await mobile.waitForTimeout(700);
 check('mobile settings shows Bridge and Agent', (await mobile.locator('body').innerText()).includes('BRIDGE'));
 await mobile.screenshot({ path: join(shots, 'mobile-settings.png') });

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -23,7 +24,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Linking from 'expo-linking';
 import Zeroconf from 'react-native-zeroconf';
 import * as Sharing from 'expo-sharing';
-import Svg, { Circle, G, Line, Path, Polyline, Rect, Text as SvgText } from 'react-native-svg';
+import Svg, { Circle, Defs, G, Line, LinearGradient, Path, Polyline, Rect, Stop, SvgXml, Text as SvgText } from 'react-native-svg';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import {
   Archive,
@@ -56,6 +57,7 @@ import {
   Table2,
   TerminalSquare,
   Trash2,
+  User,
   Users,
   Wrench,
   X,
@@ -70,6 +72,7 @@ import type {
   AgentSessionMeta,
   QueryBatchResult,
   ConnectionConfig,
+  Engine,
   Memory,
   PermissionMode,
   Risk,
@@ -88,10 +91,11 @@ import {
   type BridgeConfig,
   type DataPage,
 } from './src/bridge';
-import { colors, modeLabels, radius, riskColor, riskLabels, setPalette, type ThemeResolved } from './src/theme';
+import { colors, chartPalette, getThemeMode, heatTone, modeLabels, radius, riskColor, riskLabels, setPalette, type ThemeResolved } from './src/theme';
+import { ENGINE_LOGO_PNG, ENGINE_LOGO_SVG, LETTER_BADGES, MONO_ENGINE_LOGOS, BRIGHT_ENGINE_LOGOS } from './src/engineLogos';
 import { setLocale, translate, type Locale } from './src/i18n';
 
-type TabKey = 'chat' | 'data' | 'tools' | 'connections' | 'memory' | 'settings';
+type TabKey = 'chat' | 'data' | 'tools' | 'me';
 
 interface LiveTool {
   callId: string;
@@ -129,8 +133,54 @@ function Text(props: React.ComponentProps<typeof RNText>) {
   return <RNText {...props}>{children}</RNText>;
 }
 
+/** 与桌面端 .brand-mark 一致的固定品牌渐变，不随主题变化。 */
+function BrandMark({ size, radius: corner, fontSize }: { size: number; radius: number; fontSize: number }) {
+  const gradientId = `brandMark${size}`;
+  return (
+    <View style={{ width: size, height: size, borderRadius: corner, alignItems: 'center', justifyContent: 'center' }}>
+      <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ position: 'absolute' }}>
+        <Defs>
+          <LinearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
+            <Stop offset="0" stopColor={colors.brandA} />
+            <Stop offset="1" stopColor={colors.brandB} />
+          </LinearGradient>
+        </Defs>
+        <Rect width={size} height={size} rx={corner} fill={`url(#${gradientId})`} />
+      </Svg>
+      <Text style={{ color: colors.onBrand, fontWeight: '800', fontSize }}>AI</Text>
+    </View>
+  );
+}
+
+/** 引擎官方 logo：与桌面 EngineIcon 同一套资源；暗色下反转接近黑色的 logo。 */
+function EngineLogo({ engine, size = 16 }: { engine?: string; size?: number }) {
+  const key = (engine ?? '') as Engine;
+  const svg = ENGINE_LOGO_SVG[key];
+  if (svg) {
+    const xml = getThemeMode() === 'dark' && MONO_ENGINE_LOGOS.has(key) ? svg.replace(/(fill|stroke)="(#003B57|#003545|#005571|black)"/g, `$1="${colors.text}"`) : svg;
+    return <SvgXml xml={xml} width={size} height={size} />;
+  }
+  const png = ENGINE_LOGO_PNG[key];
+  if (png) {
+    return (
+      <Image
+        source={png}
+        style={{ width: size, height: size, opacity: getThemeMode() === 'light' && BRIGHT_ENGINE_LOGOS.has(key) ? 0.88 : 1 }}
+        resizeMode="contain"
+      />
+    );
+  }
+  const badge = LETTER_BADGES[key];
+  return (
+    <View style={{ width: size, height: size, borderRadius: 3, backgroundColor: `${badge?.color ?? colors.muted}33`, alignItems: 'center', justifyContent: 'center' }}>
+      <Text style={{ color: badge?.color ?? colors.muted, fontSize: Math.max(7, size * 0.55), fontWeight: '700' }}>{badge?.letter ?? '?'}</Text>
+    </View>
+  );
+}
+
 function TextInput(props: React.ComponentProps<typeof RNTextInput>) {
-  return <RNTextInput {...props} placeholder={props.placeholder ? translate(props.placeholder) : props.placeholder} />;
+  const webStyle = Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : undefined;
+  return <RNTextInput {...props} style={[props.style, webStyle]} placeholder={props.placeholder ? translate(props.placeholder) : props.placeholder} />;
 }
 
 const MODES: PermissionMode[] = ['readonly', 'ask', 'auto', 'full'];
@@ -283,7 +333,7 @@ function Root({ themeMode, resolvedTheme, onThemeMode, locale, onLocale }: { the
   if (!ready) {
     return (
       <View style={styles.splash}>
-        <View style={styles.logo}><Text style={styles.logoText}>AI</Text></View>
+        <BrandMark size={48} radius={14} fontSize={17} />
         <ActivityIndicator color={colors.accent} style={{ marginTop: 16 }} />
       </View>
     );
@@ -478,7 +528,7 @@ function PairScreen({ onConnected }: { onConnected: (config: BridgeConfig) => vo
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.bg }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={[styles.pairWrap, { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 30 }]} keyboardShouldPersistTaps="handled">
-        <View style={styles.logoLarge}><Text style={styles.logoLargeText}>AI</Text></View>
+        <BrandMark size={64} radius={18} fontSize={23} />
         <Text style={styles.pairTitle}>AiDB Studio</Text>
         <Text style={styles.pairSubtitle}>移动端通过 Bridge 安全访问数据库。会话、记忆与桌面端同步。</Text>
 
@@ -558,7 +608,7 @@ function PairScreen({ onConnected }: { onConnected: (config: BridgeConfig) => vo
           )}
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <Pressable testID="m-connect" style={[styles.primaryButton, busy && { opacity: 0.6 }]} onPress={() => void connect()} disabled={busy}>
-            {busy ? <ActivityIndicator color="#0b0d0d" size="small" /> : <Sparkles size={15} color="#0b0d0d" />}
+            {busy ? <ActivityIndicator color={colors.onSolid} size="small" /> : <Sparkles size={15} color={colors.onSolid} />}
             <Text style={styles.primaryButtonText}>{busy ? '连接中…' : '连接 Bridge'}</Text>
           </Pressable>
         </View>
@@ -607,6 +657,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
   const [activeConnectionId, setActiveConnectionId] = useState<string | undefined>();
   const [databases, setDatabases] = useState<string[]>([]);
   const [activeDatabase, setActiveDatabase] = useState<string | undefined>();
+  const [databaseReadyFor, setDatabaseReadyFor] = useState<string | undefined>();
   const [tables, setTables] = useState<TableInfo[]>([]);
   const [sessions, setSessions] = useState<AgentSessionMeta[]>([]);
   const [archivedSessions, setArchivedSessions] = useState<AgentSessionMeta[]>([]);
@@ -632,7 +683,9 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
   const [memoryDraft, setMemoryDraft] = useState<{ id?: string; kind: string; title: string; content: string } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
-  const [toolPage, setToolPage] = useState<'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'dictionary' | 'monitor' | 'search' | 'history' | 'audit' | 'artifacts' | 'users' | 'commands' | null>(null);
+  const [toolPage, setToolPage] = useState<'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'dictionary' | 'monitor' | 'search' | 'history' | 'audit' | 'artifacts' | 'users' | null>(null);
+  const [chatPage, setChatPage] = useState<'commands' | null>(null);
+  const [mePage, setMePage] = useState<'memory' | 'connections' | 'settings' | null>(null);
   const [toolTable, setToolTable] = useState<string | undefined>(undefined);
   const [toolSql, setToolSql] = useState<string | undefined>(undefined);
 
@@ -641,6 +694,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
   const activeConnectionIdRef = useRef<string | undefined>(undefined);
   const schemaInFlightRef = useRef(false);
   const preferredDatabaseRef = useRef<string | undefined>(undefined);
+  const pendingDatabasePickerRef = useRef(false);
   const schemaPendingRef = useRef(false);
   const handlerRef = useRef<(event: any) => void>(() => undefined);
   const scrollRef = useRef<ScrollView>(null);
@@ -748,6 +802,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
     if (!activeConnectionId) {
       setDatabases([]);
       setActiveDatabase(undefined);
+      setDatabaseReadyFor(undefined);
       setTables([]);
       return;
     }
@@ -770,6 +825,11 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
         list[0] ??
         conn?.database;
       setActiveDatabase(preferred);
+      setDatabaseReadyFor(activeConnectionId);
+      if (pendingDatabasePickerRef.current) {
+        pendingDatabasePickerRef.current = false;
+        if (list.length > 1) setPicker('databases');
+      }
     })();
     return () => {
       cancelled = true;
@@ -778,12 +838,20 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
   }, [activeConnectionId, connections]);
 
   useEffect(() => {
-    if (!activeConnectionId) return;
+    setSelectedTable(null);
+    setDataPage(null);
+    setDatabases([]);
+    setDatabaseReadyFor(undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeConnectionId]);
+
+  useEffect(() => {
+    if (!activeConnectionId || databaseReadyFor !== activeConnectionId) return;
     void loadSchema(activeConnectionId, activeDatabase);
     setSelectedTable(null);
     setDataPage(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeConnectionId, activeDatabase]);
+  }, [activeConnectionId, activeDatabase, databaseReadyFor]);
 
   const handleWsEvent = (event: any) => {
     if (event.type === 'ping' || event.type === 'pong') return;
@@ -915,9 +983,9 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
   }, [live?.text, live?.tools.length, live?.status, live?.plan, messages.length]);
 
   useEffect(() => {
-    if (tab === 'memory') void loadMemories();
+    if (tab === 'me' && mePage === 'memory') void loadMemories();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+  }, [tab, mePage]);
 
   const loadMemories = async (q = memoryQuery) => {
     setMemoryLoading(true);
@@ -941,8 +1009,13 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
       setLive(undefined);
       setPicker(null);
       if (detail.session.connectionId) {
-        preferredDatabaseRef.current = detail.session.database;
-        setActiveConnectionId(detail.session.connectionId);
+        const sessionDb = detail.session.database;
+        if (detail.session.connectionId === activeConnectionIdRef.current) {
+          if (sessionDb && sessionDb !== activeDatabase && databases.includes(sessionDb)) setActiveDatabase(sessionDb);
+        } else {
+          preferredDatabaseRef.current = sessionDb;
+          setActiveConnectionId(detail.session.connectionId);
+        }
       }
     } catch (err: any) {
       notify('打开会话失败', err?.message ?? '');
@@ -1099,7 +1172,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
         <Text style={[styles.pairTitle, { fontSize: 18, marginTop: 12 }]}>连接失败</Text>
         <Text style={[styles.hint, { textAlign: 'center' }]}>{error}</Text>
         <Pressable style={styles.primaryButton} onPress={() => void bootstrap()}>
-          <RefreshCw size={14} color="#0b0d0d" />
+          <RefreshCw size={14} color={colors.onSolid} />
           <Text style={styles.primaryButtonText}>重试</Text>
         </Pressable>
         <Pressable onPress={() => void onDisconnect()} style={{ marginTop: 12 }}>
@@ -1144,13 +1217,16 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
                 </Pressable>
               ))}
             </ScrollView>
+            <Pressable testID="m-command-workflows" style={[styles.secondaryButton, { marginTop: 10 }]} onPress={() => { setCommandOpen(false); setChatPage('commands'); }}>
+              <Text style={styles.secondaryButtonText}>需要数据源或参数？打开命令工作流</Text>
+            </Pressable>
           </View>
         </View>
       </Modal>
       <View style={[styles.topSafe, { paddingTop: insets.top }]} />
       <View style={styles.topbar}>
         <View style={styles.brandRow}>
-          <View style={styles.logoSmall}><Text style={styles.logoSmallText}>AI</Text></View>
+          <BrandMark size={30} radius={9} fontSize={11} />
           <View>
             <Text style={styles.brand}>AiDB Studio</Text>
             <Text style={styles.brandSub}>{provider} · {connected ? 'Bridge 在线' : '重连中…'}</Text>
@@ -1164,6 +1240,9 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
 
       <View style={{ flex: 1 }}>
         {tab === 'chat' ? (
+          chatPage === 'commands' ? (
+            <CommandScreen client={client} connections={connections} activeConnection={activeConnection} onBack={() => setChatPage(null)} />
+          ) : (
           <ChatScreen
             sessionMeta={sessionMeta}
             connection={activeConnection}
@@ -1197,6 +1276,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
             onPickImage={() => void pickImage()}
             onRemoveImage={(id) => setPendingImages((prev) => prev.filter((item) => item.id !== id))}
           />
+          )
         ) : null}
 
         {tab === 'data' ? (
@@ -1223,11 +1303,24 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
             />
           ) : (
             <View style={{ flex: 1 }}>
-              <ScreenHeading icon={<Table2 size={16} color={colors.accent} />} title="数据" subtitle={`${connName}${databases.length > 1 && activeDatabase ? ' · ' + activeDatabase : ''} · ${tables.length} 个对象`} action={
-                <Pressable style={styles.iconButton} onPress={() => activeConnectionId && void loadSchema(activeConnectionId)}>
+              <ScreenHeading icon={<Table2 size={16} color={colors.accent} />} title="数据" subtitle={`${databases.length > 1 && activeDatabase ? activeDatabase + ' · ' : ''}${tables.length} 个对象`} />
+              <View style={styles.dataToolbar}>
+                <Pressable testID="m-data-connection" style={[styles.dataChip, { flex: 1 }]} onPress={() => setPicker('connections')}>
+                  <EngineLogo engine={activeConnection?.engine} size={14} />
+                  <Text style={styles.dataChipText} numberOfLines={1}>{activeConnection?.name ?? '选择连接'}</Text>
+                  <ChevronDown size={12} color={colors.muted} />
+                </Pressable>
+                {databases.length > 1 ? (
+                  <Pressable testID="m-data-database" style={[styles.dataChip, { flex: 1 }]} onPress={() => setPicker('databases')}>
+                    <Database size={12} color={colors.accent} />
+                    <Text style={styles.dataChipText} numberOfLines={1}>{activeDatabase ?? '选择库'}</Text>
+                    <ChevronDown size={12} color={colors.muted} />
+                  </Pressable>
+                ) : null}
+                <Pressable testID="m-data-refresh" style={styles.iconButton} onPress={() => activeConnectionId && void loadSchema(activeConnectionId)}>
                   <RefreshCw size={15} color={colors.text} />
                 </Pressable>
-              } />
+              </View>
               <ScrollView contentContainerStyle={{ padding: 14, gap: 8 }}>
                 {tables.map((table) => (
                   <Pressable key={table.name} testID={`m-table-${table.name}`} style={styles.listRow} onPress={() => void openTable(table)}>
@@ -1243,7 +1336,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
                   </Pressable>
                 ))}
                 {!tables.length ? <Text style={styles.hint}>当前连接没有表，或尚未加载结构。</Text> : null}
-                <Text style={styles.hint}>移动端为只读浏览；写操作请交给桌面端或 AI 助手并在授权后执行。</Text>
+                <Text style={styles.hint}>点击表可浏览与编辑数据；结构变更、导入导出在「工具」页。</Text>
               </ScrollView>
             </View>
           )
@@ -1274,24 +1367,11 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
             <ArtifactsScreen client={client} onBack={() => setToolPage(null)} />
           ) : toolPage === 'users' ? (
             <UsersScreen client={client} connection={activeConnection} onBack={() => setToolPage(null)} />
-          ) : toolPage === 'commands' ? (
-            <CommandScreen client={client} connections={connections} activeConnection={activeConnection} onBack={() => setToolPage(null)} />
           ) : (
             <ToolsScreen
               connection={activeConnection}
               database={activeDatabase}
-              connections={connections}
               tables={tables}
-              sessions={sessions}
-              memories={memories}
-              onRunPrompt={(text) => {
-                setInput(text);
-                setTab('chat');
-              }}
-              onRunCommand={(id) => {
-                setInput(`/${id} `);
-                setTab('chat');
-              }}
               onOpen={(page) => {
                 if (page === 'query') setToolSql(undefined);
                 setToolPage(page);
@@ -1300,9 +1380,17 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
           )
         ) : null}
 
-        {tab === 'connections' ? (
+        {tab === 'me' && mePage === 'connections' ? (
           <View style={{ flex: 1 }}>
-            <ScreenHeading icon={<Database size={16} color={colors.accent} />} title="连接" subtitle="由 Bridge 统一管理" />
+            <View style={styles.tableHead}>
+              <Pressable testID="m-connections-back" style={styles.iconButton} onPress={() => setMePage(null)}>
+                <ChevronLeft size={18} color={colors.text} />
+              </Pressable>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.listTitle}>连接</Text>
+                <Text style={styles.listMeta}>由 Bridge 统一管理</Text>
+              </View>
+            </View>
             <ScrollView
               contentContainerStyle={{ padding: 14, gap: 8 }}
               refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refreshAll()} tintColor={colors.accent} />}
@@ -1314,11 +1402,12 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
                   style={[styles.connCard, conn.id === activeConnectionId && { borderColor: colors.accent }]}
                   onPress={() => {
                     setActiveConnectionId(conn.id);
+                    setMePage(null);
                     setTab('data');
                   }}
                 >
                   <View style={styles.connCardHead}>
-                    <Database size={14} color={colors.accent} />
+                    <EngineLogo engine={conn.engine} size={16} />
                     <Text style={styles.listTitle} numberOfLines={1}>{conn.name}</Text>
                     {conn.id === activeConnectionId ? <Check size={14} color={colors.success} /> : null}
                   </View>
@@ -1337,18 +1426,20 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
           </View>
         ) : null}
 
-        {tab === 'memory' ? (
+        {tab === 'me' && mePage === 'memory' ? (
           <View style={{ flex: 1 }}>
-            <ScreenHeading
-              icon={<Brain size={16} color={colors.agent} />}
-              title="记忆"
-              subtitle={`${memories.length} 条 · 跨会话召回`}
-              action={
-                <Pressable testID="m-memory-new" style={styles.iconButton} onPress={() => setMemoryDraft({ kind: 'fact', title: '', content: '' })}>
-                  <Plus size={16} color={colors.text} />
-                </Pressable>
-              }
-            />
+            <View style={styles.tableHead}>
+              <Pressable testID="m-memory-back" style={styles.iconButton} onPress={() => setMePage(null)}>
+                <ChevronLeft size={18} color={colors.text} />
+              </Pressable>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.listTitle}>记忆</Text>
+                <Text style={styles.listMeta}>{memories.length} 条 · 跨会话召回</Text>
+              </View>
+              <Pressable testID="m-memory-new" style={styles.iconButton} onPress={() => setMemoryDraft({ kind: 'fact', title: '', content: '' })}>
+                <Plus size={16} color={colors.text} />
+              </Pressable>
+            </View>
             <View style={styles.searchRow}>
               <Search size={14} color={colors.muted} />
               <TextInput
@@ -1416,12 +1507,35 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
           </View>
         ) : null}
 
-        {tab === 'settings' ? (
-          <SettingsScreen client={client} boot={boot} config={config} mode={mode} connected={connected} onDisconnect={onDisconnect} onMode={setMode} themeMode={themeMode} resolvedTheme={resolvedTheme} onThemeMode={onThemeMode} locale={locale} onLocale={onLocale} />
+        {tab === 'me' && mePage === 'settings' ? (
+          <SettingsScreen client={client} boot={boot} config={config} mode={mode} connected={connected} onDisconnect={onDisconnect} onMode={setMode} themeMode={themeMode} resolvedTheme={resolvedTheme} onThemeMode={onThemeMode} locale={locale} onLocale={onLocale} onBack={() => setMePage(null)} />
+        ) : null}
+
+        {tab === 'me' && !mePage ? (
+          <MeScreen
+            boot={boot}
+            config={config}
+            connections={connections}
+            activeConnection={activeConnection}
+            memories={memories}
+            connected={connected}
+            themeMode={themeMode}
+            locale={locale}
+            onOpen={(page) => setMePage(page)}
+          />
         ) : null}
       </View>
 
-      <BottomTabs tab={tab} setTab={setTab} busy={busy} bottom={insets.bottom} />
+      <BottomTabs
+        tab={tab}
+        setTab={(next) => {
+          if (next === 'me') setMePage(null);
+          if (next === 'chat') setChatPage(null);
+          setTab(next);
+        }}
+        busy={busy}
+        bottom={insets.bottom}
+      />
 
       {memoryDraft ? (
         <Modal visible transparent animationType="slide" onRequestClose={() => setMemoryDraft(null)}>
@@ -1495,7 +1609,10 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
           <View style={styles.modalBackdrop}>
             <View style={[styles.sheet, { paddingBottom: insets.bottom + 14, maxHeight: '70%' }]}>
               <View style={styles.sheetHead}>
-                <Text style={styles.sheetTitle}>选择数据库</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.sheetTitle}>选择数据库</Text>
+                  <Text style={styles.listMeta}>{activeConnection?.name ?? ''}{databases.length ? ` · ${databases.length} 个库` : ''}</Text>
+                </View>
                 <Pressable testID="m-databases-close" style={styles.iconButton} onPress={() => setPicker(null)}>
                   <X size={16} color={colors.text} />
                 </Pressable>
@@ -1530,7 +1647,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
               <View style={styles.sheetHead}>
                 <Text style={styles.sheetTitle}>会话</Text>
                 <Pressable style={styles.primarySmall} onPress={() => void newSession()}>
-                  <Plus size={13} color="#0b0d0d" />
+                  <Plus size={13} color={colors.onSolid} />
                   <Text style={styles.primarySmallText}>新会话</Text>
                 </Pressable>
                 <Pressable testID="m-sessions-close" style={styles.iconButton} onPress={() => setPicker(null)}>
@@ -1652,23 +1769,28 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
             <View style={[styles.sheet, { paddingBottom: insets.bottom + 14 }]}>
               <View style={styles.sheetHead}>
                 <Text style={styles.sheetTitle}>选择连接</Text>
-                <Pressable style={styles.iconButton} onPress={() => setPicker(null)}>
+                <Pressable testID="m-connections-close" style={styles.iconButton} onPress={() => setPicker(null)}>
                   <X size={16} color={colors.text} />
                 </Pressable>
               </View>
               {connections.map((conn) => (
                 <Pressable
                   key={conn.id}
+                  testID={`m-connection-${conn.id}`}
                   style={[styles.sessionRow, conn.id === activeConnectionId && { backgroundColor: colors.accentSoft }]}
                   onPress={() => {
+                    if (conn.id !== activeConnectionId) pendingDatabasePickerRef.current = true;
                     setActiveConnectionId(conn.id);
                     setPicker(null);
                   }}
                 >
-                  <Database size={14} color={colors.accent} />
+                  <EngineLogo engine={conn.engine} size={16} />
                   <View style={{ flex: 1 }}>
                     <Text style={styles.listTitle}>{conn.name}</Text>
-                    <Text style={styles.listMeta}>{conn.engine} · {conn.environment}</Text>
+                    <Text style={styles.listMeta}>
+                      {conn.engine} · {conn.environment}
+                      {conn.id === activeConnectionId && activeDatabase ? ` · ${activeDatabase}` : ''}
+                    </Text>
                   </View>
                   {conn.id === activeConnectionId ? <Check size={14} color={colors.success} /> : null}
                 </Pressable>
@@ -1904,7 +2026,7 @@ function ChatScreen({
           <Text style={styles.chatTitle} numberOfLines={1}>{sessionMeta?.title ?? 'AI 助手'}</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 1 }}>
             <Pressable testID="m-connection" style={styles.connInline} onPress={onOpenConnections}>
-              <Database size={11} color={colors.muted} />
+              <EngineLogo engine={connection?.engine} size={14} />
               <Text style={styles.listMeta} numberOfLines={1}>{connection?.name ?? '未选择连接'}</Text>
               <ChevronDown size={11} color={colors.muted} />
             </Pressable>
@@ -2032,15 +2154,6 @@ function ChatScreen({
           </View>
         ) : null}
         <View style={styles.inputBox}>
-          <Pressable style={styles.iconButton} onPress={onOpenCommands} testID="m-commands">
-            <TerminalSquare size={15} color={colors.accent} />
-          </Pressable>
-          <Pressable style={styles.iconButton} onPress={onOpenTables}>
-            <AtSign size={15} color={colors.muted} />
-          </Pressable>
-          <Pressable style={styles.iconButton} onPress={onPickImage} disabled={uploadingImage || pendingImages.length >= 4} testID="m-image">
-            {uploadingImage ? <ActivityIndicator size="small" color={colors.accent} /> : <ImagePlus size={15} color={colors.muted} />}
-          </Pressable>
           <TextInput
             testID="m-chat-input"
             style={styles.chatInput}
@@ -2051,17 +2164,29 @@ function ChatScreen({
             multiline
             maxLength={6000}
           />
-          {busy ? (
-            <Pressable style={[styles.sendButton, { backgroundColor: colors.danger }]} onPress={onStop}>
-              <Square size={13} color="#0b0d0d" />
+          <View style={styles.inputToolbar}>
+            <Pressable style={styles.inputTool} onPress={onOpenCommands} testID="m-commands">
+              <TerminalSquare size={15} color={colors.accent} />
             </Pressable>
-          ) : (
-            <Pressable testID="m-send" style={[styles.sendButton, (!input.trim() || !connected) && { opacity: 0.4 }]} onPress={onSend} disabled={!input.trim() || !connected}>
-              <Send size={14} color="#0b0d0d" />
+            <Pressable style={styles.inputTool} onPress={onOpenTables}>
+              <AtSign size={15} color={colors.muted} />
             </Pressable>
-          )}
+            <Pressable style={styles.inputTool} onPress={onPickImage} disabled={uploadingImage || pendingImages.length >= 4} testID="m-image">
+              {uploadingImage ? <ActivityIndicator size="small" color={colors.accent} /> : <ImagePlus size={15} color={colors.muted} />}
+            </Pressable>
+            <View style={{ flex: 1 }} />
+            {busy ? (
+              <Pressable style={[styles.sendButton, { backgroundColor: colors.danger }]} onPress={onStop}>
+                <Square size={13} color={colors.onSolid} />
+              </Pressable>
+            ) : (
+              <Pressable testID="m-send" style={[styles.sendButton, (!input.trim() || !connected) && { opacity: 0.4 }]} onPress={onSend} disabled={!input.trim() || !connected}>
+                <Send size={14} color={colors.onSolid} />
+              </Pressable>
+            )}
+          </View>
         </View>
-        <Text style={styles.composerHint}>{modeLabels[mode]}模式 · Enter 发送 · @ 引用表</Text>
+        <Text style={styles.composerHint}>{translate(modeLabels[mode])}{translate('模式 · @ 引用表 · 图片随消息发送')}</Text>
       </View>
       <Modal visible={modelSheet} transparent animationType="slide" onRequestClose={() => setModelSheet(false)}>
         <View style={styles.modalBackdrop}>
@@ -2164,6 +2289,30 @@ function TableDataScreen({
   const editableColumns = (table.columns ?? []).filter((column) => !column.autoIncrement && !column.generated);
   const [draft, setDraft] = useState<{ mode: 'insert' | 'edit'; original?: Record<string, unknown>; values: Record<string, string> } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [viewMode, setViewMode] = useState<'grid' | 'cards'>('grid');
+  const [inspect, setInspect] = useState<{ row: unknown[]; index: number } | null>(null);
+  const gridHeaderRef = useRef<ScrollView>(null);
+  const gridBodyRef = useRef<ScrollView>(null);
+  const lastGridXRef = useRef(0);
+
+  const syncGridScroll = (x: number) => {
+    if (Math.abs(x - lastGridXRef.current) < 1) return;
+    lastGridXRef.current = x;
+    gridHeaderRef.current?.scrollTo({ x, animated: false });
+    gridBodyRef.current?.scrollTo({ x, animated: false });
+  };
+
+  const widthForColumn = (column: { name: string; type?: string; kind?: string }) => {
+    const type = (column.type ?? table.columns?.find((item) => item.name === column.name)?.type ?? '').toLowerCase();
+    if (column.kind === 'json' || column.kind === 'vector' || column.kind === 'geometry') return 200;
+    if (/(text|json|blob|clob|xml|enum|set)/.test(type)) return 190;
+    if (/(char|string)/.test(type)) return 160;
+    if (/(date|time|timestamp)/.test(type)) return 150;
+    if (/(bool|bit|int|double|float|decimal|numeric|number|real)/.test(type)) return 110;
+    return 140;
+  };
+
+  const gridWidth = 40 + (canWrite ? 58 : 0) + (result?.columns ?? []).reduce((sum, column) => sum + widthForColumn(column), 0);
 
   const valueOf = (row: unknown[], name: string): unknown => {
     const index = (result?.columns ?? []).findIndex((column) => column.name === name);
@@ -2249,6 +2398,82 @@ function TableDataScreen({
       </View>
       {loading ? <ActivityIndicator color={colors.accent} style={{ marginTop: 24 }} /> : null}
       {!canWrite && !connection?.readonly ? <Text style={[styles.hint, { paddingHorizontal: 14, paddingTop: 8 }]}>该表没有主键，无法按行编辑；可用 SQL 查询修改。</Text> : null}
+      <View style={styles.dataViewBar}>
+        <View style={styles.viewSwitch}>
+          <Pressable testID="m-data-view-grid" style={[styles.viewSwitchItem, viewMode === 'grid' && styles.viewSwitchActive]} onPress={() => setViewMode('grid')}>
+            <Text style={[styles.viewSwitchText, viewMode === 'grid' && styles.viewSwitchTextActive]}>表格</Text>
+          </Pressable>
+          <Pressable testID="m-data-view-cards" style={[styles.viewSwitchItem, viewMode === 'cards' && styles.viewSwitchActive]} onPress={() => setViewMode('cards')}>
+            <Text style={[styles.viewSwitchText, viewMode === 'cards' && styles.viewSwitchTextActive]}>卡片</Text>
+          </Pressable>
+        </View>
+        {viewMode === 'grid' ? <Text style={styles.listMeta}>左右滑动查看全部列 · 点行看详情</Text> : null}
+      </View>
+      {viewMode === 'grid' ? (
+        <View style={{ flex: 1 }}>
+          <ScrollView
+            horizontal
+            ref={gridHeaderRef}
+            onScroll={(event) => syncGridScroll(event.nativeEvent.contentOffset.x)}
+            scrollEventThrottle={16}
+            showsHorizontalScrollIndicator={false}
+            style={{ flexGrow: 0, flexShrink: 0, height: 32 }}
+          >
+            <View style={[styles.gridHeaderRow, { width: gridWidth }]}>
+              <Text style={[styles.gridHeadCell, { width: 40 }]}>#</Text>
+              {canWrite ? <Text style={[styles.gridHeadCell, { width: 58 }]}>操作</Text> : null}
+              {(result?.columns ?? []).map((column) => (
+                <Text key={column.name} style={[styles.gridHeadCell, { width: widthForColumn(column) }]} numberOfLines={1}>{column.name}</Text>
+              ))}
+            </View>
+          </ScrollView>
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 8 }}>
+            <ScrollView
+              horizontal
+              ref={gridBodyRef}
+              onScroll={(event) => syncGridScroll(event.nativeEvent.contentOffset.x)}
+              scrollEventThrottle={16}
+            >
+              <View>
+                {(result?.rows ?? []).map((row, rowIndex) => (
+                  <Pressable
+                    key={rowIndex}
+                    testID={`m-row-${rowIndex}`}
+                    style={[styles.gridRow, { width: gridWidth }, rowIndex % 2 === 1 && { backgroundColor: colors.elevated }]}
+                    onPress={() => setInspect({ row, index: rowIndex })}
+                  >
+                    <Text style={[styles.gridIndexCell, { width: 40 }]}>{offset + rowIndex + 1}</Text>
+                    {canWrite ? (
+                      <View style={[styles.gridActionCell, { width: 58 }]}>
+                        <Pressable testID={`m-row-edit-${rowIndex}`} hitSlop={8} style={styles.gridActionButton} onPress={() => startEdit(row)}>
+                          <Pencil size={12} color={colors.muted} />
+                        </Pressable>
+                        <Pressable testID={`m-row-delete-${rowIndex}`} hitSlop={8} style={styles.gridActionButton} onPress={() => void remove(row)}>
+                          <Trash2 size={12} color={colors.muted} />
+                        </Pressable>
+                      </View>
+                    ) : null}
+                    {(result?.columns ?? []).map((column, colIndex) => {
+                      const value = row[colIndex];
+                      const isNull = value === null || value === undefined;
+                      return (
+                        <Text
+                          key={column.name}
+                          style={[styles.gridCell, { width: widthForColumn(column) }, isNull && { color: colors.muted, fontStyle: 'italic' }]}
+                          numberOfLines={1}
+                        >
+                          {isNull ? 'NULL' : typeof value === 'object' ? JSON.stringify(value) : String(value)}
+                        </Text>
+                      );
+                    })}
+                  </Pressable>
+                ))}
+              </View>
+            </ScrollView>
+            {!loading && !(result?.rows ?? []).length ? <Text style={styles.hint}>没有数据</Text> : null}
+          </ScrollView>
+        </View>
+      ) : (
       <ScrollView contentContainerStyle={{ padding: 12, gap: 8, paddingBottom: 24 }}>
         {(result?.rows ?? []).map((row, rowIndex) => (
           <View key={rowIndex} style={styles.rowCard}>
@@ -2281,6 +2506,7 @@ function TableDataScreen({
         ))}
         {!loading && !(result?.rows ?? []).length ? <Text style={styles.hint}>没有数据</Text> : null}
       </ScrollView>
+      )}
       <View style={styles.pager}>
         <Pressable style={[styles.pagerButton, offset <= 0 && { opacity: 0.4 }]} disabled={offset <= 0} onPress={() => onPage(Math.max(0, offset - limit))}>
           <ChevronLeft size={14} color={colors.text} />
@@ -2327,6 +2553,62 @@ function TableDataScreen({
           </View>
         </Modal>
       ) : null}
+      {inspect ? (
+        <Modal visible transparent animationType="slide" onRequestClose={() => setInspect(null)}>
+          <View style={styles.modalBackdrop}>
+            <View style={[styles.sheet, { maxHeight: '86%' }]}>
+              <View style={styles.sheetHead}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.sheetTitle}>行详情</Text>
+                  <Text style={styles.listMeta}>{table.name} · #{offset + inspect.index + 1}</Text>
+                </View>
+                <Pressable testID="m-row-inspect-close" style={styles.iconButton} onPress={() => setInspect(null)}>
+                  <X size={16} color={colors.text} />
+                </Pressable>
+              </View>
+              <ScrollView contentContainerStyle={{ padding: 14, gap: 8 }}>
+                {(result?.columns ?? []).map((column, colIndex) => {
+                  const value = inspect.row[colIndex];
+                  return (
+                    <View key={column.name} style={styles.fieldRow}>
+                      <Text style={styles.fieldName}>{column.name}</Text>
+                      <Text style={styles.fieldValue}>
+                        {value === null || value === undefined ? 'NULL' : typeof value === 'object' ? JSON.stringify(value) : String(value)}
+                      </Text>
+                    </View>
+                  );
+                })}
+                {canWrite ? (
+                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
+                    <Pressable
+                      testID="m-row-inspect-edit"
+                      style={[styles.secondaryButton, { flex: 1 }]}
+                      onPress={() => {
+                        const row = inspect.row;
+                        setInspect(null);
+                        startEdit(row);
+                      }}
+                    >
+                      <Text style={styles.secondaryButtonText}>编辑</Text>
+                    </Pressable>
+                    <Pressable
+                      testID="m-row-inspect-delete"
+                      style={[styles.secondaryButton, { flex: 1, borderColor: colors.danger }]}
+                      onPress={() => {
+                        const row = inspect.row;
+                        setInspect(null);
+                        void remove(row);
+                      }}
+                    >
+                      <Text style={[styles.secondaryButtonText, { color: colors.danger }]}>删除</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+      ) : null}
     </View>
   );
 }
@@ -2344,6 +2626,7 @@ function SettingsScreen({
   onThemeMode,
   locale,
   onLocale,
+  onBack,
 }: {
   client: BridgeClient;
   boot: BootstrapData | null;
@@ -2357,6 +2640,7 @@ function SettingsScreen({
   onThemeMode: (mode: 'dark' | 'light' | 'system') => void;
   locale: Locale;
   onLocale: (locale: Locale) => void;
+  onBack: () => void;
 }) {
   const [skills, setSkills] = useState<Array<{ id: string; name: string; description: string; enabled: boolean; builtin?: boolean }>>([]);
   const [mcps, setMcps] = useState<Array<{ id: string; name: string; command: string; enabled: boolean; builtin?: boolean }>>([]);
@@ -2376,7 +2660,15 @@ function SettingsScreen({
   }, []);
   return (
     <View style={{ flex: 1 }}>
-      <ScreenHeading icon={<SettingsIcon size={16} color={colors.accent} />} title="设置" subtitle="Bridge 与 Agent" />
+      <View style={styles.tableHead}>
+        <Pressable testID="m-settings-back" style={styles.iconButton} onPress={onBack}>
+          <ChevronLeft size={18} color={colors.text} />
+        </Pressable>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.listTitle}>设置</Text>
+          <Text style={styles.listMeta}>Bridge 与 Agent</Text>
+        </View>
+      </View>
       <ScrollView contentContainerStyle={{ padding: 14, gap: 10 }}>
         <View style={styles.card}>
           <Text style={styles.sectionLabel}>BRIDGE</Text>
@@ -3073,29 +3365,57 @@ function TableDesignScreen({
           <>
             <View style={styles.card}>
               <Text style={styles.sectionLabel}>列（{detail.columns?.length ?? 0}）</Text>
-              {(detail.columns ?? []).map((column) => (
-                <View key={column.name} style={styles.fieldRow}>
-                  <Text style={styles.fieldName}>{column.name}</Text>
-                  <Text style={styles.fieldValue}>{column.type}{column.primaryKey ? ' · PK' : ''}{column.nullable ? '' : ' · NOT NULL'}</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator>
+                <View>
+                  <View style={styles.schemaHeaderRow}>
+                    <Text style={[styles.schemaHeadCell, { width: 112 }]}>列名</Text>
+                    <Text style={[styles.schemaHeadCell, { width: 124 }]}>类型</Text>
+                    <Text style={[styles.schemaHeadCell, { width: 34 }]}>键</Text>
+                    <Text style={[styles.schemaHeadCell, { width: 44 }]}>可空</Text>
+                    <Text style={[styles.schemaHeadCell, { width: 120 }]}>默认值</Text>
+                  </View>
+                  {(detail.columns ?? []).map((column) => (
+                    <View key={column.name} style={styles.schemaRow}>
+                      <Text style={[styles.schemaCell, { width: 112, color: colors.text }]} numberOfLines={1}>{column.name}</Text>
+                      <Text style={[styles.schemaCell, { width: 124 }]} numberOfLines={1}>{column.type}</Text>
+                      <Text style={[styles.schemaCell, { width: 34 }, column.primaryKey && { color: colors.accent, fontWeight: '600' }]}>{column.primaryKey ? 'PK' : '—'}</Text>
+                      <Text style={[styles.schemaCell, { width: 44 }]}>{column.nullable ? 'YES' : 'NO'}</Text>
+                      <Text style={[styles.schemaCell, { width: 120 }]} numberOfLines={1}>{column.defaultValue === null || column.defaultValue === undefined ? '—' : String(column.defaultValue)}</Text>
+                    </View>
+                  ))}
                 </View>
-              ))}
+              </ScrollView>
             </View>
             <View style={styles.card}>
               <Text style={styles.sectionLabel}>索引（{detail.indexes?.length ?? 0}）</Text>
-              {(detail.indexes ?? []).map((index) => (
-                <View key={index.name} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <Text style={[styles.listMeta, { flex: 1 }]}>{index.name} · {index.columns.join(', ')}{index.unique ? ' · UNIQUE' : ''}</Text>
-                  <Pressable
-                    style={styles.modeChip}
-                    onPress={async () => {
-                      if (!(await confirmAction('删除索引', index.name, '删除'))) return;
-                      await exec(`DROP INDEX ${quoteIdent(index.name, engine)}`, '索引已删除');
-                    }}
-                  >
-                    <Text style={styles.modeChipText}>删除</Text>
-                  </Pressable>
+              <ScrollView horizontal showsHorizontalScrollIndicator>
+                <View>
+                  <View style={styles.schemaHeaderRow}>
+                    <Text style={[styles.schemaHeadCell, { width: 140 }]}>名称</Text>
+                    <Text style={[styles.schemaHeadCell, { width: 110 }]}>列</Text>
+                    <Text style={[styles.schemaHeadCell, { width: 40 }]}>唯一</Text>
+                    <Text style={[styles.schemaHeadCell, { width: 50 }]}>操作</Text>
+                  </View>
+                  {(detail.indexes ?? []).map((index) => (
+                    <View key={index.name} style={styles.schemaRow}>
+                      <Text style={[styles.schemaCell, { width: 140, color: colors.text }]} numberOfLines={1}>{index.name}</Text>
+                      <Text style={[styles.schemaCell, { width: 110 }]} numberOfLines={1}>{index.columns.join(', ')}</Text>
+                      <Text style={[styles.schemaCell, { width: 40 }]}>{index.unique ? 'YES' : '—'}</Text>
+                      <View style={[styles.schemaActionCell, { width: 50 }]}>
+                        <Pressable
+                          style={styles.modeChip}
+                          onPress={async () => {
+                            if (!(await confirmAction('删除索引', index.name, '删除'))) return;
+                            await exec(`DROP INDEX ${quoteIdent(index.name, engine)}`, '索引已删除');
+                          }}
+                        >
+                          <Text style={styles.modeChipText}>删除</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  ))}
                 </View>
-              ))}
+              </ScrollView>
             </View>
             <View style={styles.card}>
               <Text style={styles.sectionLabel}>加列</Text>
@@ -3860,48 +4180,29 @@ function CommandScreen({ client, connections, activeConnection, onBack }: { clie
   );
 }
 
-const QUICK_PROMPTS = [
-  '给当前数据库做一次完整体检，并列出可修复项',
-  '生成当前库的数据字典摘要',
-  '备份当前数据库',
-  '统计每张表的行数并画柱状图',
-  '找出最近失败或很慢的查询',
-  '对比当前库与另一个库的结构差异',
-];
-
 function ToolsScreen({
   connection,
   database,
-  connections,
   tables,
-  sessions,
-  memories,
-  onRunPrompt,
-  onRunCommand,
   onOpen,
 }: {
   connection?: ConnectionConfig;
   database?: string;
-  connections: ConnectionConfig[];
   tables: TableInfo[];
-  sessions: AgentSessionMeta[];
-  memories: Memory[];
-  onRunPrompt: (text: string) => void;
-  onRunCommand: (id: string) => void;
-  onOpen: (page: 'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'dictionary' | 'monitor' | 'search' | 'history' | 'audit' | 'artifacts' | 'users' | 'commands') => void;
+  onOpen: (page: 'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'dictionary' | 'monitor' | 'search' | 'history' | 'audit' | 'artifacts' | 'users') => void;
 }) {
   return (
     <View style={{ flex: 1 }}>
-      <ScreenHeading icon={<Wrench size={16} color={colors.accent} />} title="工具箱" subtitle="命令与快捷巡检" />
+      <ScreenHeading icon={<Wrench size={16} color={colors.accent} />} title="工具箱" subtitle="当前库的数据库工具" />
       <ScrollView contentContainerStyle={{ padding: 14, gap: 8 }}>
         <View style={styles.card}>
           <Text style={styles.sectionLabel}>当前上下文</Text>
           <Text style={[styles.settingValue, { marginTop: 4 }]}>
             {connection?.name ?? '未选择连接'}
-            {database && connections.length ? ` / ${database}` : ''}
+            {database ? ` / ${database}` : ''}
           </Text>
           <Text style={styles.listMeta}>
-            {connection?.engine ?? '未连接'} · {tables.length} 个对象 · {sessions.length} 个会话 · {memories.length} 条记忆
+            {connection?.engine ?? '未连接'} · {tables.length} 个对象
           </Text>
         </View>
         <Text style={styles.sectionLabel}>数据工具</Text>
@@ -3918,7 +4219,6 @@ function ToolsScreen({
           { page: 'audit' as const, label: '审计日志', desc: '谁在什么时候改了什么', icon: <ShieldAlert size={15} color={colors.accent} /> },
           { page: 'artifacts' as const, label: '报告与产物', desc: '报告/对比结果与导出', icon: <FileCode2 size={15} color={colors.accent} /> },
           { page: 'users' as const, label: '用户与权限', desc: '账户列表、创建、授权与删除', icon: <Users size={15} color={colors.accent} /> },
-          { page: 'commands' as const, label: '命令工作流', desc: '报告/对比/对账/体检的表单化运行', icon: <TerminalSquare size={15} color={colors.accent} /> },
         ].map((entry) => (
           <Pressable key={entry.page} testID={`m-tool-${entry.page}`} style={styles.listRow} onPress={() => onOpen(entry.page)}>
             {entry.icon}
@@ -3929,25 +4229,63 @@ function ToolsScreen({
             <ChevronRight size={14} color={colors.muted} />
           </Pressable>
         ))}
-        <Text style={styles.sectionLabel}>Agent 命令</Text>
-        {COMMANDS.map((command) => (
-          <Pressable key={command.id} testID={`m-tool-command-${command.id}`} style={styles.listRow} onPress={() => onRunCommand(command.id)}>
-            <TerminalSquare size={15} color={colors.agent} />
+      </ScrollView>
+    </View>
+  );
+}
+
+function MeScreen({
+  boot,
+  config,
+  connections,
+  activeConnection,
+  memories,
+  connected,
+  themeMode,
+  locale,
+  onOpen,
+}: {
+  boot: BootstrapData | null;
+  config: BridgeConfig;
+  connections: ConnectionConfig[];
+  activeConnection?: ConnectionConfig;
+  memories: Memory[];
+  connected: boolean;
+  themeMode: 'dark' | 'light' | 'system';
+  locale: Locale;
+  onOpen: (page: 'memory' | 'connections' | 'settings') => void;
+}) {
+  const entries = [
+    { page: 'memory' as const, icon: <Brain size={17} color={colors.agent} />, title: '记忆', desc: `${memories.length} 条 · 跨会话召回` },
+    { page: 'connections' as const, icon: <Database size={17} color={colors.accent} />, title: '连接', desc: `${connections.length} 个 · 当前 ${activeConnection?.name ?? '未选择'}` },
+    { page: 'settings' as const, icon: <SettingsIcon size={17} color={colors.accent} />, title: '设置', desc: 'Bridge、设备、扩展、主题与语言' },
+  ];
+  return (
+    <View style={{ flex: 1 }}>
+      <ScreenHeading icon={<User size={16} color={colors.accent} />} title="我的" subtitle="记忆、连接与设置" />
+      <ScrollView contentContainerStyle={{ padding: 14, gap: 10 }}>
+        <View style={styles.card}>
+          <Text style={styles.sectionLabel}>BRIDGE</Text>
+          <Text style={[styles.settingValue, { marginTop: 4 }]}>{config.baseUrl}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 }}>
+            <View style={[styles.statusDot, { backgroundColor: connected ? colors.success : colors.warning }]} />
+            <Text style={styles.listMeta}>{connected ? 'WebSocket 已连接' : '正在重连'} · v{boot?.version ?? '0.1.0'}</Text>
+          </View>
+        </View>
+        {entries.map((entry) => (
+          <Pressable key={entry.page} testID={`m-me-${entry.page}`} style={styles.listRow} onPress={() => onOpen(entry.page)}>
+            {entry.icon}
             <View style={{ flex: 1 }}>
-              <Text style={styles.listTitle}>{command.title.zh}</Text>
-              <Text style={styles.listMeta} numberOfLines={1}>{command.description.zh}</Text>
+              <Text style={styles.listTitle}>{entry.title}</Text>
+              <Text style={styles.listMeta} numberOfLines={1}>{entry.desc}</Text>
             </View>
             <ChevronRight size={14} color={colors.muted} />
           </Pressable>
         ))}
-        <Text style={styles.sectionLabel}>常用任务</Text>
-        {QUICK_PROMPTS.map((prompt) => (
-          <Pressable key={prompt} style={styles.listRow} onPress={() => onRunPrompt(prompt)}>
-            <Sparkles size={15} color={colors.agent} />
-            <Text style={[styles.listTitle, { flex: 1 }]}>{prompt}</Text>
-            <ChevronRight size={14} color={colors.muted} />
-          </Pressable>
-        ))}
+        <View style={styles.noteCard}>
+          <ShieldAlert size={14} color={colors.muted} />
+          <Text style={styles.hint}>主题：{themeMode === 'system' ? '跟随系统' : themeMode === 'light' ? '浅色' : '深色'} · 语言：{locale === 'en' ? 'English' : '中文'}</Text>
+        </View>
       </ScrollView>
     </View>
   );
@@ -3958,9 +4296,7 @@ function BottomTabs({ tab, setTab, busy, bottom }: { tab: TabKey; setTab: (tab: 
     { key: 'chat', label: '对话', icon: <Sparkles size={17} color={tab === 'chat' ? colors.agent : colors.muted} /> },
     { key: 'data', label: '数据', icon: <Table2 size={17} color={tab === 'data' ? colors.accent : colors.muted} /> },
     { key: 'tools', label: '工具', icon: <Wrench size={17} color={tab === 'tools' ? colors.accent : colors.muted} /> },
-    { key: 'connections', label: '连接', icon: <Database size={17} color={tab === 'connections' ? colors.accent : colors.muted} /> },
-    { key: 'memory', label: '记忆', icon: <Brain size={17} color={tab === 'memory' ? colors.agent : colors.muted} /> },
-    { key: 'settings', label: '设置', icon: <SettingsIcon size={17} color={tab === 'settings' ? colors.accent : colors.muted} /> },
+    { key: 'me', label: '我的', icon: <User size={17} color={tab === 'me' ? colors.accent : colors.muted} /> },
   ];
   return (
     <View style={[styles.bottomTabs, { paddingBottom: Math.max(bottom, 6) }]}>
@@ -3970,7 +4306,7 @@ function BottomTabs({ tab, setTab, busy, bottom }: { tab: TabKey; setTab: (tab: 
             {item.icon}
             {item.key === 'chat' && busy ? <View style={styles.busyDot} /> : null}
           </View>
-          <Text style={[styles.bottomLabel, tab === item.key && { color: item.key === 'chat' || item.key === 'memory' ? colors.agent : colors.accent }]}>{item.label}</Text>
+          <Text style={[styles.bottomLabel, tab === item.key && { color: item.key === 'chat' ? colors.agent : colors.accent }]}>{item.label}</Text>
         </Pressable>
       ))}
     </View>
@@ -4045,11 +4381,11 @@ interface ChartShape {
   heatmap?: { xLabels: string[]; yLabels: string[]; values: number[][] };
 }
 
-const CHART_COLORS = () => [colors.accent, colors.agent, colors.warning, colors.success, colors.danger, colors.cyan, colors.secondary];
+const CHART_COLORS = chartPalette;
 
 function MobileChart({ chart }: { chart: ChartShape }) {
   const series = (chart.series ?? []).slice(0, 12);
-  const palette = CHART_COLORS();
+  const palette = CHART_COLORS;
   const W = 320;
   const H = 150;
   const type = chart.type ?? 'bar';
@@ -4067,9 +4403,9 @@ function MobileChart({ chart }: { chart: ChartShape }) {
         {[0, 0.5, 1].map((ratio) => (
           <Line key={ratio} x1={10} y1={15 + (H - 30) * ratio} x2={W - 10} y2={15 + (H - 30) * ratio} stroke={colors.border} strokeWidth={1} />
         ))}
-        <Polyline points={points} fill="none" stroke={colors.accent} strokeWidth={2} />
+        <Polyline points={points} fill="none" stroke={palette[0]} strokeWidth={2} />
         {series.map((point, index) => (
-          <Circle key={point.label} cx={10 + index * step} cy={scale(Number(point.value) || 0)} r={3} fill={colors.agent} />
+          <Circle key={point.label} cx={10 + index * step} cy={scale(Number(point.value) || 0)} r={3} fill={palette[0]} />
         ))}
         <SvgText x={10} y={H - 3} fill={colors.muted} fontSize={8}>{String(series[0]?.label ?? '').slice(0, 10)}</SvgText>
         <SvgText x={W - 10} y={H - 3} fill={colors.muted} fontSize={8} textAnchor="end">{String(series[series.length - 1]?.label ?? '').slice(0, 10)}</SvgText>
@@ -4106,7 +4442,7 @@ function MobileChart({ chart }: { chart: ChartShape }) {
         <Line x1={12} y1={H - 15} x2={W - 10} y2={H - 15} stroke={colors.border} strokeWidth={1} />
         <Line x1={12} y1={15} x2={12} y2={H - 15} stroke={colors.border} strokeWidth={1} />
         {chart.points.slice(0, 120).map((point, index) => (
-          <Circle key={index} cx={12 + ((Number(point.x) || 0) / xMax) * (W - 24)} cy={H - 15 - ((Number(point.y) || 0) / yMax) * (H - 30)} r={2.5} fill={colors.accent} fillOpacity={0.75} />
+          <Circle key={index} cx={12 + ((Number(point.x) || 0) / xMax) * (W - 24)} cy={H - 15 - ((Number(point.y) || 0) / yMax) * (H - 30)} r={2.5} fill={palette[0]} fillOpacity={0.75} />
         ))}
       </>
     );
@@ -4114,6 +4450,7 @@ function MobileChart({ chart }: { chart: ChartShape }) {
     const { xLabels, yLabels, values } = chart.heatmap;
     const flat = values.flat().map((value) => Number(value) || 0);
     const heatMax = Math.max(1, ...flat);
+    const heatMin = Math.min(0, ...flat);
     const cellW = (W - 20) / Math.max(1, xLabels.length);
     const cellH = (H - 22) / Math.max(1, yLabels.length);
     body = values.slice(0, yLabels.length).map((row, y) =>
@@ -4125,13 +4462,12 @@ function MobileChart({ chart }: { chart: ChartShape }) {
           width={Math.max(1, cellW - 2)}
           height={Math.max(1, cellH - 2)}
           rx={2}
-          fill={colors.accent}
-          fillOpacity={0.12 + 0.78 * ((Number(value) || 0) / heatMax)}
+          fill={heatTone(((Number(value) || 0) - heatMin) / (heatMax - heatMin || 1))}
         />
       )),
     );
     legend = [
-      { label: `${xLabels[0] ?? ''} …`, value: 0, color: colors.accent },
+      { label: `${xLabels[0] ?? ''} …`, value: 0, color: palette[0] },
       { label: `${yLabels[0] ?? ''} …`, value: 0, color: colors.muted },
     ];
   } else if (type === 'radar' && series.length >= 3) {
@@ -4148,7 +4484,7 @@ function MobileChart({ chart }: { chart: ChartShape }) {
         {[0.33, 0.66, 1].map((ratio) => (
           <Circle key={ratio} cx={cx} cy={cy} r={r * ratio} fill="none" stroke={colors.border} strokeWidth={1} />
         ))}
-        <Polyline points={points} fill={colors.accent} fillOpacity={0.18} stroke={colors.accent} strokeWidth={2} />
+        <Polyline points={points} fill={palette[0]} fillOpacity={0.18} stroke={palette[0]} strokeWidth={2} />
       </>
     );
     legend = series.slice(0, 4).map((point, index) => ({ label: point.label, value: point.value, color: palette[index] }));
@@ -4316,12 +4652,6 @@ function Markdown({ text }: { text: string }) {
 
 const makeStyles = () => StyleSheet.create({
   splash: { flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' },
-  logo: { width: 48, height: 48, borderRadius: 14, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
-  logoText: { color: '#fff', fontWeight: '800', fontSize: 17 },
-  logoLarge: { width: 64, height: 64, borderRadius: 18, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center', alignSelf: 'center' },
-  logoLargeText: { color: '#fff', fontWeight: '800', fontSize: 23 },
-  logoSmall: { width: 30, height: 30, borderRadius: 9, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
-  logoSmallText: { color: '#fff', fontWeight: '800', fontSize: 11 },
   pairWrap: { paddingHorizontal: 20, flexGrow: 1, justifyContent: 'center' },
   pairTitle: { fontSize: 24, fontWeight: '700', color: colors.text, textAlign: 'center', marginTop: 16, letterSpacing: -0.5 },
   pairSubtitle: { color: colors.secondary, textAlign: 'center', fontSize: 12.5, lineHeight: 19, marginTop: 8, marginBottom: 24 },
@@ -4342,13 +4672,13 @@ const makeStyles = () => StyleSheet.create({
   hint: { color: colors.muted, fontSize: 11, lineHeight: 17, marginTop: 4 },
   error: { color: colors.danger, fontSize: 11.5, marginTop: 8, lineHeight: 17 },
   primaryButton: { height: 42, borderRadius: radius.md, backgroundColor: colors.agent, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, marginTop: 14 },
-  primaryButtonText: { color: '#1a120d', fontWeight: '700', fontSize: 13 },
+  primaryButtonText: { color: colors.onSolid, fontWeight: '700', fontSize: 13 },
   secondaryButton: { height: 40, borderRadius: radius.md, borderWidth: 1, borderColor: colors.borderStrong, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.panel },
   secondaryButtonText: { color: colors.secondary, fontSize: 12.5 },
   paleButton: { height: 40, borderRadius: radius.md, backgroundColor: colors.elevated, alignItems: 'center', justifyContent: 'center' },
   paleButtonText: { color: colors.text, fontSize: 12.5 },
   primarySmall: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.agent, paddingHorizontal: 9, height: 26, borderRadius: 7 },
-  primarySmallText: { color: '#1a120d', fontSize: 11, fontWeight: '600' },
+  primarySmallText: { color: colors.onSolid, fontSize: 11, fontWeight: '600' },
   segment: { flexDirection: 'row', backgroundColor: colors.elevated, borderRadius: radius.md, padding: 3, marginTop: 10, marginBottom: 6 },
   segmentItem: { flex: 1, height: 30, alignItems: 'center', justifyContent: 'center', borderRadius: 7 },
   segmentActive: { backgroundColor: colors.bg },
@@ -4358,8 +4688,8 @@ const makeStyles = () => StyleSheet.create({
   pairNoteText: { flex: 1, color: colors.muted, fontSize: 10.5, lineHeight: 16 },
 
   app: { flex: 1, backgroundColor: colors.bg },
-  topSafe: { backgroundColor: colors.panel },
-  topbar: { height: 52, backgroundColor: colors.panel, borderBottomWidth: 1, borderBottomColor: colors.border, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  topSafe: { backgroundColor: colors.chrome },
+  topbar: { height: 52, backgroundColor: colors.chrome, borderBottomWidth: 1, borderBottomColor: colors.border, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 8 },
   brandRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
   brand: { color: colors.text, fontSize: 13, fontWeight: '700' },
   brandSub: { color: colors.muted, fontSize: 9.5, marginTop: 1 },
@@ -4432,13 +4762,36 @@ const makeStyles = () => StyleSheet.create({
   modeChipActive: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
   modeChipText: { color: colors.muted, fontSize: 9.5 },
   modeHint: { justifyContent: 'center', marginLeft: 'auto', paddingHorizontal: 4 },
-  inputBox: { flexDirection: 'row', alignItems: 'flex-end', gap: 4, backgroundColor: colors.elevated, borderWidth: 1, borderColor: colors.borderStrong, borderRadius: radius.lg, paddingHorizontal: 4, paddingVertical: 4 },
-  chatInput: { flex: 1, minHeight: 36, maxHeight: 120, color: colors.text, fontSize: 12.5, lineHeight: 18, paddingTop: 8, paddingBottom: 8, paddingHorizontal: 4 },
-  sendButton: { width: 34, height: 34, borderRadius: 10, backgroundColor: colors.agent, alignItems: 'center', justifyContent: 'center', marginBottom: 1 },
+  inputBox: { gap: 3, backgroundColor: colors.elevated, borderWidth: 1, borderColor: colors.borderStrong, borderRadius: radius.lg, paddingHorizontal: 6, paddingTop: 3, paddingBottom: 4 },
+  chatInput: { width: '100%', minHeight: 38, maxHeight: 120, color: colors.text, fontSize: 13, lineHeight: 19, paddingTop: 7, paddingBottom: 4, paddingHorizontal: 5 },
+  inputToolbar: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  inputTool: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  sendButton: { width: 32, height: 32, borderRadius: 9, backgroundColor: colors.agent, alignItems: 'center', justifyContent: 'center' },
   composerHint: { color: colors.muted, fontSize: 9, marginTop: 5, marginBottom: 6, textAlign: 'center' },
 
   screenHeading: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 14, height: 52, borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.panel },
   screenTitle: { color: colors.text, fontSize: 14, fontWeight: '600' },
+  dataToolbar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.panel },
+  dataChip: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 32, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.elevated, paddingHorizontal: 9 },
+  dataChipText: { flex: 1, color: colors.secondary, fontSize: 11.5 },
+  dataViewBar: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.panel },
+  viewSwitch: { flexDirection: 'row', backgroundColor: colors.elevated, borderRadius: radius.sm, padding: 2 },
+  viewSwitchItem: { paddingHorizontal: 12, height: 26, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' },
+  viewSwitchActive: { backgroundColor: colors.panel },
+  viewSwitchText: { color: colors.muted, fontSize: 11 },
+  viewSwitchTextActive: { color: colors.text, fontWeight: '600' },
+  gridHeaderRow: { flexDirection: 'row', alignItems: 'center', height: 32, backgroundColor: colors.elevated, borderBottomWidth: 1, borderBottomColor: colors.borderStrong },
+  gridHeadCell: { color: colors.muted, fontSize: 9.5, fontWeight: '600', paddingHorizontal: 8 },
+  gridRow: { flexDirection: 'row', alignItems: 'center', minHeight: 34, backgroundColor: colors.panel, borderBottomWidth: 1, borderBottomColor: colors.border },
+  gridCell: { color: colors.secondary, fontSize: 11, paddingHorizontal: 8, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
+  gridIndexCell: { color: colors.muted, fontSize: 9.5, paddingLeft: 8, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
+  gridActionCell: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 2 },
+  gridActionButton: { width: 26, height: 26, alignItems: 'center', justifyContent: 'center' },
+  schemaHeaderRow: { flexDirection: 'row', alignItems: 'center', height: 30, backgroundColor: colors.elevated, borderBottomWidth: 1, borderBottomColor: colors.borderStrong },
+  schemaRow: { flexDirection: 'row', alignItems: 'center', minHeight: 32, borderBottomWidth: 1, borderBottomColor: colors.border },
+  schemaHeadCell: { color: colors.muted, fontSize: 9.5, fontWeight: '600', paddingHorizontal: 8 },
+  schemaCell: { color: colors.secondary, fontSize: 10.5, paddingHorizontal: 8, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
+  schemaActionCell: { alignItems: 'flex-start', paddingLeft: 6 },
   listRow: { flexDirection: 'row', alignItems: 'center', gap: 9, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: 12, height: 52 },
   listTitle: { color: colors.text, fontSize: 12.5, fontWeight: '600' },
   listMeta: { color: colors.muted, fontSize: 10, marginTop: 1 },
@@ -4463,12 +4816,12 @@ const makeStyles = () => StyleSheet.create({
   pager: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 14, paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.panel },
   pagerButton: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.elevated },
 
-  bottomTabs: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.panel, paddingTop: 6 },
+  bottomTabs: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.chrome, paddingTop: 6 },
   bottomTab: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 2, paddingBottom: 2 },
   bottomLabel: { color: colors.muted, fontSize: 9 },
   busyDot: { position: 'absolute', right: -3, top: -1, width: 5, height: 5, borderRadius: 3, backgroundColor: colors.agent },
 
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(5,8,12,0.7)', justifyContent: 'flex-end' },
+  modalBackdrop: { flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' },
   sheet: { backgroundColor: colors.panel, borderTopLeftRadius: 16, borderTopRightRadius: 16, borderWidth: 1, borderColor: colors.borderStrong, padding: 14 },
   sheetHead: { flexDirection: 'row', alignItems: 'center', gap: 9, marginBottom: 10 },
   sheetTitle: { flex: 1, color: colors.text, fontSize: 14, fontWeight: '700' },
