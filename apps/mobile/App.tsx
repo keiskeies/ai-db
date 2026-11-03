@@ -22,6 +22,8 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Sharing from 'expo-sharing';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import {
+  Archive,
+  ArchiveRestore,
   AtSign,
   BarChart3,
   Brain,
@@ -50,6 +52,7 @@ import {
   Table2,
   TerminalSquare,
   Trash2,
+  Users,
   Wrench,
   X,
 } from 'lucide-react-native';
@@ -436,6 +439,8 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
   const [activeDatabase, setActiveDatabase] = useState<string | undefined>();
   const [tables, setTables] = useState<TableInfo[]>([]);
   const [sessions, setSessions] = useState<AgentSessionMeta[]>([]);
+  const [archivedSessions, setArchivedSessions] = useState<AgentSessionMeta[]>([]);
+  const [sessionView, setSessionView] = useState<'active' | 'archived'>('active');
   const [sessionId, setSessionId] = useState<string | undefined>();
   const [sessionMeta, setSessionMeta] = useState<AgentSessionMeta | undefined>();
   const [messages, setMessages] = useState<AgentMessage[]>([]);
@@ -457,7 +462,7 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
   const [memoryDraft, setMemoryDraft] = useState<{ id?: string; kind: string; title: string; content: string } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
-  const [toolPage, setToolPage] = useState<'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'dictionary' | 'monitor' | 'search' | 'history' | 'audit' | 'artifacts' | null>(null);
+  const [toolPage, setToolPage] = useState<'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'dictionary' | 'monitor' | 'search' | 'history' | 'audit' | 'artifacts' | 'users' | null>(null);
   const [toolTable, setToolTable] = useState<string | undefined>(undefined);
   const [toolSql, setToolSql] = useState<string | undefined>(undefined);
 
@@ -485,6 +490,15 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
     try {
       const result = await client.sessions();
       setSessions(result.sessions);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const refreshArchivedSessions = async () => {
+    try {
+      const result = await client.sessions(true);
+      setArchivedSessions(result.sessions);
     } catch {
       /* ignore */
     }
@@ -996,7 +1010,7 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
             onSend={() => void send()}
             onStop={() => void stop()}
             onNew={() => void newSession()}
-            onOpenSessions={() => setPicker('sessions')}
+            onOpenSessions={() => { setPicker('sessions'); setSessionView('active'); void refreshSessions(); void refreshArchivedSessions(); }}
             onOpenConnections={() => setPicker('connections')}
             onOpenTables={() => setPicker('tables')}
             onOpenCommands={() => setCommandOpen(true)}
@@ -1088,6 +1102,8 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
             <AuditScreen client={client} connection={activeConnection} onBack={() => setToolPage(null)} />
           ) : toolPage === 'artifacts' ? (
             <ArtifactsScreen client={client} onBack={() => setToolPage(null)} />
+          ) : toolPage === 'users' ? (
+            <UsersScreen client={client} connection={activeConnection} onBack={() => setToolPage(null)} />
           ) : (
             <ToolsScreen
               connection={activeConnection}
@@ -1360,8 +1376,15 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
                   autoCorrect={false}
                 />
               </View>
+              <View style={{ flexDirection: 'row', gap: 6, paddingHorizontal: 14, paddingBottom: 8 }}>
+                {(['active', 'archived'] as const).map((view) => (
+                  <Pressable key={view} style={[styles.modeChip, sessionView === view && styles.modeChipActive]} onPress={() => setSessionView(view)}>
+                    <Text style={[styles.modeChipText, sessionView === view && { color: colors.accent }]}>{view === 'active' ? `活跃 ${sessions.length}` : `已归档 ${archivedSessions.length}`}</Text>
+                  </Pressable>
+                ))}
+              </View>
               <ScrollView>
-                {sessions
+                {(sessionView === 'archived' ? archivedSessions : sessions)
                   .filter((session) => !sessionQuery.trim() || session.title.toLowerCase().includes(sessionQuery.trim().toLowerCase()))
                   .map((session) => (
                     <Pressable key={session.id} style={[styles.sessionRow, session.id === sessionId && { backgroundColor: colors.accentSoft }]} onPress={() => void openSession(session.id)}>
@@ -1370,6 +1393,27 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
                         <Text style={styles.listTitle} numberOfLines={1}>{session.title}</Text>
                         <Text style={styles.listMeta}>{timeAgo(session.updatedAt)} · {modeLabels[session.permissionMode]}</Text>
                       </View>
+                      <Pressable
+                        testID={`m-session-archive-${session.id}`}
+                        hitSlop={8}
+                        style={{ paddingHorizontal: 6 }}
+                        onPress={async () => {
+                          try {
+                            await client.updateSession(session.id, { archived: sessionView === 'active' });
+                            await refreshSessions();
+                            await refreshArchivedSessions();
+                            if (sessionView === 'active' && sessionId === session.id) {
+                              setSessionId(undefined);
+                              setSessionMeta(undefined);
+                              setMessages([]);
+                            }
+                          } catch (err: any) {
+                            notify('操作失败', err?.message ?? '');
+                          }
+                        }}
+                      >
+                        {sessionView === 'active' ? <Archive size={13} color={colors.muted} /> : <ArchiveRestore size={13} color={colors.muted} />}
+                      </Pressable>
                       <Pressable testID={`m-session-rename-${session.id}`} hitSlop={8} style={{ paddingHorizontal: 6 }} onPress={() => setRenameTarget({ id: session.id, title: session.title })}>
                         <Pencil size={13} color={colors.muted} />
                       </Pressable>
@@ -1414,6 +1458,7 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
                     try {
                       const result = await client.renameSession(renameTarget.id, title);
                       setSessions((prev) => prev.map((item) => (item.id === result.session.id ? result.session : item)));
+                      setArchivedSessions((prev) => prev.map((item) => (item.id === result.session.id ? result.session : item)));
                       if (sessionId === renameTarget.id) setSessionMeta(result.session);
                       setRenameTarget(null);
                     } catch (err: any) {
@@ -3214,6 +3259,128 @@ function ArtifactsScreen({ client, onBack }: { client: BridgeClient; onBack: () 
   );
 }
 
+function UsersScreen({ client, connection, onBack }: { client: BridgeClient; connection?: ConnectionConfig; onBack: () => void }) {
+  const [state, setState] = useState<{ supported: boolean; users: Array<{ name: string; host?: string; attributes: string[]; superuser?: boolean; disabled?: boolean }>; note?: string }>({ supported: false, users: [] });
+  const [draft, setDraft] = useState<{ action: 'create' | 'grant' | 'drop'; name: string; host: string; password: string; privileges: string; scope: string; role: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = async () => {
+    if (!connection) return;
+    try {
+      setState(await client.users(connection.id));
+    } catch (err: any) {
+      notify('加载失败', err?.message ?? '');
+    }
+  };
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connection?.id]);
+  const run = async () => {
+    if (!connection || !draft || !draft.name.trim()) return;
+    setBusy(true);
+    try {
+      const payload: Record<string, unknown> = { name: draft.name.trim(), host: draft.host.trim() || '%' };
+      if (draft.action === 'create') payload.password = draft.password;
+      if (draft.action === 'grant') {
+        payload.privileges = draft.privileges.trim() || 'SELECT';
+        payload.scope = draft.scope.trim() || '*.*';
+        payload.role = draft.role.trim() || payload.privileges;
+      }
+      const result = await client.userAction(connection.id, draft.action, payload);
+      notify('执行成功', (result.result.sql ?? []).join('\n'));
+      setDraft(null);
+      await load();
+    } catch (err: any) {
+      notify('执行失败', err?.message ?? '');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <View style={{ flex: 1 }}>
+      <View style={styles.tableHead}>
+        <Pressable testID="m-users-back" style={styles.iconButton} onPress={onBack}><ChevronLeft size={18} color={colors.text} /></Pressable>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.listTitle}>用户与权限</Text>
+          <Text style={styles.listMeta}>{connection?.name ?? '未选择连接'} · {state.supported ? `${state.users.length} 个账户` : '该引擎无服务器账户'}</Text>
+        </View>
+        {state.supported ? (
+          <Pressable testID="m-user-create" style={styles.primarySmall} onPress={() => setDraft({ action: 'create', name: '', host: '%', password: '', privileges: 'SELECT', scope: '*.*', role: '' })}>
+            <Text style={styles.primarySmallText}>创建账户</Text>
+          </Pressable>
+        ) : null}
+      </View>
+      <ScrollView contentContainerStyle={{ padding: 14, gap: 8 }}>
+        {!state.supported ? <Text style={styles.hint}>{state.note ?? '当前引擎不支持账户管理。'}</Text> : null}
+        {state.users.map((user) => (
+          <View key={`${user.name}@${user.host ?? ''}`} style={styles.rowCard}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Text style={[styles.listTitle, { flex: 1 }]}>{user.name}{user.host ? `@${user.host}` : ''}</Text>
+              {user.disabled ? <Text style={[styles.listMeta, { color: colors.warning }]}>已禁用</Text> : null}
+            </View>
+            <Text style={styles.listMeta}>{user.attributes.filter(Boolean).join(' · ') || '—'}{user.superuser ? ' · SUPERUSER' : ''}</Text>
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+              <Pressable
+                style={styles.modeChip}
+                onPress={() => setDraft({ action: 'grant', name: user.name, host: user.host ?? '%', password: '', privileges: 'SELECT', scope: '*.*', role: '' })}
+              >
+                <Text style={styles.modeChipText}>授权</Text>
+              </Pressable>
+              <Pressable
+                style={styles.modeChip}
+                onPress={async () => {
+                  if (!connection) return;
+                  if (!(await confirmAction('删除账户', `${user.name}${user.host ? '@' + user.host : ''}`, '删除'))) return;
+                  try {
+                    await client.userAction(connection.id, 'drop', { name: user.name, host: user.host ?? '%' });
+                    notify('已删除', '账户已删除');
+                    await load();
+                  } catch (err: any) {
+                    notify('删除失败', err?.message ?? '');
+                  }
+                }}
+              >
+                <Text style={[styles.modeChipText, { color: colors.danger }]}>删除</Text>
+              </Pressable>
+            </View>
+          </View>
+        ))}
+      </ScrollView>
+      {draft ? (
+        <Modal visible transparent animationType="slide" onRequestClose={() => setDraft(null)}>
+          <View style={styles.modalBackdrop}>
+            <View style={[styles.sheet, { maxHeight: '86%' }]}>
+              <View style={styles.sheetHead}>
+                <Text style={styles.sheetTitle}>{draft.action === 'create' ? '创建账户' : draft.action === 'grant' ? '授权' : '删除账户'}</Text>
+                <Pressable style={styles.iconButton} onPress={() => setDraft(null)}><X size={16} color={colors.text} /></Pressable>
+              </View>
+              <ScrollView contentContainerStyle={{ padding: 14, gap: 8 }}>
+                <TextInput style={styles.input} value={draft.name} onChangeText={(name) => setDraft({ ...draft, name })} placeholder="账户名" autoCapitalize="none" placeholderTextColor={colors.muted} />
+                {connection?.engine === 'mysql' || connection?.engine === 'mariadb' ? (
+                  <TextInput style={styles.input} value={draft.host} onChangeText={(host) => setDraft({ ...draft, host })} placeholder="主机，默认 %" autoCapitalize="none" placeholderTextColor={colors.muted} />
+                ) : null}
+                {draft.action === 'create' ? (
+                  <TextInput style={styles.input} value={draft.password} onChangeText={(password) => setDraft({ ...draft, password })} placeholder="密码（至少 4 位）" secureTextEntry placeholderTextColor={colors.muted} />
+                ) : null}
+                {draft.action === 'grant' ? (
+                  <>
+                    <TextInput style={styles.input} value={draft.privileges} onChangeText={(privileges) => setDraft({ ...draft, privileges })} placeholder="权限，如 SELECT / ALL PRIVILEGES" autoCapitalize="characters" placeholderTextColor={colors.muted} />
+                    <TextInput style={styles.input} value={draft.scope} onChangeText={(scope) => setDraft({ ...draft, scope })} placeholder="范围，如 db.* 或 *.*" autoCapitalize="none" placeholderTextColor={colors.muted} />
+                    <TextInput style={styles.input} value={draft.role} onChangeText={(role) => setDraft({ ...draft, role })} placeholder="角色（PostgreSQL/SQL Server 用），可选" autoCapitalize="none" placeholderTextColor={colors.muted} />
+                  </>
+                ) : null}
+                <Pressable style={[styles.primaryButton, busy && { opacity: 0.5 }]} disabled={busy} onPress={() => void run()}>
+                  <Text style={styles.primaryButtonText}>{busy ? '执行中…' : '执行'}</Text>
+                </Pressable>
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+      ) : null}
+    </View>
+  );
+}
+
 const QUICK_PROMPTS = [
   '给当前数据库做一次完整体检，并列出可修复项',
   '生成当前库的数据字典摘要',
@@ -3242,7 +3409,7 @@ function ToolsScreen({
   memories: Memory[];
   onRunPrompt: (text: string) => void;
   onRunCommand: (id: string) => void;
-  onOpen: (page: 'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'dictionary' | 'monitor' | 'search' | 'history' | 'audit' | 'artifacts') => void;
+  onOpen: (page: 'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'dictionary' | 'monitor' | 'search' | 'history' | 'audit' | 'artifacts' | 'users') => void;
 }) {
   return (
     <View style={{ flex: 1 }}>
@@ -3271,6 +3438,7 @@ function ToolsScreen({
           { page: 'history' as const, label: '查询历史', desc: '搜索、收藏、回填 SQL', icon: <History size={15} color={colors.accent} /> },
           { page: 'audit' as const, label: '审计日志', desc: '谁在什么时候改了什么', icon: <ShieldAlert size={15} color={colors.accent} /> },
           { page: 'artifacts' as const, label: '报告与产物', desc: '报告/对比结果与导出', icon: <FileCode2 size={15} color={colors.accent} /> },
+          { page: 'users' as const, label: '用户与权限', desc: '账户列表、创建、授权与删除', icon: <Users size={15} color={colors.accent} /> },
         ].map((entry) => (
           <Pressable key={entry.page} testID={`m-tool-${entry.page}`} style={styles.listRow} onPress={() => onOpen(entry.page)}>
             {entry.icon}

@@ -1138,11 +1138,11 @@ export class Store {
    * 产生的记录，按库过滤时藏起来会让用户以为历史丢了。
    */
   listSessions(
-    opts: number | { connectionId?: string; database?: string; limit?: number } = 60,
+    opts: number | { connectionId?: string; database?: string; limit?: number; archived?: boolean } = 60,
   ): AgentSessionMeta[] {
     const o = typeof opts === 'number' ? { limit: opts } : opts;
-    const where: string[] = ['archived = 0'];
-    const args: string[] = [];
+    const where: string[] = ['archived = ?'];
+    const args: Array<string | number> = [o.archived ? 1 : 0];
     if (o.connectionId) {
       where.push('connection_id = ?');
       args.push(o.connectionId);

@@ -137,8 +137,8 @@ export class BridgeClient {
     return this.request<BootstrapData>('/bootstrap');
   }
 
-  sessions() {
-    return this.request<{ sessions: AgentSessionMeta[] }>('/agent/sessions');
+  sessions(archived = false) {
+    return this.request<{ sessions: AgentSessionMeta[] }>(`/agent/sessions${archived ? '?archived=1' : ''}`);
   }
 
   updateSettings(patch: Partial<AppSettings>) {
@@ -292,6 +292,17 @@ export class BridgeClient {
 
   uploadAttachment(base64: string, mime: string) {
     return this.request<{ attachment: { id: string; mime: string; bytes: number } }>('/agent/attachments', { method: 'POST', body: JSON.stringify({ base64, mime }) });
+  }
+
+  users(connectionId: string) {
+    return this.request<{ supported: boolean; users: Array<{ name: string; host?: string; attributes: string[]; superuser?: boolean; login?: boolean; disabled?: boolean }>; note?: string }>(`/users?connectionId=${encodeURIComponent(connectionId)}`);
+  }
+
+  userAction(connectionId: string, action: 'create' | 'drop' | 'grant', payload: Record<string, unknown>) {
+    return this.request<{ result: { sql: string[] } }>('/users/action', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId, action, ...payload }),
+    });
   }
 
   search(connectionId: string, query: string, scope: 'objects' | 'data' | 'all', database?: string) {

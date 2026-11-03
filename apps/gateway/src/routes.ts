@@ -2273,6 +2273,7 @@ export function createApiRouter(deps: ApiDeps): Router {
       sessions: store.listSessions({
         connectionId: typeof req.query.connectionId === 'string' ? req.query.connectionId : undefined,
         database: typeof req.query.database === 'string' ? req.query.database : undefined,
+        archived: req.query.archived === '1',
       }),
     }),
   );
