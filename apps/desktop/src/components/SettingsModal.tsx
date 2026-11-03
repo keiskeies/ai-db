@@ -1043,6 +1043,15 @@ export function SettingsModal() {
                           </button>
                         </div>
                         <p className="hint">手机打开「扫码配对」扫描左侧二维码；也可填写 Bridge 地址：{pairing.url ?? `${pairing.host}:${pairing.port}`}，再输入上方配对码。远程访问请置于 TLS 反向代理之后（可用 AIDB_PUBLIC_URL 固定二维码地址）。</p>
+                        <button
+                          className="link-btn"
+                          onClick={() => {
+                            const target = pairing.url ?? `http://${pairing.host}:${pairing.port}`;
+                            void navigator.clipboard.writeText(`aidb://pair?url=${encodeURIComponent(target)}&code=${pairing.code}`);
+                          }}
+                        >
+                          复制 App 深链（aidb://pair）
+                        </button>
                         {/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])([:/]|$)/.test(pairing.url ?? '') ? (
                           <p className="hint" style={{ color: 'var(--warning)' }}>当前是回环地址，手机无法访问；请改用局域网地址，或通过 AIDB_PUBLIC_URL / 反向代理打开桌面端后再生成二维码。</p>
                         ) : null}

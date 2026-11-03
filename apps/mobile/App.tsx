@@ -10,8 +10,9 @@ import {
   ScrollView,
   StyleSheet,
   Switch,
-  Text,
-  TextInput,
+  useColorScheme,
+  Text as RNText,
+  TextInput as RNTextInput,
   View,
 } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -19,7 +20,10 @@ import { StatusBar } from 'expo-status-bar';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
+import * as Linking from 'expo-linking';
+import Zeroconf from 'react-native-zeroconf';
 import * as Sharing from 'expo-sharing';
+import Svg, { Circle, G, Line, Path, Polyline, Rect, Text as SvgText } from 'react-native-svg';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import {
   Archive,
@@ -84,7 +88,8 @@ import {
   type BridgeConfig,
   type DataPage,
 } from './src/bridge';
-import { colors, modeLabels, radius, riskColor, riskLabels } from './src/theme';
+import { colors, modeLabels, radius, riskColor, riskLabels, setPalette, type ThemeResolved } from './src/theme';
+import { setLocale, translate, type Locale } from './src/i18n';
 
 type TabKey = 'chat' | 'data' | 'tools' | 'connections' | 'memory' | 'settings';
 
@@ -119,6 +124,15 @@ interface ApprovalState {
   sql?: string;
 }
 
+function Text(props: React.ComponentProps<typeof RNText>) {
+  const children = React.Children.map(props.children, (child) => (typeof child === 'string' ? translate(child) : child));
+  return <RNText {...props}>{children}</RNText>;
+}
+
+function TextInput(props: React.ComponentProps<typeof RNTextInput>) {
+  return <RNTextInput {...props} placeholder={props.placeholder ? translate(props.placeholder) : props.placeholder} />;
+}
+
 const MODES: PermissionMode[] = ['readonly', 'ask', 'auto', 'full'];
 const modeDescriptions: Record<PermissionMode, string> = {
   readonly: '只查询，不允许任何写入或结构变更',
@@ -129,13 +143,15 @@ const modeDescriptions: Record<PermissionMode, string> = {
 
 /** RN Web 没有实现带按钮的 Alert：统一用浏览器原生确认/提示，避免按钮点了没反应。 */
 function notify(title: string, message: string): void {
+  const heading = translate(title);
+  const body = translate(message);
   if (Platform.OS === 'web') {
-    if (typeof window !== 'undefined') window.alert(`${title}
+    if (typeof window !== 'undefined') window.alert(`${heading}
 
-${message}`);
+${body}`);
     return;
   }
-  Alert.alert(title, message);
+  Alert.alert(heading, body);
 }
 
 async function shareBase64(base64: string, format: string): Promise<void> {
@@ -180,8 +196,8 @@ ${message}`) : false);
   }
   return new Promise((resolve) => {
     Alert.alert(
-      title,
-      message,
+      translate(title),
+      translate(message),
       [
         { text: '取消', style: 'cancel', onPress: () => resolve(false) },
         { text: confirmLabel, style: 'destructive', onPress: () => resolve(true) },
@@ -201,15 +217,48 @@ function timeAgo(iso?: string): string {
 }
 
 export default function App() {
+  const scheme = useColorScheme();
+  const [themeMode, setThemeMode] = useState<'dark' | 'light' | 'system'>(() => {
+    try {
+      const stored = typeof localStorage !== 'undefined' ? localStorage.getItem('aidb.mobile.theme') : null;
+      return stored === 'dark' || stored === 'light' || stored === 'system' ? stored : 'system';
+    } catch {
+      return 'system';
+    }
+  });
+  const resolvedTheme: ThemeResolved = themeMode === 'system' ? (scheme === 'light' ? 'light' : 'dark') : themeMode;
+  applyTheme(resolvedTheme);
+  const [locale, setLocaleState] = useState<Locale>(() => {
+    try {
+      return typeof localStorage !== 'undefined' && localStorage.getItem('aidb.mobile.locale') === 'en' ? 'en' : 'zh';
+    } catch {
+      return 'zh';
+    }
+  });
+  setLocale(locale);
+  useEffect(() => {
+    try {
+      if (typeof localStorage !== 'undefined') localStorage.setItem('aidb.mobile.locale', locale);
+    } catch {
+      /* ignore */
+    }
+  }, [locale]);
+  useEffect(() => {
+    try {
+      if (typeof localStorage !== 'undefined') localStorage.setItem('aidb.mobile.theme', themeMode);
+    } catch {
+      /* ignore */
+    }
+  }, [themeMode]);
   return (
     <SafeAreaProvider>
-      <StatusBar style="light" />
-      <Root />
+      <StatusBar style={resolvedTheme === 'light' ? 'dark' : 'light'} />
+      <Root themeMode={themeMode} resolvedTheme={resolvedTheme} onThemeMode={setThemeMode} locale={locale} onLocale={setLocaleState} />
     </SafeAreaProvider>
   );
 }
 
-function Root() {
+function Root({ themeMode, resolvedTheme, onThemeMode, locale, onLocale }: { themeMode: 'dark' | 'light' | 'system'; resolvedTheme: ThemeResolved; onThemeMode: (mode: 'dark' | 'light' | 'system') => void; locale: Locale; onLocale: (locale: Locale) => void }) {
   const [config, setConfig] = useState<BridgeConfig | null>(null);
   const [ready, setReady] = useState(false);
 
@@ -244,6 +293,11 @@ function Root() {
   return (
     <Main
       config={config}
+      themeMode={themeMode}
+      resolvedTheme={resolvedTheme}
+      onThemeMode={onThemeMode}
+      locale={locale}
+      onLocale={onLocale}
       onDisconnect={async () => {
         await clearBridgeConfig();
         setConfig(null);
@@ -260,8 +314,30 @@ function PairScreen({ onConnected }: { onConnected: (config: BridgeConfig) => vo
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const apply = (raw: string | null) => {
+      if (!raw) return;
+      try {
+        const parsed = Linking.parse(raw);
+        if (parsed.hostname !== 'pair' && parsed.path !== 'pair') return;
+        const params = (parsed.queryParams ?? {}) as Record<string, unknown>;
+        if (typeof params.url === 'string') setUrl(params.url);
+        if (typeof params.code === 'string') {
+          setCode(params.code);
+          setMethod('pair');
+        }
+      } catch {
+        /* 忽略非配对深链 */
+      }
+    };
+    void Linking.getInitialURL().then(apply);
+    const subscription = Linking.addEventListener('url', (event) => apply(event.url));
+    return () => subscription.remove();
+  }, []);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
+  const [discovering, setDiscovering] = useState(false);
+  const [discovered, setDiscovered] = useState<Array<{ url: string; version?: string }>>([]);
   const [permission, requestPermission] = useCameraPermissions();
   const scannedRef = useRef(false);
 
@@ -292,6 +368,85 @@ function PairScreen({ onConnected }: { onConnected: (config: BridgeConfig) => vo
       setError(null);
     } catch (err: any) {
       setScanError(err?.message ?? '无法识别二维码');
+    }
+  };
+
+  const discoverMdns = async (): Promise<Array<{ url: string; version?: string }>> => {
+    if (Platform.OS === 'web') return [];
+    return new Promise((resolve) => {
+      const found: Array<{ url: string; version?: string }> = [];
+      let zeroconf: Zeroconf | undefined;
+      const finish = () => {
+        clearTimeout(timer);
+        try {
+          zeroconf?.stop();
+          zeroconf?.removeAllListeners();
+        } catch {
+          /* ignore */
+        }
+        resolve(found);
+      };
+      const timer = setTimeout(finish, 4000);
+      try {
+        zeroconf = new Zeroconf();
+        zeroconf.on('resolved', (service: any) => {
+          const host = (service.addresses ?? []).find((address: string) => /^\d+\.\d+\.\d+\.\d+$/.test(address)) ?? service.host;
+          if (!host) return;
+          const entry = { url: `http://${host}:${service.port}`, version: service.txt?.version };
+          if (!found.some((item) => item.url === entry.url)) found.push(entry);
+        });
+        zeroconf.on('error', () => finish());
+        zeroconf.scan('aidb', 'tcp', 'local.');
+      } catch {
+        finish();
+      }
+    });
+  };
+
+  const discover = async () => {
+    setDiscovering(true);
+    setDiscovered([]);
+    try {
+      const mdns = await discoverMdns();
+      if (mdns.length) {
+        setDiscovered(mdns);
+        return;
+      }
+      const parsed = new URL(normalizeBaseUrl(url));
+      const match = /^(\d+\.\d+\.\d+)\.\d+$/.exec(parsed.hostname);
+      if (!match) throw new Error('请先填写一个局域网 IP，例如 192.168.1.10');
+      if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location.protocol === 'https:' && parsed.protocol === 'http:') {
+        throw new Error('HTTPS 页面不能扫描 HTTP 地址，请改用 https Bridge 或手动输入');
+      }
+      const port = parsed.port || '8787';
+      const hosts = Array.from({ length: 254 }, (_, index) => `${match[1]}.${index + 1}`);
+      const found: Array<{ url: string; version?: string }> = [];
+      let cursor = 0;
+      const workers = Array.from({ length: 24 }, async () => {
+        while (cursor < hosts.length) {
+          const host = hosts[cursor++];
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 700);
+          try {
+            const response = await fetch(`http://${host}:${port}/api/health`, { signal: controller.signal });
+            if (response.ok) {
+              const body = await response.json().catch(() => null);
+              found.push({ url: `http://${host}:${port}`, version: body?.version });
+            }
+          } catch {
+            /* 忽略不可达主机 */
+          } finally {
+            clearTimeout(timer);
+          }
+        }
+      });
+      await Promise.all(workers);
+      setDiscovered(found.sort((a, b) => a.url.localeCompare(b.url)));
+      if (!found.length) setError('没有发现同一网段的 Bridge；请确认 Bridge 绑定 0.0.0.0 且端口为 ' + port);
+    } catch (err: any) {
+      setError(err?.message ?? '扫描失败');
+    } finally {
+      setDiscovering(false);
     }
   };
 
@@ -330,11 +485,26 @@ function PairScreen({ onConnected }: { onConnected: (config: BridgeConfig) => vo
         <View style={styles.card}>
           <View style={styles.labelRow}>
             <Text style={[styles.label, { marginTop: 0 }]}>Bridge 地址</Text>
-            <Pressable testID="m-scan-qr" onPress={() => void openScanner()} hitSlop={8} style={styles.scanLink}>
-              <ScanLine size={13} color={colors.accent} />
-              <Text style={styles.scanLinkText}>扫码配对</Text>
-            </Pressable>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <Pressable testID="m-discover" onPress={() => void discover()} hitSlop={8} style={styles.scanLink}>
+                <Search size={13} color={colors.accent} />
+                <Text style={styles.scanLinkText}>{discovering ? '扫描中…' : '发现附近'}</Text>
+              </Pressable>
+              <Pressable testID="m-scan-qr" onPress={() => void openScanner()} hitSlop={8} style={styles.scanLink}>
+                <ScanLine size={13} color={colors.accent} />
+                <Text style={styles.scanLinkText}>扫码配对</Text>
+              </Pressable>
+            </View>
           </View>
+          {discovered.length ? (
+            <View style={{ gap: 6, marginTop: 8 }}>
+              {discovered.map((item) => (
+                <Pressable key={item.url} testID={`m-discovered-${item.url}`} style={styles.modeChip} onPress={() => setUrl(item.url)}>
+                  <Text style={styles.modeChipText}>{item.url}{item.version ? ` · v${item.version}` : ''}</Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
           <TextInput
             testID="m-bridge-url"
             style={styles.input}
@@ -425,7 +595,7 @@ function PairScreen({ onConnected }: { onConnected: (config: BridgeConfig) => vo
   );
 }
 
-function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: () => void }) {
+function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, locale, onLocale }: { config: BridgeConfig; onDisconnect: () => void; themeMode: 'dark' | 'light' | 'system'; resolvedTheme: ThemeResolved; onThemeMode: (mode: 'dark' | 'light' | 'system') => void; locale: Locale; onLocale: (locale: Locale) => void }) {
   const insets = useSafeAreaInsets();
   const client = useMemo(() => new BridgeClient(config), [config]);
   const [boot, setBoot] = useState<BootstrapData | null>(null);
@@ -462,7 +632,7 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
   const [memoryDraft, setMemoryDraft] = useState<{ id?: string; kind: string; title: string; content: string } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
-  const [toolPage, setToolPage] = useState<'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'dictionary' | 'monitor' | 'search' | 'history' | 'audit' | 'artifacts' | 'users' | null>(null);
+  const [toolPage, setToolPage] = useState<'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'dictionary' | 'monitor' | 'search' | 'history' | 'audit' | 'artifacts' | 'users' | 'commands' | null>(null);
   const [toolTable, setToolTable] = useState<string | undefined>(undefined);
   const [toolSql, setToolSql] = useState<string | undefined>(undefined);
 
@@ -1104,6 +1274,8 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
             <ArtifactsScreen client={client} onBack={() => setToolPage(null)} />
           ) : toolPage === 'users' ? (
             <UsersScreen client={client} connection={activeConnection} onBack={() => setToolPage(null)} />
+          ) : toolPage === 'commands' ? (
+            <CommandScreen client={client} connections={connections} activeConnection={activeConnection} onBack={() => setToolPage(null)} />
           ) : (
             <ToolsScreen
               connection={activeConnection}
@@ -1245,7 +1417,7 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
         ) : null}
 
         {tab === 'settings' ? (
-          <SettingsScreen client={client} boot={boot} config={config} mode={mode} connected={connected} onDisconnect={onDisconnect} onMode={setMode} />
+          <SettingsScreen client={client} boot={boot} config={config} mode={mode} connected={connected} onDisconnect={onDisconnect} onMode={setMode} themeMode={themeMode} resolvedTheme={resolvedTheme} onThemeMode={onThemeMode} locale={locale} onLocale={onLocale} />
         ) : null}
       </View>
 
@@ -2167,6 +2339,11 @@ function SettingsScreen({
   connected,
   onDisconnect,
   onMode,
+  themeMode,
+  resolvedTheme,
+  onThemeMode,
+  locale,
+  onLocale,
 }: {
   client: BridgeClient;
   boot: BootstrapData | null;
@@ -2175,6 +2352,11 @@ function SettingsScreen({
   connected: boolean;
   onDisconnect: () => void;
   onMode: (mode: PermissionMode) => void;
+  themeMode: 'dark' | 'light' | 'system';
+  resolvedTheme: ThemeResolved;
+  onThemeMode: (mode: 'dark' | 'light' | 'system') => void;
+  locale: Locale;
+  onLocale: (locale: Locale) => void;
 }) {
   const [skills, setSkills] = useState<Array<{ id: string; name: string; description: string; enabled: boolean; builtin?: boolean }>>([]);
   const [mcps, setMcps] = useState<Array<{ id: string; name: string; command: string; enabled: boolean; builtin?: boolean }>>([]);
@@ -2252,6 +2434,47 @@ function SettingsScreen({
             <PermissionSelect mode={mode} onChange={onMode} testID="m-settings-mode" />
           </View>
           <Text style={[styles.hint, { marginTop: 8 }]}>移动端新会话默认只读；破坏性操作即使在全自动模式下也需要审批。</Text>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.sectionLabel}>外观</Text>
+          <View style={{ flexDirection: 'row', gap: 6, marginTop: 6 }}>
+            {([
+              { value: 'dark', label: '深色' },
+              { value: 'light', label: '浅色' },
+              { value: 'system', label: '跟随系统' },
+            ] as const).map((option) => (
+              <Pressable
+                key={option.value}
+                testID={`m-theme-${option.value}`}
+                style={[styles.modeChip, themeMode === option.value && styles.modeChipActive]}
+                onPress={() => onThemeMode(option.value)}
+              >
+                <Text style={[styles.modeChipText, themeMode === option.value && { color: colors.accent }]}>{option.label}</Text>
+              </Pressable>
+            ))}
+          </View>
+          <Text style={[styles.hint, { marginTop: 8 }]}>当前：{resolvedTheme === 'light' ? '浅色' : '深色'}；主题只保存在本机。</Text>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.sectionLabel}>语言 / Language</Text>
+          <View style={{ flexDirection: 'row', gap: 6, marginTop: 6 }}>
+            {([
+              { value: 'zh', label: '中文' },
+              { value: 'en', label: 'English' },
+            ] as const).map((option) => (
+              <Pressable
+                key={option.value}
+                testID={`m-locale-${option.value}`}
+                style={[styles.modeChip, locale === option.value && styles.modeChipActive]}
+                onPress={() => onLocale(option.value)}
+              >
+                <Text style={[styles.modeChipText, locale === option.value && { color: colors.accent }]}>{option.label}</Text>
+              </Pressable>
+            ))}
+          </View>
+          <Text style={[styles.hint, { marginTop: 8 }]}>界面文案即时切换，只保存在本机。</Text>
         </View>
 
         <View style={styles.card}>
@@ -2375,7 +2598,7 @@ function QueryScreen({
     }
   };
 
-  const exportResult = async (format: 'csv' | 'json') => {
+  const exportResult = async (format: 'csv' | 'json' | 'xml' | 'sql' | 'xlsx') => {
     if (!connection || !sql.trim()) return;
     try {
       const result = await client.exportInline({ connectionId: connection.id, database, sql, format, limit: 5000 });
@@ -2434,6 +2657,15 @@ function QueryScreen({
           </Pressable>
           <Pressable style={styles.modeChip} onPress={() => void exportResult('json')}>
             <Text style={styles.modeChipText}>导出 JSON</Text>
+          </Pressable>
+          <Pressable style={styles.modeChip} onPress={() => void exportResult('xml')}>
+            <Text style={styles.modeChipText}>XML</Text>
+          </Pressable>
+          <Pressable style={styles.modeChip} onPress={() => void exportResult('sql')}>
+            <Text style={styles.modeChipText}>SQL</Text>
+          </Pressable>
+          <Pressable style={styles.modeChip} onPress={() => void exportResult('xlsx')}>
+            <Text style={styles.modeChipText}>XLSX</Text>
           </Pressable>
           <Pressable style={styles.modeChip} onPress={() => setSaveOpen(true)}>
             <Text style={styles.modeChipText}>存为仪表板</Text>
@@ -2682,7 +2914,7 @@ function ImportExportScreen({ client, connection, database, tables, onBack }: { 
       setImporting(false);
     }
   };
-  const exportTable = async (format: 'csv' | 'json') => {
+  const exportTable = async (format: 'csv' | 'json' | 'xml' | 'sql' | 'xlsx') => {
     if (!connection || !table) return;
     setExporting(true);
     try {
@@ -2729,6 +2961,15 @@ function ImportExportScreen({ client, connection, database, tables, onBack }: { 
             <Pressable style={[styles.modeChip, exporting && { opacity: 0.5 }]} disabled={exporting || !table} onPress={() => void exportTable('json')}>
               <Text style={styles.modeChipText}>JSON</Text>
             </Pressable>
+            <Pressable style={[styles.modeChip, exporting && { opacity: 0.5 }]} disabled={exporting || !table} onPress={() => void exportTable('xml')}>
+              <Text style={styles.modeChipText}>XML</Text>
+            </Pressable>
+            <Pressable style={[styles.modeChip, exporting && { opacity: 0.5 }]} disabled={exporting || !table} onPress={() => void exportTable('sql')}>
+              <Text style={styles.modeChipText}>SQL</Text>
+            </Pressable>
+            <Pressable style={[styles.modeChip, exporting && { opacity: 0.5 }]} disabled={exporting || !table} onPress={() => void exportTable('xlsx')}>
+              <Text style={styles.modeChipText}>XLSX</Text>
+            </Pressable>
           </View>
         </View>
         {last ? <Text style={styles.hint}>{last}</Text> : null}
@@ -2761,11 +3002,16 @@ function TableDesignScreen({
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const [busy, setBusy] = useState(false);
+  const [tableList, setTableList] = useState<TableInfo[]>(tables);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newTable, setNewTable] = useState<{ name: string; columns: Array<{ name: string; type: string; pk: boolean }> }>({ name: '', columns: [{ name: 'id', type: 'INTEGER', pk: true }, { name: '', type: 'TEXT', pk: false }] });
   const load = async () => {
     if (!connection || !tableName) return;
     try {
       const result = await client.schema(connection.id, database);
-      const found = result.schemas.flatMap((schema) => schema.tables).find((item) => item.name === tableName);
+      const all = result.schemas.flatMap((schema) => schema.tables);
+      setTableList(all.length ? all : tables);
+      const found = all.find((item) => item.name === tableName);
       setDetail(found ?? null);
     } catch (err: any) {
       notify('加载失败', err?.message ?? '');
@@ -2811,10 +3057,13 @@ function TableDesignScreen({
           <Text style={styles.listTitle}>表结构</Text>
           <Text style={styles.listMeta}>{connection?.name ?? '未选择连接'}{database ? ` · ${database}` : ''}</Text>
         </View>
+        <Pressable testID="m-table-create" style={styles.primarySmall} onPress={() => setCreateOpen(true)}>
+          <Text style={styles.primarySmallText}>新建表</Text>
+        </Pressable>
       </View>
       <ScrollView contentContainerStyle={{ padding: 14, gap: 10 }}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
-          {tables.map((item) => (
+          {tableList.map((item) => (
             <Pressable key={item.name} style={[styles.modeChip, tableName === item.name && styles.modeChipActive]} onPress={() => setTableName(item.name)}>
               <Text style={[styles.modeChipText, tableName === item.name && { color: colors.accent }]}>{item.name}</Text>
             </Pressable>
@@ -2900,6 +3149,80 @@ function TableDesignScreen({
           </>
         ) : <Text style={styles.hint}>选择一张表查看结构。</Text>}
       </ScrollView>
+      <Modal visible={createOpen} transparent animationType="slide" onRequestClose={() => setCreateOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.sheet, { maxHeight: '86%' }]}>
+            <View style={styles.sheetHead}>
+              <Text style={styles.sheetTitle}>新建表</Text>
+              <Pressable style={styles.iconButton} onPress={() => setCreateOpen(false)}><X size={16} color={colors.text} /></Pressable>
+            </View>
+            <ScrollView contentContainerStyle={{ padding: 14, gap: 8 }}>
+              <TextInput testID="m-new-table-name" style={styles.input} value={newTable.name} onChangeText={(name) => setNewTable({ ...newTable, name })} placeholder="表名" autoCapitalize="none" placeholderTextColor={colors.muted} />
+              {newTable.columns.map((column, index) => (
+                <View key={index} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <TextInput
+                    style={[styles.input, { flex: 1 }]}
+                    value={column.name}
+                    onChangeText={(name) => setNewTable({ ...newTable, columns: newTable.columns.map((item, i) => (i === index ? { ...item, name } : item)) })}
+                    placeholder="列名"
+                    autoCapitalize="none"
+                    placeholderTextColor={colors.muted}
+                  />
+                  <TextInput
+                    style={[styles.input, { width: 88 }]}
+                    value={column.type}
+                    onChangeText={(type) => setNewTable({ ...newTable, columns: newTable.columns.map((item, i) => (i === index ? { ...item, type } : item)) })}
+                    placeholder="TEXT"
+                    autoCapitalize="characters"
+                    placeholderTextColor={colors.muted}
+                  />
+                  <Pressable
+                    style={[styles.modeChip, column.pk && styles.modeChipActive]}
+                    onPress={() => setNewTable({ ...newTable, columns: newTable.columns.map((item, i) => (i === index ? { ...item, pk: !item.pk } : item)) })}
+                  >
+                    <Text style={[styles.modeChipText, column.pk && { color: colors.accent }]}>PK</Text>
+                  </Pressable>
+                  <Pressable hitSlop={8} onPress={() => setNewTable({ ...newTable, columns: newTable.columns.filter((_, i) => i !== index) })}>
+                    <X size={14} color={colors.muted} />
+                  </Pressable>
+                </View>
+              ))}
+              <Pressable style={styles.modeChip} onPress={() => setNewTable({ ...newTable, columns: [...newTable.columns, { name: '', type: 'TEXT', pk: false }] })}>
+                <Text style={styles.modeChipText}>+ 添加列</Text>
+              </Pressable>
+              <Pressable
+                testID="m-create-table-save"
+                style={[styles.primaryButton, (!newTable.name.trim() || !newTable.columns.some((column) => column.name.trim())) && { opacity: 0.5 }]}
+                disabled={!newTable.name.trim() || !newTable.columns.some((column) => column.name.trim())}
+                onPress={async () => {
+                  if (!connection) return;
+                  const name = newTable.name.trim();
+                  const columns = newTable.columns.filter((column) => column.name.trim());
+                  const pk = columns.filter((column) => column.pk);
+                  const defs = columns.map((column) => `${quoteIdent(column.name.trim(), engine)} ${column.type.trim() || 'TEXT'}`.trim());
+                  if (pk.length) defs.push(`PRIMARY KEY (${pk.map((column) => quoteIdent(column.name.trim(), engine)).join(', ')})`);
+                  setBusy(true);
+                  try {
+                    await client.execDdl(connection.id, `CREATE TABLE ${quoteIdent(name, engine)} (${defs.join(', ')})`, database);
+                    notify('已创建', `表 ${name} 已创建`);
+                    setCreateOpen(false);
+                    setTableName(name);
+                    setNewTable({ name: '', columns: [{ name: 'id', type: 'INTEGER', pk: true }, { name: '', type: 'TEXT', pk: false }] });
+                    await load();
+                  } catch (err: any) {
+                    notify('创建失败', err?.message ?? '');
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                <Text style={styles.primaryButtonText}>{busy ? '创建中…' : '创建表'}</Text>
+              </Pressable>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={renameOpen} transparent animationType="fade" onRequestClose={() => setRenameOpen(false)}>
         <View style={styles.modalBackdrop}>
           <View style={styles.sheet}>
@@ -3381,6 +3704,162 @@ function UsersScreen({ client, connection, onBack }: { client: BridgeClient; con
   );
 }
 
+function CommandScreen({ client, connections, activeConnection, onBack }: { client: BridgeClient; connections: ConnectionConfig[]; activeConnection?: ConnectionConfig; onBack: () => void }) {
+  const [commandId, setCommandId] = useState(COMMANDS[0]?.id ?? 'report');
+  const command = COMMANDS.find((item) => item.id === commandId) ?? COMMANDS[0];
+  const minSources = Math.max(1, Number((command as any)?.sources?.min ?? 1));
+  const maxSources = Math.max(minSources, Number((command as any)?.sources?.max ?? minSources));
+  const slots = ((command as any)?.slots ?? []) as Array<{ key: string; kind: string; label: { zh: string }; required?: boolean; default?: unknown; options?: Array<{ value: string; label: { zh: string } }> }>;
+  const [sources, setSources] = useState<string[]>(() => Array.from({ length: minSources }, (_, index) => (index === 0 ? activeConnection?.id : connections[index]?.id) ?? '').filter(Boolean));
+  const [values, setValues] = useState<Record<string, string | boolean>>({});
+  const [busy, setBusy] = useState(false);
+  const [run, setRun] = useState<{ id: string; status: string; error?: { message?: string } | string; artifactId?: string } | null>(null);
+
+  useEffect(() => {
+    setSources(Array.from({ length: minSources }, (_, index) => (index === 0 ? activeConnection?.id : connections[index]?.id) ?? '').filter(Boolean));
+    setValues({});
+    setRun(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [commandId]);
+
+  const start = async () => {
+    const chosen = sources.filter(Boolean);
+    if (chosen.length < minSources) {
+      notify('无法运行', `需要选择 ${minSources} 个数据源`);
+      return;
+    }
+    const input: Record<string, unknown> = {
+      sources: chosen.map((connectionId) => {
+        const conn = connections.find((item) => item.id === connectionId);
+        return { connectionId, database: conn?.database, label: conn?.name };
+      }),
+    };
+    for (const slot of slots) {
+      if (slot.kind === 'sources') continue;
+      const raw = values[slot.key];
+      if (raw === undefined || raw === '') continue;
+      if (slot.kind === 'tables') input[slot.key] = String(raw).split(',').map((item) => item.trim()).filter(Boolean);
+      else if (slot.kind === 'mapping') {
+        try {
+          input[slot.key] = JSON.parse(String(raw));
+        } catch {
+          notify('映射格式错误', '请输入合法 JSON');
+          return;
+        }
+      } else input[slot.key] = raw;
+    }
+    setBusy(true);
+    try {
+      const started = await client.startCommand(command.id, input as any, { title: `${command.title.zh} · 移动端` });
+      setRun({ id: started.run.id, status: started.run.status });
+      for (let attempt = 0; attempt < 90; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const detail = await client.commandRun(started.run.id);
+        setRun({ id: detail.run.id, status: detail.run.status, error: detail.run.error, artifactId: (detail.run as any).artifactId });
+        if (['succeeded', 'failed', 'cancelled'].includes(detail.run.status)) break;
+      }
+    } catch (err: any) {
+      notify('运行失败', err?.message ?? '');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <View style={{ flex: 1 }}>
+      <View style={styles.tableHead}>
+        <Pressable testID="m-command-back" style={styles.iconButton} onPress={onBack}><ChevronLeft size={18} color={colors.text} /></Pressable>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.listTitle}>命令工作流</Text>
+          <Text style={styles.listMeta}>{command.title.zh}</Text>
+        </View>
+      </View>
+      <ScrollView contentContainerStyle={{ padding: 14, gap: 10 }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+          {COMMANDS.map((item) => (
+            <Pressable key={item.id} testID={`m-command-${item.id}`} style={[styles.modeChip, commandId === item.id && styles.modeChipActive]} onPress={() => setCommandId(item.id)}>
+              <Text style={[styles.modeChipText, commandId === item.id && { color: colors.accent }]}>{item.title.zh}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+        <View style={styles.card}>
+          <Text style={styles.sectionLabel}>数据源（{minSources}–{maxSources}）</Text>
+          {sources.map((sourceId, index) => (
+            <View key={index} style={{ marginTop: 6 }}>
+              <Text style={styles.listMeta}>源 {index + 1}</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, marginTop: 4 }}>
+                {connections.map((conn) => (
+                  <Pressable
+                    key={conn.id}
+                    testID={`m-cmd-source-${index}-${conn.id}`}
+                    style={[styles.modeChip, sourceId === conn.id && styles.modeChipActive]}
+                    onPress={() => setSources((prev) => prev.map((item, i) => (i === index ? conn.id : item)))}
+                  >
+                    <Text style={[styles.modeChipText, sourceId === conn.id && { color: colors.accent }]}>{conn.name}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+          ))}
+          {sources.length < maxSources ? (
+            <Pressable style={[styles.modeChip, { marginTop: 6 }]} onPress={() => setSources((prev) => [...prev, connections[0]?.id ?? ''])}>
+              <Text style={styles.modeChipText}>+ 添加数据源</Text>
+            </Pressable>
+          ) : null}
+        </View>
+        <View style={styles.card}>
+          <Text style={styles.sectionLabel}>参数</Text>
+          {slots.filter((slot) => slot.kind !== 'sources').map((slot) => (
+            <View key={slot.key} style={{ marginTop: 8 }}>
+              <Text style={styles.listMeta}>{slot.label.zh}{slot.required ? ' *' : ''}</Text>
+              {slot.kind === 'boolean' ? (
+                <Switch
+                  value={Boolean(values[slot.key] ?? slot.default ?? false)}
+                  onValueChange={(value) => setValues((prev) => ({ ...prev, [slot.key]: value }))}
+                />
+              ) : slot.kind === 'enum' ? (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, marginTop: 4 }}>
+                  {(slot.options ?? []).map((option) => (
+                    <Pressable
+                      key={option.value}
+                      style={[styles.modeChip, values[slot.key] === option.value && styles.modeChipActive]}
+                      onPress={() => setValues((prev) => ({ ...prev, [slot.key]: option.value }))}
+                    >
+                      <Text style={[styles.modeChipText, values[slot.key] === option.value && { color: colors.accent }]}>{option.label.zh}</Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              ) : (
+                <TextInput
+                  style={[styles.input, slot.kind === 'mapping' && { minHeight: 90, textAlignVertical: 'top' }]}
+                  value={String(values[slot.key] ?? slot.default ?? '')}
+                  onChangeText={(value) => setValues((prev) => ({ ...prev, [slot.key]: value }))}
+                  placeholder={slot.kind === 'tables' ? '表名，英文逗号分隔' : slot.kind === 'mapping' ? 'JSON 映射' : slot.label.zh}
+                  placeholderTextColor={colors.muted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  multiline={slot.kind === 'mapping'}
+                />
+              )}
+            </View>
+          ))}
+        </View>
+        <Pressable testID="m-command-run" style={[styles.primaryButton, busy && { opacity: 0.5 }]} disabled={busy} onPress={() => void start()}>
+          <Text style={styles.primaryButtonText}>{busy ? '运行中…' : `运行 /${command.id}`}</Text>
+        </Pressable>
+        {run ? (
+          <View style={styles.card}>
+            <Text style={styles.sectionLabel}>运行状态</Text>
+            <Text testID="m-command-status" style={styles.listTitle}>{run.status}</Text>
+            {run.error ? <Text style={styles.error}>{typeof run.error === 'string' ? run.error : run.error.message}</Text> : null}
+            {run.artifactId ? <Text style={styles.listMeta}>产物：{run.artifactId}</Text> : null}
+          </View>
+        ) : null}
+      </ScrollView>
+    </View>
+  );
+}
+
 const QUICK_PROMPTS = [
   '给当前数据库做一次完整体检，并列出可修复项',
   '生成当前库的数据字典摘要',
@@ -3409,7 +3888,7 @@ function ToolsScreen({
   memories: Memory[];
   onRunPrompt: (text: string) => void;
   onRunCommand: (id: string) => void;
-  onOpen: (page: 'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'dictionary' | 'monitor' | 'search' | 'history' | 'audit' | 'artifacts' | 'users') => void;
+  onOpen: (page: 'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'dictionary' | 'monitor' | 'search' | 'history' | 'audit' | 'artifacts' | 'users' | 'commands') => void;
 }) {
   return (
     <View style={{ flex: 1 }}>
@@ -3429,7 +3908,7 @@ function ToolsScreen({
         {[
           { page: 'query' as const, label: 'SQL 查询', desc: '执行 SQL、导出、保存到仪表板', icon: <TerminalSquare size={15} color={colors.accent} /> },
           { page: 'table' as const, label: '表结构', desc: '列 / 索引 / 加列 / 重命名 / 清空', icon: <Table2 size={15} color={colors.accent} /> },
-          { page: 'io' as const, label: '导入 / 导出', desc: 'CSV 导入、CSV / JSON 导出', icon: <Database size={15} color={colors.accent} /> },
+          { page: 'io' as const, label: '导入 / 导出', desc: 'CSV 导入；CSV / JSON / XML / SQL / XLSX 导出', icon: <Database size={15} color={colors.accent} /> },
           { page: 'backups' as const, label: '备份', desc: '创建与恢复 SQL 备份', icon: <History size={15} color={colors.accent} /> },
           { page: 'dashboards' as const, label: '仪表板', desc: '刷新卡片、查看趋势、删除卡片', icon: <BarChart3 size={15} color={colors.accent} /> },
           { page: 'search' as const, label: '数据库搜索', desc: '按对象与数据全文查找', icon: <Search size={15} color={colors.accent} /> },
@@ -3439,6 +3918,7 @@ function ToolsScreen({
           { page: 'audit' as const, label: '审计日志', desc: '谁在什么时候改了什么', icon: <ShieldAlert size={15} color={colors.accent} /> },
           { page: 'artifacts' as const, label: '报告与产物', desc: '报告/对比结果与导出', icon: <FileCode2 size={15} color={colors.accent} /> },
           { page: 'users' as const, label: '用户与权限', desc: '账户列表、创建、授权与删除', icon: <Users size={15} color={colors.accent} /> },
+          { page: 'commands' as const, label: '命令工作流', desc: '报告/对比/对账/体检的表单化运行', icon: <TerminalSquare size={15} color={colors.accent} /> },
         ].map((entry) => (
           <Pressable key={entry.page} testID={`m-tool-${entry.page}`} style={styles.listRow} onPress={() => onOpen(entry.page)}>
             {entry.icon}
@@ -3555,6 +4035,153 @@ function AssistantMessage({ message }: { message: AgentMessage }) {
   );
 }
 
+interface ChartShape {
+  type?: string;
+  title?: string;
+  xLabel?: string;
+  yLabel?: string;
+  series?: Array<{ label: string; value: number }>;
+  points?: Array<{ x: number; y: number }>;
+  heatmap?: { xLabels: string[]; yLabels: string[]; values: number[][] };
+}
+
+const CHART_COLORS = () => [colors.accent, colors.agent, colors.warning, colors.success, colors.danger, colors.cyan, colors.secondary];
+
+function MobileChart({ chart }: { chart: ChartShape }) {
+  const series = (chart.series ?? []).slice(0, 12);
+  const palette = CHART_COLORS();
+  const W = 320;
+  const H = 150;
+  const type = chart.type ?? 'bar';
+  const max = Math.max(1, ...series.map((point) => Number(point.value) || 0));
+  const min = Math.min(0, ...series.map((point) => Number(point.value) || 0));
+  const scale = (value: number) => H - 18 - ((value - min) / Math.max(1, max - min)) * (H - 30);
+
+  let body: React.ReactNode = null;
+  let legend: Array<{ label: string; value: number; color: string }> = [];
+  if (type === 'line' && series.length > 1) {
+    const step = (W - 20) / (series.length - 1);
+    const points = series.map((point, index) => `${10 + index * step},${scale(Number(point.value) || 0)}`).join(' ');
+    body = (
+      <>
+        {[0, 0.5, 1].map((ratio) => (
+          <Line key={ratio} x1={10} y1={15 + (H - 30) * ratio} x2={W - 10} y2={15 + (H - 30) * ratio} stroke={colors.border} strokeWidth={1} />
+        ))}
+        <Polyline points={points} fill="none" stroke={colors.accent} strokeWidth={2} />
+        {series.map((point, index) => (
+          <Circle key={point.label} cx={10 + index * step} cy={scale(Number(point.value) || 0)} r={3} fill={colors.agent} />
+        ))}
+        <SvgText x={10} y={H - 3} fill={colors.muted} fontSize={8}>{String(series[0]?.label ?? '').slice(0, 10)}</SvgText>
+        <SvgText x={W - 10} y={H - 3} fill={colors.muted} fontSize={8} textAnchor="end">{String(series[series.length - 1]?.label ?? '').slice(0, 10)}</SvgText>
+      </>
+    );
+    legend = series.slice(0, 3).map((point, index) => ({ label: point.label, value: point.value, color: palette[index] }));
+  } else if (type === 'pie' && series.length) {
+    const total = series.reduce((sum, point) => sum + Math.max(0, Number(point.value) || 0), 0) || 1;
+    const cx = W / 2;
+    const cy = H / 2;
+    const r = Math.min(W, H) / 2 - 12;
+    let angle = -Math.PI / 2;
+    body = series.map((point, index) => {
+      const slice = (Math.max(0, Number(point.value) || 0) / total) * Math.PI * 2;
+      const end = angle + slice;
+      const large = slice > Math.PI ? 1 : 0;
+      const x1 = cx + r * Math.cos(angle);
+      const y1 = cy + r * Math.sin(angle);
+      const x2 = cx + r * Math.cos(end);
+      const y2 = cy + r * Math.sin(end);
+      const path = `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`;
+      const fill = palette[index % palette.length];
+      angle = end;
+      return <Path key={point.label} d={path} fill={fill} stroke={colors.panel} strokeWidth={1} />;
+    });
+    legend = series.slice(0, 8).map((point, index) => ({ label: point.label, value: point.value, color: palette[index % palette.length] }));
+  } else if (type === 'scatter' && chart.points?.length) {
+    const xs = chart.points.map((point) => Number(point.x) || 0);
+    const ys = chart.points.map((point) => Number(point.y) || 0);
+    const xMax = Math.max(1, ...xs);
+    const yMax = Math.max(1, ...ys);
+    body = (
+      <>
+        <Line x1={12} y1={H - 15} x2={W - 10} y2={H - 15} stroke={colors.border} strokeWidth={1} />
+        <Line x1={12} y1={15} x2={12} y2={H - 15} stroke={colors.border} strokeWidth={1} />
+        {chart.points.slice(0, 120).map((point, index) => (
+          <Circle key={index} cx={12 + ((Number(point.x) || 0) / xMax) * (W - 24)} cy={H - 15 - ((Number(point.y) || 0) / yMax) * (H - 30)} r={2.5} fill={colors.accent} fillOpacity={0.75} />
+        ))}
+      </>
+    );
+  } else if (type === 'heatmap' && chart.heatmap) {
+    const { xLabels, yLabels, values } = chart.heatmap;
+    const flat = values.flat().map((value) => Number(value) || 0);
+    const heatMax = Math.max(1, ...flat);
+    const cellW = (W - 20) / Math.max(1, xLabels.length);
+    const cellH = (H - 22) / Math.max(1, yLabels.length);
+    body = values.slice(0, yLabels.length).map((row, y) =>
+      row.slice(0, xLabels.length).map((value, x) => (
+        <Rect
+          key={`${x}-${y}`}
+          x={10 + x * cellW}
+          y={4 + y * cellH}
+          width={Math.max(1, cellW - 2)}
+          height={Math.max(1, cellH - 2)}
+          rx={2}
+          fill={colors.accent}
+          fillOpacity={0.12 + 0.78 * ((Number(value) || 0) / heatMax)}
+        />
+      )),
+    );
+    legend = [
+      { label: `${xLabels[0] ?? ''} …`, value: 0, color: colors.accent },
+      { label: `${yLabels[0] ?? ''} …`, value: 0, color: colors.muted },
+    ];
+  } else if (type === 'radar' && series.length >= 3) {
+    const cx = W / 2;
+    const cy = H / 2;
+    const r = Math.min(W, H) / 2 - 18;
+    const points = series.map((point, index) => {
+      const angle = -Math.PI / 2 + (index / series.length) * Math.PI * 2;
+      const radius = (Math.max(0, Number(point.value) || 0) / max) * r;
+      return `${cx + radius * Math.cos(angle)},${cy + radius * Math.sin(angle)}`;
+    }).join(' ');
+    body = (
+      <>
+        {[0.33, 0.66, 1].map((ratio) => (
+          <Circle key={ratio} cx={cx} cy={cy} r={r * ratio} fill="none" stroke={colors.border} strokeWidth={1} />
+        ))}
+        <Polyline points={points} fill={colors.accent} fillOpacity={0.18} stroke={colors.accent} strokeWidth={2} />
+      </>
+    );
+    legend = series.slice(0, 4).map((point, index) => ({ label: point.label, value: point.value, color: palette[index] }));
+  } else {
+    // bar（默认）
+    const barW = (W - 20) / Math.max(1, series.length);
+    body = series.map((point, index) => {
+      const height = Math.max(2, ((Number(point.value) || 0) / max) * (H - 30));
+      return <Rect key={point.label} x={10 + index * barW + 2} y={H - 15 - height} width={Math.max(3, barW - 4)} height={height} rx={2} fill={palette[index % palette.length]} />;
+    });
+    legend = series.slice(0, 4).map((point, index) => ({ label: point.label, value: point.value, color: palette[index % palette.length] }));
+  }
+
+  return (
+    <View style={{ marginTop: 7, gap: 5 }}>
+      <Text style={[styles.listMeta, { color: colors.text }]}>{chart.title ?? '图表'}{chart.xLabel || chart.yLabel ? ` · ${chart.xLabel ?? ''}${chart.yLabel ? ' × ' + chart.yLabel : ''}` : ''}</Text>
+      <View style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 8, backgroundColor: colors.panel, padding: 4 }}>
+        <Svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`}>{body}</Svg>
+      </View>
+      {legend.length ? (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+          {legend.map((item, index) => (
+            <View key={`${item.label}-${index}`} style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+              <View style={{ width: 7, height: 7, borderRadius: 2, backgroundColor: item.color }} />
+              <Text style={styles.listMeta} numberOfLines={1}>{item.label}{item.value ? ` · ${item.value.toLocaleString()}` : ''}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 function MobileToolCard({
   tool,
   args,
@@ -3573,10 +4200,9 @@ function MobileToolCard({
   const [open, setOpen] = React.useState(false);
   const sql = args && typeof args === 'object' ? (args as Record<string, unknown>).sql : undefined;
   const data = result?.data as Record<string, any> | undefined;
-  const chart = data?.chart as { title?: string; series?: Array<{ label: string; value: number }> } | undefined;
-  const chartMax = Math.max(1, ...(chart?.series ?? []).map((point) => point.value));
+  const chart = data?.chart as ChartShape | undefined;
   return (
-    <Pressable style={[styles.toolCard, status === 'error' && { borderLeftColor: colors.danger }, status === 'awaiting' && { borderLeftColor: colors.warning }]} onPress={() => setOpen(!open)}>
+    <Pressable testID="m-tool-card" style={[styles.toolCard, status === 'error' && { borderLeftColor: colors.danger }, status === 'awaiting' && { borderLeftColor: colors.warning }]} onPress={() => setOpen(!open)}>
       <View style={styles.toolHead}>
         {status === 'running' ? <Loader2 size={11} color={colors.agent} /> : status === 'ok' ? <Check size={11} color={colors.success} /> : <X size={11} color={colors.danger} />}
         <Text style={styles.toolName}>{tool}</Text>
@@ -3592,22 +4218,7 @@ function MobileToolCard({
               <Text style={styles.toolLabel}>结果</Text>
               <Text style={[styles.listMeta, { color: result.ok ? colors.success : colors.danger }]}>{result.summary}</Text>
               {result.error ? <Text style={[styles.hint, { color: colors.danger, marginTop: 4 }]}>{result.error.message}</Text> : null}
-              {chart?.series?.length ? (
-                <View style={{ marginTop: 7, gap: 4 }}>
-                  <Text style={[styles.listMeta, { color: colors.text }]}>{chart.title}</Text>
-                  {chart.series.slice(0, 8).map((point) => (
-                    <View key={point.label} style={{ gap: 2 }}>
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
-                        <Text style={[styles.listMeta, { flex: 1 }]} numberOfLines={1}>{point.label}</Text>
-                        <Text style={[styles.listMeta, { color: colors.text }]}>{point.value.toLocaleString()}</Text>
-                      </View>
-                      <View style={{ height: 4, backgroundColor: colors.elevated, borderRadius: 2, overflow: 'hidden' }}>
-                        <View style={{ width: `${Math.max(3, (point.value / chartMax) * 100)}%`, height: 4, backgroundColor: colors.agent }} />
-                      </View>
-                    </View>
-                  ))}
-                </View>
-              ) : null}
+              {chart ? <MobileChart chart={chart as ChartShape} /> : null}
               {Array.isArray(data?.findings) && data.findings.length ? (
                 <View style={{ marginTop: 6, gap: 5 }}>
                   {data.findings.slice(0, 5).map((finding: any, index: number) => (
@@ -3703,7 +4314,7 @@ function Markdown({ text }: { text: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = () => StyleSheet.create({
   splash: { flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' },
   logo: { width: 48, height: 48, borderRadius: 14, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
   logoText: { color: '#fff', fontWeight: '800', fontSize: 17 },
@@ -3869,3 +4480,14 @@ const styles = StyleSheet.create({
   approvalSql: { maxHeight: 150, backgroundColor: colors.code, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border, padding: 8 },
   settingValue: { color: colors.text, fontSize: 12.5, marginTop: 4 },
 });
+
+let styles = makeStyles();
+let currentTheme: ThemeResolved | undefined;
+
+function applyTheme(mode: ThemeResolved): void {
+  if (currentTheme === mode) return;
+  currentTheme = mode;
+  setPalette(mode);
+  styles = makeStyles();
+}
+

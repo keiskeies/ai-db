@@ -2,6 +2,8 @@ import http from 'node:http';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
+import { Bonjour } from 'bonjour-service';
+import { hostname } from 'node:os';
 import cors from 'cors';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { AgentEvent, PermissionMode } from '@aidb/core';
@@ -225,7 +227,28 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
     }
   });
 
+  // 局域网发现：仅当 Bridge 绑定到非回环地址时广播 _aidb._tcp，避免桌面内置桥误报。
+  let bonjour: Bonjour | undefined;
+  let mdnsService: { stop: (callback?: () => void) => void } | undefined;
+  const loopback = ['127.0.0.1', 'localhost', '::1'].includes(config.host);
+  if (!loopback && process.env.AIDB_MDNS !== '0') {
+    try {
+      bonjour = new Bonjour();
+      mdnsService = bonjour.publish({
+        name: `AiDB Studio ${hostname()}`,
+        type: 'aidb',
+        port: config.port,
+        txt: { version: config.version },
+      }) as unknown as { stop: (callback?: () => void) => void };
+      console.log(`[gateway] mDNS advertised: _aidb._tcp on ${config.host}:${config.port}`);
+    } catch (err) {
+      console.warn('[gateway] mDNS advertise failed:', (err as Error).message);
+    }
+  }
+
   const close = async (): Promise<void> => {
+    mdnsService?.stop();
+    bonjour?.destroy();
     scheduler.stop();
     shutdownMcpClients();
     await new Promise<void>((resolve) => {

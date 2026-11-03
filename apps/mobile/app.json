@@ -14,7 +14,9 @@
     "android": {
       "package": "com.aidb.studio",
       "permissions": [
-        "INTERNET"
+        "INTERNET",
+        "CHANGE_WIFI_MULTICAST_STATE",
+        "ACCESS_WIFI_STATE"
       ]
     },
     "ios": {
@@ -23,7 +25,11 @@
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
-        }
+        },
+        "NSLocalNetworkUsageDescription": "AiDB Studio 需要访问局域网以发现并连接 Bridge。",
+        "NSBonjourServices": [
+          "_aidb._tcp"
+        ]
       }
     },
     "web": {
