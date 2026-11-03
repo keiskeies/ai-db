@@ -18,6 +18,7 @@
     "dev:web": "npm --workspace apps/desktop run dev",
     "dev:desktop": "npm run build:core && concurrently -k -n bridge,ui,electron \"npm run dev:gateway\" \"npm run dev:web\" \"npm --workspace apps/desktop run dev:electron\"",
     "seed": "node --import tsx scripts/seed-demo.ts",
+    "seed:business": "node --import tsx scripts/seed-business.ts",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm --workspace @aidb/core run test && npm --workspace @aidb/gateway run test",
     "build:core": "npm --workspace @aidb/core run build",
