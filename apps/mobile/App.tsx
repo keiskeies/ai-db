@@ -5,6 +5,8 @@ import {
   Image,
   KeyboardAvoidingView,
   Modal,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   Platform,
   Pressable,
   RefreshControl,
@@ -29,6 +31,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import {
   Archive,
   ArchiveRestore,
+  ArrowDown,
   AtSign,
   BarChart3,
   Brain,
@@ -39,15 +42,21 @@ import {
   Database,
   FileCode2,
   Gauge,
+  Grid3x3,
   History,
   ImagePlus,
+  Layers,
+  LineChart,
   Loader2,
   Lock,
   MessageSquarePlus,
   Pencil,
+  PieChart,
   Plus,
+  Radar,
   RefreshCw,
   ScanLine,
+  ScatterChart,
   Search,
   Send,
   Settings as SettingsIcon,
@@ -62,7 +71,7 @@ import {
   Wrench,
   X,
 } from 'lucide-react-native';
-import { COMMANDS, parsePairingPayload } from '@aidb/core';
+import { COMMANDS, chartSuitability, parsePairingPayload } from '@aidb/core';
 import type {
   AgentEvent,
   AgentSettings,
@@ -70,6 +79,7 @@ import type {
   AgentMessageBlock,
   AgentPlanItem,
   AgentSessionMeta,
+  ChartKind,
   QueryBatchResult,
   ConnectionConfig,
   Engine,
@@ -698,9 +708,21 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
   const schemaPendingRef = useRef(false);
   const handlerRef = useRef<(event: any) => void>(() => undefined);
   const scrollRef = useRef<ScrollView>(null);
+  /** 是否跟随最新输出；用户手动上滑后置为 false，滑回底部再恢复。 */
+  const stickRef = useRef(true);
+  const lastScrollTopRef = useRef(0);
+  /** 首次加载/流式输出期间，内容尺寸变化才跟随贴底；静态展开折叠不触发。 */
+  const initialScrollRef = useRef(true);
+  const busyRef = useRef(false);
+  const lastTurnStartRef = useRef(0);
+  const [showJump, setShowJump] = useState(false);
 
   const activeConnection = connections.find((c) => c.id === activeConnectionId);
   const busy = live?.status === 'streaming' || live?.status === 'awaiting';
+
+  useEffect(() => {
+    busyRef.current = Boolean(busy);
+  }, [busy]);
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -977,10 +999,55 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
   }, [client]);
 
   useEffect(() => {
-    if (live) {
-      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 60);
-    }
+    if (!stickRef.current) return;
+    const timer = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 60);
+    return () => clearTimeout(timer);
   }, [live?.text, live?.tools.length, live?.status, live?.plan, messages.length]);
+
+  // 新一轮开始：无论此前停在哪里都回到最新输出。
+  useEffect(() => {
+    if (!live || live.startedAt === lastTurnStartRef.current) return;
+    lastTurnStartRef.current = live.startedAt;
+    stickRef.current = true;
+    setShowJump(false);
+    scrollRef.current?.scrollToEnd({ animated: false });
+  }, [live?.startedAt]);
+
+  // 切换/新建会话：重置为跟随底部，等首屏布局完成再贴底一次。
+  useEffect(() => {
+    stickRef.current = true;
+    setShowJump(false);
+    initialScrollRef.current = true;
+    const timer = setTimeout(() => {
+      initialScrollRef.current = false;
+      scrollRef.current?.scrollToEnd({ animated: false });
+    }, 160);
+    return () => clearTimeout(timer);
+  }, [sessionId]);
+
+  const onChatScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const top = contentOffset.y;
+    const distance = contentSize.height - top - layoutMeasurement.height;
+    const scrolledUp = top < lastScrollTopRef.current - 2;
+    lastScrollTopRef.current = top;
+    if (scrolledUp) stickRef.current = false;
+    else if (distance <= 48) stickRef.current = true;
+    setShowJump((prev) => (distance <= 48 ? false : scrolledUp || distance > 120 ? true : prev));
+  };
+
+  // 只有首次加载或流式输出期间，尺寸变化才跟随贴底；静态展开折叠不触发。
+  const onChatContentSizeChange = () => {
+    if (!stickRef.current) return;
+    if (!busyRef.current && !initialScrollRef.current) return;
+    scrollRef.current?.scrollToEnd({ animated: false });
+  };
+
+  const jumpToLatest = () => {
+    stickRef.current = true;
+    setShowJump(false);
+    scrollRef.current?.scrollToEnd({ animated: true });
+  };
 
   useEffect(() => {
     if (tab === 'me' && mePage === 'memory') void loadMemories();
@@ -1265,6 +1332,10 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
             onOpenCommands={() => setCommandOpen(true)}
             onOpenRecent={(id) => void openSession(id)}
             scrollRef={scrollRef}
+            onScroll={onChatScroll}
+            onContentSizeChange={onChatContentSizeChange}
+            showJump={showJump}
+            onJumpToLatest={jumpToLatest}
             tables={tables}
             agentSettings={boot?.settings.agent}
             onSaveAgent={(patch) => void saveAgent(patch)}
@@ -1941,6 +2012,10 @@ function ChatScreen({
   onOpenCommands,
   onOpenRecent,
   scrollRef,
+  onScroll,
+  onContentSizeChange,
+  showJump,
+  onJumpToLatest,
   tables,
   agentSettings,
   onSaveAgent,
@@ -1973,6 +2048,10 @@ function ChatScreen({
   onOpenCommands: () => void;
   onOpenRecent: (id: string) => void;
   scrollRef: React.RefObject<ScrollView>;
+  onScroll: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
+  onContentSizeChange: () => void;
+  showJump: boolean;
+  onJumpToLatest: () => void;
   tables: TableInfo[];
   agentSettings?: AgentSettings;
   onSaveAgent: (patch: Record<string, unknown>) => void;
@@ -2047,13 +2126,16 @@ function ChatScreen({
         </Pressable>
       </View>
 
-      <ScrollView
-        ref={scrollRef}
-        style={{ flex: 1 }}
-        contentContainerStyle={{ padding: 14, paddingBottom: 24, gap: 14 }}
-        keyboardShouldPersistTaps="handled"
-        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: false })}
-      >
+      <View style={{ flex: 1 }}>
+        <ScrollView
+          ref={scrollRef}
+          style={{ flex: 1 }}
+          contentContainerStyle={{ padding: 14, paddingBottom: 24, gap: 14 }}
+          keyboardShouldPersistTaps="handled"
+          onScroll={onScroll}
+          scrollEventThrottle={16}
+          onContentSizeChange={onContentSizeChange}
+        >
         {!messages.length && !live ? (
           <View style={styles.chatEmpty}>
             <View style={styles.agentAvatarLarge}><Sparkles size={22} color={colors.agent} /></View>
@@ -2109,17 +2191,24 @@ function ChatScreen({
                   ))}
                 </View>
               ) : null}
-              {live.thinking ? <ThinkingBlock text={live.thinking} /> : null}
+              {live.thinking || live.tools.length || live.plan.length ? (
+                <ExecutionSection count={live.tools.length} running={busy}>
+                  {live.thinking ? <ThinkingBlock text={live.thinking} /> : null}
+                  {live.tools.map((tool) => (
+                    <MobileToolCard key={tool.callId} tool={tool.tool} args={tool.args} risk={tool.risk} status={tool.status} result={tool.result} summary={tool.summary} showChart={!chartOf(tool.result)} />
+                  ))}
+                  {live.plan.length ? <PlanCard items={live.plan} /> : null}
+                </ExecutionSection>
+              ) : null}
               {live.text ? <Markdown text={live.text} /> : busy ? (
                 <View style={styles.loadingRow}>
                   <Loader2 size={12} color={colors.agent} />
                   <Text style={styles.listMeta}>{live.status === 'awaiting' ? '等待授权…' : '正在处理…'}</Text>
                 </View>
               ) : null}
-              {live.tools.map((tool) => (
-                <MobileToolCard key={tool.callId} tool={tool.tool} args={tool.args} risk={tool.risk} status={tool.status} result={tool.result} summary={tool.summary} />
+              {live.tools.filter((tool) => chartOf(tool.result)).map((tool) => (
+                <MobileChart key={`chart_${tool.callId}`} chart={chartOf(tool.result)!} />
               ))}
-              {live.plan.length ? <PlanCard items={live.plan} /> : null}
               {live.error ? <Text style={styles.error}>{live.error}</Text> : null}
               {!busy ? (
                 <Text style={styles.turnEnd}>
@@ -2129,7 +2218,16 @@ function ChatScreen({
             </View>
           </>
         ) : null}
-      </ScrollView>
+        </ScrollView>
+        {showJump ? (
+          <View pointerEvents="box-none" style={styles.jumpWrap}>
+            <Pressable testID="m-scroll-bottom" style={styles.jumpButton} onPress={onJumpToLatest}>
+              <ArrowDown size={12} color={colors.secondary} />
+              <Text style={styles.jumpText}>回到底部</Text>
+            </Pressable>
+          </View>
+        ) : null}
+      </View>
 
       <View style={styles.composer}>
         <View style={styles.composerTop}>
@@ -4334,11 +4432,37 @@ function ThinkingBlock({ text }: { text: string }) {
   );
 }
 
+function ExecutionSection({ count, running, children }: { count: number; running?: boolean; children: React.ReactNode }) {
+  const [manual, setManual] = React.useState<boolean | null>(null);
+  const open = manual ?? Boolean(running);
+  return (
+    <View style={styles.execution}>
+      <Pressable testID="m-execution-section" style={styles.executionHead} onPress={() => setManual(!open)}>
+        <Text style={styles.executionTitle}>{open ? '▾' : '▸'} 执行过程</Text>
+        <Text style={styles.executionCount}>{count} 次工具调用</Text>
+      </Pressable>
+      {open ? <View style={styles.executionBody}>{children}</View> : null}
+    </View>
+  );
+}
+
+function chartOf(result?: ToolResult): ChartShape | undefined {
+  const data = result?.data as Record<string, any> | undefined;
+  return (data?.chart as ChartShape | undefined) ?? undefined;
+}
+
 function AssistantMessage({ message }: { message: AgentMessage }) {
   const results = new Map<string, ToolResult>();
   for (const block of message.blocks) if (block.type === 'tool_result' && block.callId) results.set(block.callId, block.result as ToolResult);
   const thinking = message.blocks.find((b) => b.type === 'thinking')?.text;
   const tools = message.blocks.filter((b) => b.type === 'tool_call').length;
+  // 模型每更新一次计划都会追加一个 plan block；只渲染最后一份，避免旧计划卡堆叠。
+  const latestPlan = [...message.blocks].reverse().find((block) => block.type === 'plan');
+  const hasExecution = Boolean(thinking) || tools > 0 || Boolean(latestPlan);
+  const charts = message.blocks
+    .filter((block) => block.type === 'tool_result')
+    .map((block, index) => ({ key: block.callId ?? String(index), chart: chartOf(block.result as ToolResult | undefined) }))
+    .filter((item): item is { key: string; chart: ChartShape } => Boolean(item.chart));
   return (
     <View style={{ gap: 10 }}>
       <View style={{ flexDirection: 'row', gap: 7, alignItems: 'center' }}>
@@ -4346,25 +4470,31 @@ function AssistantMessage({ message }: { message: AgentMessage }) {
         <Text style={styles.listMeta}>AiDB Agent</Text>
       </View>
       <View style={{ paddingLeft: 26, gap: 10 }}>
-        {thinking ? <ThinkingBlock text={thinking} /> : null}
+        {hasExecution ? (
+          <ExecutionSection count={tools} running={false}>
+            {thinking ? <ThinkingBlock text={thinking} /> : null}
+            {message.blocks.map((block, index) => {
+              if (block.type !== 'tool_call') return null;
+              const result = block.callId ? results.get(block.callId) : undefined;
+              return (
+                <MobileToolCard
+                  key={`${message.id}_${block.callId ?? index}`}
+                  tool={block.tool ?? 'tool'}
+                  args={block.args}
+                  risk={block.risk}
+                  status={result ? (result.ok ? 'ok' : 'error') : 'error'}
+                  result={result}
+                  showChart={!chartOf(result)}
+                />
+              );
+            })}
+            {latestPlan ? <PlanCard items={latestPlan.items ?? []} /> : null}
+          </ExecutionSection>
+        ) : null}
         {message.content ? <Markdown text={message.content} /> : null}
-        {message.blocks.map((block, index) => {
-          if (block.type === 'tool_call') {
-            const result = block.callId ? results.get(block.callId) : undefined;
-            return (
-              <MobileToolCard
-                key={`${message.id}_${block.callId ?? index}`}
-                tool={block.tool ?? 'tool'}
-                args={block.args}
-                risk={block.risk}
-                status={result ? (result.ok ? 'ok' : 'error') : 'error'}
-                result={result}
-              />
-            );
-          }
-          if (block.type === 'plan') return <PlanCard key={`${message.id}_plan_${index}`} items={block.items ?? []} />;
-          return null;
-        })}
+        {charts.map((item) => (
+          <MobileChart key={`${message.id}_chart_${item.key}`} chart={item.chart} />
+        ))}
         {tools ? <Text style={styles.turnEnd}>{tools} 次工具调用</Text> : null}
       </View>
     </View>
@@ -4376,144 +4506,660 @@ interface ChartShape {
   title?: string;
   xLabel?: string;
   yLabel?: string;
+  sql?: string;
   series?: Array<{ label: string; value: number }>;
-  points?: Array<{ x: number; y: number }>;
-  heatmap?: { xLabels: string[]; yLabels: string[]; values: number[][] };
+  extraSeries?: Array<{ name: string; values: number[] }>;
+  stacked?: boolean;
+  dualAxis?: boolean;
+  scatter?: Array<{ x: number; y: number; label?: string }>;
+  heatmap?: { xLabels: string[]; yLabels: string[]; values: number[][]; valueLabel?: string };
+  forecast?: Array<{ label: string; value: number; lower: number; upper: number }>;
+  note?: string;
 }
 
 const CHART_COLORS = chartPalette;
 
+const CHART_TYPES: Array<{ value: ChartKind; label: string; icon: typeof BarChart3 }> = [
+  { value: 'bar', label: '柱状', icon: BarChart3 },
+  { value: 'stacked', label: '堆叠', icon: Layers },
+  { value: 'line', label: '折线', icon: LineChart },
+  { value: 'pie', label: '饼图', icon: PieChart },
+  { value: 'scatter', label: '散点', icon: ScatterChart },
+  { value: 'heatmap', label: '热力', icon: Grid3x3 },
+  { value: 'radar', label: '雷达', icon: Radar },
+];
+
+const normalizeChartType = (value?: string): ChartKind =>
+  value && CHART_TYPES.some((item) => item.value === value) ? (value as ChartKind) : 'bar';
+
+const chartCharWidth = (char: string, size: number): number =>
+  /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uff60]/.test(char) ? size : size * 0.56;
+
+const chartLabelWidth = (text: string, size: number): number =>
+  Array.from(text).reduce((sum, char) => sum + chartCharWidth(char, size), 0);
+
+const CHART_DATE_LABEL = /^\d{4}[-/]\d{1,2}([-/]\d{1,2})?[日号]?$/;
+
+/** 日期轴永不截断；其余标签按可用像素宽度裁切，避免旋转后互相压字。 */
+const fitChartLabel = (label: string, maxWidth: number): string => {
+  if (!Number.isFinite(maxWidth) || CHART_DATE_LABEL.test(label) || chartLabelWidth(label, 8) <= maxWidth) return label;
+  let used = 0;
+  let kept = '';
+  for (const char of label) {
+    const width = chartCharWidth(char, 8);
+    if (used + width > maxWidth - 4) break;
+    used += width;
+    kept += char;
+  }
+  return kept ? `${kept}…` : label.slice(0, 1);
+};
+
+const compactNumber = (value: number): string => {
+  const abs = Math.abs(value);
+  if (abs >= 1e8) return `${+(value / 1e8).toFixed(1)}亿`;
+  if (abs >= 1e4) return `${+(value / 1e4).toFixed(1)}万`;
+  if (abs >= 1e3) return `${+(value / 1e3).toFixed(1)}k`;
+  if (Number.isInteger(value)) return String(value);
+  return String(+value.toFixed(2));
+};
+
+interface ChartSelection {
+  label: string;
+  index?: number;
+  entries: Array<{ name: string; value: string; color: string }>;
+}
+
+const formatMetric = (value: number): string =>
+  Number.isFinite(value) && !Number.isInteger(value)
+    ? value.toLocaleString(undefined, { maximumFractionDigits: 2 })
+    : Number(value).toLocaleString();
+
 function MobileChart({ chart }: { chart: ChartShape }) {
-  const series = (chart.series ?? []).slice(0, 12);
-  const palette = CHART_COLORS;
+  const [selection, setSelection] = React.useState<ChartSelection | null>(null);
+  const [type, setType] = React.useState<ChartKind>(() => normalizeChartType(chart.type));
+  const fit = React.useMemo(
+    () => chartSuitability({ series: chart.series, extraSeries: chart.extraSeries, scatter: chart.scatter, heatmap: chart.heatmap, forecast: chart.forecast }),
+    [chart],
+  );
   const W = 320;
-  const H = 150;
-  const type = chart.type ?? 'bar';
-  const max = Math.max(1, ...series.map((point) => Number(point.value) || 0));
-  const min = Math.min(0, ...series.map((point) => Number(point.value) || 0));
-  const scale = (value: number) => H - 18 - ((value - min) / Math.max(1, max - min)) * (H - 30);
+  const H = 168;
+  const padLeft = 38;
+  const padRight = 8;
+  const padTop = 10;
+  const innerW = W - padLeft - padRight;
+  const palette = CHART_COLORS;
+  const toggleSelection = (next: ChartSelection) => {
+    setSelection((prev) => (prev && prev.label === next.label && prev.index === next.index ? null : next));
+  };
+  const history = (chart.series ?? []).slice(0, 24);
+  const valuesOf = (list: Array<{ value: number }>) => list.map((point) => Number(point.value) || 0);
+  const columns = [
+    { name: chart.yLabel || '值', values: valuesOf(history), color: palette[0] },
+    ...(chart.extraSeries ?? [])
+      .filter((extra) => Array.isArray(extra.values) && extra.values.length >= history.length && history.length > 0)
+      .slice(0, 4)
+      .map((extra, index) => ({ name: extra.name, values: extra.values.slice(0, history.length).map((value) => Number(value) || 0), color: palette[(index + 1) % palette.length] })),
+  ];
+  const isBar = type === 'bar' || type === 'stacked';
+  const stacked = isBar && columns.length > 1 && (type === 'stacked' || chart.stacked === true);
+  const dual = isBar && chart.dualAxis === true && columns.length > 1 && !stacked;
+  const forecast = type === 'line' ? (chart.forecast ?? []).slice(0, 12) : [];
+  const labels = [...history.map((point) => String(point.label)), ...forecast.map((point) => String(point.label))];
+  const primary = columns[0]?.values ?? [];
+
+  // 横轴标签：放不下就统一倾斜；倾斜后仍会压字时才隔几个显示。
+  const labelWidths = labels.map((label) => chartLabelWidth(label, 8));
+  const bandEstimate = innerW / Math.max(1, labels.length);
+  const rotateLabels = labels.length > 1 && Math.max(0, ...labelWidths) > bandEstimate - 6;
+  const sinAngle = Math.sin((40 * Math.PI) / 180);
+  const labelStep = rotateLabels ? Math.max(1, Math.ceil(8 / Math.max(1, bandEstimate * sinAngle))) : 1;
+  const padBottom = rotateLabels ? Math.min(56, Math.max(32, Math.round(12 + Math.max(0, ...labelWidths) * sinAngle))) : 22;
+  const innerH = H - padTop - padBottom;
+
+  const bounds: number[] = [...primary, ...forecast.map((point) => Number(point.value) || 0)];
+  if (stacked) {
+    for (let index = 0; index < primary.length; index += 1) {
+      let positive = 0;
+      let negative = 0;
+      for (const column of columns) {
+        const value = column.values[index] ?? 0;
+        if (value >= 0) positive += value;
+        else negative += value;
+      }
+      bounds.push(positive, negative);
+    }
+  } else if (!dual) {
+    for (const column of columns.slice(1)) bounds.push(...column.values);
+  }
+  for (const point of forecast) bounds.push(Number(point.lower) || 0, Number(point.upper) || 0);
+
+  const hi = Math.max(1, ...bounds);
+  const lo = Math.min(0, ...bounds);
+  const span = hi - lo || 1;
+  const y = (value: number) => padTop + innerH - ((value - lo) / span) * innerH;
+  const secondary = dual ? columns[1].values : [];
+  const hi2 = Math.max(1, ...secondary);
+  const lo2 = Math.min(0, ...secondary);
+  const y2 = (value: number) => padTop + innerH - ((value - lo2) / (hi2 - lo2 || 1)) * innerH;
+
+  const count = Math.max(1, labels.length);
+  const band = innerW / count;
+  const x = (index: number) => padLeft + band * (index + 0.5);
+  const selectedIndex = selection?.index ?? -1;
+  const selectAt = (index: number, series: Array<{ name: string; values: number[]; color: string }>) => {
+    toggleSelection({
+      index,
+      label: String(labels[index] ?? ''),
+      entries: series.map((column) => ({ name: column.name, value: formatMetric(column.values[index] ?? 0), color: column.color })),
+    });
+  };
+  const hitBands = (onPressAt: (index: number) => void) =>
+    labels.map((_, index) => (
+      <Rect
+        key={`hit-${index}`}
+        x={padLeft + index * band}
+        y={padTop}
+        width={band}
+        height={innerH}
+        fill={colors.text}
+        fillOpacity={0.001}
+        onPress={() => onPressAt(index)}
+      />
+    ));
+
+  const grid = (
+    <>
+      {[0, 0.5, 1].map((ratio) => {
+        const gy = padTop + innerH * ratio;
+        return (
+          <React.Fragment key={ratio}>
+            <Line x1={padLeft} y1={gy} x2={W - padRight} y2={gy} stroke={colors.border} strokeWidth={1} />
+            <SvgText x={padLeft - 4} y={gy + 3} fill={colors.muted} fontSize={7.5} textAnchor="end">{compactNumber(hi - span * ratio)}</SvgText>
+          </React.Fragment>
+        );
+      })}
+    </>
+  );
+  const axisLabels = labels.length ? (
+    <>
+      {labels.map((label, index) => {
+        if (index % labelStep !== 0) return null;
+        const labelX = x(index);
+        const labelY = H - 4 - (rotateLabels ? Math.max(0, ...labelWidths) * sinAngle : 0);
+        const room = rotateLabels ? (padBottom - 14) / sinAngle : band - 4;
+        return (
+          <SvgText
+            key={`ax-${index}`}
+            x={labelX}
+            y={labelY}
+            fill={colors.muted}
+            fontSize={8}
+            textAnchor={rotateLabels ? 'end' : 'middle'}
+            transform={rotateLabels ? `rotate(-40 ${labelX} ${labelY})` : undefined}
+          >
+            {fitChartLabel(String(label), room)}
+          </SvgText>
+        );
+      })}
+    </>
+  ) : null;
 
   let body: React.ReactNode = null;
-  let legend: Array<{ label: string; value: number; color: string }> = [];
-  if (type === 'line' && series.length > 1) {
-    const step = (W - 20) / (series.length - 1);
-    const points = series.map((point, index) => `${10 + index * step},${scale(Number(point.value) || 0)}`).join(' ');
-    body = (
+  let legend: Array<{ label: string; value?: number; color: string }> = [];
+  let caption = '';
+  let empty = false;
+
+  if (type === 'pie') {
+    if (!history.length) {
+      empty = true;
+    } else {
+      const total = history.reduce((sum, point) => sum + Math.max(0, Number(point.value) || 0), 0) || 1;
+      const cx = W / 2;
+      const cy = H / 2;
+      const r = Math.min(W, H) / 2 - 12;
+      let angle = -Math.PI / 2;
+      body = history.map((point, index) => {
+        const value = Math.max(0, Number(point.value) || 0);
+        const slice = (value / total) * Math.PI * 2;
+        const end = angle + slice;
+        const large = slice > Math.PI ? 1 : 0;
+        const x1 = cx + r * Math.cos(angle);
+        const y1 = cy + r * Math.sin(angle);
+        const x2 = cx + r * Math.cos(end);
+        const y2 = cy + r * Math.sin(end);
+        const path = `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`;
+        const fill = palette[index % palette.length];
+        const active = selection?.index === index;
+        angle = end;
+        return (
+          <Path
+            key={`${point.label}-${index}`}
+            d={path}
+            fill={fill}
+            fillOpacity={selection && !active ? 0.45 : 1}
+            stroke={active ? colors.text : colors.panel}
+            strokeWidth={active ? 1.6 : 1}
+            onPress={() => toggleSelection({
+              index,
+              label: String(point.label),
+              entries: [
+                { name: '值', value: formatMetric(Number(point.value) || 0), color: fill },
+                { name: '占比', value: `${((value / total) * 100).toFixed(1)}%`, color: fill },
+              ],
+            })}
+          />
+        );
+      });
+      legend = history.slice(0, 8).map((point, index) => ({ label: String(point.label), value: Number(point.value) || 0, color: palette[index % palette.length] }));
+    }
+  } else if (type === 'heatmap') {
+    if (!chart.heatmap || !chart.heatmap.values.length) {
+      empty = true;
+    } else {
+      const { xLabels, yLabels, values, valueLabel } = chart.heatmap;
+      const flat = values.flat().map((value) => Number(value) || 0);
+      const heatMax = Math.max(1, ...flat);
+      const heatMin = Math.min(0, ...flat);
+      const cellW = (innerW - 2) / Math.max(1, xLabels.length);
+      const cellH = innerH / Math.max(1, yLabels.length);
+      body = values.slice(0, yLabels.length).map((row, rowIndex) =>
+        row.slice(0, xLabels.length).map((value, columnIndex) => {
+          const numeric = Number(value) || 0;
+          const fill = heatTone((numeric - heatMin) / (heatMax - heatMin || 1));
+          const label = `${yLabels[rowIndex] ?? ''} · ${xLabels[columnIndex] ?? ''}`;
+          const active = selection?.label === label;
+          return (
+            <Rect
+              key={`${columnIndex}-${rowIndex}`}
+              x={padLeft + columnIndex * cellW}
+              y={padTop + rowIndex * cellH}
+              width={Math.max(1, cellW - 2)}
+              height={Math.max(1, cellH - 2)}
+              rx={2}
+              fill={fill}
+              stroke={active ? colors.text : 'transparent'}
+              strokeWidth={active ? 1.4 : 0}
+              onPress={() => toggleSelection({ label, entries: [{ name: valueLabel || '值', value: formatMetric(numeric), color: fill }] })}
+            />
+          );
+        }),
+      );
+      const xTicks = Array.from(new Set([0, Math.floor(xLabels.length / 2), xLabels.length - 1]));
+      body = (
+        <>
+          {body}
+          {yLabels.slice(0, 8).map((label, rowIndex) => (
+            <SvgText key={`yl-${rowIndex}`} x={padLeft - 4} y={padTop + rowIndex * cellH + cellH / 2 + 3} fill={colors.muted} fontSize={7.5} textAnchor="end">
+              {String(label).slice(0, 4)}
+            </SvgText>
+          ))}
+          {xTicks.map((columnIndex) => (
+            <SvgText key={`xl-${columnIndex}`} x={padLeft + columnIndex * cellW + cellW / 2} y={H - 5} fill={colors.muted} fontSize={7.5} textAnchor="middle">
+              {String(xLabels[columnIndex] ?? '').slice(0, 5)}
+            </SvgText>
+          ))}
+        </>
+      );
+      caption = `${valueLabel || '值'}：${compactNumber(heatMin)} → ${compactNumber(heatMax)}`;
+    }
+  } else if (type === 'scatter') {
+    const points = chart.scatter?.length
+      ? chart.scatter
+      : history.map((point, index) => {
+          const numeric = Number(point.label);
+          return { x: Number.isFinite(numeric) ? numeric : index + 1, y: Number(point.value) || 0, label: String(point.label) };
+        });
+    if (!points.length) {
+      empty = true;
+    } else {
+      const xs = points.map((point) => Number(point.x) || 0);
+      const ys = points.map((point) => Number(point.y) || 0);
+      const xHi = Math.max(1, ...xs);
+      const xLo = Math.min(0, ...xs);
+      const yHi = Math.max(1, ...ys);
+      const yLo = Math.min(0, ...ys);
+      const px = (value: number) => padLeft + ((value - xLo) / (xHi - xLo || 1)) * innerW;
+      const py = (value: number) => padTop + innerH - ((value - yLo) / (yHi - yLo || 1)) * innerH;
+      const pointLabel = (point: { x: number; y: number; label?: string }) =>
+        point.label && String(point.label).trim() ? String(point.label) : `(${Number(point.x) || 0}, ${Number(point.y) || 0})`;
+      const selectPoint = (point: { x: number; y: number; label?: string }) =>
+        toggleSelection({
+          label: pointLabel(point),
+          entries: [
+            { name: chart.xLabel || 'x', value: formatMetric(Number(point.x) || 0), color: palette[0] },
+            { name: chart.yLabel || 'y', value: formatMetric(Number(point.y) || 0), color: palette[0] },
+          ],
+        });
+      body = (
+        <>
+          <Line x1={padLeft} y1={padTop + innerH} x2={W - padRight} y2={padTop + innerH} stroke={colors.borderStrong} strokeWidth={1} />
+          <Line x1={padLeft} y1={padTop} x2={padLeft} y2={padTop + innerH} stroke={colors.borderStrong} strokeWidth={1} />
+          {points.slice(0, 180).map((point, index) => {
+            const active = selection?.label === pointLabel(point);
+            return (
+              <Circle
+                key={`dot-${index}`}
+                cx={px(Number(point.x) || 0)}
+                cy={py(Number(point.y) || 0)}
+                r={active ? 4.6 : 2.6}
+                fill={palette[0]}
+                fillOpacity={active ? 1 : 0.72}
+                stroke={active ? colors.text : 'transparent'}
+                strokeWidth={active ? 1.2 : 0}
+              />
+            );
+          })}
+          <SvgText x={padLeft - 4} y={padTop + 4} fill={colors.muted} fontSize={7.5} textAnchor="end">{compactNumber(yHi)}</SvgText>
+          <SvgText x={padLeft - 4} y={padTop + innerH + 3} fill={colors.muted} fontSize={7.5} textAnchor="end">{compactNumber(yLo)}</SvgText>
+          <SvgText x={W - padRight} y={H - 5} fill={colors.muted} fontSize={8} textAnchor="end">{chart.xLabel ?? 'x'}</SvgText>
+          {points.slice(0, 180).map((point, index) => (
+            <Circle
+              key={`hit-${index}`}
+              cx={px(Number(point.x) || 0)}
+              cy={py(Number(point.y) || 0)}
+              r={9}
+              fill={colors.text}
+              fillOpacity={0.001}
+              onPress={() => selectPoint(point)}
+            />
+          ))}
+        </>
+      );
+    }
+  } else if (type === 'radar') {
+    if (history.length < 3) {
+      empty = true;
+    } else {
+      const cx = W / 2;
+      const cy = H / 2;
+      const r = Math.min(W, H) / 2 - 22;
+      const angleAt = (index: number) => -Math.PI / 2 + (index / history.length) * Math.PI * 2;
+      const vertexAt = (index: number, value: number) => {
+        const radius = (Math.max(0, value) / hi) * r;
+        const angle = angleAt(index);
+        return { cx: cx + radius * Math.cos(angle), cy: cy + radius * Math.sin(angle) };
+      };
+      const primaryVertices = history.map((point, index) => vertexAt(index, Number(point.value) || 0));
+      body = (
+        <>
+          {[0.33, 0.66, 1].map((ratio) => (
+            <Circle key={ratio} cx={cx} cy={cy} r={r * ratio} fill="none" stroke={colors.border} strokeWidth={1} />
+          ))}
+          {columns.map((column) => (
+            <Polyline
+              key={column.name}
+              points={column.values.map((value, index) => { const vertex = vertexAt(index, value); return `${vertex.cx},${vertex.cy}`; }).join(' ')}
+              fill={column.color}
+              fillOpacity={0.12}
+              stroke={column.color}
+              strokeWidth={2}
+            />
+          ))}
+          {history.map((point, index) => {
+            const angle = angleAt(index);
+            const labelX = cx + (r + 12) * Math.cos(angle);
+            const labelY = cy + (r + 12) * Math.sin(angle) + 3;
+            const anchor = Math.cos(angle) > 0.25 ? 'start' : Math.cos(angle) < -0.25 ? 'end' : 'middle';
+            return (
+              <SvgText key={`rl-${index}`} x={labelX} y={labelY} fill={colors.muted} fontSize={7.5} textAnchor={anchor}>
+                {String(point.label).slice(0, 5)}
+              </SvgText>
+            );
+          })}
+          {primaryVertices.map((vertex, index) => (
+            <Circle
+              key={`hit-${index}`}
+              cx={vertex.cx}
+              cy={vertex.cy}
+              r={9}
+              fill={colors.text}
+              fillOpacity={0.001}
+              onPress={() => selectAt(index, columns)}
+            />
+          ))}
+          {selectedIndex >= 0 ? columns.map((column) => {
+            if (selectedIndex >= column.values.length) return null;
+            const vertex = vertexAt(selectedIndex, column.values[selectedIndex]);
+            return <Circle key={`sel-${column.name}`} cx={vertex.cx} cy={vertex.cy} r={3.4} fill={column.color} stroke={colors.text} strokeWidth={1} />;
+          }) : null}
+        </>
+      );
+      legend = columns.length > 1
+        ? columns.map((column) => ({ label: column.name, color: column.color }))
+        : history.slice(0, 5).map((point, index) => ({ label: String(point.label), value: Number(point.value) || 0, color: palette[index % palette.length] }));
+    }
+  } else if (!history.length) {
+    empty = true;
+  } else if (type === 'line') {
+    const lineFor = (values: number[], scale: (value: number) => number, color: string) => (
       <>
-        {[0, 0.5, 1].map((ratio) => (
-          <Line key={ratio} x1={10} y1={15 + (H - 30) * ratio} x2={W - 10} y2={15 + (H - 30) * ratio} stroke={colors.border} strokeWidth={1} />
-        ))}
-        <Polyline points={points} fill="none" stroke={palette[0]} strokeWidth={2} />
-        {series.map((point, index) => (
-          <Circle key={point.label} cx={10 + index * step} cy={scale(Number(point.value) || 0)} r={3} fill={palette[0]} />
-        ))}
-        <SvgText x={10} y={H - 3} fill={colors.muted} fontSize={8}>{String(series[0]?.label ?? '').slice(0, 10)}</SvgText>
-        <SvgText x={W - 10} y={H - 3} fill={colors.muted} fontSize={8} textAnchor="end">{String(series[series.length - 1]?.label ?? '').slice(0, 10)}</SvgText>
+        <Polyline points={values.map((value, index) => `${x(index)},${scale(value)}`).join(' ')} fill="none" stroke={color} strokeWidth={2} />
+        {values.length <= 12 ? values.map((value, index) => <Circle key={index} cx={x(index)} cy={scale(value)} r={2.2} fill={color} />) : null}
       </>
     );
-    legend = series.slice(0, 3).map((point, index) => ({ label: point.label, value: point.value, color: palette[index] }));
-  } else if (type === 'pie' && series.length) {
-    const total = series.reduce((sum, point) => sum + Math.max(0, Number(point.value) || 0), 0) || 1;
-    const cx = W / 2;
-    const cy = H / 2;
-    const r = Math.min(W, H) / 2 - 12;
-    let angle = -Math.PI / 2;
-    body = series.map((point, index) => {
-      const slice = (Math.max(0, Number(point.value) || 0) / total) * Math.PI * 2;
-      const end = angle + slice;
-      const large = slice > Math.PI ? 1 : 0;
-      const x1 = cx + r * Math.cos(angle);
-      const y1 = cy + r * Math.sin(angle);
-      const x2 = cx + r * Math.cos(end);
-      const y2 = cy + r * Math.sin(end);
-      const path = `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`;
-      const fill = palette[index % palette.length];
-      angle = end;
-      return <Path key={point.label} d={path} fill={fill} stroke={colors.panel} strokeWidth={1} />;
-    });
-    legend = series.slice(0, 8).map((point, index) => ({ label: point.label, value: point.value, color: palette[index % palette.length] }));
-  } else if (type === 'scatter' && chart.points?.length) {
-    const xs = chart.points.map((point) => Number(point.x) || 0);
-    const ys = chart.points.map((point) => Number(point.y) || 0);
-    const xMax = Math.max(1, ...xs);
-    const yMax = Math.max(1, ...ys);
+    const anchor = primary.length ? { x: x(primary.length - 1), y: y(primary[primary.length - 1]) } : null;
+    const forecastPath = forecast.map((point, index) => `${index === 0 && anchor ? `M ${anchor.x} ${anchor.y} L` : index === 0 ? 'M' : 'L'} ${x(primary.length + index)} ${y(Number(point.value) || 0)}`).join(' ');
+    const bandPath = forecast.length
+      ? [
+          ...forecast.map((point, index) => `${index === 0 ? 'M' : 'L'} ${x(primary.length + index)} ${y(Number(point.upper) || 0)}`),
+          ...[...forecast].reverse().map((point, index) => `L ${x(primary.length + forecast.length - 1 - index)} ${y(Number(point.lower) || 0)}`),
+          'Z',
+        ].join(' ')
+      : '';
     body = (
       <>
-        <Line x1={12} y1={H - 15} x2={W - 10} y2={H - 15} stroke={colors.border} strokeWidth={1} />
-        <Line x1={12} y1={15} x2={12} y2={H - 15} stroke={colors.border} strokeWidth={1} />
-        {chart.points.slice(0, 120).map((point, index) => (
-          <Circle key={index} cx={12 + ((Number(point.x) || 0) / xMax) * (W - 24)} cy={H - 15 - ((Number(point.y) || 0) / yMax) * (H - 30)} r={2.5} fill={palette[0]} fillOpacity={0.75} />
-        ))}
+        {grid}
+        {selectedIndex >= 0 ? <Line x1={x(selectedIndex)} y1={padTop} x2={x(selectedIndex)} y2={padTop + innerH} stroke={colors.borderStrong} strokeWidth={1} /> : null}
+        {columns.map((column, index) => <React.Fragment key={column.name}>{lineFor(column.values, dual && index === 1 ? y2 : y, column.color)}</React.Fragment>)}
+        {bandPath ? <Path d={bandPath} fill={palette[1]} fillOpacity={0.13} /> : null}
+        {forecastPath ? <Path d={forecastPath} fill="none" stroke={palette[1]} strokeWidth={2} strokeDasharray="4 3" /> : null}
+        {selectedIndex >= 0 ? columns.map((column, columnIndex) => (
+          selectedIndex < column.values.length ? (
+            <Circle
+              key={`sel-${column.name}`}
+              cx={x(selectedIndex)}
+              cy={(dual && columnIndex === 1 ? y2 : y)(column.values[selectedIndex])}
+              r={3.8}
+              fill={column.color}
+              stroke={colors.panel}
+              strokeWidth={1.5}
+            />
+          ) : null
+        )) : null}
+        {axisLabels}
+        {hitBands((index) => {
+          if (index < history.length) {
+            selectAt(index, columns);
+            return;
+          }
+          const point = forecast[index - history.length];
+          toggleSelection({
+            index,
+            label: String(labels[index] ?? ''),
+            entries: [
+              { name: '预测', value: formatMetric(Number(point?.value) || 0), color: palette[1] },
+              { name: '区间', value: `${formatMetric(Number(point?.lower) || 0)} ~ ${formatMetric(Number(point?.upper) || 0)}`, color: palette[1] },
+            ],
+          });
+        })}
       </>
     );
-  } else if (type === 'heatmap' && chart.heatmap) {
-    const { xLabels, yLabels, values } = chart.heatmap;
-    const flat = values.flat().map((value) => Number(value) || 0);
-    const heatMax = Math.max(1, ...flat);
-    const heatMin = Math.min(0, ...flat);
-    const cellW = (W - 20) / Math.max(1, xLabels.length);
-    const cellH = (H - 22) / Math.max(1, yLabels.length);
-    body = values.slice(0, yLabels.length).map((row, y) =>
-      row.slice(0, xLabels.length).map((value, x) => (
-        <Rect
-          key={`${x}-${y}`}
-          x={10 + x * cellW}
-          y={4 + y * cellH}
-          width={Math.max(1, cellW - 2)}
-          height={Math.max(1, cellH - 2)}
-          rx={2}
-          fill={heatTone(((Number(value) || 0) - heatMin) / (heatMax - heatMin || 1))}
-        />
-      )),
+    legend = columns.map((column) => ({ label: column.name, color: column.color }));
+    if (forecast.length) legend = [...legend, { label: '预测', color: palette[1] }];
+  } else if (dual) {
+    const barW = Math.min(band * 0.5, 30);
+    const path = secondary.map((value, index) => `${x(index)},${y2(value)}`).join(' ');
+    body = (
+      <>
+        {grid}
+        {selectedIndex >= 0 ? <Rect x={padLeft + selectedIndex * band} y={padTop} width={band} height={innerH} fill={palette[0]} fillOpacity={0.07} /> : null}
+        {primary.map((value, index) => {
+          const top = y(Math.max(value, 0));
+          const bottom = y(Math.min(value, 0));
+          return <Rect key={index} x={x(index) - barW / 2} y={top} width={barW} height={Math.max(1, bottom - top)} rx={2.5} fill={palette[0]} fillOpacity={0.9} />;
+        })}
+        <Polyline points={path} fill="none" stroke={palette[1]} strokeWidth={2} />
+        {secondary.map((value, index) => <Circle key={index} cx={x(index)} cy={y2(value)} r={2.2} fill={palette[1]} />)}
+        {axisLabels}
+        {hitBands((index) => selectAt(index, columns))}
+      </>
     );
     legend = [
-      { label: `${xLabels[0] ?? ''} …`, value: 0, color: palette[0] },
-      { label: `${yLabels[0] ?? ''} …`, value: 0, color: colors.muted },
+      { label: columns[0].name, color: palette[0] },
+      { label: `${columns[1].name}（右轴）`, color: palette[1] },
     ];
-  } else if (type === 'radar' && series.length >= 3) {
-    const cx = W / 2;
-    const cy = H / 2;
-    const r = Math.min(W, H) / 2 - 18;
-    const points = series.map((point, index) => {
-      const angle = -Math.PI / 2 + (index / series.length) * Math.PI * 2;
-      const radius = (Math.max(0, Number(point.value) || 0) / max) * r;
-      return `${cx + radius * Math.cos(angle)},${cy + radius * Math.sin(angle)}`;
-    }).join(' ');
+  } else if (stacked) {
+    const barW = Math.min(band * 0.62, 34);
     body = (
       <>
-        {[0.33, 0.66, 1].map((ratio) => (
-          <Circle key={ratio} cx={cx} cy={cy} r={r * ratio} fill="none" stroke={colors.border} strokeWidth={1} />
-        ))}
-        <Polyline points={points} fill={palette[0]} fillOpacity={0.18} stroke={palette[0]} strokeWidth={2} />
+        {grid}
+        {selectedIndex >= 0 ? <Rect x={padLeft + selectedIndex * band} y={padTop} width={band} height={innerH} fill={palette[0]} fillOpacity={0.07} /> : null}
+        {history.map((point, index) => {
+          let positive = 0;
+          let negative = 0;
+          return (
+            <React.Fragment key={`${point.label}-${index}`}>
+              {columns.map((column) => {
+                const value = column.values[index] ?? 0;
+                const base = value >= 0 ? positive : negative;
+                const end = base + value;
+                if (value >= 0) positive = end;
+                else negative = end;
+                const top = y(Math.max(base, end));
+                const bottom = y(Math.min(base, end));
+                return <Rect key={column.name} x={x(index) - barW / 2} y={top} width={barW} height={Math.max(1, bottom - top)} rx={1.5} fill={column.color} fillOpacity={0.92} />;
+              })}
+            </React.Fragment>
+          );
+        })}
+        {axisLabels}
+        {hitBands((index) => selectAt(index, columns))}
       </>
     );
-    legend = series.slice(0, 4).map((point, index) => ({ label: point.label, value: point.value, color: palette[index] }));
+    legend = columns.map((column) => ({ label: column.name, color: column.color }));
+  } else if (columns.length > 1) {
+    const groupW = band * 0.78;
+    const barW = groupW / columns.length;
+    body = (
+      <>
+        {grid}
+        {selectedIndex >= 0 ? <Rect x={padLeft + selectedIndex * band} y={padTop} width={band} height={innerH} fill={palette[0]} fillOpacity={0.07} /> : null}
+        {history.map((point, index) => (
+          <React.Fragment key={`${point.label}-${index}`}>
+            {columns.map((column, columnIndex) => {
+              const value = column.values[index] ?? 0;
+              const top = y(Math.max(value, 0));
+              const bottom = y(Math.min(value, 0));
+              return (
+                <Rect
+                  key={column.name}
+                  x={x(index) - groupW / 2 + columnIndex * barW}
+                  y={top}
+                  width={Math.max(1, barW - 2)}
+                  height={Math.max(1, bottom - top)}
+                  rx={2}
+                  fill={column.color}
+                  fillOpacity={0.92}
+                />
+              );
+            })}
+          </React.Fragment>
+        ))}
+        {axisLabels}
+        {hitBands((index) => selectAt(index, columns))}
+      </>
+    );
+    legend = columns.map((column) => ({ label: column.name, color: column.color }));
   } else {
-    // bar（默认）
-    const barW = (W - 20) / Math.max(1, series.length);
-    body = series.map((point, index) => {
-      const height = Math.max(2, ((Number(point.value) || 0) / max) * (H - 30));
-      return <Rect key={point.label} x={10 + index * barW + 2} y={H - 15 - height} width={Math.max(3, barW - 4)} height={height} rx={2} fill={palette[index % palette.length]} />;
-    });
-    legend = series.slice(0, 4).map((point, index) => ({ label: point.label, value: point.value, color: palette[index % palette.length] }));
+    const barW = Math.min(band * 0.62, 34);
+    body = (
+      <>
+        {grid}
+        {selectedIndex >= 0 ? <Rect x={padLeft + selectedIndex * band} y={padTop} width={band} height={innerH} fill={palette[0]} fillOpacity={0.07} /> : null}
+        {history.map((point, index) => {
+          const value = Number(point.value) || 0;
+          const top = y(Math.max(value, 0));
+          const bottom = y(Math.min(value, 0));
+          return <Rect key={`${point.label}-${index}`} x={x(index) - barW / 2} y={top} width={barW} height={Math.max(1, bottom - top)} rx={2.5} fill={palette[index % palette.length]} fillOpacity={0.92} />;
+        })}
+        {axisLabels}
+        {hitBands((index) => selectAt(index, [{ ...columns[0], color: palette[index % palette.length] }]))}
+      </>
+    );
+    legend = history.slice(0, 6).map((point, index) => ({ label: String(point.label), value: Number(point.value) || 0, color: palette[index % palette.length] }));
   }
 
+  const axisHint = [chart.xLabel, chart.yLabel].filter(Boolean).join(' × ');
+  const hasData = history.length > 0 || Boolean(chart.heatmap?.values.length) || Boolean(chart.scatter?.length);
   return (
     <View style={{ marginTop: 7, gap: 5 }}>
-      <Text style={[styles.listMeta, { color: colors.text }]}>{chart.title ?? '图表'}{chart.xLabel || chart.yLabel ? ` · ${chart.xLabel ?? ''}${chart.yLabel ? ' × ' + chart.yLabel : ''}` : ''}</Text>
-      <View style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 8, backgroundColor: colors.panel, padding: 4 }}>
-        <Svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`}>{body}</Svg>
+      <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6 }}>
+        <Text style={styles.chartTitle} numberOfLines={2}>{chart.title ?? '图表'}</Text>
+        {axisHint ? <Text style={styles.chartAxisHint} numberOfLines={1}>{axisHint}</Text> : null}
       </View>
+      {hasData ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 3 }}>
+          {CHART_TYPES.map((item) => {
+            const active = item.value === type;
+            const blocked = !active && fit[item.value]?.ok === false;
+            return (
+              <Pressable
+                key={item.value}
+                testID={`m-chart-type-${item.value}`}
+                disabled={blocked}
+                accessibilityLabel={item.label}
+                accessibilityState={{ selected: active, disabled: blocked }}
+                style={[styles.chartTypeChip, active && styles.chartTypeChipActive, blocked && styles.chartTypeChipBlocked]}
+                onPress={() => {
+                  setType(item.value);
+                  setSelection(null);
+                }}
+              >
+                <item.icon size={10} color={active ? colors.accent : blocked ? colors.muted : colors.secondary} />
+                <Text style={[styles.chartTypeText, active && styles.chartTypeTextActive]}>{item.label}</Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      ) : null}
+      {empty ? (
+        <View style={styles.chartEmpty}><Text style={styles.listMeta}>没有可绘制的数据点（结果集为空或全为 NULL）</Text></View>
+      ) : (
+        <View style={styles.chartCard}>
+          <Svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`}>
+            <Rect x={0} y={0} width={W} height={H} fill={colors.text} fillOpacity={0.001} onPress={() => setSelection(null)} />
+            {body}
+          </Svg>
+          {selection ? (
+            <View
+              testID="m-chart-tooltip"
+              pointerEvents="none"
+              style={[styles.chartTooltip, selection.index !== undefined && selection.index < labels.length / 2 ? { right: 6 } : { left: 6 }]}
+            >
+              <Text style={styles.chartTooltipLabel} numberOfLines={1}>{selection.label}</Text>
+              {selection.entries.map((entry, index) => (
+                <View key={`${entry.name}-${index}`} style={styles.chartTooltipRow}>
+                  <View style={[styles.chartTooltipDot, { backgroundColor: entry.color }]} />
+                  <Text style={styles.chartTooltipName} numberOfLines={1}>{entry.name}</Text>
+                  <Text style={styles.chartTooltipValue} numberOfLines={1}>{entry.value}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+        </View>
+      )}
+      {caption ? <Text style={styles.chartNote}>{caption}</Text> : null}
       {legend.length ? (
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
           {legend.map((item, index) => (
             <View key={`${item.label}-${index}`} style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
               <View style={{ width: 7, height: 7, borderRadius: 2, backgroundColor: item.color }} />
-              <Text style={styles.listMeta} numberOfLines={1}>{item.label}{item.value ? ` · ${item.value.toLocaleString()}` : ''}</Text>
+              <Text style={styles.listMeta} numberOfLines={1}>{item.label}{item.value !== undefined ? ` · ${item.value.toLocaleString()}` : ''}</Text>
             </View>
           ))}
         </View>
       ) : null}
+      {chart.note ? <Text style={styles.chartNote}>{chart.note}</Text> : null}
     </View>
   );
 }
@@ -4525,6 +5171,7 @@ function MobileToolCard({
   status,
   result,
   summary,
+  showChart = true,
 }: {
   tool: string;
   args: unknown;
@@ -4532,6 +5179,7 @@ function MobileToolCard({
   status: LiveTool['status'];
   result?: ToolResult;
   summary?: string;
+  showChart?: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   const sql = args && typeof args === 'object' ? (args as Record<string, unknown>).sql : undefined;
@@ -4554,7 +5202,7 @@ function MobileToolCard({
               <Text style={styles.toolLabel}>结果</Text>
               <Text style={[styles.listMeta, { color: result.ok ? colors.success : colors.danger }]}>{result.summary}</Text>
               {result.error ? <Text style={[styles.hint, { color: colors.danger, marginTop: 4 }]}>{result.error.message}</Text> : null}
-              {chart ? <MobileChart chart={chart as ChartShape} /> : null}
+              {chart && showChart ? <MobileChart chart={chart as ChartShape} /> : null}
               {Array.isArray(data?.findings) && data.findings.length ? (
                 <View style={{ marginTop: 6, gap: 5 }}>
                   {data.findings.slice(0, 5).map((finding: any, index: number) => (
@@ -4602,53 +5250,269 @@ function PlanCard({ items }: { items: AgentPlanItem[] }) {
   );
 }
 
+type MdAlign = 'left' | 'center' | 'right';
+
+type MdBlock =
+  | { kind: 'heading'; level: number; text: string }
+  | { kind: 'paragraph'; text: string }
+  | { kind: 'list'; ordered: boolean; start: number; items: Array<{ depth: number; text: string }> }
+  | { kind: 'quote'; text: string }
+  | { kind: 'code'; code: string }
+  | { kind: 'hr' }
+  | { kind: 'table'; header: string[]; align: MdAlign[]; rows: string[][] };
+
+const MD_HEADING = /^(#{1,6})\s+(.*)$/;
+const MD_HR = /^(?:-{3,}|\*{3,}|_{3,})$/;
+const MD_LIST = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+
+const mdTableRow = (line: string): string[] => {
+  let content = line.trim();
+  if (content.startsWith('|')) content = content.slice(1);
+  if (content.endsWith('|')) content = content.slice(0, -1);
+  return content.split('|').map((cell) => cell.trim());
+};
+
+const mdTableSeparator = (line: string): boolean => {
+  if (!line.includes('|')) return false;
+  const cells = mdTableRow(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{1,}:?$/.test(cell.replace(/\s/g, '')));
+};
+
+const mdTableAlign = (line: string): MdAlign[] =>
+  mdTableRow(line).map((cell) => {
+    const token = cell.replace(/\s/g, '');
+    if (token.startsWith(':') && token.endsWith(':')) return 'center';
+    return token.endsWith(':') ? 'right' : 'left';
+  });
+
+const mdIsBlockStart = (lines: string[], index: number): boolean => {
+  const trimmed = lines[index]?.trim() ?? '';
+  if (!trimmed) return true;
+  if (/^```/.test(trimmed) || MD_HEADING.test(trimmed) || MD_HR.test(trimmed)) return true;
+  if (trimmed.startsWith('>') || MD_LIST.test(lines[index] ?? '')) return true;
+  return trimmed.includes('|') && index + 1 < lines.length && mdTableSeparator(lines[index + 1]);
+};
+
+const mdJoinLines = (lines: string[]): string =>
+  lines.reduce((acc, line) => {
+    if (!acc) return line;
+    const glued = /[\u2e80-\u9fff\u3000-\u303f]$/.test(acc) || /^[\u2e80-\u9fff\u3000-\u303f]/.test(line);
+    return acc + (glued ? '' : ' ') + line;
+  }, '');
+
+function parseMarkdown(text: string): MdBlock[] {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const blocks: MdBlock[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    if (!trimmed) {
+      index += 1;
+      continue;
+    }
+
+    if (/^```/.test(trimmed)) {
+      const code: string[] = [];
+      index += 1;
+      while (index < lines.length && !lines[index].trim().startsWith('```')) {
+        code.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      blocks.push({ kind: 'code', code: code.join('\n') });
+      continue;
+    }
+
+    const heading = MD_HEADING.exec(trimmed);
+    if (heading) {
+      blocks.push({ kind: 'heading', level: heading[1].length, text: heading[2] });
+      index += 1;
+      continue;
+    }
+
+    if (MD_HR.test(trimmed)) {
+      blocks.push({ kind: 'hr' });
+      index += 1;
+      continue;
+    }
+
+    if (trimmed.includes('|') && index + 1 < lines.length && mdTableSeparator(lines[index + 1])) {
+      const header = mdTableRow(trimmed);
+      const align = mdTableAlign(lines[index + 1]);
+      index += 2;
+      const rows: string[][] = [];
+      while (index < lines.length && lines[index].trim() && lines[index].includes('|')) {
+        rows.push(mdTableRow(lines[index]));
+        index += 1;
+      }
+      blocks.push({ kind: 'table', header, align, rows });
+      continue;
+    }
+
+    if (trimmed.startsWith('>')) {
+      const quote: string[] = [];
+      while (index < lines.length && lines[index].trim().startsWith('>')) {
+        quote.push(lines[index].trim().replace(/^>\s?/, ''));
+        index += 1;
+      }
+      blocks.push({ kind: 'quote', text: mdJoinLines(quote) });
+      continue;
+    }
+
+    if (MD_LIST.test(line)) {
+      const ordered = /\d/.test(MD_LIST.exec(line)![2]);
+      const start = ordered ? parseInt(MD_LIST.exec(line)![2], 10) || 1 : 1;
+      const items: Array<{ depth: number; text: string }> = [];
+      while (index < lines.length) {
+        const match = MD_LIST.exec(lines[index]);
+        if (!match) break;
+        const indent = match[1].replace(/\t/g, '  ').length;
+        items.push({ depth: Math.min(3, Math.floor(indent / 2)), text: match[3].trim() });
+        index += 1;
+        while (index < lines.length && lines[index].trim() && !MD_LIST.test(lines[index]) && !mdIsBlockStart(lines, index) && /^\s{2,}/.test(lines[index])) {
+          items[items.length - 1].text += ' ' + lines[index].trim();
+          index += 1;
+        }
+      }
+      blocks.push({ kind: 'list', ordered, start, items });
+      continue;
+    }
+
+    const paragraph: string[] = [];
+    while (index < lines.length && lines[index].trim() && (paragraph.length === 0 || !mdIsBlockStart(lines, index))) {
+      paragraph.push(lines[index].trim());
+      index += 1;
+    }
+    blocks.push({ kind: 'paragraph', text: mdJoinLines(paragraph) });
+  }
+  return blocks;
+}
+
+const MD_INLINE = /(\*\*[^*]+\*\*|__[^_]+__|`[^`\n]+`|~~[^~\n]+~~|\[[^\]\n]+\]\([^)\s]+\)|\*[^*\n]+\*)/g;
+
 function Inline({ text, style }: { text: string; style?: any }) {
-  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).filter(Boolean);
+  const parts = text.split(MD_INLINE).filter(Boolean);
   return (
     <Text style={[styles.mdText, style]}>
       {parts.map((part, index) => {
         if (part.startsWith('**') && part.endsWith('**')) return <Text key={index} style={styles.mdBold}>{part.slice(2, -2)}</Text>;
+        if (part.startsWith('__') && part.endsWith('__')) return <Text key={index} style={styles.mdBold}>{part.slice(2, -2)}</Text>;
         if (part.startsWith('`') && part.endsWith('`')) return <Text key={index} style={styles.mdCode}>{part.slice(1, -1)}</Text>;
+        if (part.startsWith('~~') && part.endsWith('~~')) return <Text key={index} style={styles.mdStrike}>{part.slice(2, -2)}</Text>;
+        const link = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(part);
+        if (link) {
+          return (
+            <Text key={index} style={styles.mdLink} onPress={() => void Linking.openURL(link[2])}>
+              {link[1]}
+            </Text>
+          );
+        }
+        if (part.startsWith('*') && part.endsWith('*') && part.length > 2) return <Text key={index} style={styles.mdItalic}>{part.slice(1, -1)}</Text>;
         return <Text key={index}>{part}</Text>;
       })}
     </Text>
   );
 }
 
-function Markdown({ text }: { text: string }) {
-  const chunks = text.split('```');
+const mdTextWidth = (value: string): number =>
+  Array.from(value).reduce((sum, char) => sum + (/[\u2e80-\u9fff\uf900-\ufaff\uff00-\uff60]/.test(char) ? 10.5 : 6), 0);
+
+function MarkdownTable({ header, align, rows }: { header: string[]; align: MdAlign[]; rows: string[][] }) {
+  const columns = Math.max(header.length, ...rows.map((row) => row.length), 1);
+  const cellAt = (row: string[], column: number) => row[column] ?? '';
+  const numeric = Array.from({ length: columns }, (_, column) =>
+    rows.some((row) => cellAt(row, column).trim() !== '') &&
+    rows.every((row) => cellAt(row, column).trim() === '' || /^(?:[—–-]|[-+¥$€]?[\d,]+(\.\d+)?%?)$/.test(cellAt(row, column).trim())),
+  );
+  const widths = Array.from({ length: columns }, (_, column) => {
+    const widest = Math.max(...[header[column] ?? '', ...rows.map((row) => cellAt(row, column))].map(mdTextWidth), 2);
+    return Math.max(62, Math.min(210, Math.round(widest + 16)));
+  });
+  const cellStyle = (column: number, lastRow = false) => [
+    styles.mdTableCell,
+    column === columns - 1 && styles.mdTableCellLast,
+    lastRow && styles.mdTableCellLastRow,
+    { width: widths[column], alignItems: numeric[column] || align[column] === 'right' ? 'flex-end' : align[column] === 'center' ? 'center' : 'flex-start' } as any,
+  ];
   return (
-    <View style={{ gap: 6 }}>
-      {chunks.map((chunk, index) => {
-        if (index % 2 === 1) {
-          const code = chunk.replace(/^[a-zA-Z]+\n/, '');
-          return (
-            <View key={index} style={styles.codeBlock}>
-              <Text style={styles.codeText}>{code.trim()}</Text>
-            </View>
-          );
-        }
-        return (
-          <View key={index} style={{ gap: 3 }}>
-            {chunk.split('\n').map((line, lineIndex) => {
-              const trimmed = line.trim();
-              if (!trimmed) return null;
-              if (trimmed.startsWith('# ')) return <Text key={lineIndex} style={styles.mdHeading}>{trimmed.slice(2)}</Text>;
-              if (/^\|?[\s:-]+\|/.test(trimmed)) return null;
-              if (trimmed.startsWith('|')) {
-                return <Text key={lineIndex} style={styles.mdTable}>{trimmed.replace(/\|/g, ' │ ')}</Text>;
-              }
-              if (/^[-*]\s+/.test(trimmed)) return <Inline key={lineIndex} text={`• ${trimmed.replace(/^[-*]\s+/, '')}`} style={styles.mdBullet} />;
-              if (/^\d+\.\s+/.test(trimmed)) return <Inline key={lineIndex} text={trimmed} style={styles.mdBullet} />;
-              if (trimmed.startsWith('>')) return <Inline key={lineIndex} text={trimmed.replace(/^>\s*/, '')} style={styles.mdQuote} />;
-              return <Inline key={lineIndex} text={trimmed} />;
-            })}
+    <View style={styles.mdTableWrap}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+        <View>
+          <View style={[styles.mdTableRow, styles.mdTableHeadRow]}>
+            {Array.from({ length: columns }, (_, column) => (
+              <View key={column} style={cellStyle(column)}>
+                <Inline text={cellAt(header, column)} style={styles.mdTableHeadText} />
+              </View>
+            ))}
           </View>
-        );
+          {rows.map((row, rowIndex) => (
+            <View key={rowIndex} style={[styles.mdTableRow, rowIndex % 2 === 1 && { backgroundColor: colors.elevated }]}>
+              {Array.from({ length: columns }, (_, column) => (
+                <View key={column} style={cellStyle(column, rowIndex === rows.length - 1)}>
+                  <Inline text={cellAt(row, column)} style={styles.mdTableCellText} />
+                </View>
+              ))}
+            </View>
+          ))}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+function Markdown({ text }: { text: string }) {
+  const blocks = useMemo(() => parseMarkdown(text), [text]);
+  return (
+    <View style={{ gap: 7 }}>
+      {blocks.map((block, index) => {
+        switch (block.kind) {
+          case 'heading': {
+            const style = block.level === 1 ? styles.mdH1 : block.level === 2 ? styles.mdH2 : block.level === 3 ? styles.mdH3 : styles.mdH4;
+            return <Inline key={index} text={block.text} style={style} />;
+          }
+          case 'paragraph':
+            return <Inline key={index} text={block.text} style={styles.mdParagraph} />;
+          case 'list':
+            return (
+              <View key={index} style={{ gap: 3 }}>
+                {block.items.map((item, itemIndex) => (
+                  <View key={itemIndex} style={[styles.mdListRow, { paddingLeft: item.depth * 14 }]}>
+                    <Text style={styles.mdListMarker}>{block.ordered ? `${block.start + itemIndex}.` : '•'}</Text>
+                    <Inline text={item.text} style={styles.mdListText} />
+                  </View>
+                ))}
+              </View>
+            );
+          case 'quote':
+            return (
+              <View key={index} style={styles.mdQuoteBlock}>
+                <Inline text={block.text} style={styles.mdQuoteText} />
+              </View>
+            );
+          case 'code':
+            return (
+              <View key={index} style={styles.codeBlock}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  <Text style={styles.codeText}>{block.code.trim()}</Text>
+                </ScrollView>
+              </View>
+            );
+          case 'hr':
+            return <View key={index} style={styles.mdHr} />;
+          case 'table':
+            return <MarkdownTable key={index} header={block.header} align={block.align} rows={block.rows} />;
+          default:
+            return null;
+        }
       })}
     </View>
   );
 }
+
+/** AI 回答统一行高；React Native 的 lineHeight 只能给数值，这里按字号乘 1.6 计算。 */
+const MD_LINE_HEIGHT = 1.6;
+const mdLine = (fontSize: number) => fontSize * MD_LINE_HEIGHT;
 
 const makeStyles = () => StyleSheet.create({
   splash: { flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' },
@@ -4718,21 +5582,47 @@ const makeStyles = () => StyleSheet.create({
   userBubble: { flex: 1, backgroundColor: colors.elevated, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, paddingHorizontal: 10, paddingVertical: 8 },
   userText: { color: colors.text, fontSize: 12.5, lineHeight: 19 },
 
-  mdText: { color: colors.secondary, fontSize: 12.5, lineHeight: 19 },
-  mdBullet: { color: colors.secondary, fontSize: 12.5, lineHeight: 20, paddingLeft: 2 },
-  mdHeading: { color: colors.text, fontSize: 14, fontWeight: '700', marginTop: 4 },
+  mdText: { color: colors.secondary, fontSize: 12.5, lineHeight: mdLine(12.5) },
+  mdParagraph: { color: colors.secondary, fontSize: 12.5, lineHeight: mdLine(12.5) },
+  mdH1: { color: colors.text, fontSize: 16, lineHeight: mdLine(16), fontWeight: '700', marginTop: 2 },
+  mdH2: { color: colors.text, fontSize: 14.5, lineHeight: mdLine(14.5), fontWeight: '700', marginTop: 2 },
+  mdH3: { color: colors.text, fontSize: 13.5, lineHeight: mdLine(13.5), fontWeight: '600', marginTop: 1 },
+  mdH4: { color: colors.text, fontSize: 12.5, lineHeight: mdLine(12.5), fontWeight: '600' },
   mdBold: { color: colors.text, fontWeight: '700' },
+  mdItalic: { fontStyle: 'italic' },
+  mdStrike: { textDecorationLine: 'line-through', color: colors.muted },
+  mdLink: { color: colors.accent, textDecorationLine: 'underline' },
   mdCode: { fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', color: colors.text, fontSize: 11 },
-  mdTable: { color: colors.secondary, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 9.5, lineHeight: 15 },
-  mdQuote: { color: colors.secondary, borderLeftWidth: 2, borderLeftColor: colors.agent, paddingLeft: 8 },
+  mdListRow: { flexDirection: 'row', gap: 6, alignItems: 'flex-start' },
+  mdListMarker: { color: colors.muted, fontSize: 11, lineHeight: mdLine(12.5), minWidth: 13 },
+  mdListText: { flex: 1, color: colors.secondary, fontSize: 12.5, lineHeight: mdLine(12.5) },
+  mdQuoteBlock: { borderLeftWidth: 2, borderLeftColor: colors.agent, backgroundColor: colors.agentSoft, borderRadius: 6, paddingVertical: 6, paddingHorizontal: 9 },
+  mdQuoteText: { color: colors.secondary, fontSize: 12, lineHeight: mdLine(12) },
+  mdHr: { height: 1, backgroundColor: colors.border, marginVertical: 3 },
+  mdTableWrap: { marginVertical: 2, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, overflow: 'hidden' },
+  mdTableRow: { flexDirection: 'row', alignItems: 'stretch' },
+  mdTableHeadRow: { backgroundColor: colors.elevated },
+  mdTableCell: { paddingHorizontal: 7, paddingVertical: 5, borderBottomWidth: 1, borderRightWidth: 1, borderColor: colors.border },
+  mdTableCellLast: { borderRightWidth: 0 },
+  mdTableCellLastRow: { borderBottomWidth: 0 },
+  mdTableHeadText: { color: colors.secondary, fontSize: 10, lineHeight: mdLine(10), fontWeight: '600' },
+  mdTableCellText: { color: colors.text, fontSize: 10.5, lineHeight: mdLine(10.5) },
   codeBlock: { backgroundColor: colors.code, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, padding: 9 },
-  codeText: { color: colors.secondary, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 10.5, lineHeight: 16 },
+  codeText: { color: colors.secondary, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 10.5, lineHeight: mdLine(10.5) },
   memoryPill: { flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderColor: colors.border, borderRadius: 999, paddingHorizontal: 7, paddingVertical: 2, maxWidth: '70%' },
   memoryPillText: { color: colors.muted, fontSize: 9.5 },
   loadingRow: { flexDirection: 'row', gap: 6, alignItems: 'center' },
   turnEnd: { color: colors.muted, fontSize: 9.5, textAlign: 'center', marginTop: 4 },
 
   thinking: { borderWidth: 1, borderStyle: 'dashed', borderColor: colors.borderStrong, borderRadius: radius.sm, padding: 8, backgroundColor: colors.panel },
+  jumpWrap: { position: 'absolute', left: 0, right: 0, bottom: 12, alignItems: 'center' },
+  jumpButton: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 30, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.elevated, shadowColor: '#000', shadowOpacity: 0.28, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 4 },
+  jumpText: { color: colors.secondary, fontSize: 10.5 },
+  execution: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, backgroundColor: colors.panel, overflow: 'hidden' },
+  executionHead: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 9, paddingVertical: 7 },
+  executionTitle: { color: colors.muted, fontSize: 10.5, flex: 1 },
+  executionCount: { color: colors.muted, fontSize: 9.5 },
+  executionBody: { borderTopWidth: 1, borderTopColor: colors.border, paddingHorizontal: 8, paddingTop: 8, paddingBottom: 8, gap: 7 },
   toolCard: { borderWidth: 1, borderColor: colors.border, borderLeftWidth: 2, borderLeftColor: colors.agent, borderRadius: radius.sm, backgroundColor: colors.panel },
   toolHead: { flexDirection: 'row', alignItems: 'center', gap: 6, padding: 8 },
   toolName: { color: colors.text, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 11, fontWeight: '600' },
@@ -4740,6 +5630,22 @@ const makeStyles = () => StyleSheet.create({
   riskBadgeText: { fontSize: 8, fontWeight: '700' },
   toolBody: { borderTopWidth: 1, borderTopColor: colors.border, padding: 8, gap: 3 },
   toolLabel: { color: colors.muted, fontSize: 8.5, textTransform: 'uppercase', letterSpacing: 0.6, marginTop: 4 },
+  chartTitle: { color: colors.text, fontSize: 12, fontWeight: '600', flexShrink: 1 },
+  chartAxisHint: { color: colors.muted, fontSize: 9, flexShrink: 1 },
+  chartTypeChip: { flexDirection: 'row', alignItems: 'center', gap: 3, height: 24, paddingHorizontal: 6, borderRadius: 999, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.panel },
+  chartTypeChipActive: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
+  chartTypeChipBlocked: { opacity: 0.45 },
+  chartTypeText: { color: colors.secondary, fontSize: 9.5 },
+  chartTypeTextActive: { color: colors.accent, fontWeight: '600' },
+  chartCard: { borderWidth: 1, borderColor: colors.border, borderRadius: 8, backgroundColor: colors.panel, padding: 4 },
+  chartTooltip: { position: 'absolute', top: 6, minWidth: 96, maxWidth: '72%', backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.borderStrong, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 5, gap: 3, shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 4 },
+  chartTooltipLabel: { color: colors.text, fontSize: 9.5, fontWeight: '600' },
+  chartTooltipRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  chartTooltipDot: { width: 6, height: 6, borderRadius: 2 },
+  chartTooltipName: { color: colors.muted, fontSize: 9, flexShrink: 1 },
+  chartTooltipValue: { color: colors.text, fontSize: 9.5, fontWeight: '600', marginLeft: 'auto' },
+  chartEmpty: { borderWidth: 1, borderColor: colors.border, borderRadius: 8, backgroundColor: colors.panel, padding: 12 },
+  chartNote: { color: colors.muted, fontSize: 9, lineHeight: 14 },
   planCard: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, padding: 9, gap: 5, backgroundColor: colors.panel },
   planRow: { flexDirection: 'row', gap: 7, alignItems: 'flex-start' },
   planIcon: { color: colors.muted, fontSize: 10, width: 12 },

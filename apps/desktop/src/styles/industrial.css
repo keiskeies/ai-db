@@ -198,7 +198,7 @@ body {
   color: var(--agent); border: 1px solid color-mix(in srgb, var(--agent) 22%, transparent);
 }
 .msg-assistant .content { gap: 8px; }
-.prose { font-size: 11.8px; line-height: 1.68; }
+.prose { font-size: 11.8px; line-height: 1.6; }
 .prose h1 { font-size: 14px; }
 .prose h2 { font-size: 13px; }
 .prose h3, .prose h4 { font-size: 12px; }
