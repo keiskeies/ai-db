@@ -1,9 +1,9 @@
 {
-  "at": "2026-11-03T01:43:38.718Z",
-  "elapsedMs": 258728,
+  "at": "2026-11-03T08:17:19.898Z",
+  "elapsedMs": 263613,
   "summary": {
-    "total": 190,
-    "passed": 190,
+    "total": 200,
+    "passed": 200,
     "failed": 0,
     "bySection": {
       "desktop-viewports": {
@@ -19,7 +19,7 @@
         "failed": 0
       },
       "mobile-app": {
-        "total": 30,
+        "total": 40,
         "failed": 0
       }
     }
@@ -1158,6 +1158,18 @@
     },
     {
       "section": "mobile-app",
+      "name": "app390x844 数据页包含连接选择器",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app390x844 单库连接不显示库选择器",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
       "name": "app390x844-memory 无布局缺陷",
       "ok": true,
       "detail": null
@@ -1189,6 +1201,18 @@
     {
       "section": "mobile-app",
       "name": "app360x640-data 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app360x640 数据页包含连接选择器",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app360x640 单库连接不显示库选择器",
       "ok": true,
       "detail": null
     },
@@ -1230,6 +1254,18 @@
     },
     {
       "section": "mobile-app",
+      "name": "app414x896 数据页包含连接选择器",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app414x896 单库连接不显示库选择器",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
       "name": "app414x896-memory 无布局缺陷",
       "ok": true,
       "detail": null
@@ -1266,6 +1302,18 @@
     },
     {
       "section": "mobile-app",
+      "name": "app768x1024 数据页包含连接选择器",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app768x1024 单库连接不显示库选择器",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
       "name": "app768x1024-memory 无布局缺陷",
       "ok": true,
       "detail": null
@@ -1297,6 +1345,18 @@
     {
       "section": "mobile-app",
       "name": "app320x568-data 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app320x568 数据页包含连接选择器",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app320x568 单库连接不显示库选择器",
       "ok": true,
       "detail": null
     },

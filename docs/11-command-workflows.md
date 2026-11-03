@@ -765,7 +765,7 @@ export interface ReportBlock {
   unit?: string;
   /** chart / table 绑定一个已执行的结果引用。 */
   resultRef?: string;
-  chartType?: 'bar' | 'line' | 'pie';
+  chartType?: 'bar' | 'line' | 'pie' | 'stacked';
   x?: string;
   y?: string;
   ys?: string[];
@@ -858,7 +858,7 @@ export interface ReportSpec {
 
 - 屏幕渲染复用现有图表组件与数据网格；报告页为独立标签页，支持滚动、打印、导出。
 - 布局：标题区 + 概览指标 + 章节；每节可含叙述、指标卡、图表、表格、对比、提示。
-- 报告图表块只输出柱 / 折线 / 饼（`compose_report` 的结构）；交互图表与 Agent 工具支持柱 / 堆叠 / 折线 / 饼 / 散点 / 热力 / 雷达，多系列用 `ys`。
+- 报告图表块只输出柱 / 折线 / 饼 / 堆叠柱（`compose_report` 的结构，热力图/雷达图/散点图在报告块中显式拒绝并提示改用对话图表）；交互图表与 Agent 工具支持柱 / 堆叠 / 折线 / 饼 / 散点 / 热力 / 雷达，多系列用 `ys`。助手里的 `/report` 属于 Agent 对话图表，可按数据形态使用全部七种。
 - 表格最多 200 行预览，超过时提示“导出查看全部”。
 - 响应式：桌面双栏，移动端单栏；图表在移动端保持可读的最小高度。
 - 打印 / PDF：沿用现有打印通道；分页避免把图表切断。
