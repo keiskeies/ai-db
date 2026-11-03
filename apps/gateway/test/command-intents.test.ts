@@ -51,5 +51,9 @@ test('report mode structures conclusions and charts rather than dumping rows', (
   const text = commandIntent('report')!.instruction;
   assert.match(text, /top-line summary/);
   assert.match(text, /render_chart/);
+  assert.match(text, /heatmap/);
+  assert.match(text, /radar/);
+  assert.match(text, /pie for one whole with 3–8/);
+  assert.match(text, /do not render a draft/);
   assert.match(text, /Do not paste raw result sets/);
 });

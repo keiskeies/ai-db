@@ -731,8 +731,23 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight, height: t
         ? Math.max(140, Math.min(350, maxHeight))
         : Math.max(140, Math.min(chartHeightCap(), naturalHeight));
   const plotW = width - 42 - (dual ? 44 : 12);
-  const denseLabels = all.length > 6 && plotW / all.length < 52;
-  const pad = { left: 42, right: dual ? 44 : 12, top: 12, bottom: denseLabels ? 42 : 28 };
+  // 横轴标签：放不下就统一倾斜，而不是隔几个丢一个——空着的刻度会被当成缺数据。
+  // 只有倾斜后仍然会压字（类别极多、带宽极窄）时，才退化为隔几个显示。
+  const rotateLabels = all.length > 1 && Math.max(...all.map((point) => textWidth(point.label))) > plotW / all.length - 6;
+  const maxLabelBottom = Math.round(Math.min(76, Math.max(36, height * 0.26)));
+  const sinAngle = Math.sin((40 * Math.PI) / 180);
+  const labelStep = rotateLabels
+    ? Math.max(1, Math.ceil(10.5 / Math.max(1, (plotW / all.length) * sinAngle)))
+    : 1;
+  const labelRoom = rotateLabels ? Math.max(20, (maxLabelBottom - 14) / sinAngle) : Math.max(24, plotW / all.length - 6);
+  const labels = all.map((point) => fitLabel(point.label, /^\d{4}[-/]\d{1,2}([-/]\d{1,2})?[日号]?$/.test(point.label) ? Infinity : labelRoom));
+  const widestShown = Math.max(...labels.map((label) => textWidth(label)), 0);
+  const pad = {
+    left: 42,
+    right: dual ? 44 : 12,
+    top: 12,
+    bottom: rotateLabels ? Math.min(maxLabelBottom, Math.max(34, Math.round(14 + widestShown * sinAngle))) : 28,
+  };
   const innerW = width - pad.left - pad.right;
   const innerH = height - pad.top - pad.bottom;
   const band = innerW / all.length;
@@ -788,13 +803,6 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight, height: t
       ].join(' ')
     : '';
 
-  const labelChars = denseLabels ? Math.max(3, Math.min(8, Math.floor(band / 7.5))) : 8;
-  const projected = (labelChars + 1) * 9 * 0.72;
-  const labelStep = denseLabels
-    ? projected > band * 1.15 ? Math.ceil(projected / band) : 1
-    : Math.max(1, Math.ceil(all.length / (zoomed ? 10 : 6)));
-  /** 日期型轴标签（2025-07 / 2025-07-15）必须整段显示：截成「2025-」等于把趋势图横轴废掉。 */
-  const labelLimit = (label: string) => (/^\d{4}[-/]\d{1,2}([-/]\d{1,2})?[日号]?$/.test(label) ? Math.max(labelChars, label.length) : labelChars);
   const tipAt = (label: string, index: number) =>
     `${label}\n${seriesList.map((entry) => `${entry.name}: ${formatExact(entry.values[index] ?? 0)}`).join('\n')}`;
 
@@ -1017,17 +1025,19 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight, height: t
       {all.map((point, index) => {
         if (index % labelStep !== 0) return null;
         const x = cx(index);
-        const y = height - (denseLabels ? 10 : 9);
+        const y = height - (rotateLabels ? 12 : 9);
+        const label = labels[index];
         return (
           <text
             key={`l-${point.label}-${index}`}
             x={x}
             y={y}
-            textAnchor={denseLabels ? 'end' : 'middle'}
-            transform={denseLabels ? `rotate(-42 ${x} ${y})` : undefined}
+            textAnchor={rotateLabels ? 'end' : 'middle'}
+            transform={rotateLabels ? `rotate(-40 ${x} ${y})` : undefined}
             className="chart-axis chart-axis-label"
+            data-tip={label === point.label ? undefined : point.label}
           >
-            {point.label.length > labelLimit(point.label) ? `${point.label.slice(0, labelLimit(point.label))}…` : point.label}
+            {label}
           </text>
         );
       })}
@@ -1035,6 +1045,31 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight, height: t
     {multi ? <SeriesLegend series={seriesList} /> : null}
     </>
   );
+}
+
+/** 9px 字号下的近似字宽：CJK/全角按 9.2px，其余按 5.4px。 */
+function charWidth(char: string): number {
+  return /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]/.test(char) ? 9.2 : 5.4;
+}
+
+function textWidth(text: string): number {
+  let width = 0;
+  for (const char of text) width += charWidth(char);
+  return width;
+}
+
+/** 按像素宽度截断标签，超长部分用省略号；日期轴（2025-07-15）永不截断。 */
+function fitLabel(label: string, maxWidth: number): string {
+  if (!Number.isFinite(maxWidth) || textWidth(label) <= maxWidth) return label;
+  let used = 0;
+  let kept = '';
+  for (const char of label) {
+    const width = charWidth(char);
+    if (used + width > maxWidth - 6) break;
+    used += width;
+    kept += char;
+  }
+  return kept ? `${kept}…` : '…';
 }
 
 function formatTick(value: number): string {

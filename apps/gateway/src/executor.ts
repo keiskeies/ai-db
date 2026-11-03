@@ -10,6 +10,8 @@ import {
   buildExplain,
   buildSelectTable,
   builtinMcpServer,
+  chartSuitability,
+  CHART_KIND_LABELS,
   classifySql,
   cqlQueryFromArgs,
   cypherQueryFromArgs,
@@ -25,6 +27,7 @@ import {
   managesIndexes,
   mqlQueryFromArgs,
   quoteIdent,
+  recommendChartType,
   redisQueryFromArgs,
   resolveRisk,
   round,
@@ -228,7 +231,18 @@ export class ToolExecutor {
         approval: 'policy',
         status: result.ok ? 'ok' : 'error',
         durationMs: result.meta.durationMs,
-        meta: { sessionId: ctx.sessionId, callId: call.id, error: result.error?.code, summary: result.summary },
+        meta: {
+          sessionId: ctx.sessionId,
+          callId: call.id,
+          error: result.error?.code,
+          summary: result.summary,
+          ...(call.name === 'render_chart' && result.ok
+            ? {
+                requestedChartType: typeof call.args.type === 'string' ? call.args.type : undefined,
+                chartType: (result.data as { chart?: { type?: string } } | undefined)?.chart?.type,
+              }
+            : {}),
+        },
       });
     }
     if (call.name === 'skill_run' || call.name === 'skill_worker_run') {
@@ -1642,6 +1656,9 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
       return Number.isFinite(typeof value === 'number' ? value : Number(String(value).trim()));
     }).slice(0, 24);
     const series = toSeries(usable, x, y).map((point) => ({ label: point.label || '—', value: point.value }));
+    if (!series.length) {
+      throw new DbError('图表没有有效数据点：检查 x/y 列与 NULL 值', { code: 'EMPTY_SERIES' });
+    }
     const extraSeries = (extraNames ?? [])
       .filter((name) => name !== y && name !== x && columns.some((column) => column.name === name))
       .map((name) => ({
@@ -1654,18 +1671,30 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
     if (type === 'radar' && series.length < 3) {
       throw new DbError('雷达图至少需要 3 个类别轴（结果行数不足）', { code: 'EMPTY_SERIES' });
     }
+    // 数据形态是权威的：模型点错类型时在这里确定性降级，并把原因写进图表与工具记录，
+    // 避免「工具记录说饼图、界面却画出柱状图」的两套事实。
+    const fit = chartSuitability({ series, extraSeries });
+    let selectedType = type;
+    let correctionNote: string | undefined;
+    if (!fit[type].ok && (type === 'pie' || type === 'radar' || type === 'stacked')) {
+      const recommended = recommendChartType(fit);
+      selectedType = recommended && recommended !== 'scatter' && recommended !== 'heatmap' ? recommended : 'bar';
+      correctionNote = `${CHART_KIND_LABELS[type]}不适配当前数据：${fit[type].reason ?? '形态不符'}；已改用${CHART_KIND_LABELS[selectedType]}。`;
+    }
+    const keepStacked = (selectedType === 'stacked' || (selectedType === 'bar' && stacked)) && extraSeries.length > 0;
     const chart = {
-      type,
-      title: title ?? (type === 'radar' ? `${y} 等 ${series.length} 项指标` : `${y} by ${x}`),
+      type: selectedType,
+      title: title ?? (selectedType === 'radar' ? `${y} 等 ${series.length} 项指标` : `${y} by ${x}`),
       xLabel: x,
       yLabel: y,
       sql,
       series,
       ...(extraSeries.length ? { extraSeries } : {}),
-      ...((stacked || type === 'stacked') && extraSeries.length ? { stacked: true } : {}),
+      ...(keepStacked ? { stacked: true } : {}),
+      ...(correctionNote ? { note: correctionNote } : {}),
     };
-    const typeText = type === 'line' ? '折线' : type === 'pie' ? '饼' : type === 'stacked' ? '堆叠柱' : type === 'radar' ? '雷达' : '柱状';
-    return ok(started, `已生成${typeText}图（${type === 'radar' ? `${series.length} 个轴` : `${series.length} 个数据点`}）`, {
+    const summaryType = selectedType === 'pie' ? '饼' : selectedType === 'stacked' ? '堆叠柱' : CHART_KIND_LABELS[selectedType].replace(/图$/, '');
+    return ok(started, `已生成${summaryType}图（${selectedType === 'radar' ? `${series.length} 个轴` : `${series.length} 个数据点`}）${correctionNote ? `；${correctionNote}` : ''}`, {
       chart,
       columns,
       rows,

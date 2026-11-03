@@ -156,3 +156,39 @@ test('没有业务时间列时不给假指标，明确说明只能做规模盘�
   assert.ok(spec.sections[0].blocks.some((block) => block.kind === 'callout' && block.tone === 'warning'));
   assert.match(spec.executive?.headline ?? '', /未识别出/);
 });
+
+test('确定性报告在存在低基数维度时生成构成饼图', async () => {
+  const eventsPath = join(home, 'events.sqlite');
+  const events = new DatabaseSync(eventsPath);
+  events.exec(`
+    CREATE TABLE events (
+      id INTEGER PRIMARY KEY,
+      channel TEXT NOT NULL,
+      amount REAL,
+      created_at TEXT NOT NULL
+    );
+    INSERT INTO events (id, channel, amount, created_at) VALUES
+      (1, '自然流量', 10, '2026-10-02 10:00:00'),
+      (2, '自然流量', 20, '2026-10-03 10:00:00'),
+      (3, '广告', 30, '2026-10-04 10:00:00'),
+      (4, '广告', 40, '2026-10-05 10:00:00'),
+      (5, '活动', 50, '2026-10-06 10:00:00'),
+      (6, '活动', 60, '2026-10-07 10:00:00'),
+      (7, '合作', 70, '2026-10-08 10:00:00'),
+      (8, '合作', 80, '2026-10-09 10:00:00');
+  `);
+  events.close();
+  const eventsConn = gateway.store.createConnection({ name: 'Events', engine: 'sqlite', database: eventsPath });
+  const spec = await generateReport(gateway.store, gateway.manager, {
+    sources: [{ connectionId: eventsConn.id }],
+    topic: '10 月渠道构成',
+    resolvedPeriod: period,
+  });
+  const trend = spec.sections.find((section) => section.id === 'trend');
+  const pie = trend?.blocks.find((block) => block.kind === 'chart' && block.chartType === 'pie');
+  assert.ok(pie, `缺少构成饼图：${(trend?.blocks ?? []).map((block) => block.kind === 'chart' ? block.chartType : block.kind).join(', ')}`);
+  assert.equal(pie.series?.length, 4);
+  assert.deepEqual(pie.series?.map((point) => point.label).sort(), ['合作', '广告', '活动', '自然流量'].sort());
+  assert.match(pie.note ?? '', /按 channel 分组/);
+});
+

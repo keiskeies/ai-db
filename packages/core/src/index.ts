@@ -10,6 +10,7 @@ export * from './sql/ddl';
 export * from './schema/diff';
 export * from './analysis/stats';
 export * from './analysis/forecast';
+export * from './analysis/chartFit';
 export * from './agent/types';
 export * from './agent/tools';
 export * from './agent/toolGroups';

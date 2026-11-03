@@ -293,21 +293,64 @@ function agentActivity(live: LiveTurn): ActivityState {
   return { icon: <Brain size={11} />, label: '正在理解你的问题', tone: 'think' };
 }
 
+/**
+ * 计划固定在输入框上方的状态条里：回答正文会不断把计划卡顶出视野，
+ * 这里始终显示当前步骤，点开再看完整清单。
+ */
 function LiveActivity({ live }: { live: LiveTurn }) {
   const activity = agentActivity(live);
   const [now, setNow] = useState(() => Date.now());
+  const [planOpen, setPlanOpen] = useState(false);
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [live.startedAt]);
   const seconds = Math.max(0, Math.floor((now - live.startedAt) / 1000));
+  const plan = live.plan;
+  const done = plan.filter((item) => item.status === 'done').length;
+  const current = plan.find((item) => item.status === 'doing');
+  const planLabel = current?.text ?? (plan.length && done === plan.length ? '计划已完成' : '正在准备下一步');
+  const label = plan.length ? planLabel : activity.label;
   return (
-    <div className={`agent-activity tone-${activity.tone}`} data-testid="agent-activity" role="status" aria-live="polite">
+    <div
+      className={`agent-activity tone-${activity.tone}${plan.length ? ' has-plan' : ''}`}
+      data-testid="agent-activity"
+      role="status"
+      aria-live="polite"
+    >
       <span className="activity-orb" aria-hidden="true">{activity.icon}</span>
-      <span className="activity-label" key={activity.label}>{activity.label}</span>
-      <span className="activity-dots" aria-hidden="true"><i /><i /><i /></span>
-      <span className="spacer" />
+      <div className="activity-main">
+        <div className="activity-plan-line">
+          {plan.length ? <span className="activity-plan-count">{done}/{plan.length}</span> : null}
+          <span className="activity-label" key={label}>{label}</span>
+          <span className="activity-dots" aria-hidden="true"><i /><i /><i /></span>
+        </div>
+        {plan.length ? <div className="activity-sub" key={activity.label}>{activity.label}</div> : null}
+      </div>
       {seconds >= 1 ? <span className="activity-elapsed">{seconds}s</span> : null}
+      {plan.length ? (
+        <button
+          type="button"
+          className="activity-plan-toggle"
+          aria-expanded={planOpen}
+          aria-label={planOpen ? '收起计划步骤' : '展开计划步骤'}
+          title={planOpen ? '收起计划步骤' : '展开计划步骤'}
+          onClick={() => setPlanOpen((open) => !open)}
+          data-testid="agent-plan-toggle"
+        >
+          <ChevronDown size={11} />
+        </button>
+      ) : null}
+      {plan.length && planOpen ? (
+        <div className="activity-plan-pop" data-testid="agent-plan-pop">
+          {plan.map((item) => (
+            <div key={item.id} className={`plan-item ${item.status}`}>
+              <span className="plan-icon">{item.status === 'done' ? '✓' : ''}</span>
+              <span>{item.text}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -690,15 +733,13 @@ function ToolCard({
   );
 }
 
-function PlanCard({ items, running }: { items: Array<{ id: string; text: string; status: string }>; running?: boolean }) {
+function PlanCard({ items }: { items: Array<{ id: string; text: string; status: string }> }) {
   if (!items.length) return null;
   const done = items.filter((item) => item.status === 'done').length;
-  const active = items.findIndex((item) => item.status === 'doing');
   return (
     <div className="plan-card" data-testid="plan-card">
       <div className="plan-title" data-testid="plan-progress">
         <Check size={11} /> 计划 · {done}/{items.length}
-        {running && active >= 0 ? <span className="plan-stage">第 {active + 1} 步进行中</span> : null}
       </div>
       {items.map((item) => (
         <div key={item.id} className={`plan-item ${item.status}`}>
@@ -1498,7 +1539,6 @@ export function AgentPanel() {
                           onOpenEditor={(sql) => openQuery(undefined, sql)}
                         />
                       ))}
-                      <PlanCard items={live.plan} running={busy} />
                     </ExecutionSection>
                   ) : null}
                   {live.text ? (

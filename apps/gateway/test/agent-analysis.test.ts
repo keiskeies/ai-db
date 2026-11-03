@@ -259,3 +259,70 @@ test('render_chart radar keeps multiple measures and enforces three axes', async
   assert.equal(tooFew.ok, false);
   assert.match(tooFew.error?.message ?? '', /3 个类别轴/);
 });
+
+test('render_chart 对不适配的饼图做确定性降级，并让工具记录与图表一致', async () => {
+  const tooMany = await run('render_chart', {
+    sql: "SELECT 'c' || id AS bucket, id AS cnt FROM orders LIMIT 10",
+    type: 'pie',
+    x: 'bucket',
+    y: 'cnt',
+  });
+  assert.equal(tooMany.ok, true, tooMany.error?.message);
+  const tooManyChart = (tooMany.data as any).chart;
+  assert.equal(tooManyChart.type, 'bar', '10 个切片超过饼图上限，应降级为柱状图');
+  assert.match(tooManyChart.note ?? '', /饼图不适配.*最多 8 个.*已改用柱状图/);
+  assert.match(tooMany.summary, /已改用柱状图/);
+
+  const multiMeasure = await run('render_chart', {
+    sql: 'SELECT status, COUNT(*) AS cnt, SUM(total_cents) AS gmv FROM orders GROUP BY status',
+    type: 'pie',
+    ys: ['gmv'],
+  });
+  assert.equal(multiMeasure.ok, true, multiMeasure.error?.message);
+  const multiChart = (multiMeasure.data as any).chart;
+  assert.equal(multiChart.type, 'bar');
+  assert.match(multiChart.note ?? '', /多个度量/);
+});
+
+test('render_chart 保留合法的饼图与雷达图，不误降级', async () => {
+  const pie = await run('render_chart', {
+    sql: 'SELECT status, COUNT(*) AS cnt FROM orders GROUP BY status',
+    type: 'pie',
+  });
+  assert.equal(pie.ok, true, pie.error?.message);
+  assert.equal((pie.data as any).chart.type, 'pie');
+  assert.equal((pie.data as any).chart.note, undefined);
+});
+
+test('render_chart 对缺度量的堆叠图与超类别的雷达图降级', async () => {
+  const stacked = await run('render_chart', {
+    sql: 'SELECT status, COUNT(*) AS cnt FROM orders GROUP BY status',
+    type: 'stacked',
+  });
+  assert.equal(stacked.ok, true, stacked.error?.message);
+  assert.equal((stacked.data as any).chart.type, 'bar');
+  assert.match((stacked.data as any).chart.note ?? '', /只有一个度量列/);
+
+  const radar = await run('render_chart', {
+    sql: "SELECT 'c' || id AS bucket, id AS cnt FROM orders LIMIT 10",
+    type: 'radar',
+    x: 'bucket',
+    y: 'cnt',
+  });
+  assert.equal(radar.ok, true, radar.error?.message);
+  assert.equal((radar.data as any).chart.type, 'bar');
+  assert.match((radar.data as any).chart.note ?? '', /类别超过 8 个/);
+});
+
+test('render_chart 审计记录同时留下请求类型与实际类型', async () => {
+  await run('render_chart', {
+    sql: "SELECT 'c' || id AS bucket, id AS cnt FROM orders LIMIT 10",
+    type: 'pie',
+    x: 'bucket',
+    y: 'cnt',
+  });
+  const entry = gateway.store.listAudit({ limit: 20 }).find((row: any) => row.tool === 'render_chart');
+  assert.equal(entry?.meta?.requestedChartType, 'pie');
+  assert.equal(entry?.meta?.chartType, 'bar');
+});
+

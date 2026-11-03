@@ -15,7 +15,7 @@ import type { ConnectionManager } from '../manager';
 import type { Store } from '../store';
 import { connectionSchema } from './common';
 import { flattenTables, type TableFact } from './databaseBrief';
-import { businessTimeOf, columnsOf, factScore, moneyOf, softDeleteFilter, tableLabel, tableRef } from './dashboardGenerate';
+import { businessTimeOf, columnsOf, dimensionLabel, dimensionOf, factScore, moneyOf, softDeleteFilter, tableLabel, tableRef } from './dashboardGenerate';
 
 /**
  * 无模型时可用的业务名：英文库名直译成中文，读者才不会看到「orders单量」。
@@ -216,6 +216,7 @@ async function businessFactsOf(
   const previous = period.previous;
   // 基线读法直接取解析器的标签（已含「环比 / 同比」），不要再加前缀，否则会变成「环比 环比 上期」。
   const baselineLabel = previous ? previous.label.split('（')[0]?.trim() : undefined;
+  let compositionTried = false;
 
   for (const fact of usable) {
     if (out.length >= limit && series.length >= 2) break;
@@ -284,6 +285,36 @@ async function businessFactsOf(
         .filter((point) => Number.isFinite(point.value) && !/^\s*$/.test(point.label));
       if (points.length >= 3) {
         series.push({ title: `${label}月度趋势`, chartType: 'line', points, definition: `${label}：按 ${time} 分月统计记录数` });
+      }
+    }
+
+    // 一张低基数维度构成：有明确业务维度时，报告应能回答「占比」而不是只有时间趋势。
+    // 先查 9 行判断是否真的是一个完整整体；超过 8 类就不画饼图，避免把 Top 8 伪装成全部。
+    if (!compositionTried) {
+      const dim = dimensionOf(fact, [time, ...(money ? [money] : [])]);
+      if (dim) {
+        compositionTried = true;
+        const composition = await rowsQuery(
+          manager,
+          conn,
+          database,
+          `SELECT ${quoteIdent(dim, engine)} AS dim_value, COUNT(*) AS cnt FROM ${table} ${whereFor(from, to)} GROUP BY dim_value ORDER BY cnt DESC LIMIT 9`,
+          9,
+        );
+        const points = composition
+          .slice(0, 8)
+          .map((row) => ({ label: String(row[0] ?? '—'), value: Number(row[1]) }))
+          .filter((point) => point.label.trim() && Number.isFinite(point.value) && point.value >= 0);
+        if (composition.length <= 8 && points.length >= 3) {
+          const dimText = dimensionLabel(fact, dim);
+          series.push({
+            title: `${label}${dimText}构成`,
+            chartType: 'pie',
+            points,
+            definition: `${label}：${from} ~ ${to} 按 ${dim} 分组统计记录数`,
+          });
+          calibers.push(`${label} 构成口径：按 ${dim} 分组`);
+        }
       }
     }
 

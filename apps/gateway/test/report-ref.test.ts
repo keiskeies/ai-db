@@ -45,3 +45,48 @@ test('报告块必须绑定存在的 resultRef，且数字来自该结果', () =
   assert.ok(!('error' in comparison));
   assert.equal((comparison as any).delta.absolute, 35);
 });
+
+test('报告图表拒绝热力图/雷达图，而不是静默改成柱状图', () => {
+  const heatmap = normalizeReportBlock(
+    { kind: 'chart', resultRef: 'call_1', chartType: 'heatmap', series: [{ label: 'a', value: 42 }] },
+    new Set([42]),
+    refs,
+    true,
+  );
+  assert.ok('error' in heatmap);
+  assert.match(heatmap.error, /不支持 heatmap/);
+});
+
+test('报告饼图按 3–8 个切片校验，避免把 Top N 伪装成整体', () => {
+  const valid = normalizeReportBlock(
+    {
+      kind: 'chart',
+      resultRef: 'call_1',
+      chartType: 'pie',
+      series: [
+        { label: 'a', value: 42 },
+        { label: 'b', value: 7 },
+        { label: 'c', value: 42 },
+      ],
+    },
+    new Set([42, 7]),
+    refs,
+    true,
+  );
+  assert.ok(!('error' in valid));
+
+  const tooMany = normalizeReportBlock(
+    {
+      kind: 'chart',
+      resultRef: 'call_1',
+      chartType: 'pie',
+      series: Array.from({ length: 9 }, (_, index) => ({ label: String(index), value: 42 })),
+    },
+    new Set([42]),
+    refs,
+    true,
+  );
+  assert.ok('error' in tooMany);
+  assert.match(tooMany.error, /3–8/);
+});
+

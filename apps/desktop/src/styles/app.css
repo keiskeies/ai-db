@@ -594,7 +594,6 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 .plan-item.done .plan-icon { background: var(--success); border-color: var(--success); color: var(--on-solid); }
 .plan-item.doing .plan-icon { border-color: var(--agent); background: var(--agent-soft); }
 .plan-item.doing .plan-icon::after { content: ''; width: 4px; height: 4px; border-radius: 50%; background: var(--agent); animation: plan-pulse 1.4s ease-in-out infinite; }
-.plan-title .plan-stage { margin-left: auto; text-transform: none; letter-spacing: 0; color: var(--agent); font-size: 9.5px; }
 @keyframes plan-pulse { 50% { transform: scale(.55); opacity: .45; } }
 .memory-refs { font-size: 10px; color: var(--text-muted); }
 .memory-refs summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 4px; }
@@ -619,6 +618,7 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 /* 固定贴在输入框上方的实时状态条：图标随阶段变化，文案说明 AI 正在做什么 */
 .agent-activity {
   --activity: var(--agent);
+  position: relative;
   flex: 0 0 auto; display: flex; align-items: center; gap: 7px;
   margin: 0 10px 7px; padding: 7px 10px;
   border: 1px solid color-mix(in srgb, var(--activity) 26%, var(--border-subtle));
@@ -643,12 +643,37 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
   animation: spin 1.1s linear infinite;
 }
 .agent-activity.tone-think .activity-orb svg, .agent-activity.tone-answer .activity-orb svg { animation: activity-pulse 1.6s ease-in-out infinite; }
+.activity-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.activity-plan-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .activity-label { color: var(--text-primary); font-weight: 550; animation: fade-in .2s ease; }
-.activity-dots { display: inline-flex; align-items: flex-end; gap: 2px; height: 4px; }
+.agent-activity.has-plan .activity-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-plan-count {
+  flex: 0 0 auto; padding: 0 5px; border-radius: 999px; line-height: 15px;
+  font-family: var(--font-mono); font-size: 9px; font-variant-numeric: tabular-nums;
+  color: var(--activity); background: color-mix(in srgb, var(--activity) 14%, transparent);
+}
+.activity-sub { font-size: 9.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-plan-toggle {
+  flex: 0 0 auto; width: 18px; height: 18px; display: grid; place-items: center;
+  border: none; background: transparent; border-radius: 5px; color: var(--text-muted); cursor: pointer;
+}
+.activity-plan-toggle:hover { color: var(--text-primary); background: var(--bg-hover); }
+.activity-plan-toggle svg { transition: transform .15s ease; }
+.activity-plan-toggle[aria-expanded='true'] svg { transform: rotate(180deg); }
+/* 完整计划在状态条上方展开，状态条本身位置纹丝不动 */
+.activity-plan-pop {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 5;
+  max-height: 240px; overflow: auto; padding: 7px 9px;
+  border: 1px solid var(--border-strong); border-radius: 9px;
+  background: var(--bg-elevated); box-shadow: var(--shadow-pop);
+  animation: slideUp .15s ease;
+}
+.activity-plan-pop .plan-item { font-size: 11px; }
+.activity-dots { display: inline-flex; align-items: flex-end; gap: 2px; height: 4px; flex: 0 0 auto; }
 .activity-dots i { width: 3px; height: 3px; border-radius: 50%; background: var(--activity); opacity: .3; animation: activity-bounce 1s ease-in-out infinite; }
 .activity-dots i:nth-child(2) { animation-delay: .14s; }
 .activity-dots i:nth-child(3) { animation-delay: .28s; }
-.activity-elapsed { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.activity-elapsed { flex: 0 0 auto; font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 @keyframes activity-bounce { 0%, 100% { opacity: .3; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } }
 @keyframes activity-pulse { 50% { opacity: .45; transform: scale(.88); } }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }

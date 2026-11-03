@@ -305,7 +305,20 @@ export function normalizeReportBlock(
       }
       out.push(chartPoint);
     }
-    const chartType = raw.chartType === 'line' || raw.chartType === 'pie' || raw.chartType === 'stacked' ? raw.chartType : 'bar';
+    const chartType = (() => {
+      const rawType = raw.chartType === undefined || raw.chartType === null || String(raw.chartType).trim() === ''
+        ? 'bar'
+        : String(raw.chartType).trim();
+      if (!['bar', 'line', 'pie', 'stacked'].includes(rawType)) {
+        return { error: `报告图表不支持 ${rawType}；可用 bar/line/pie/stacked，热力图/雷达图/散点图请在对话中用 render_chart 展示` } as const;
+      }
+      return rawType as 'bar' | 'line' | 'pie' | 'stacked';
+    })();
+    if (typeof chartType !== 'string') return chartType;
+    if (chartType === 'pie') {
+      if (out.length < 3 || out.length > 8) return { error: 'pie 需要 3–8 个切片' };
+      if (out.some((point) => point.value < 0)) return { error: 'pie 不支持负值' };
+    }
     if (chartType === 'pie' && out.some((point) => point.baseline !== undefined)) return { error: 'pie 不支持基线系列' };
     return {
       kind,
@@ -472,7 +485,7 @@ Rules:
 - Never calculate totals, deltas, ratios or shares by hand. Use one aggregate SQL or analyze_chart; quote its numbers verbatim. The app computes comparison deltas from the submitted left/right values and the metric baseline you supply.
 - KPI cards need a reference point: for each headline metric, query its baseline in a second aggregate SQL and submit it as \`baseline\` + \`baselineLabel\` (e.g. 环比 上周 / 同比 去年同期 / 目标). Set \`goodDirection\` to "down" for metrics where a rise is bad (refund rate, complaint rate, latency, cost). The app computes the delta; never submit a delta yourself.
 - Numbers must be the exact values returned by a tool. The app abbreviates for display (12,345,678 -> 「1234.57 万」) — never pre-round or re-scale a number yourself, and never write a percentage that was not returned (a 0.1234 ratio stays 0.1234 in the payload).
-- Report chart blocks support bar / line / pie / stacked. Choose line for an ordered time axis, bar for category comparisons, stacked for parts-of-a-total across an ordered axis, and pie only for 2–6 non-negative parts of one whole. Other render_chart types (scatter/heatmap/radar) are for exploration during the turn, not for compose_report blocks; never force them into a pie just to add a chart. For a trend that should show 本期 vs 上期, submit one line chart whose series points each carry a \`baseline\`.
+- Report chart blocks support bar / line / pie / stacked. Choose line for an ordered time axis, bar for category comparisons, stacked for parts-of-a-total across an ordered axis, and pie only for 3–8 non-negative parts of one whole (never for time series or multi-period comparison). Other render_chart types (scatter/heatmap/radar) are for exploration during the turn, not for compose_report blocks; never force them into a pie just to add a chart. For a trend that should show 本期 vs 上期, submit one line chart whose series points each carry a \`baseline\`.
 - Time series must be bucketed. Group by a date expression (day / week / month), never by a raw timestamp — one point per row is not a trend.
 - Do not join across different sources. Each source is queried separately; if the user asks for a merged total, aggregate per source and label the result.
 - ${compare ? 'This is a comparison: use layout comparison and include a comparison block with the two numeric results. Both queries must use the same aggregation and filters; only the compared period/segment may differ.' : 'Choose the layout from the user semantics: sections for per-source sections, comparison for side-by-side comparison, merged for summed totals, mixed for a broad report. Do not ask the user which layout.'}

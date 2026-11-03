@@ -451,6 +451,9 @@ export class CommandRunner {
             sources: sources.map((source) => source.connectionId),
             layout: spec.layout,
             sections: spec.sections.length,
+            charts: spec.sections.flatMap((section) =>
+              section.blocks.filter((block) => block.kind === 'chart').map((block) => block.chartType ?? 'bar'),
+            ),
           },
         });
         return { summary: `${spec.sections.length} 个章节 · ${spec.layout}`, result: spec };
