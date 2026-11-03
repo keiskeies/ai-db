@@ -1,0 +1,1316 @@
+{
+  "at": "2026-11-03T01:43:38.718Z",
+  "elapsedMs": 258728,
+  "summary": {
+    "total": 190,
+    "passed": 190,
+    "failed": 0,
+    "bySection": {
+      "desktop-viewports": {
+        "total": 95,
+        "failed": 0
+      },
+      "pane-resize": {
+        "total": 42,
+        "failed": 0
+      },
+      "mobile-web": {
+        "total": 23,
+        "failed": 0
+      },
+      "mobile-app": {
+        "total": 30,
+        "failed": 0
+      }
+    }
+  },
+  "consoleErrors": [
+    "desktop 720x720: HTTP 400 http://127.0.0.1:8787/api/query",
+    "desktop 720x720: Failed to load resource: the server responded with a status of 400 (Bad Request)",
+    "desktop 390x844: HTTP 400 http://127.0.0.1:8787/api/query",
+    "desktop 390x844: Failed to load resource: the server responded with a status of 400 (Bad Request)",
+    "desktop 720x1280: HTTP 400 http://127.0.0.1:8787/api/query",
+    "desktop 720x1280: Failed to load resource: the server responded with a status of 400 (Bad Request)"
+  ],
+  "results": [
+    {
+      "section": "desktop-viewports",
+      "name": "d2560x1440-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d2560x1440-data 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d2560x1440-data+agent 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d2560x1440-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1920x1080-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1920x1080-data 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1920x1080-data+agent 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1920x1080-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1920x1080-query 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1920x1080-dashboard 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1920x1080-tools 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1680x1050-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1680x1050-data 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1680x1050-data+agent 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1680x1050-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1600x900-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1600x900-data 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1600x900-data+agent 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1600x900-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1440x900-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1440x900-data 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1440x900-data+agent 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1440x900-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1440x900-query 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1440x900-dashboard 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1440x900-tools 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1366x768-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1366x768-data 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1366x768-data+agent 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1366x768-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1280x800-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1280x800-data 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1280x800-data+agent 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1280x800-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1100x800-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1100x800-data 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1100x800-data+agent 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1100x800-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1024x768-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1024x768-data 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1024x768-data+agent 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1024x768-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1024x768-query 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1024x768-dashboard 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d1024x768-tools 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d960x720-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d960x720-data 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d960x720-data+agent 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d960x720-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d900x700-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d900x700 右栏浮层宽度符合断点",
+      "ok": true,
+      "detail": {
+        "actual": 440,
+        "expected": 440
+      }
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d900x700-data 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d900x700-data+agent 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d900x700-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d800x700-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d800x700-data 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d800x700-data+agent 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d800x700-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d768x720-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d768x720 右栏浮层宽度符合断点",
+      "ok": true,
+      "detail": {
+        "actual": 440,
+        "expected": 440
+      }
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d768x720-data 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d768x720-data+agent 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d768x720-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d720x720-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d720x720 右栏浮层宽度符合断点",
+      "ok": true,
+      "detail": {
+        "actual": 720,
+        "expected": 720
+      }
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d720x720-data 可进入数据页",
+      "ok": true,
+      "detail": "窄屏侧栏隐藏，跳过数据页（由移动端 App 覆盖）"
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d720x720-data+agent 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d720x720-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d720x720-query 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d720x720-dashboard 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d720x720-tools 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d640x800-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d640x800-data 可进入数据页",
+      "ok": true,
+      "detail": "窄屏侧栏隐藏，跳过数据页（由移动端 App 覆盖）"
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d640x800-data+agent 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d640x800-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d480x800-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d480x800-data 可进入数据页",
+      "ok": true,
+      "detail": "窄屏侧栏隐藏，跳过数据页（由移动端 App 覆盖）"
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d480x800-data+agent 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d480x800-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d390x844-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d390x844 右栏浮层宽度符合断点",
+      "ok": true,
+      "detail": {
+        "actual": 390,
+        "expected": 390
+      }
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d390x844-data 可进入数据页",
+      "ok": true,
+      "detail": "窄屏侧栏隐藏，跳过数据页（由移动端 App 覆盖）"
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d390x844-data+agent 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d390x844-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d390x844-query 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d390x844-dashboard 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d390x844-tools 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d720x1280-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d720x1280 右栏浮层宽度符合断点",
+      "ok": true,
+      "detail": {
+        "actual": 720,
+        "expected": 720
+      }
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d720x1280-data 可进入数据页",
+      "ok": true,
+      "detail": "窄屏侧栏隐藏，跳过数据页（由移动端 App 覆盖）"
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d720x1280-data+agent 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d720x1280-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d720x1280-query 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d720x1280-dashboard 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "desktop-viewports",
+      "name": "d720x1280-tools 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1440x900 左栏拖到最大后工作区仍可用",
+      "ok": true,
+      "detail": {
+        "sidebar": 460,
+        "agent": 384,
+        "workspace": 586
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1440x900-sidebar-max 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1440x900 左栏拖到最小后工作区仍可用",
+      "ok": true,
+      "detail": {
+        "sidebar": 200,
+        "agent": 384,
+        "workspace": 846
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1440x900-sidebar-min 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1440x900 右栏拖到最大后工作区仍可用",
+      "ok": true,
+      "detail": {
+        "sidebar": 200,
+        "agent": 760,
+        "workspace": 470
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1440x900-agent-max 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1440x900 右栏拖到最小后工作区仍可用",
+      "ok": true,
+      "detail": {
+        "sidebar": 200,
+        "agent": 320,
+        "workspace": 910
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1440x900-agent-min 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1440x900 左右栏同时拖到最大后工作区仍可用",
+      "ok": true,
+      "detail": {
+        "sideMax2": {
+          "sidebar": 460,
+          "agent": 320,
+          "workspace": 650
+        },
+        "bothMax": {
+          "sidebar": 460,
+          "agent": 630,
+          "workspace": 340
+        }
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1440x900-both-max 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1440x900 双栏极值下无横向滚动",
+      "ok": true,
+      "detail": {
+        "overflow": 0
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1440x900 拖宽后缩小窗口自动收敛",
+      "ok": true,
+      "detail": {
+        "sidebar": 354,
+        "agent": 320,
+        "workspace": 340,
+        "overflow": 0
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1440x900-shrink-1024 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1280x800 左栏拖到最大后工作区仍可用",
+      "ok": true,
+      "detail": {
+        "sidebar": 460,
+        "agent": 384,
+        "workspace": 426
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1280x800-sidebar-max 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1280x800 左栏拖到最小后工作区仍可用",
+      "ok": true,
+      "detail": {
+        "sidebar": 200,
+        "agent": 384,
+        "workspace": 686
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1280x800-sidebar-min 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1280x800 右栏拖到最大后工作区仍可用",
+      "ok": true,
+      "detail": {
+        "sidebar": 200,
+        "agent": 730,
+        "workspace": 340
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1280x800-agent-max 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1280x800 右栏拖到最小后工作区仍可用",
+      "ok": true,
+      "detail": {
+        "sidebar": 200,
+        "agent": 320,
+        "workspace": 750
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1280x800-agent-min 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1280x800 左右栏同时拖到最大后工作区仍可用",
+      "ok": true,
+      "detail": {
+        "sideMax2": {
+          "sidebar": 460,
+          "agent": 320,
+          "workspace": 490
+        },
+        "bothMax": {
+          "sidebar": 460,
+          "agent": 470,
+          "workspace": 340
+        }
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1280x800-both-max 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1280x800 双栏极值下无横向滚动",
+      "ok": true,
+      "detail": {
+        "overflow": 0
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1280x800 拖宽后缩小窗口自动收敛",
+      "ok": true,
+      "detail": {
+        "sidebar": 354,
+        "agent": 320,
+        "workspace": 340,
+        "overflow": 0
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1280x800-shrink-1024 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1024x768 左栏拖到最大后工作区仍可用",
+      "ok": true,
+      "detail": {
+        "sidebar": 290,
+        "agent": 384,
+        "workspace": 340
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1024x768-sidebar-max 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1024x768 左栏拖到最小后工作区仍可用",
+      "ok": true,
+      "detail": {
+        "sidebar": 200,
+        "agent": 384,
+        "workspace": 430
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1024x768-sidebar-min 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1024x768 右栏拖到最大后工作区仍可用",
+      "ok": true,
+      "detail": {
+        "sidebar": 200,
+        "agent": 474,
+        "workspace": 340
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1024x768-agent-max 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1024x768 右栏拖到最小后工作区仍可用",
+      "ok": true,
+      "detail": {
+        "sidebar": 200,
+        "agent": 320,
+        "workspace": 494
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1024x768-agent-min 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1024x768 左右栏同时拖到最大后工作区仍可用",
+      "ok": true,
+      "detail": {
+        "sideMax2": {
+          "sidebar": 354,
+          "agent": 320,
+          "workspace": 340
+        },
+        "bothMax": {
+          "sidebar": 354,
+          "agent": 320,
+          "workspace": 340
+        }
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1024x768-both-max 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane1024x768 双栏极值下无横向滚动",
+      "ok": true,
+      "detail": {
+        "overflow": 0
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane900x700 左栏拖到最大后工作区仍可用",
+      "ok": true,
+      "detail": {
+        "sidebar": 460,
+        "agent": 440,
+        "workspace": 435
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane900x700-sidebar-max 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane900x700 左栏拖到最小后工作区仍可用",
+      "ok": true,
+      "detail": {
+        "sidebar": 460,
+        "agent": 440,
+        "workspace": 435
+      }
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane900x700-sidebar-min 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "pane-resize",
+      "name": "pane900x700 窄屏右栏按设计改为浮层（无拖拽条）",
+      "ok": true,
+      "detail": "≤1000px 隐藏 splitter-agent"
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb390x844-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb390x844-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb390x844 抽屉侧栏可打开且不撑宽页面",
+      "ok": true,
+      "detail": {
+        "initial": false,
+        "opened": true,
+        "overflow": 0
+      }
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb390x844-drawer 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb390x844 抽屉可再次关闭",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb360x640-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb360x640-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb360x640 抽屉侧栏可打开且不撑宽页面",
+      "ok": true,
+      "detail": {
+        "initial": false,
+        "opened": true,
+        "overflow": 0
+      }
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb360x640-drawer 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb360x640 抽屉可再次关闭",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb414x896-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb414x896-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb414x896 抽屉侧栏可打开且不撑宽页面",
+      "ok": true,
+      "detail": {
+        "initial": false,
+        "opened": true,
+        "overflow": 0
+      }
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb414x896-drawer 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb414x896 抽屉可再次关闭",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb768x1024-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb768x1024-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb768x1024 侧栏按断点可见",
+      "ok": true,
+      "detail": {
+        "width": 768,
+        "sidebarVisible": true
+      }
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb320x568-welcome 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb320x568-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb320x568 抽屉侧栏可打开且不撑宽页面",
+      "ok": true,
+      "detail": {
+        "initial": false,
+        "opened": true,
+        "overflow": 0
+      }
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb320x568-drawer 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-web",
+      "name": "mweb320x568 抽屉可再次关闭",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app390x844-pairing 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app390x844 配对连接",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app390x844-chat 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app390x844-data 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app390x844-memory 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app390x844-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app360x640-pairing 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app360x640 配对连接",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app360x640-chat 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app360x640-data 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app360x640-memory 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app360x640-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app414x896-pairing 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app414x896 配对连接",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app414x896-chat 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app414x896-data 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app414x896-memory 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app414x896-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app768x1024-pairing 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app768x1024 配对连接",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app768x1024-chat 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app768x1024-data 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app768x1024-memory 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app768x1024-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app320x568-pairing 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app320x568 配对连接",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app320x568-chat 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app320x568-data 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app320x568-memory 无布局缺陷",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mobile-app",
+      "name": "app320x568-settings 无布局缺陷",
+      "ok": true,
+      "detail": null
+    }
+  ]
+}
