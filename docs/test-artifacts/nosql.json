@@ -1,0 +1,96 @@
+{
+  "meta": {
+    "qdrant": "fab3d9c2-2e15-41a7-be4a-6e24ee5bbda0",
+    "es": "15c1c628-b437-4217-ac94-029c57bd221c",
+    "at": "2026-11-03T00:44:39.537Z"
+  },
+  "summary": {
+    "total": 12,
+    "passed": 12,
+    "failed": 0,
+    "bySection": {
+      "qdrant": {
+        "total": 6,
+        "failed": 0
+      },
+      "elasticsearch": {
+        "total": 6,
+        "failed": 0
+      }
+    }
+  },
+  "results": [
+    {
+      "section": "qdrant",
+      "name": "qdrant collections listed",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "qdrant",
+      "name": "qdrant scroll returns points",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "qdrant",
+      "name": "qdrant document read",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "qdrant",
+      "name": "qdrant text vector search",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "qdrant",
+      "name": "vector search endpoint",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "qdrant",
+      "name": "tool sample_rows gives vector-specific guidance",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "elasticsearch",
+      "name": "es indices listed",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "elasticsearch",
+      "name": "es query returns documents",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "elasticsearch",
+      "name": "es document read",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "elasticsearch",
+      "name": "es export csv",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "elasticsearch",
+      "name": "tool search_index on es",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "elasticsearch",
+      "name": "tool sample_rows gives search-specific guidance",
+      "ok": true,
+      "detail": null
+    }
+  ]
+}

@@ -1,0 +1,2136 @@
+{
+  "meta": {
+    "base": "http://127.0.0.1:8787",
+    "elapsedMs": 49332,
+    "demoConnection": "8c3545e8-859b-485b-a98c-6326baaf9164",
+    "mirrorConnection": "425b7ad2-d841-4002-a8f4-97839cecddc9",
+    "at": "2026-11-03T00:44:34.357Z"
+  },
+  "summary": {
+    "total": 198,
+    "passed": 198,
+    "failed": 0,
+    "bySection": {
+      "meta": {
+        "total": 7,
+        "failed": 0
+      },
+      "connections": {
+        "total": 5,
+        "failed": 0
+      },
+      "schema": {
+        "total": 10,
+        "failed": 0
+      },
+      "query": {
+        "total": 10,
+        "failed": 0
+      },
+      "transactions": {
+        "total": 9,
+        "failed": 0
+      },
+      "grid-edit": {
+        "total": 12,
+        "failed": 0
+      },
+      "ddl": {
+        "total": 11,
+        "failed": 0
+      },
+      "table-ops": {
+        "total": 9,
+        "failed": 0
+      },
+      "data-replace": {
+        "total": 2,
+        "failed": 0
+      },
+      "import-export": {
+        "total": 9,
+        "failed": 0
+      },
+      "generate-data": {
+        "total": 2,
+        "failed": 0
+      },
+      "backups": {
+        "total": 3,
+        "failed": 0
+      },
+      "jobs": {
+        "total": 4,
+        "failed": 0
+      },
+      "dashboards": {
+        "total": 9,
+        "failed": 0
+      },
+      "capabilities": {
+        "total": 8,
+        "failed": 0
+      },
+      "search": {
+        "total": 4,
+        "failed": 0
+      },
+      "agent-context": {
+        "total": 7,
+        "failed": 0
+      },
+      "notifications": {
+        "total": 4,
+        "failed": 0
+      },
+      "mcp": {
+        "total": 4,
+        "failed": 0
+      },
+      "skills": {
+        "total": 3,
+        "failed": 0
+      },
+      "agent-tools-direct": {
+        "total": 23,
+        "failed": 0
+      },
+      "readonly-guard": {
+        "total": 8,
+        "failed": 0
+      },
+      "migration": {
+        "total": 19,
+        "failed": 0
+      },
+      "history-audit": {
+        "total": 8,
+        "failed": 0
+      },
+      "commands": {
+        "total": 8,
+        "failed": 0
+      }
+    }
+  },
+  "results": [
+    {
+      "section": "meta",
+      "name": "health ok",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "meta",
+      "name": "bootstrap exposes 52 tools",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "meta",
+      "name": "bootstrap has sessions/settings",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "meta",
+      "name": "settings readable",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "meta",
+      "name": "settings update",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "meta",
+      "name": "settings persisted",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "meta",
+      "name": "settings restore",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "connections",
+      "name": "connections list",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "connections",
+      "name": "connection test",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "connections",
+      "name": "draft connection test",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "connections",
+      "name": "connection update note",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "connections",
+      "name": "schema refresh speed < 3s",
+      "ok": true,
+      "detail": {
+        "ms": 15
+      }
+    },
+    {
+      "section": "schema",
+      "name": "schema lists 40 objects",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "schema",
+      "name": "orders columns parsed",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "schema",
+      "name": "orders pk detected",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "schema",
+      "name": "orders FK detected",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "schema",
+      "name": "orders index detected",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "schema",
+      "name": "view present",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "schema",
+      "name": "composite pk table present",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "schema",
+      "name": "tables endpoint",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "schema",
+      "name": "databases endpoint",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "schema",
+      "name": "schema refresh",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "query",
+      "name": "select count orders",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "query",
+      "name": "select joins business question",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "query",
+      "name": "auto limit caps big table rows",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "query",
+      "name": "auto-limit result flagged truncated",
+      "ok": true,
+      "detail": {
+        "truncated": true,
+        "rowCount": 100,
+        "statement": "SELECT * FROM web_events LIMIT 100"
+      }
+    },
+    {
+      "section": "query",
+      "name": "explicit limit",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "query",
+      "name": "short multi statement runs",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "query",
+      "name": "oversized script needs allowMulti",
+      "ok": true,
+      "detail": {
+        "status": 400,
+        "expected": [
+          400,
+          403
+        ],
+        "code": "SCRIPT_TOO_LARGE",
+        "error": {
+          "code": "SCRIPT_TOO_LARGE",
+          "message": "脚本含 201 条语句，超过单次上限 200 条",
+          "hint": "整段执行需显式声明：调用 run_sql 时传 allowMulti: true，或在 设置 → 查询 打开「允许多语句」。整段脚本非原子：中途失败时前面的语句已生效。超过 200 条时建议分批，每批之间可以确认上一批的结果。"
+        }
+      }
+    },
+    {
+      "section": "query",
+      "name": "oversized script allowed with allowMulti",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "query",
+      "name": "bad SQL returns 4xx/5xx with code",
+      "ok": true,
+      "detail": {
+        "status": 400,
+        "error": {
+          "code": "SQLITE_ERROR",
+          "message": "no such table: no_such_table"
+        }
+      }
+    },
+    {
+      "section": "query",
+      "name": "explain plan",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "transactions",
+      "name": "scratch table created",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "transactions",
+      "name": "tx begin",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "transactions",
+      "name": "tx insert in session",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "transactions",
+      "name": "tx rollback",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "transactions",
+      "name": "rollback removes row",
+      "ok": true,
+      "detail": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "section": "transactions",
+      "name": "tx begin #2",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "transactions",
+      "name": "tx insert #2",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "transactions",
+      "name": "tx commit",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "transactions",
+      "name": "commit persists row",
+      "ok": true,
+      "detail": [
+        [
+          1
+        ]
+      ]
+    },
+    {
+      "section": "grid-edit",
+      "name": "grid insert boolean value",
+      "ok": true,
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "grid-edit",
+      "name": "row insert",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"result\":{\"columns\":[],\"rows\":[],\"rowCount\":0,\"affected\":1,\"lastInsertId\":3,\"durationMs\":6,\"statement\":\"INSERT INTO \\\"qa_widgets\\\" (\\\"name\\\", \\\"price_cents\\\") VALUES (?, ?)\"}}"
+      }
+    },
+    {
+      "section": "grid-edit",
+      "name": "inserted row visible",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "grid-edit",
+      "name": "row update by pk",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"result\":{\"columns\":[],\"rows\":[],\"rowCount\":0,\"affected\":1,\"lastInsertId\":3,\"durationMs\":7,\"statement\":\"UPDATE \\\"qa_widgets\\\" SET \\\"price_cents\\\" = ? WHERE \\\"id\\\" = ?\"}}"
+      }
+    },
+    {
+      "section": "grid-edit",
+      "name": "grid update boolean value",
+      "ok": true,
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "grid-edit",
+      "name": "update persisted",
+      "ok": true,
+      "detail": [
+        [
+          777
+        ]
+      ]
+    },
+    {
+      "section": "grid-edit",
+      "name": "update without pk rejected",
+      "ok": true,
+      "detail": {
+        "status": 400,
+        "error": {
+          "code": "KEY_NOT_PRIMARY",
+          "message": "更新/删除必须使用完整主键：id"
+        }
+      }
+    },
+    {
+      "section": "grid-edit",
+      "name": "insertMany",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"result\":{\"columns\":[],\"rows\":[],\"rowCount\":0,\"affected\":3,\"lastInsertId\":6,\"durationMs\":6,\"statement\":\"INSERT INTO \\\"qa_widgets\\\" (\\\"name\\\", \\\"price_cents\\\") VALUES (?, ?), (?, ?), (?, ?)\"}}"
+      }
+    },
+    {
+      "section": "grid-edit",
+      "name": "data paging",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "total": 6,
+        "rows": 2
+      }
+    },
+    {
+      "section": "grid-edit",
+      "name": "data filter",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "total": 3
+      }
+    },
+    {
+      "section": "grid-edit",
+      "name": "row delete",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"result\":{\"columns\":[],\"rows\":[],\"rowCount\":0,\"affected\":1,\"lastInsertId\":6,\"durationMs\":6,\"statement\":\"DELETE FROM \\\"qa_widgets\\\" WHERE \\\"id\\\" = ?\"}}"
+      }
+    },
+    {
+      "section": "grid-edit",
+      "name": "deleteMany tolerates absent keys",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"result\":{\"columns\":[],\"rows\":[],\"rowCount\":0,\"affected\":2,\"lastInsertId\":6,\"durationMs\":6,\"statement\":\"DELETE FROM \\\"qa_widgets\\\" WHERE (\\\"id\\\" = ?) OR (\\\"id\\\" = ?)\"}}"
+      }
+    },
+    {
+      "section": "ddl",
+      "name": "ddl preview create",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"statements\":[\"CREATE TABLE \\\"qa_orders_v2\\\" (\\n  \\\"id\\\" INTEGER PRIMARY KEY AUTOINCREMENT,\\n  \\\"order_no\\\" TEXT NOT NULL,\\n  \\\"amount_cents\\\" INTEGER NOT NULL DEFAULT 0,\\n  \\\"created_at\\\" TEXT\\n);\",\"CREATE UNIQUE INDEX \\\"ix_qa_orders_v2_no\\\" ON \\\"qa_orders_v2\\\" (\\\"order_no\\\");\"],\"ddl\":\"CREATE TABLE \\\"qa_orders_v2\\\" (\\n  \\\"id\\\" INTEGER PRIMARY KEY AUTOINCREMENT,\\n  \\\"order_no\\\" TEXT NOT NULL,\\n  "
+      }
+    },
+    {
+      "section": "ddl",
+      "name": "ddl execute create",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"batch\":{\"sets\":[{\"columns\":[],\"rows\":[],\"rowCount\":0,\"affected\":2,\"lastInsertId\":6,\"durationMs\":7,\"statement\":\"CREATE TABLE \\\"qa_orders_v2\\\" (\\n  \\\"id\\\" INTEGER PRIMARY KEY AUTOINCREMENT,\\n  \\\"order_no\\\" TEXT NOT NULL,\\n  \\\"amount_cents\\\" INTEGER NOT NULL DEFAULT 0,\\n  \\\"created_at\\\" TEXT\\n)\"},{\"columns\":[],\"rows\":[],\"rowCount\":0,\"affected\":2,\"lastInsertId\":6,\"durationMs\":6,\"statement\":\"CREATE U"
+      }
+    },
+    {
+      "section": "ddl",
+      "name": "created table visible with index",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "ddl",
+      "name": "field create is NoSQL-only on SQLite",
+      "ok": true,
+      "detail": {
+        "status": 400,
+        "expected": [
+          400
+        ],
+        "code": "UNSUPPORTED_ENGINE",
+        "expectedCode": "UNSUPPORTED_ENGINE",
+        "error": {
+          "code": "UNSUPPORTED_ENGINE",
+          "message": "SQLite 不支持追加字段",
+          "hint": "该引擎的字段定义只能通过重建对象修改"
+        }
+      }
+    },
+    {
+      "section": "ddl",
+      "name": "SQLite ALTER TABLE ADD COLUMN via DDL",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"batch\":{\"sets\":[{\"columns\":[],\"rows\":[],\"rowCount\":0,\"affected\":2,\"lastInsertId\":6,\"durationMs\":7,\"statement\":\"ALTER TABLE qa_orders_v2 ADD COLUMN remark TEXT\"}],\"messages\":[\"[1] 影响 2 行 · 7ms\"],\"durationMs\":7}}"
+      }
+    },
+    {
+      "section": "ddl",
+      "name": "field visible",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "ddl",
+      "name": "collection index create is NoSQL-only on SQLite",
+      "ok": true,
+      "detail": {
+        "status": 400,
+        "expected": [
+          400
+        ],
+        "code": "UNSUPPORTED_ENGINE",
+        "expectedCode": "UNSUPPORTED_ENGINE",
+        "error": {
+          "code": "UNSUPPORTED_ENGINE",
+          "message": "SQLite 暂不支持在此创建索引",
+          "hint": "请使用该引擎自身的索引命令"
+        }
+      }
+    },
+    {
+      "section": "ddl",
+      "name": "SQL index create via DDL",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "ddl",
+      "name": "SQL index drop via DDL",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "ddl",
+      "name": "object drop via table ops",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "ddl",
+      "name": "dropped table gone",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "table-ops",
+      "name": "table rename",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "table-ops",
+      "name": "rename persisted",
+      "ok": true,
+      "detail": [
+        [
+          "qa_widgets_renamed"
+        ]
+      ]
+    },
+    {
+      "section": "table-ops",
+      "name": "table duplicate",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "table-ops",
+      "name": "duplicate copies rows",
+      "ok": true,
+      "detail": [
+        [
+          3
+        ]
+      ]
+    },
+    {
+      "section": "table-ops",
+      "name": "table truncate",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "table-ops",
+      "name": "truncate empties table",
+      "ok": true,
+      "detail": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "section": "table-ops",
+      "name": "table maintenance",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "table-ops",
+      "name": "table drop",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "table-ops",
+      "name": "database ops graceful on sqlite",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"supported\":false,\"statements\":[],\"message\":\"sqlite 不支持新建数据库\"}"
+      }
+    },
+    {
+      "section": "data-replace",
+      "name": "replace preview",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "data-replace",
+      "name": "replace apply",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "import-export",
+      "name": "export csv",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "file": {
+          "rows": 20,
+          "bytes": 2212,
+          "size": 2212
+        }
+      }
+    },
+    {
+      "section": "import-export",
+      "name": "export json",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "file": {
+          "rows": 20,
+          "bytes": 6117,
+          "size": 6117
+        }
+      }
+    },
+    {
+      "section": "import-export",
+      "name": "export sql",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "file": {
+          "rows": 20,
+          "bytes": 5764,
+          "size": 5764
+        }
+      }
+    },
+    {
+      "section": "import-export",
+      "name": "export xml",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "file": {
+          "rows": 20,
+          "bytes": 6589,
+          "size": 6589
+        }
+      }
+    },
+    {
+      "section": "import-export",
+      "name": "export xlsx",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "file": {
+          "rows": 20,
+          "bytes": 3242,
+          "size": 3242
+        }
+      }
+    },
+    {
+      "section": "import-export",
+      "name": "export from SQL",
+      "ok": true,
+      "detail": "{\"file\":{\"path\":\"C:\\\\Users\\\\Administrator\\\\.aidb\\\\exports\\\\query-2026-11-03T00-43-46.csv\",\"bytes\":124,\"rows\":8},\"format\":\"csv\"}"
+    },
+    {
+      "section": "import-export",
+      "name": "import csv",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "import-export",
+      "name": "import persisted rows",
+      "ok": true,
+      "detail": [
+        [
+          3
+        ]
+      ]
+    },
+    {
+      "section": "import-export",
+      "name": "duplicate mapping rejected",
+      "ok": true,
+      "detail": {
+        "status": 400,
+        "error": {
+          "code": "DUPLICATE_COLUMN",
+          "message": "列映射存在重复目标列"
+        }
+      }
+    },
+    {
+      "section": "generate-data",
+      "name": "generate dry-run",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"result\":{\"table\":\"qa_widgets_renamed\",\"columns\":[\"name\",\"price_cents\",\"active\",\"note\"],\"rowsPreview\":[[\"Sam 1\",925.17,0,\"自动生成的示例内容 #1\"],[\"Jordan 2\",200.92,1,\"自动生成的示例内容 #2\"],[\"Taylor 3\",264.34,0,\"自动生成的示例内容 #3\"],[\"Casey 4\",437.06,1,\"自动生成的示例内容 #4\"],[\"Robin 5\",642.71,0,\"自动生成的示例内容 #5\"]],\"sqlPreview\":\"INSERT INTO \\\"qa_widgets_renamed\\\" (\\\"name\\\", \\\"price_cents\\\", \\\"active\\\", \\\"note\\\") VALUES ('Sam 1',"
+      }
+    },
+    {
+      "section": "generate-data",
+      "name": "generate inserts rows",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"result\":{\"table\":\"qa_widgets_renamed\",\"columns\":[\"name\",\"price_cents\",\"active\",\"note\"],\"rowsPreview\":[[\"Sam 1\",991.7,0,\"自动生成的示例内容 #1\"],[\"Jordan 2\",161.58,1,\"自动生成的示例内容 #2\"],[\"Taylor 3\",437.81,0,\"自动生成的示例内容 #3\"],[\"Casey 4\",308,1,\"自动生成的示例内容 #4\"],[\"Robin 5\",479.27,0,\"自动生成的示例内容 #5\"]],\"sqlPreview\":\"INSERT INTO \\\"qa_widgets_renamed\\\" (\\\"name\\\", \\\"price_cents\\\", \\\"active\\\", \\\"note\\\") VALUES ('Sam 1', 991"
+      }
+    },
+    {
+      "section": "backups",
+      "name": "backup created",
+      "ok": true,
+      "detail": {
+        "status": 201,
+        "body": "{\"backup\":{\"id\":\"38d4e279-42a9-4a7f-b1b7-3f641fdd70b3\",\"createdAt\":\"2026-11-03T00:43:47.391Z\",\"path\":\"C:\\\\Users\\\\Administrator\\\\.aidb\\\\backups\\\\QA_沙箱库-C_Users_Administrator_aidb_demo_qa-sandb-2026-11-03T00-43-47.sql\",\"bytes\":130164296,\"tables\":39,\"rows\":454724}}"
+      }
+    },
+    {
+      "section": "backups",
+      "name": "backup listed",
+      "ok": true,
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "backups",
+      "name": "restore brings rows back",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "before": [
+          [
+            0
+          ]
+        ],
+        "after": [
+          [
+            11
+          ]
+        ],
+        "body": "{\"batch\":{\"sets\":[],\"messages\":[\"备份已恢复\"],\"durationMs\":1598}}"
+      }
+    },
+    {
+      "section": "jobs",
+      "name": "job created",
+      "ok": "bb802c13-b20c-44c9-b361-ab5f574e5361",
+      "detail": {
+        "status": 201,
+        "body": "{\"job\":{\"id\":\"bb802c13-b20c-44c9-b361-ab5f574e5361\",\"name\":\"qa-count-orders\",\"connectionId\":\"8c3545e8-859b-485b-a98c-6326baaf9164\",\"type\":\"query\",\"sql\":\"SELECT COUNT(*) FROM orders\",\"intervalSeconds\":30,\"enabled\":true,\"createdAt\":\"2026-11-03T00:43:49.268Z\",\"updatedAt\":\"2026-11-03T00:43:49.268Z\"}}"
+      }
+    },
+    {
+      "section": "jobs",
+      "name": "job run",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"ok\":true,\"message\":\"1 个结果集，1 行\"}"
+      }
+    },
+    {
+      "section": "jobs",
+      "name": "job update",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "jobs",
+      "name": "job delete",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "dashboards",
+      "name": "dashboard card create",
+      "ok": "12470a40-2096-4629-857f-15e742169f87",
+      "detail": {
+        "status": 200,
+        "body": "{\"card\":{\"id\":\"12470a40-2096-4629-857f-15e742169f87\",\"connectionId\":\"8c3545e8-859b-485b-a98c-6326baaf9164\",\"database\":\"C:/Users/Administrator/.aidb/demo/demo-retail.sqlite\",\"title\":\"渠道 GMV\",\"sql\":\"SELECT channel, SUM(pay_cents) AS gmv FROM orders GROUP BY channel ORDER BY gmv DESC\",\"chartType\":\"bar\",\"span\":1,\"position\":1,\"source\":\"manual\",\"pinned\":true,\"createdAt\":\"2026-11-03T00:43:49.289Z\",\"updat"
+      }
+    },
+    {
+      "section": "dashboards",
+      "name": "dashboard preview",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"preview\":{\"columns\":[{\"name\":\"status\"},{\"name\":\"cnt\"}],\"rows\":[[\"cancelled\",1293],[\"closed\",955],[\"completed\",20927],[\"delivered\",201],[\"paid\",82],[\"pending\",99],[\"refunded\",1271],[\"shipped\",172]],\"rowCount\":8,\"durationMs\":0,\"truncated\":false}}"
+      }
+    },
+    {
+      "section": "dashboards",
+      "name": "dashboard refresh",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"results\":[{\"cardId\":\"12470a40-2096-4629-857f-15e742169f87\",\"status\":\"ok\",\"columns\":[{\"name\":\"channel\"},{\"name\":\"gmv\"}],\"rows\":[[\"小程序\",13504384214],[\"APP\",10103536486],[\"抖音小店\",6228634250],[\"天猫\",4853646606],[\"PC 商城\",4566210095],[\"京东\",3530639264],[\"线下门店\",2347615094]],\"durationMs\":5}],\"cards\":[{\"id\":\"12470a40-2096-4629-857f-15e742169f87\",\"connectionId\":\"8c3545e8-859b-485b-a98c-6326baaf9164\",\"databas"
+      }
+    },
+    {
+      "section": "dashboards",
+      "name": "dashboard compose (model)",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"usedModel\":true,\"title\":\"最近半年月度成交金额趋势\",\"sql\":\"SELECT strftime('%Y-%m', paid_at) AS month, ROUND(SUM(pay_cents) / 100.0, 2) AS gmv_yuan FROM orders WHERE paid_at IS NOT NULL AND is_test_order = 0 AND paid_at >= datetime('now', 'localtime', '-5 months', 'start of month') GROUP BY strftime('%Y-%m', paid_at) ORDER BY month ASC\",\"chartType\":\"line\",\"x\":\"month\",\"y\":\"gmv_yuan\",\"timeColumn\":\"month\",\"prev"
+      }
+    },
+    {
+      "section": "dashboards",
+      "name": "compose picks line chart for time series",
+      "ok": true,
+      "detail": {
+        "chartType": "line",
+        "sql": "SELECT strftime('%Y-%m', paid_at) AS month, ROUND(SUM(pay_cents) / 100.0, 2) AS gmv_yuan FROM orders WHERE paid_at IS NOT NULL AND is_test_order = 0 AND paid_at >= datetime('now', 'localtime', '-5 months', 'start of month') GROUP BY strftime('%Y-%m', paid_at) ORDER BY month ASC"
+      }
+    },
+    {
+      "section": "dashboards",
+      "name": "dashboard report artifact",
+      "ok": "98b2c05a-5279-4301-88b8-7e100cce0935",
+      "detail": {
+        "status": 200,
+        "body": "{\"artifact\":{\"id\":\"98b2c05a-5279-4301-88b8-7e100cce0935\",\"type\":\"report\",\"title\":\"仪表板 · demo-retail.sqlite\",\"spec\":{\"version\":1,\"title\":\"仪表板 · demo-retail.sqlite\",\"layout\":\"sections\",\"sources\":[{\"key\":\"board\",\"connectionId\":\"8c3545e8-859b-485b-a98c-6326baaf9164\",\"connectionName\":\"Demo · 零售业务库\",\"database\":\"C:/Users/Administrator/.aidb/demo/demo-retail.sqlite\",\"engine\":\"sqlite\",\"label\":\"Demo · 零售业务库"
+      }
+    },
+    {
+      "section": "dashboards",
+      "name": "dashboard schedule read",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "dashboards",
+      "name": "dashboard schedule write",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "dashboards",
+      "name": "dashboard card delete",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "capabilities",
+      "name": "capabilities list",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "capabilities",
+      "name": "capability detail",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "capabilities",
+      "name": "dictionary markdown",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "tables": 40
+      }
+    },
+    {
+      "section": "capabilities",
+      "name": "advanced objects responds",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "objects": "{\"supported\":true,\"triggers\":[{\"name\":\"trg_inventory_audit\",\"type\":\"trigger\",\"definition\":\"CREATE TRIGGER trg_inventory_audit AFTER UPDATE OF qty ON inventory\\n        WHEN NEW.qty <> OLD.qty\\n        BEGIN\\n          INSERT INTO stock_movements (product_id, warehouse_id, movement_type, qty_delta, ref_no, occurred_at)\\n          VALUES (NEW.product_id, NEW.warehouse_id, 'adjust', NEW.qty - OLD.qty"
+      }
+    },
+    {
+      "section": "capabilities",
+      "name": "sqlite triggers surfaced",
+      "ok": true,
+      "detail": {
+        "triggers": [
+          {
+            "name": "trg_inventory_audit",
+            "type": "trigger",
+            "definition": "CREATE TRIGGER trg_inventory_audit AFTER UPDATE OF qty ON inventory\n        WHEN NEW.qty <> OLD.qty\n        BEGIN\n          INSERT INTO stock_movements (product_id, warehouse_id, movement_type, qty_delta, ref_no, occurred_at)\n          VALUES (NEW.product_id, NEW.warehouse_id, 'adjust', NEW.qty - OLD.qty, 'AUDIT', datetime('now'));\n        END"
+          },
+          {
+            "name": "trg_order_status_log",
+            "type": "trigger",
+            "definition": "CREATE TRIGGER trg_order_status_log AFTER UPDATE OF status ON orders\n        BEGIN\n          INSERT INTO order_status_history (order_id, from_status, to_status, changed_at, changed_by)\n          VALUES (OLD.id, OLD.status, NEW.status, datetime('now'), 'trigger');\n        END"
+          }
+        ]
+      }
+    },
+    {
+      "section": "capabilities",
+      "name": "table options responds",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"supported\":true,\"options\":[{\"label\":\"类型\",\"value\":\"table\"},{\"label\":\"页大小\",\"value\":\"4096\"},{\"label\":\"编码\",\"value\":\"UTF-8\"},{\"label\":\"日志模式\",\"value\":\"wal\"}]}"
+      }
+    },
+    {
+      "section": "capabilities",
+      "name": "users endpoint graceful",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"supported\":false,\"users\":[],\"note\":\"SQLite 没有服务器账户体系，权限由文件系统决定。\"}"
+      }
+    },
+    {
+      "section": "capabilities",
+      "name": "monitor responds",
+      "ok": {
+        "engine": "sqlite",
+        "version": "SQLite 3.51.2",
+        "sampledAt": "2026-11-03T00:44:04.907Z",
+        "sections": [
+          {
+            "title": "数据库",
+            "items": [
+              {
+                "label": "文件大小",
+                "value": "47.2 MB"
+              },
+              {
+                "label": "页数 × 页大小",
+                "value": "12,095 × 4,096"
+              },
+              {
+                "label": "空闲页",
+                "value": "0"
+              },
+              {
+                "label": "Journal 模式",
+                "value": "wal"
+              }
+            ]
+          },
+          {
+            "title": "对象",
+            "items": [
+              {
+                "label": "表",
+                "value": 38
+              },
+              {
+                "label": "视图",
+                "value": 2
+              },
+              {
+                "label": "估算行数",
+                "value": "454,713"
+              }
+            ]
+          }
+        ],
+        "sessions": []
+      },
+      "detail": {
+        "status": 200,
+        "body": "{\"monitor\":{\"engine\":\"sqlite\",\"version\":\"SQLite 3.51.2\",\"sampledAt\":\"2026-11-03T00:44:04.907Z\",\"sections\":[{\"title\":\"数据库\",\"items\":[{\"label\":\"文件大小\",\"value\":\"47.2 MB\"},{\"label\":\"页数 × 页大小\",\"value\":\"12,095 × 4,096\"},{\"label\":\"空闲页\",\"value\":\"0\"},{\"label\":\"Journal 模式\",\"value\":\"wal\"}]},{\"title\":\"对象\",\"items\":[{\"label\":\"表\",\"value\":38},{\"label\":\"视图\",\"value\":2},{\"label\":\"估算行数\",\"value\":\"454,713\"}]}],\"sessions\""
+      }
+    },
+    {
+      "section": "search",
+      "name": "search objects",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "objects": [
+          {
+            "kind": "column",
+            "table": "categories",
+            "column": "sort_order",
+            "detail": "INTEGER"
+          },
+          {
+            "kind": "column",
+            "table": "coupon_redemptions",
+            "column": "order_id",
+            "detail": "INTEGER"
+          },
+          {
+            "kind": "column",
+            "table": "daily_metrics",
+            "column": "order_cnt",
+            "detail": "INTEGER"
+          },
+          {
+            "kind": "column",
+            "table": "daily_metrics",
+            "column": "paid_order_cnt",
+            "detail": "INTEGER"
+          },
+          {
+            "kind": "column",
+            "table": "finance_entries",
+            "column": "related_order_id",
+            "detail": "INTEGER"
+          }
+        ]
+      }
+    },
+    {
+      "section": "search",
+      "name": "search data",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"query\":\"SO2025\",\"scope\":\"data\",\"objects\":[],\"data\":[{\"table\":\"orders\",\"columns\":[\"id\",\"order_no\",\"customer_id\",\"store_id\",\"channel\",\"status\",\"payment_method\",\"coupon_code\",\"goods_cents\",\"freight_cents\",\"discount_cents\",\"pay_cents\",\"points_used\",\"created_at\",\"paid_at\",\"shipped_at\",\"completed_at\",\"delivery_date\",\"remark\",\"invoice_title\",\"is_test_order\"],\"rows\":[[4,\"SO20251004000004\",880,null,\"小程序\""
+      }
+    },
+    {
+      "section": "search",
+      "name": "search backends listed",
+      "ok": [
+        {
+          "id": "exa",
+          "label": "Exa (MCP, 免费)",
+          "needsKey": false,
+          "group": "free"
+        },
+        {
+          "id": "parallel",
+          "label": "Parallel (MCP, 免费)",
+          "needsKey": false,
+          "group": "free"
+        },
+        {
+          "id": "bing",
+          "label": "Bing (RSS, 免密钥)",
+          "needsKey": false,
+          "group": "free"
+        },
+        {
+          "id": "duckduckgo",
+          "label": "DuckDuckGo (HTML, 需代理)",
+          "needsKey": false,
+          "group": "free"
+        },
+        {
+          "id": "searxng",
+          "label": "SearXNG (需自建)",
+          "needsKey": false,
+          "group": "free"
+        },
+        {
+          "id": "brave",
+          "label": "Brave Search",
+          "needsKey": true,
+          "group": "key"
+        },
+        {
+          "id": "tavily",
+          "label": "Tavily (AI)",
+          "needsKey": true,
+          "group": "key"
+        },
+        {
+          "id": "serper",
+          "label": "Serper.dev",
+          "needsKey": true,
+          "group": "key"
+        },
+        {
+          "id": "mojeek",
+          "label": "Mojeek",
+          "needsKey": true,
+          "group": "key"
+        },
+        {
+          "id": "deepseek",
+          "label": "DeepSeek",
+          "needsKey": true,
+          "group": "key"
+        },
+        {
+          "id": "anthropic",
+          "label": "Anthropic",
+          "needsKey": true,
+          "group": "key"
+        },
+        {
+          "id": "openai",
+          "label": "OpenAI",
+          "needsKey": true,
+          "group": "key"
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "search",
+      "name": "search backend probe",
+      "ok": {
+        "id": "searxng",
+        "status": "ok",
+        "successes": 1,
+        "failures": 0,
+        "lastMs": 450,
+        "lastAt": "2026-11-03T00:44:05.506Z"
+      },
+      "detail": {
+        "status": 200,
+        "body": "{\"health\":{\"id\":\"searxng\",\"status\":\"ok\",\"successes\":1,\"failures\":0,\"lastMs\":450,\"lastAt\":\"2026-11-03T00:44:05.506Z\"}}"
+      }
+    },
+    {
+      "section": "agent-context",
+      "name": "context entry upsert",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-context",
+      "name": "context relation upsert",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-context",
+      "name": "context bundle read",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-context",
+      "name": "context bulk enable",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-context",
+      "name": "memory create",
+      "ok": "5f9cdd8f-efd5-449f-aa61-a1cdd9eba5ec",
+      "detail": {
+        "status": 201,
+        "body": "{\"memory\":{\"id\":\"5f9cdd8f-efd5-449f-aa61-a1cdd9eba5ec\",\"scopeType\":\"database\",\"scopeKey\":\"8c3545e8-859b-485b-a98c-6326baaf9164/C:/Users/Administrator/.aidb/demo/demo-retail.sqlite\",\"kind\":\"fact\",\"title\":\"QA 记忆：GMV 口径\",\"content\":\"GMV 使用 orders.pay_cents 汇总，排除 cancelled。\",\"tags\":[],\"importance\":0.6,\"confidence\":0.7,\"pinned\":false,\"archived\":false,\"useCount\":0,\"createdAt\":\"2026-11-03T00:44:05.518Z\",\""
+      }
+    },
+    {
+      "section": "agent-context",
+      "name": "memory search",
+      "ok": true,
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "agent-context",
+      "name": "memory update",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "notifications",
+      "name": "notification channel create",
+      "ok": "6d96dec5-f4d8-48a1-b715-fefe1d600d29",
+      "detail": {
+        "status": 201,
+        "body": "{\"channel\":{\"id\":\"6d96dec5-f4d8-48a1-b715-fefe1d600d29\",\"name\":\"QA 通道\",\"type\":\"feishu\",\"enabled\":true,\"summary\":\"open.feishu.cn\",\"createdAt\":\"2026-11-03T00:44:05.526Z\",\"updatedAt\":\"2026-11-03T00:44:05.526Z\"}}"
+      }
+    },
+    {
+      "section": "notifications",
+      "name": "notification channel listed",
+      "ok": true,
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "notifications",
+      "name": "notification test reports failure gracefully",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"result\":{\"channelId\":\"6d96dec5-f4d8-48a1-b715-fefe1d600d29\",\"name\":\"QA 通道\",\"ok\":false,\"message\":\"飞书返回 code=19001 param invalid: incoming webhook access token invalid\"}}"
+      }
+    },
+    {
+      "section": "notifications",
+      "name": "notification channel delete",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "mcp",
+      "name": "mcp servers listed",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"servers\":[{\"id\":\"builtin-filesystem\",\"name\":\"filesystem\",\"command\":\"builtin:filesystem\",\"args\":[\"C:\\\\server\\\\kbook\"],\"enabled\":true,\"builtin\":\"filesystem\",\"createdAt\":\"2026-10-31T10:14:39.756Z\",\"updatedAt\":\"2026-10-31T11:22:43.434Z\"},{\"id\":\"builtin-git\",\"name\":\"git\",\"command\":\"builtin:git\",\"args\":[],\"enabled\":true,\"builtin\":\"git\",\"createdAt\":\"2026-10-31T10:14:39.758Z\",\"updatedAt\":\"2026-10-31T10:"
+      }
+    },
+    {
+      "section": "mcp",
+      "name": "builtin mcp tools listed",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"server\":{\"id\":\"builtin-filesystem\",\"name\":\"filesystem\",\"command\":\"builtin:filesystem\",\"args\":[\"C:\\\\server\\\\kbook\"],\"enabled\":true,\"builtin\":\"filesystem\",\"createdAt\":\"2026-10-31T10:14:39.756Z\",\"updatedAt\":\"2026-10-31T11:22:43.434Z\"},\"tools\":[{\"name\":\"list_directory\",\"description\":\"List files and folders under a granted directory. Pass recursive=true to walk the whole tree. Skips .git, node_module"
+      }
+    },
+    {
+      "section": "mcp",
+      "name": "mcp server create",
+      "ok": "061ce402-0004-4762-94f2-a05510622f9d",
+      "detail": {
+        "status": 201,
+        "body": "{\"server\":{\"id\":\"061ce402-0004-4762-94f2-a05510622f9d\",\"name\":\"qa-dummy\",\"command\":\"node\",\"args\":[\"-e\",\"console.error(\\\"x\\\")\"],\"enabled\":false,\"createdAt\":\"2026-11-03T00:44:05.634Z\",\"updatedAt\":\"2026-11-03T00:44:05.634Z\"}}"
+      }
+    },
+    {
+      "section": "mcp",
+      "name": "mcp server delete",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "skills",
+      "name": "skills listed",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"skills\":[{\"id\":\"aidb-data-dictionary\",\"name\":\"数据字典\",\"description\":\"为表、列、枚举和关联关系生成可维护的数据字典说明。\",\"version\":\"1.0.0\",\"license\":\"MIT\",\"enabled\":true,\"builtin\":true,\"runnable\":false,\"fileCount\":2,\"updatedAt\":\"2026-10-30T00:34:23.335Z\"},{\"id\":\"aidb-report\",\"name\":\"AiDB 报告写作\",\"description\":\"把查询结果组织成结论先行、数字可追溯的报告；适合 /report 与汇报材料。\",\"version\":\"1.0.0\",\"license\":\"MIT\",\"enabled\":true,\"builtin\":true,\"runnable\""
+      }
+    },
+    {
+      "section": "skills",
+      "name": "skill detail",
+      "ok": {
+        "id": "aidb-data-dictionary",
+        "name": "数据字典",
+        "description": "为表、列、枚举和关联关系生成可维护的数据字典说明。",
+        "version": "1.0.0",
+        "license": "MIT",
+        "enabled": true,
+        "builtin": true,
+        "runnable": false,
+        "fileCount": 2,
+        "updatedAt": "2026-10-30T00:34:23.335Z",
+        "files": [
+          {
+            "path": ".builtin",
+            "type": "file",
+            "size": 24
+          },
+          {
+            "path": "SKILL.md",
+            "type": "file",
+            "size": 485
+          }
+        ],
+        "body": "\n# 数据字典\n\n## 每张表写清楚\n\n- 业务含义、数据来源、更新频率、负责人。\n- 主键、唯一键、外键与关联表。\n- 列的物理类型、业务含义、枚举值、空值规则、示例。\n- 敏感字段与脱敏要求。\n- 常见查询口径与已知坑（时区、软删除、历史表）。\n"
+      },
+      "detail": {
+        "status": 200,
+        "body": "{\"skill\":{\"id\":\"aidb-data-dictionary\",\"name\":\"数据字典\",\"description\":\"为表、列、枚举和关联关系生成可维护的数据字典说明。\",\"version\":\"1.0.0\",\"license\":\"MIT\",\"enabled\":true,\"builtin\":true,\"runnable\":false,\"fileCount\":2,\"updatedAt\":\"2026-10-30T00:34:23.335Z\",\"files\":[{\"path\":\".builtin\",\"type\":\"file\",\"size\":24},{\"path\":\"SKILL.md\",\"type\":\"file\",\"size\":485}],\"body\":\"\\n# 数据字典\\n\\n## 每张表写清楚\\n\\n- 业务含义、数据来源、更新频率、负责人。\\n- 主键、唯一键、外键与关联表。\\"
+      }
+    },
+    {
+      "section": "skills",
+      "name": "skill file read",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"skill\":\"aidb-data-dictionary\",\"path\":\"SKILL.md\",\"content\":\"---\\nname: 数据字典\\ndescription: 为表、列、枚举和关联关系生成可维护的数据字典说明。\\nmetadata:\\n  version: \\\"1.0.0\\\"\\n  license: MIT\\n---\\n\\n# 数据字典\\n\\n## 每张表写清楚\\n\\n- 业务含义、数据来源、更新频率、负责人。\\n- 主键、唯一键、外键与关联表。\\n- 列的物理类型、业务含义、枚举值、空值规则、示例。\\n- 敏感字段与脱敏要求。\\n- 常见查询口径与已知坑（时区、软删除、历史表）。\\n\",\"truncated\":false,\"offset\":0,\"totalChars\":227}"
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tools endpoint lists 52",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "count": 52
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool list_connections",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "summary": "共有 9 个连接"
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool inspect_schema",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "summary": "读取到 2 个对象"
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool search_objects",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "summary": "找到 2 个匹配对象"
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool sample_rows",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "summary": "读取 3 行样例"
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool profile_column",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "summary": "customers.mobile 画像完成"
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool explain_sql",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "summary": "执行计划已生成"
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool check_data_quality",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "summary": "质量检查完成：3,000 行，5 项发现"
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool audit_database",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "summary": "体检完成：38 张表，1 高 / 38 中 / 0 低风险"
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool render_chart",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "summary": "已生成柱状图（7 个数据点）"
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool analyze_chart",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "summary": "7 个数据点：合计 45134666009，均值 6447809429.86，最大 小程序=13504384214，最小 线下门店=2347615094"
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool forecast_chart",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "summary": "预测未来 3 期（移动平均，窗口 4，r=-0.3662）"
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool get_query_history",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "summary": "读取 5 条历史"
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool update_plan",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "summary": "计划已更新"
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool memory_write",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "summary": "已记住：QA 工具记忆（新记忆）"
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool memory_search",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "summary": "检索到 8 条记忆"
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool backup_database",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "summary": "备份完成：39 张表 / 454724 行"
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool skill_list",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "summary": "4 个 Skill"
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool recon_data",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "summary": "0 键 · 0 缺失 · 0 多余 · 0 改值"
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool schema_diff",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "summary": "2 张表 · 6 条语句 · 含破坏性变更"
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool mcp_list_servers excluded from outbound bridge",
+      "ok": true,
+      "detail": {
+        "status": 403,
+        "error": {
+          "code": "TOOL_NOT_EXPOSED",
+          "message": "出站 MCP 桥不暴露 mcp_list_servers；本地 MCP 工具只能在 AiDB 内使用"
+        }
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "tool mcp_list_tools excluded from outbound bridge",
+      "ok": true,
+      "detail": {
+        "status": 403,
+        "error": {
+          "code": "TOOL_NOT_EXPOSED",
+          "message": "出站 MCP 桥不暴露 mcp_list_tools；本地 MCP 工具只能在 AiDB 内使用"
+        }
+      }
+    },
+    {
+      "section": "agent-tools-direct",
+      "name": "direct write tool blocked (TOOL_READ_ONLY)",
+      "ok": true,
+      "detail": {
+        "status": 403,
+        "error": {
+          "code": "TOOL_READ_ONLY",
+          "message": "MCP 只读桥不允许执行 transfer_data（风险 write）"
+        }
+      }
+    },
+    {
+      "section": "readonly-guard",
+      "name": "readonly select allowed",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "readonly-guard",
+      "name": "readonly write query blocked",
+      "ok": true,
+      "detail": {
+        "status": 403,
+        "expected": [
+          403
+        ],
+        "code": "READONLY",
+        "error": {
+          "code": "READONLY",
+          "message": "只读连接不允许执行 UPDATE",
+          "hint": "在连接设置中关闭只读后才可写入"
+        }
+      }
+    },
+    {
+      "section": "readonly-guard",
+      "name": "readonly row insert blocked",
+      "ok": true,
+      "detail": {
+        "status": 403,
+        "expected": [
+          403
+        ],
+        "code": "READONLY",
+        "error": {
+          "code": "READONLY",
+          "message": "只读连接禁止修改数据"
+        }
+      }
+    },
+    {
+      "section": "readonly-guard",
+      "name": "readonly import blocked",
+      "ok": true,
+      "detail": {
+        "status": 403,
+        "expected": [
+          403
+        ],
+        "code": "READONLY",
+        "error": {
+          "code": "READONLY",
+          "message": "只读连接禁止导入"
+        }
+      }
+    },
+    {
+      "section": "readonly-guard",
+      "name": "readonly generate blocked",
+      "ok": true,
+      "detail": {
+        "status": 403,
+        "expected": [
+          403
+        ],
+        "code": "READONLY",
+        "error": {
+          "code": "READONLY",
+          "message": "只读连接禁止写入"
+        }
+      }
+    },
+    {
+      "section": "readonly-guard",
+      "name": "readonly generate dry-run allowed",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"result\":{\"table\":\"orders\",\"columns\":[\"order_no\",\"customer_id\",\"store_id\",\"channel\",\"status\",\"payment_method\",\"coupon_code\",\"goods_cents\",\"freight_cents\",\"discount_cents\",\"pay_cents\",\"points_used\",\"created_at\",\"paid_at\",\"shipped_at\",\"completed_at\",\"delivery_date\",\"remark\",\"invoice_title\",\"is_test_order\"],\"rowsPreview\":[[\"demo_1\",874,136,\"demo_1\",\"pending\",\"demo_1\",\"demo_1\",973,244,353,728,668,\"20"
+      }
+    },
+    {
+      "section": "readonly-guard",
+      "name": "readonly export allowed",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "readonly-guard",
+      "name": "readonly backup allowed",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "migration",
+      "name": "schema compare status",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"diff\":{\"sourceTables\":40,\"targetTables\":37,\"tables\":[{\"name\":\"brands\",\"status\":\"unchanged\",\"changes\":[],\"sql\":[]},{\"name\":\"campaign_touches\",\"status\":\"unchanged\",\"changes\":[],\"sql\":[]},{\"name\":\"categories\",\"status\":\"unchanged\",\"changes\":[],\"sql\":[]},{\"name\":\"cities\",\"status\":\"unchanged\",\"changes\":[],\"sql\":[]},{\"name\":\"coupon_redemptions\",\"status\":\"unchanged\",\"changes\":[],\"sql\":[]},{\"name\":\"coupo"
+      }
+    },
+    {
+      "section": "migration",
+      "name": "schema compare finds differences",
+      "ok": true,
+      "detail": {
+        "added": 3,
+        "removed": 0,
+        "changed": 2,
+        "unchanged": 33,
+        "statements": 10
+      }
+    },
+    {
+      "section": "migration",
+      "name": "schema compare detects missing tables",
+      "ok": true,
+      "detail": {
+        "tables": [
+          {
+            "name": "brands",
+            "status": "unchanged",
+            "changes": [],
+            "sql": []
+          },
+          {
+            "name": "campaign_touches",
+            "status": "unchanged",
+            "changes": [],
+            "sql": []
+          },
+          {
+            "name": "categories",
+            "status": "unchanged",
+            "changes": [],
+            "sql": []
+          },
+          {
+            "name": "cities",
+            "status": "unchanged",
+            "changes": [],
+            "sql": []
+          },
+          {
+            "name": "coupon_redemptions",
+            "status": "unchanged",
+            "changes": [],
+            "sql": []
+          },
+          {
+            "name": "coupons",
+            "status": "unchanged",
+            "changes": [],
+            "sql": []
+          }
+        ]
+      }
+    },
+    {
+      "section": "migration",
+      "name": "data compare status",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"result\":{\"source\":\"Demo · 零售业务库/C:/Users/Administrator/.aidb/demo/demo-retail.sqlite\",\"target\":\"Demo2 · 零售镜像库/C:/Users/Administrator/.aidb/demo/demo-retail.sqlite\",\"rows\":[{\"table\":\"coupons\",\"sourceRows\":120,\"targetRows\":120,\"status\":\"same\",\"fingerprint\":\"[120,1,120]\",\"targetFingerprint\":\"[120,1,120]\"},{\"table\":\"customers\",\"sourceRows\":3000,\"targetRows\":3025,\"status\":\"different\"},{\"table\":\"order"
+      }
+    },
+    {
+      "section": "migration",
+      "name": "data compare detects order drift",
+      "ok": true,
+      "detail": [
+        {
+          "table": "coupons",
+          "sourceRows": 120,
+          "targetRows": 120,
+          "status": "same",
+          "fingerprint": "[120,1,120]",
+          "targetFingerprint": "[120,1,120]"
+        },
+        {
+          "table": "customers",
+          "sourceRows": 3000,
+          "targetRows": 3025,
+          "status": "different"
+        },
+        {
+          "table": "orders",
+          "sourceRows": 25000,
+          "targetRows": 24500,
+          "status": "different"
+        },
+        {
+          "table": "product_reviews",
+          "sourceRows": -1,
+          "targetRows": null,
+          "status": "missing"
+        },
+        {
+          "table": "products",
+          "sourceRows": 600,
+          "targetRows": 600,
+          "status": "same",
+          "fingerprint": "[600,1,600]",
+          "targetFingerprint": "[600,1,600]"
+        }
+      ]
+    },
+    {
+      "section": "migration",
+      "name": "data compare detects missing table",
+      "ok": true,
+      "detail": [
+        {
+          "table": "coupons",
+          "sourceRows": 120,
+          "targetRows": 120,
+          "status": "same",
+          "fingerprint": "[120,1,120]",
+          "targetFingerprint": "[120,1,120]"
+        },
+        {
+          "table": "customers",
+          "sourceRows": 3000,
+          "targetRows": 3025,
+          "status": "different"
+        },
+        {
+          "table": "orders",
+          "sourceRows": 25000,
+          "targetRows": 24500,
+          "status": "different"
+        },
+        {
+          "table": "product_reviews",
+          "sourceRows": -1,
+          "targetRows": null,
+          "status": "missing"
+        },
+        {
+          "table": "products",
+          "sourceRows": 600,
+          "targetRows": 600,
+          "status": "same",
+          "fingerprint": "[600,1,600]",
+          "targetFingerprint": "[600,1,600]"
+        }
+      ]
+    },
+    {
+      "section": "migration",
+      "name": "transfer small tables",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"result\":{\"results\":[{\"table\":\"brands\",\"status\":\"ok\",\"rows\":25,\"created\":true,\"truncated\":false},{\"table\":\"coupons\",\"status\":\"ok\",\"rows\":120,\"created\":true,\"truncated\":false}],\"totalRows\":145,\"createdTables\":2}}"
+      }
+    },
+    {
+      "section": "migration",
+      "name": "transfer target row count",
+      "ok": true,
+      "detail": [
+        [
+          25
+        ]
+      ]
+    },
+    {
+      "section": "migration",
+      "name": "schema diff produces DDL for empty target",
+      "ok": true,
+      "detail": {
+        "statements": 49,
+        "summary": {
+          "added": 36,
+          "removed": 0,
+          "changed": 0,
+          "unchanged": 2,
+          "statements": 49
+        }
+      }
+    },
+    {
+      "section": "migration",
+      "name": "schema sync executes diff",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"batch\":{\"sets\":[{\"columns\":[],\"rows\":[],\"rowCount\":0,\"affected\":120,\"lastInsertId\":120,\"durationMs\":7,\"statement\":\"CREATE TABLE \\\"campaign_touches\\\" (\\n  \\\"id\\\" INTEGER PRIMARY KEY AUTOINCREMENT,\\n  \\\"campaign_id\\\" INTEGER NOT NULL,\\n  \\\"customer_id\\\" INTEGER NOT NULL,\\n  \\\"touch_type\\\" VARCHAR(16) NOT NULL,\\n  \\\"touched_at\\\" DATETIME NOT NULL,\\n  \\\"clicked\\\" BOOLEAN NOT NULL DEFAULT 0,\\n  \\\"con"
+      }
+    },
+    {
+      "section": "migration",
+      "name": "schema sync creates all tables",
+      "ok": true,
+      "detail": {
+        "tables": 38
+      }
+    },
+    {
+      "section": "migration",
+      "name": "full transfer completes",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "ms": 25431,
+        "totalRows": 454713,
+        "errors": []
+      }
+    },
+    {
+      "section": "migration",
+      "name": "full transfer orders rows",
+      "ok": true,
+      "detail": {
+        "actual": 25000,
+        "expected": 25000
+      }
+    },
+    {
+      "section": "migration",
+      "name": "full transfer order_items rows",
+      "ok": true,
+      "detail": {
+        "actual": 62596,
+        "expected": 62596
+      }
+    },
+    {
+      "section": "migration",
+      "name": "full transfer customers rows",
+      "ok": true,
+      "detail": {
+        "actual": 3000,
+        "expected": 3000
+      }
+    },
+    {
+      "section": "migration",
+      "name": "full transfer web_events rows",
+      "ok": true,
+      "detail": {
+        "actual": 60000,
+        "expected": 60000
+      }
+    },
+    {
+      "section": "migration",
+      "name": "data compare after full transfer matches",
+      "ok": true,
+      "detail": [
+        {
+          "table": "brands",
+          "sourceRows": 25,
+          "targetRows": 25,
+          "status": "same",
+          "fingerprint": "[25,1,25]",
+          "targetFingerprint": "[25,1,25]"
+        },
+        {
+          "table": "customers",
+          "sourceRows": 3000,
+          "targetRows": 3000,
+          "status": "same",
+          "fingerprint": "[3000,1,3000]",
+          "targetFingerprint": "[3000,1,3000]"
+        },
+        {
+          "table": "orders",
+          "sourceRows": 25000,
+          "targetRows": 25000,
+          "status": "same",
+          "fingerprint": "[25000,1,25000]",
+          "targetFingerprint": "[25000,1,25000]"
+        }
+      ]
+    },
+    {
+      "section": "migration",
+      "name": "transfer stream emits progress events",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "types": [
+          "start",
+          "table-start",
+          "phase-start",
+          "phase-done",
+          "progress",
+          "table-done",
+          "done"
+        ]
+      }
+    },
+    {
+      "section": "migration",
+      "name": "transfer stream honors limit",
+      "ok": true,
+      "detail": [
+        [
+          1000
+        ]
+      ]
+    },
+    {
+      "section": "history-audit",
+      "name": "history recorded",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "count": 50
+      }
+    },
+    {
+      "section": "history-audit",
+      "name": "history favorite",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"id\":\"c5c133d7-8c5d-4e24-bd30-e0d41bf06e34\",\"favorite\":true}"
+      }
+    },
+    {
+      "section": "history-audit",
+      "name": "audit entries",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "count": 20
+      }
+    },
+    {
+      "section": "history-audit",
+      "name": "audit csv export",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "head": "id,actor,connectionId,database,tool,sql,risk,approval,status,durationMs,meta,createdAt\r\nd3bff5eb-91c5-4616-8bb8-22070fb2"
+      }
+    },
+    {
+      "section": "history-audit",
+      "name": "snippet create",
+      "ok": "46277e88-a6ba-4161-94c2-b46459e42f61",
+      "detail": {
+        "status": 201,
+        "body": "{\"snippet\":{\"id\":\"46277e88-a6ba-4161-94c2-b46459e42f61\"}}"
+      }
+    },
+    {
+      "section": "history-audit",
+      "name": "snippet listed",
+      "ok": true,
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "history-audit",
+      "name": "snippet delete",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "history-audit",
+      "name": "history clear",
+      "ok": true,
+      "detail": {
+        "status": 204
+      }
+    },
+    {
+      "section": "commands",
+      "name": "commands listed",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "ids": [
+          "report",
+          "compare",
+          "diff",
+          "recon",
+          "fix",
+          "ask"
+        ]
+      }
+    },
+    {
+      "section": "commands",
+      "name": "command /diff accepted",
+      "ok": "dff7829d-bb8d-4548-a3cb-83c56836b22a",
+      "detail": {
+        "status": 202,
+        "body": "{\"run\":{\"id\":\"dff7829d-bb8d-4548-a3cb-83c56836b22a\",\"command\":\"diff\",\"title\":\"结构对比 · 业务库 ↔ 镜像库\",\"status\":\"queued\",\"input\":{\"sources\":[{\"connectionId\":\"8c3545e8-859b-485b-a98c-6326baaf9164\",\"database\":\"C:/Users/Administrator/.aidb/demo/demo-retail.sqlite\",\"label\":\"业务库\"},{\"connectionId\":\"425b7ad2-d841-4002-a8f4-97839cecddc9\",\"database\":\"C:/Users/Administrator/.aidb/demo/demo-retail.sqlite\",\"label\":\""
+      }
+    },
+    {
+      "section": "commands",
+      "name": "command /diff finished",
+      "ok": true,
+      "detail": {
+        "status": "succeeded"
+      }
+    },
+    {
+      "section": "commands",
+      "name": "command /diff succeeded",
+      "ok": true,
+      "detail": {
+        "status": "succeeded"
+      }
+    },
+    {
+      "section": "commands",
+      "name": "command /recon accepted",
+      "ok": "88ac61b9-0510-486e-b2ad-86e1e46c4704",
+      "detail": {
+        "status": 202,
+        "body": "{\"run\":{\"id\":\"88ac61b9-0510-486e-b2ad-86e1e46c4704\",\"command\":\"recon\",\"title\":\"数据对账 · 业务库 ↔ 镜像库\",\"status\":\"queued\",\"input\":{\"sources\":[{\"connectionId\":\"8c3545e8-859b-485b-a98c-6326baaf9164\",\"database\":\"C:/Users/Administrator/.aidb/demo/demo-retail.sqlite\",\"label\":\"业务库\"},{\"connectionId\":\"425b7ad2-d841-4002-a8f4-97839cecddc9\",\"database\":\"C:/Users/Administrator/.aidb/demo/demo-retail.sqlite\",\"label\":"
+      }
+    },
+    {
+      "section": "commands",
+      "name": "command /recon finished",
+      "ok": true,
+      "detail": {
+        "status": "succeeded"
+      }
+    },
+    {
+      "section": "commands",
+      "name": "command /recon succeeded",
+      "ok": true,
+      "detail": {
+        "status": "succeeded"
+      }
+    },
+    {
+      "section": "commands",
+      "name": "recon rejects malformed mapping with a clear error",
+      "ok": true,
+      "detail": {
+        "status": 202,
+        "runStatus": "failed",
+        "error": {
+          "code": "INVALID_INPUT",
+          "message": "对账映射缺少 mode / 左右数据源连接，请重新选择两侧数据源"
+        }
+      }
+    }
+  ]
+}

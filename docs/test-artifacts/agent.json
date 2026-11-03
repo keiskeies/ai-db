@@ -1,0 +1,1310 @@
+{
+  "meta": {
+    "model": "openai/qwen3.8-flash-next",
+    "elapsedMs": 1651683,
+    "cases": [
+      {
+        "name": "月度 GMV 趋势",
+        "prompt": "帮我看看最近半年每个月的成交金额（GMV）走势怎么样，用折线图展示。",
+        "elapsed": 91062,
+        "tools": [
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "render_chart",
+          "analyze_chart",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql"
+        ],
+        "chart": [
+          {
+            "tool": "render_chart",
+            "type": "line",
+            "x": "month",
+            "y": "gmv_yuan"
+          }
+        ],
+        "text": "我先确认数据的时间范围和订单状态口径，再出图。\n\n已出图（数据点直接来自 `orders` 明细表）。\n\n## 口径说明\n- 时间窗：**2026-05 ~ 2026-10**（库内最新成交在 2026-11-02，只有 2 天，不完整，未纳入）\n- 归属月：按 **`paid_at` 支付时间**分月（成交口径，未支付的 pending/cancelled 天然排除）\n- GMV = `SUM(pay_cents)/100`，并过滤 `is_test_order = 0`\n\n```sql\nSELECT substr(paid_at,1,7) AS month,\n       ROUND(SUM(pay_cents)/100.0, 2) AS gmv_yuan\nFROM orders\nWHERE paid_at IS NOT NULL AND is_test_order = 0\n  AND substr(paid_at,1,7) BETWEEN '2026-05' AND '2026-10'\nGROUP BY month ORDER BY month\n```\n\n## 走势结论\n| 月份 | GMV（元） | 环比 | 支付订单 | 客单价（元） |\n|---|---|---|---|---|\n| 2026-05 | 22,061,841.56 | — | 1,201 | 18,369.56 |\n| 2026-06 | **32,402,606.15** | **+46.87%** | 1,782 | 18,183.28 |\n| 2026-07 | **19,284,106.98** | **−40.49%** | 1,100 | 17,531.01 |\n| 2026-08 | 21,734,248.09 | +12.71% | 1,185 | 18,341.14 |\n| 2026-09 | 19,555,654.08 | −10.02% | 1,094 | 17,875.37 |\n| 2026-10 | 20,445,255.38 | +4.55% | 1,099 | 18,603.51 |\n\n- **半年合计 135,483,712.24 元（1.35 亿），月均 22,580,618.71 元。**\n- **6 月是唯一的大波动**：单月占半年 GMV 的 **23.92%**，比其余 5 个月（占比 14.2%~16.3%）高出一截；7 月立刻回落到半年最低点，之后 8–10 月在 1,950 万~2,170 万之间**窄幅横盘**，没有趋势性增长。\n- 6 月的增长是**量驱动而非价驱动**：支付订单 1,782 单（其他月 1,094–1,201），下单买家 1,215 人（其他月 849–946），而客单价 18,183 元反而略低于 5/8/1",
+        "error": null,
+        "done": true,
+        "toolErrors": [],
+        "usage": {
+          "type": "usage",
+          "tokensIn": 15379,
+          "tokensOut": 366,
+          "durationMs": 6756,
+          "__raw": "event: usage\ndata: {\"type\":\"usage\",\"tokensIn\":15379,\"tokensOut\":366,\"durationMs\":6756}"
+        }
+      },
+      {
+        "name": "类目销售排行",
+        "prompt": "哪些商品类目卖得最好？给我销售额前 10 名的类目和销量，做成柱状图。",
+        "elapsed": 94108,
+        "tools": [
+          "inspect_schema",
+          "sample_rows",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "render_chart",
+          "analyze_chart",
+          "run_sql",
+          "run_sql"
+        ],
+        "chart": [
+          {
+            "tool": "render_chart",
+            "type": "bar",
+            "x": "类目",
+            "y": "销售额_元"
+          }
+        ],
+        "text": "我先看一下现成的 `v_category_sales` 视图和相关表结构，避免重复造轮子。\n\n视图里全是 0，先看看它的定义，同时确认订单状态与退款口径。\n\n视图本身没问题——之前那 10 行是 level 0/1 的分类（商品全部挂在 25 个二级类目上，所以父级显示 0）。现在按有效成交口径统计。\n\n数据出来了。现在出柱状图，并让工具算好前 10 名合计与占比。\n\nCTE 别名写错了，修正后重跑。\n\n已出图。下面是结果和一个**重要提醒**。\n\n## 销售额 TOP10 类目\n\n| # | 类目 | 一级分类 | 销售额（元） | 销量（件） | 件单价（元） |\n|---|------|---------|-------------|-----------|-------------|\n| 1 | 手机通讯 | 数码 | 15,748,814.03 | 4,296 | 3,665.93 |\n| 2 | 生活电器 | 家电 | 15,700,013.75 | 4,398 | 3,569.81 |\n| 3 | 生鲜 | 食品 | 15,656,795.95 | 4,213 | 3,715.35 |\n| 4 | 男装 | 服饰 | 15,638,662.15 | 4,370 | 3,578.64 |\n| 5 | 家纺 | 家居 | 15,630,832.59 | 4,311 | 3,625.80 |\n| 6 | 厨房电器 | 家电 | 15,595,841.60 | 4,333 | 3,599.32 |\n| 7 | 厨具 | 家居 | 15,559,421.64 | 4,290 | 3,626.90 |\n| 8 | 健身器材 | 运动 | 15,529,936.61 | 4,174 | 3,720.63 |\n| 9 | 科技经管 | 图书 | 15,430,427.48 | 4,285 | 3,600.57 |\n| 10 | 影音娱乐 | 数码 | 15,425,813.10 | 4,280 | 3,604.16 |\n\n**统计口径**：`orders.is_test_order = 0`、订单状态 ∈ (paid / shipped / delivered / completed)、剔除 `order_items.refund_status = 'refunded'` 的行；销售额 = `SUM(qty × unit_price_cents − discount_cents)`，按二级（叶子）类目汇总。全库有效成交合计 **382,823,516.89 元 / 105,979 件**，共 25 个叶子类目有销售。\n\n## ⚠️ 但这个榜单基本没有区分度\n\n- Top1 手机通讯占比仅 **4.11%**，Top10 合计 **40.73%**（25 个类目",
+        "error": null,
+        "done": true,
+        "toolErrors": [
+          {
+            "tool": "run_sql",
+            "ok": false,
+            "summary": "工具执行失败",
+            "error": {
+              "code": "SQLITE_ERROR",
+              "message": "no such column: oi.unit_price_cents"
+            }
+          }
+        ],
+        "usage": {
+          "type": "usage",
+          "tokensIn": 15711,
+          "tokensOut": 262,
+          "durationMs": 9556,
+          "__raw": "event: usage\ndata: {\"type\":\"usage\",\"tokensIn\":15711,\"tokensOut\":262,\"durationMs\":9556}"
+        }
+      },
+      {
+        "name": "渠道退款率",
+        "prompt": "上个月各渠道的退款率是多少？按退款率从高到低排序，给我一张对比图。",
+        "elapsed": 76707,
+        "tools": [
+          "inspect_schema",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "render_chart",
+          "run_sql"
+        ],
+        "chart": [
+          {
+            "tool": "render_chart",
+            "type": "bar",
+            "x": "channel",
+            "y": "refund_rate_pct"
+          }
+        ],
+        "text": "我先确认数据的时间范围和退款表的口径。\n\n已出图。\n\n## 口径说明\n- **月份**：库内最新订单停在 `2026-11-02`（11月只有 2 天，不完整），所以「上个月」取 **2026-10** 这个完整月，按 `orders.created_at` 归属。\n- **分母**：2026-10 创建的订单，剔除测试单（`is_test_order=1` 有 10 笔）→ **1,225 单**。\n- **分子**：这些订单中产生过**非 rejected**退款记录（`refunds.status in approved/processing`）的订单数，按 `order_id` 去重 → **80 单**。\n- **整体退款率 = 80 / 1225 = 6.53%**。\n\n```sql\nWITH base AS (\n  SELECT o.id, o.channel FROM orders o\n  WHERE substr(o.created_at,1,7)='2026-10' AND o.is_test_order=0\n), rf AS (\n  SELECT DISTINCT r.order_id FROM refunds r WHERE r.status<>'rejected'\n)\nSELECT b.channel, COUNT(*) AS order_cnt,\n       SUM(CASE WHEN rf.order_id IS NOT NULL THEN 1 ELSE 0 END) AS refund_cnt,\n       ROUND(100.0*SUM(CASE WHEN rf.order_id IS NOT NULL THEN 1 ELSE 0 END)/COUNT(*),2) AS refund_rate_pct\nFROM base b LEFT JOIN rf ON rf.order_id=b.id\nGROUP BY b.channel ORDER BY refund_rate_pct DESC;\n```\n\n## 结果（订单退款率，从高到低）\n\n| # | 渠道 | 订单数 | 退款订单数 | 退款率 |\n|---|------|-------|-----------|--------|\n| 1 | 抖音小店 | 161 | 13 | **8.07%** |\n| 2 | 小程序 | 381 | 29 | **7.61%** |\n| 3 | APP | 269 | 19 | **7.06%** |\n| 4 | 京东 | 103 | 6 | **5.83%** |\n| 5 | PC 商城 | 117 | 6 | **5.13%** |\n| 6 | 线下门店 | 61 | 3 | **4.92%** |\n| 7 | 天猫 | 133 |",
+        "error": null,
+        "done": true,
+        "toolErrors": [],
+        "usage": {
+          "type": "usage",
+          "tokensIn": 16072,
+          "tokensOut": 212,
+          "durationMs": 3885,
+          "__raw": "event: usage\ndata: {\"type\":\"usage\",\"tokensIn\":16072,\"tokensOut\":212,\"durationMs\":3885}"
+        }
+      },
+      {
+        "name": "沉睡高价值会员",
+        "prompt": "帮我找出最近 90 天没有下单、但历史消费超过 5000 元的高价值会员，列出会员号、姓名、手机号和最近一次下单时间。",
+        "elapsed": 76328,
+        "tools": [
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "export_result"
+        ],
+        "chart": [],
+        "text": "我先确认数据的时间基准和订单状态口径，再定义「消费金额」。\n\n数据基准确认：库内最新订单为 `2026-11-02`，所以「最近 90 天」窗口 = `2026-08-04 ~ 2026-11-02`。先跑统计看规模。\n\n1073 人符合条件，规模较大。我按消费额降序取前 50，并算一下这批人的总价值。\n\n我把全部 1073 人导出成 CSV，方便你做召回名单。\n\n已筛出 **1073 人**，全部名单已导出 CSV。\n\n## 口径说明\n- **时间基准**：库内最新订单停在 `2026-11-02`，所以「最近 90 天」= `2026-08-04 ~ 2026-11-02`（按 `orders.created_at` 判定下单，含未支付的 pending 单也算\"下过单\"，更严格）。\n- **历史消费**：只计**有效成交** `status IN (completed, delivered, shipped, paid)`，剔除 `cancelled / refunded / closed` 和 256 笔测试单（`is_test_order=1`），金额 = `SUM(pay_cents)/100`。\n- **筛选**：历史消费 > 5000 元 **且** 90 天窗口内无任何订单。\n\n## 这批人的体量（工具聚合结果）\n| 指标 | 数值 |\n|---|---|\n| 人数 | **1,073** |\n| 历史消费合计 | **93,328,569.25 元** |\n| 人均历史消费 | **86,979.10 元** |\n| 消费区间 | 5,442.99 ~ 371,113.14 元 |\n| 沉默超 180 天 | **412 人**（占 38.4%） |\n| 其中金卡/黑金会员 | **229 人** |\n| 其中账户已冻结 | **29 人**（短信召回无效，需换渠道） |\n\n## TOP 30 高价值沉默会员（按历史消费降序）\n| 会员号 | 姓名 | 手机号 | 等级 | 历史消费(元) | 订单数 | 最近下单时间 | 沉默天数 |\n|---|---|---|---|---|---|---|---|\n| C000103 | 黄博文 | 13358684038 | 普通会员 | 371,113.14 | 21 | 2026-07-29 05:20:20 | 95 |\n| C000621 | 叶杰 | 15052198883 | 普通会员 | 339,184.73 | 15 | 2026-07-04 18:22:12 | 120 |\n| C000114 | 吴子涵 | 13864031966 | 普通会员 | 330,907.21 | 19 | 2026-06-19 15:13:43 | 135 |\n| C000428 | 马琳 | 15",
+        "error": null,
+        "done": true,
+        "toolErrors": [],
+        "usage": {
+          "type": "usage",
+          "tokensIn": 16442,
+          "tokensOut": 498,
+          "durationMs": 7563,
+          "__raw": "event: usage\ndata: {\"type\":\"usage\",\"tokensIn\":16442,\"tokensOut\":498,\"durationMs\":7563}"
+        }
+      },
+      {
+        "name": "订单数据质量",
+        "prompt": "订单表里哪些字段有空值或者异常数据？帮我检查一下并给出清单。",
+        "elapsed": 239948,
+        "tools": [
+          "update_plan",
+          "check_data_quality",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "update_plan",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "inspect_schema",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "update_plan",
+          "update_plan"
+        ],
+        "chart": [],
+        "text": "我先跑数据质量检查，再针对金额、状态、时间等业务规则做异常核查。\n\n现存的 12 列已扫描完，还有 9 个字段（时间链、备注、积分等）需要专项核查。我并行跑几组校验 SQL。\n\n现存的空值都定位到了。接下来查金额算术、时间链逻辑、外键孤儿和优惠券一致性。\n\n金额公式有 6,232 行对不上，优惠券/时间也有疑点。我定位这些异常的具体形态。\n\n金额公式其实完全自洽（points_used 不参与实付）。继续核对明细表勾稽、配送日期与状态、以及格式类异常。\n\n最后量化两处业务影响的金额，再出清单。\n\n已扫完 `orders` 全部 21 列（25,000 行）。结论：**9 列有空值，但其中 6 列的空值是业务设计如此、不是脏数据；真正需要你处理的是 5 类逻辑矛盾。**\n\n## 一、空值清单（先看哪些是\"假问题\"）\n\n| 字段 | NULL 数 | 占比 | 判定 |\n|---|---|---|---|\n| `store_id` | 23,725 | 94.90% | ✅ **正常**：非空恰好 1,275 行 = `channel='线下门店'` 的订单数，线上订单本就无门店（0 孤儿外键） |\n| `coupon_code` | 20,429 | 81.72% | ✅ **正常**：非空 4,571 行与 `coupon_redemptions` 的 4,571 行**完全一一对应** |\n| `paid_at` | 1,392 | 5.57% | ✅ **正常**：恰好 = `cancelled` 1,293 + `pending` 99 |\n| `shipped_at` | 2,429 | 9.72% | ✅ **正常**：恰好 = cancelled+closed+pending+paid |\n| `completed_at` | 2,802 | 11.21% | ✅ **正常**：再额外含 shipped 172 + delivered 201 |\n| `payment_method` | 1,392 | 5.57% | ✅ **正常**：与无 `paid_at` 的 1,392 行**同一批**（未支付当然无支付方式） |\n| **`delivery_date`** | 18,663 | **74.65%** | ❌ **有问题**，见第二节 #4 |\n| **`remark`** | 22,004 | **88.02%** | ⚠️ 结构问题：非空 2,996 行只有 **5 个固定值**（礼品包装 645／工作日送达 615／需要开发票 610／放快递柜 591／请尽快发货 535）——枚举被塞进了自由文本列 |\n| **`invoice_title`** | 23,064 | **92.26%** | ❌ **有问题**，见第二节 #5 |",
+        "error": null,
+        "done": true,
+        "toolErrors": [],
+        "usage": {
+          "type": "usage",
+          "tokensIn": 16847,
+          "tokensOut": 344,
+          "durationMs": 5104,
+          "__raw": "event: usage\ndata: {\"type\":\"usage\",\"tokensIn\":16847,\"tokensOut\":344,\"durationMs\":5104}"
+        }
+      },
+      {
+        "name": "两库结构差异",
+        "prompt": "对比零售业务库（Demo · 零售业务库）和镜像库（Demo2 · 零售镜像库）的订单表结构，告诉我有什么不同。",
+        "elapsed": 29640,
+        "tools": [
+          "list_connections",
+          "schema_diff",
+          "inspect_schema",
+          "inspect_schema",
+          "run_sql",
+          "run_sql"
+        ],
+        "chart": [],
+        "text": "需要先找到镜像库的连接 id。\n\n再核对源表的索引与行数，确认差异是否只在列上。\n\n已对比完 `orders` 表。两个库的连接分别是 `8c3545e8…`（源/业务库）和 `425b7ad2…`（目标/镜像库）。\n\n## 结构差异：只有 2 列不同（各 21 列，其余完全一致）\n\n| 列 | 业务库（源） | 镜像库（目标） | 性质 |\n|---|---|---|---|\n| `goods_cents` INTEGER NOT NULL | ✅ 有 | ❌ 无 | 镜像库**缺列** |\n| `invoice_title` VARCHAR(128) | ✅ 有（1,936 行有值） | ❌ 无 | 镜像库**缺列** |\n| `goods_amount_cents` INTEGER NOT NULL | ❌ 无 | ✅ 有 | 镜像库**多出的旧列**（疑似 `goods_cents` 改名前的遗留） |\n| `sync_at` DATETIME | ❌ 无 | ✅ 有 | 镜像库**多出的列**（镜像/同步专用字段） |\n\n**完全一致的部分**：主键 `id` 自增、19 个同名列的类型与 NOT NULL/默认值（`freight_cents`/`discount_cents`/`points_used` 默认 0、`is_test_order` 默认 0）、3 个索引（`ix_orders_customer`、`ix_orders_status`、`ix_orders_created`）、2 个外键（`store_id→stores(id)`、`customer_id→customers(id)`）都没有漂移。\n\n## 生成到镜像库（SQLite 方言）的同步 DDL\n\n```sql\nALTER TABLE \"orders\" ADD COLUMN \"goods_cents\" INTEGER NOT NULL;\nALTER TABLE \"orders\" ADD COLUMN \"invoice_title\" VARCHAR(128);\nALTER TABLE \"orders\" DROP COLUMN \"goods_amount_cents\";   -- 破坏性\nALTER TABLE \"orders\" DROP COLUMN \"sync_at\";              -- 破坏性\n```\n\n## 三个执行前必须注意的点\n\n1. **第一条 DDL 在 SQLite 上会直接失败**：`ADD COLUMN … NOT NULL` 不带 DEFAULT，在有 24,500 行的非空表上 SQLite 会拒绝。需要改成带默认值，或先可空、回填后再收紧。\n2. **两个 DROP 是破坏性的**：`goods_amount_cents` 在镜像库里",
+        "error": null,
+        "done": true,
+        "toolErrors": [],
+        "usage": {
+          "type": "usage",
+          "tokensIn": 17244,
+          "tokensOut": 164,
+          "durationMs": 3200,
+          "__raw": "event: usage\ndata: {\"type\":\"usage\",\"tokensIn\":17244,\"tokensOut\":164,\"durationMs\":3200}"
+        }
+      },
+      {
+        "name": "订单行数对账",
+        "prompt": "订单表在业务库和镜像库里行数差多少？为什么会不一致，给我数据证据。",
+        "elapsed": 240010,
+        "tools": [
+          "list_connections",
+          "update_plan",
+          "run_sql",
+          "run_sql",
+          "recon_data",
+          "run_sql",
+          "update_plan",
+          "recon_data",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql"
+        ],
+        "chart": [],
+        "text": "我先找到镜像库的连接，再逐层对比行数。\n\n行数已确认：业务库 25,000 / 镜像库 24,500，差 500 行。现在做主键级对账，定位具体缺哪些单。\n\n缺失的 500 行是连续的尾部 id。但 recon 还报了 24,500 行\"改值\"——这需要拆开验证。我逐字段比对。\n\n关键发现：同一个 `id` 在两库里指向的是完全不同的订单（order_no、时间、金额都不一样）。所以 `id` 不是有效的跨库对账键，业务主键应该是 `order_no`。重新按 `order_no` 对账。\n\n按业务单号 `order_no` 只有 64 行能对上——说明两库不是简单的\"少同步了一批\"。我继续拆：单号里的流水号部分单独比对。\n\n镜像库的 `id` 与单号流水已脱钩（只有 49 行一致）。我按流水号 `seq` 重新对账，看两库到底共不共用同一批订单。\n\n",
+        "error": null,
+        "done": false,
+        "toolErrors": [
+          {
+            "tool": "run_sql",
+            "ok": false,
+            "summary": "工具执行失败",
+            "error": {
+              "code": "SQLITE_ERROR",
+              "message": "database m is already in use"
+            }
+          }
+        ],
+        "usage": {
+          "type": "usage",
+          "tokensIn": 17601,
+          "tokensOut": 271,
+          "durationMs": 5941,
+          "__raw": "event: usage\ndata: {\"type\":\"usage\",\"tokensIn\":17601,\"tokensOut\":271,\"durationMs\":5941}"
+        }
+      },
+      {
+        "name": "退款原因饼图",
+        "prompt": "退款的订单里，主要原因分布是什么？画个饼图。",
+        "elapsed": 58165,
+        "tools": [
+          "inspect_schema",
+          "sample_rows",
+          "run_sql",
+          "run_sql",
+          "analyze_chart",
+          "run_sql",
+          "render_chart",
+          "run_sql",
+          "run_sql"
+        ],
+        "chart": [
+          {
+            "tool": "render_chart",
+            "type": "pie",
+            "x": "reason",
+            "y": "refund_cnt"
+          }
+        ],
+        "text": "我先看一下退款表的结构和原因字段。\n\n已出图。饼图基于 `refunds` 全部 **1,689 笔退款记录**（一笔退款对应一个订单，无重复）。\n\n## 退款原因分布\n\n| 排名 | 原因 | 退款笔数 | 占比 | 其中通过 | 通过率 | 被拒率 | 实退金额（元） |\n|---|---|---|---|---|---|---|---|\n| 1 | 价格保护 | 306 | 18.1% | 187 | 61.1% | 19.6% | 2,150,083.23 |\n| 2 | 物流破损 | 296 | 17.5% | 173 | 58.4% | 22.6% | 1,793,102.86 |\n| 3 | 发错货 | 276 | 16.3% | 154 | 55.8% | **24.6%** | 1,776,423.04 |\n| 4 | 商品质量问题 | 275 | 16.3% | 173 | **62.9%** | 17.1% | 1,901,563.29 |\n| 5 | 不想要了 | 268 | 15.9% | 168 | 62.7% | 18.3% | 2,022,918.70 |\n| 6 | 七天无理由 | 268 | 15.9% | 157 | 58.6% | 23.9% | 1,808,731.01 |\n| — | **合计** | **1,689** | 100% | **1,012** | 59.9% | 21.0% | **11,452,822.13** |\n\n## 关键结论\n\n1. **没有绝对主导的原因** —— 最高（价格保护 306 笔）与最低（268 笔）只差 38 笔，六个原因全部落在 15.9%~18.1% 的窄区间，分布接近均匀。所以「哪个原因最多」这个结论本身**不具区分度**，别拿它做决策依据。\n2. **按金额看，价格保护才是第一大出血点**：实退 215.0 万元，占全部实退金额 11,452,822.13 元的 **18.8%**，单均退款额最高。\n3. **商家/物流责任类占了三分之一**：物流破损 + 发错货 = 572 笔（**33.9%**），且这两类的**通过率最低、被拒率最高**（发错货 24.6%、物流破损 22.6%），是审核争议集中区，也是最该从履约端治理的。\n4. **主观原因反而最容易通过**：商品质量问题 62.9%、不想要了 62.7%、价格保护 61.1% 通过率明显更高。\n\n## 口径说明\n- 统计对象：`refunds` 全表，**不区分 status**（含 approved 1,012 / processing 322 / rejected 355）。若只想看「实际退款成功」的分布，饼图需改为 `WHERE status='approved'`，届时排序会变成：价格保护 187 ",
+        "error": null,
+        "done": true,
+        "toolErrors": [
+          {
+            "tool": "run_sql",
+            "ok": false,
+            "summary": "工具执行失败",
+            "error": {
+              "code": "SQLITE_ERROR",
+              "message": "ambiguous column name: status"
+            }
+          }
+        ],
+        "usage": {
+          "type": "usage",
+          "tokensIn": 17560,
+          "tokensOut": 202,
+          "durationMs": 3832,
+          "__raw": "event: usage\ndata: {\"type\":\"usage\",\"tokensIn\":17560,\"tokensOut\":202,\"durationMs\":3832}"
+        }
+      },
+      {
+        "name": "销售额预测",
+        "prompt": "根据最近三个月的每日成交金额，预测下个月每一天的销售额趋势。",
+        "elapsed": 240011,
+        "tools": [
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "forecast_chart",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "render_chart",
+          "render_chart",
+          "run_sql",
+          "run_sql"
+        ],
+        "chart": [
+          {
+            "tool": "forecast_chart",
+            "x": "day",
+            "y": "gmv_yuan"
+          },
+          {
+            "tool": "render_chart",
+            "type": "line",
+            "x": "day"
+          },
+          {
+            "tool": "render_chart",
+            "type": "line",
+            "x": "day",
+            "y": "gmv_yuan"
+          }
+        ],
+        "text": "我先确认数据的时间基准，再构建每日 GMV 序列。\n\n数据基准确认：库内最新成交在 `2026-11-02`（11月只有 2 天，不完整）。所以「最近三个月」取完整月 **2026-08-01 ~ 2026-10-31**，预测目标为 **2026-11 的每一天**。先看日序列的完整性。\n\n92 天序列完整无空档。现在跑预测，并同时提取周内季节性（日级序列的周期规律）。\n\n预测工具最多外推 12 期，且它给的是**移动平均的平坦值**（30 天全是同一个数），没有体现周内规律。我用季节法重算逐日预测，并先验证趋势是否真的在下滑。\n\n周度基线平稳（近28天日均 65.4 万 vs 92天日均 67.1 万，仅低 2.5%），但 10/28–10/31 四天全部低于各自星期期望值。我需要查两件事：月末是否是周期性低谷，以及库内 2025-11 的双11表现。\n\n关键发现：库内有**年度大促季节性**。2025-11 的双11（11/09–11/14）GMV 达平日 3–4.6 倍，这是最近三个月数据无法捕捉的。我再核实促销形态，并用已发生的 11/01–11/02 实际值校验基线预测。\n\n年度同期模板与当前基线高度吻合（2025-11/01–02 日均 662,899 vs 今年同期 655,794，差 1.1%）。我用它做同期类比预测，并给出「有大促/无大促」两档。\n\n基线校验通过：库内 2026-11/01–02 实际日均 655,794 元，与「无大促」基线预测吻合。现在出图。\n\nSQLite 没有 STDDEV 函数，手算标准差。\n\n",
+        "error": null,
+        "done": false,
+        "toolErrors": [
+          {
+            "tool": "run_sql",
+            "ok": false,
+            "summary": "工具执行失败",
+            "error": {
+              "code": "SQLITE_ERROR",
+              "message": "no such function: STDDEV"
+            }
+          }
+        ],
+        "usage": {
+          "type": "usage",
+          "tokensIn": 17640,
+          "tokensOut": 471,
+          "durationMs": 8239,
+          "__raw": "event: usage\ndata: {\"type\":\"usage\",\"tokensIn\":17640,\"tokensOut\":471,\"durationMs\":8239}"
+        }
+      },
+      {
+        "name": "城市客单价 SQL",
+        "prompt": "帮我统计每个城市的客单价，按客单价从高到低取前 10 名。",
+        "elapsed": 41513,
+        "tools": [
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "analyze_chart",
+          "run_sql",
+          "render_chart"
+        ],
+        "chart": [
+          {
+            "tool": "render_chart",
+            "type": "bar",
+            "x": "city",
+            "y": "aov_yuan"
+          }
+        ],
+        "text": "我先确认城市归属字段和订单口径。\n\n已出图。\n\n## 城市客单价 TOP10\n\n| # | 城市 | 层级 | 客单价（元/单） | 成交单数 | 买家数 | GMV（元） |\n|---|------|------|----------------|---------|--------|-----------|\n| 1 | 哈尔滨市 | 二线 | **18,894.41** | 661 | 92 | 12,489,206.72 |\n| 2 | 兰州市 | 二线 | 18,749.97 | 692 | 85 | 12,974,976.25 |\n| 3 | 郑州市 | 新一线 | 18,749.78 | 723 | 93 | 13,556,094.21 |\n| 4 | 大连市 | 二线 | 18,628.89 | 666 | 92 | 12,406,840.03 |\n| 5 | 苏州市 | 二线 | 18,567.57 | 632 | 88 | 11,734,701.74 |\n| 6 | 昆明市 | 二线 | 18,546.39 | 644 | 80 | 11,943,873.18 |\n| 7 | 太原市 | 二线 | 18,506.24 | 681 | 90 | 12,602,747.42 |\n| 8 | 南宁市 | 二线 | 18,473.05 | 721 | 98 | 13,319,071.07 |\n| 9 | 杭州市 | 新一线 | 18,291.71 | 753 | 101 | 13,773,654.13 |\n| 10 | 西安市 | 新一线 | 18,273.74 | 717 | 99 | 13,102,274.52 |\n\n## 口径说明\n- **客单价 = 每笔订单实付金额均值**（`AVG(orders.pay_cents)/100`），即 AOV 口径。\n- **城市归属**：按 `orders.customer_id → customers.city_id → cities.name`，即**客户所在城市**（库里没有订单收货城市字段，只有会员注册城市）。\n- **订单过滤**：剔除测试单（`is_test_order=1`，256 笔）、未支付单（`paid_at IS NULL`）、以及 `cancelled`/`closed` 状态；保留 completed / delivered / shipped / refunded / paid / pending。\n- **样本**：全库 31 个城市，**21,446 笔有效成交订单**，**整体客单价 18,049.82 元**。\n\n## 两个值得注意的点\n1. **差距极小**：第 1 名哈尔滨 18,894 元 vs 第 10 名西安 18,274 元，**仅高 3.4%**；TOP1",
+        "error": null,
+        "done": true,
+        "toolErrors": [],
+        "usage": {
+          "type": "usage",
+          "tokensIn": 17676,
+          "tokensOut": 529,
+          "durationMs": 10069,
+          "__raw": "event: usage\ndata: {\"type\":\"usage\",\"tokensIn\":17676,\"tokensOut\":529,\"durationMs\":10069}"
+        }
+      },
+      {
+        "name": "/chart 渠道占比",
+        "prompt": "/chart 各渠道的 GMV 占比",
+        "elapsed": 58435,
+        "tools": [
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "render_chart",
+          "analyze_chart",
+          "run_sql"
+        ],
+        "chart": [
+          {
+            "tool": "render_chart",
+            "type": "pie",
+            "x": "channel",
+            "y": "gmv_yuan"
+          }
+        ],
+        "text": "已出图。饼图基于 `orders` 表的**已支付 GMV**，7 个渠道。\n\n## 口径\n- **GMV** = `pay_cents`（实付金额），仅统计 `status IN ('paid','shipped','delivered','completed')` 的订单；排除 `pending / cancelled / closed / refunded`。\n- 剔除测试单 `is_test_order=1`（256 笔）。\n- 时间范围：全周期 `2025-05-11 ~ 2026-11-02`。\n\n## 各渠道 GMV 占比\n\n| # | 渠道 | GMV（元） | 占比 | 已支付订单数 |\n|---|------|-----------:|------:|-------------:|\n| 1 | 小程序 | 113,645,202.56 | **29.71%** | 6,317 |\n| 2 | APP | 85,872,302.17 | 22.45% | 4,755 |\n| 3 | 抖音小店 | 52,633,798.81 | 13.76% | 2,906 |\n| 4 | 天猫 | 41,434,351.66 | 10.83% | 2,293 |\n| 5 | PC 商城 | 38,984,661.87 | 10.19% | 2,146 |\n| 6 | 京东 | 29,854,145.15 | 7.80% | 1,644 |\n| 7 | 线下门店 | 20,109,695.81 | 5.26% | 1,099 |\n| | **合计** | **382,534,158.03** | 100% | 21,160 |\n\n**读数**：小程序 + APP 两个自有渠道合计 **52.2%**，是绝对主力；前三大渠道（小程序、APP、抖音小店）占 **65.9%**；线下门店只有 5.3%，但客单价最高（20,109,695.81 / 1,099 ≈ 18,298 元/单，全渠道均值约 18,078 元/单，差异不大）。\n\n## 一个提醒\n`daily_metrics` 表里也有 `gmv_cents` 按渠道的数据，但它和 `orders` **完全对不上**：`daily_metrics` 总 GMV 只有 124,708,395.06 元（约为订单口径的 1/3），而它的 `order_cnt` 累计 332,417 单，远超 `orders` 的 25,000 单。这张表看起来是独立生成的模拟指标，不能用来做渠道占比。所以我用了 `orders` 明细，如果你需要以 `daily_metrics` 为准，请告诉我。\n\n```sql\nSELECT channel,\n       ROUND(SUM(CASE WHEN status IN ('pa",
+        "error": null,
+        "done": true,
+        "toolErrors": [],
+        "usage": {
+          "type": "usage",
+          "tokensIn": 17711,
+          "tokensOut": 481,
+          "durationMs": 7285,
+          "__raw": "event: usage\ndata: {\"type\":\"usage\",\"tokensIn\":17711,\"tokensOut\":481,\"durationMs\":7285}"
+        }
+      },
+      {
+        "name": "/report 经营报告",
+        "prompt": "/report 生成一份上个月的经营分析报告，包含收入和订单趋势。",
+        "elapsed": 240012,
+        "tools": [
+          "update_plan",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "update_plan",
+          "render_chart",
+          "run_sql",
+          "render_chart",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "render_chart",
+          "render_chart",
+          "run_sql",
+          "run_sql",
+          "update_plan",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "render_chart",
+          "run_sql",
+          "analyze_chart",
+          "update_plan",
+          "run_sql",
+          "run_sql",
+          "render_chart",
+          "render_chart",
+          "run_sql",
+          "run_sql"
+        ],
+        "chart": [
+          {
+            "tool": "render_chart",
+            "type": "line",
+            "x": "d",
+            "y": "gmv"
+          },
+          {
+            "tool": "render_chart",
+            "type": "line",
+            "x": "week_label",
+            "y": "gmv_wan"
+          },
+          {
+            "tool": "render_chart",
+            "type": "line",
+            "x": "week_start",
+            "y": "gmv_wan"
+          },
+          {
+            "tool": "render_chart",
+            "type": "line",
+            "x": "week_start",
+            "y": "gmv_wan"
+          },
+          {
+            "tool": "render_chart",
+            "type": "bar",
+            "x": "channel",
+            "y": "gmv_10月"
+          },
+          {
+            "tool": "render_chart",
+            "type": "line",
+            "x": "d",
+            "y": "gmv_wan"
+          },
+          {
+            "tool": "render_chart",
+            "type": "bar",
+            "x": "cat",
+            "y": "gmv_10月"
+          }
+        ],
+        "text": "I'll build the report from the retail database. Let me set up the plan and start gathering numbers.\n\n数据完整（截至 2026-11-02），10 月为完整月，可直接与 9 月对比。现在算核心指标。\n\n每日趋势已出。接下来看周节奏、类目贡献、客户结构与退款履约。\n\n类目 SQL 列名有误（明细表无 amount_cents），修正后重跑；同时周度分桶存在截断偏差，改用周一为起点重算。\n\n周度分桶函数有问题（CAST 截断），改用 floor 重算，同时补退款与履约数据。\n\n月末 5 天明显走低，需判断是真下滑还是数据延迟。做最后两项验证。\n\n",
+        "error": null,
+        "done": false,
+        "toolErrors": [
+          {
+            "tool": "run_sql",
+            "ok": false,
+            "summary": "工具执行失败",
+            "error": {
+              "code": "SQLITE_ERROR",
+              "message": "no such column: oi.amount_cents"
+            }
+          },
+          {
+            "tool": "run_sql",
+            "ok": false,
+            "summary": "工具执行失败",
+            "error": {
+              "code": "SQLITE_ERROR",
+              "message": "no such column: r.refund_cents"
+            }
+          }
+        ],
+        "usage": {
+          "type": "usage",
+          "tokensIn": 18409,
+          "tokensOut": 633,
+          "durationMs": 10317,
+          "__raw": "event: usage\ndata: {\"type\":\"usage\",\"tokensIn\":18409,\"tokensOut\":633,\"durationMs\":10317}"
+        }
+      },
+      {
+        "name": "/init 数据库说明",
+        "prompt": "/init",
+        "elapsed": 120044,
+        "tools": [],
+        "chart": [],
+        "text": "## AI_DB.md 已生成\n\n- 文件：`C:\\Users\\Administrator\\.aidb\\context\\8c3545e8-859b-485b-a98c-6326baaf9164\\demo-retail\\AI_DB.md`\n- 覆盖：38 张表、2 个视图；20 张核心表、45 条关联\n- 模型注解：未生成（离线或模型不可用，仅确定性内容）\n- 注解说明：模型注解失败：This operation was aborted\n- 结构指纹：`11ccff48dcc3f23b`\n\n\n后续对话会自动加载这份文档；修改文件后重跑 `/init` 可更新自动段落，人工段落会保留。\n\n这是首次生成，后续对话会自动加载它。",
+        "error": null,
+        "done": true,
+        "toolErrors": [],
+        "usage": null
+      },
+      {
+        "name": "写操作：建表并插入",
+        "prompt": "新建 customer_feedback 并插入 3 条示例",
+        "elapsed": 0,
+        "tools": [
+          "update_plan",
+          "run_sql",
+          "update_plan",
+          "run_sql",
+          "update_plan",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "update_plan"
+        ],
+        "chart": [],
+        "text": "已完成，表建在 `main` 库（连接 QA · Agent 沙箱，SQLite）。\n\n**1. 建表 DDL**\n\n```sql\nCREATE TABLE IF NOT EXISTS customer_feedback (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  customer_id INTEGER NOT NULL,\n  content TEXT NOT NULL,\n  rating INTEGER NOT NULL,\n  created_at TEXT NOT NULL,\n  FOREIGN KEY (customer_id) REFERENCES customers(id)\n);\n```\n\n说明：SQLite 的自增主键用 `INTEGER PRIMARY KEY AUTOINCREMENT`；按你要求 `created_at` 用 TEXT（存 `YYYY-MM-DD HH:MM:SS`）。额外加了 `customer_id → customers(id)` 外键，方便后续关联查询——如不需要可以去掉。\n\n**2. 插入数据**（`customer_id` 取的是库里真实存在的活跃客户 1/2/3，避免外键悬空）\n\n```sql\nINSERT INTO customer_feedback (customer_id, content, rating, created_at) VALUES\n(1, '物流很快，包装也很结实，客服态度不错，下次还会再来。', 5, '2024-05-18 09:32:11'),\n(2, '衣服版型偏小，换货流程太慢了，等了一个星期才处理完。', 3, '2024-06-02 14:05:47'),\n(3, '商品和描述不一致，色差比较大，已经申请退款。', 2, '2024-06-21 20:18:03');\n```\n\n影响 3 行，`lastInsertId = 3`。\n\n**3. 验证结果**（`sqlite_master` 中的建表语句已确认落库；联表查询返回 3 行）\n\n| id | customer_id | customer_name | rating | content | created_at |\n|---|---|---|---|---|---|\n| 1 | 1 | 赵平 | 5 | 物流很快，包装也很结实，客服态度不错，下次还会再来。 | 2024-05-18 09:32:11 |\n| 2 | 2 | 魏诗涵 | 3 | 衣服版型偏小，换货流程太慢了，等了一个星期才处理完。 | 2024-06-02 14:05:47 |\n| 3 | 3 | 郭思远 | 2 | 商品和描述不一致，色差比较大，已经申请退款。 | 2024-06-21 20:18:03 |\n\n",
+        "done": true,
+        "toolErrors": []
+      }
+    ],
+    "at": "2026-11-03T00:24:31.839Z"
+  },
+  "summary": {
+    "total": 63,
+    "passed": 55,
+    "failed": 8,
+    "bySection": {
+      "agent-business": {
+        "total": 52,
+        "failed": 8
+      },
+      "agent-write": {
+        "total": 2,
+        "failed": 0
+      },
+      "agent-approval": {
+        "total": 3,
+        "failed": 0
+      },
+      "agent-session-api": {
+        "total": 6,
+        "failed": 0
+      }
+    }
+  },
+  "results": [
+    {
+      "section": "agent-business",
+      "name": "月度 GMV 趋势: turn finished",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "月度 GMV 趋势: used tools",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "月度 GMV 趋势: tool calls succeeded",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "月度 GMV 趋势: business expectation",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "类目销售排行: turn finished",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "类目销售排行: used tools",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "类目销售排行: tool calls succeeded",
+      "ok": false,
+      "detail": {
+        "failures": [
+          {
+            "tool": "run_sql",
+            "ok": false,
+            "summary": "工具执行失败",
+            "error": {
+              "code": "SQLITE_ERROR",
+              "message": "no such column: oi.unit_price_cents"
+            }
+          }
+        ],
+        "tools": [
+          "inspect_schema",
+          "sample_rows",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "render_chart",
+          "analyze_chart",
+          "run_sql",
+          "run_sql"
+        ]
+      }
+    },
+    {
+      "section": "agent-business",
+      "name": "类目销售排行: business expectation",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "渠道退款率: turn finished",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "渠道退款率: used tools",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "渠道退款率: tool calls succeeded",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "渠道退款率: business expectation",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "沉睡高价值会员: turn finished",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "沉睡高价值会员: used tools",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "沉睡高价值会员: tool calls succeeded",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "沉睡高价值会员: business expectation",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "订单数据质量: turn finished",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "订单数据质量: used tools",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "订单数据质量: tool calls succeeded",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "订单数据质量: business expectation",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "两库结构差异: turn finished",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "两库结构差异: used tools",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "两库结构差异: tool calls succeeded",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "两库结构差异: business expectation",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "订单行数对账: turn finished",
+      "ok": false,
+      "detail": {
+        "elapsed": 240010,
+        "tools": [
+          "list_connections",
+          "update_plan",
+          "run_sql",
+          "run_sql",
+          "recon_data",
+          "run_sql",
+          "update_plan",
+          "recon_data",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql"
+        ]
+      }
+    },
+    {
+      "section": "agent-business",
+      "name": "订单行数对账: used tools",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "订单行数对账: tool calls succeeded",
+      "ok": false,
+      "detail": {
+        "failures": [
+          {
+            "tool": "run_sql",
+            "ok": false,
+            "summary": "工具执行失败",
+            "error": {
+              "code": "SQLITE_ERROR",
+              "message": "database m is already in use"
+            }
+          }
+        ],
+        "tools": [
+          "list_connections",
+          "update_plan",
+          "run_sql",
+          "run_sql",
+          "recon_data",
+          "run_sql",
+          "update_plan",
+          "recon_data",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql"
+        ]
+      }
+    },
+    {
+      "section": "agent-business",
+      "name": "订单行数对账: business expectation",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "退款原因饼图: turn finished",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "退款原因饼图: used tools",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "退款原因饼图: tool calls succeeded",
+      "ok": false,
+      "detail": {
+        "failures": [
+          {
+            "tool": "run_sql",
+            "ok": false,
+            "summary": "工具执行失败",
+            "error": {
+              "code": "SQLITE_ERROR",
+              "message": "ambiguous column name: status"
+            }
+          }
+        ],
+        "tools": [
+          "inspect_schema",
+          "sample_rows",
+          "run_sql",
+          "run_sql",
+          "analyze_chart",
+          "run_sql",
+          "render_chart",
+          "run_sql",
+          "run_sql"
+        ]
+      }
+    },
+    {
+      "section": "agent-business",
+      "name": "退款原因饼图: business expectation",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "销售额预测: turn finished",
+      "ok": false,
+      "detail": {
+        "elapsed": 240011,
+        "tools": [
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "forecast_chart",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "render_chart",
+          "render_chart",
+          "run_sql",
+          "run_sql"
+        ]
+      }
+    },
+    {
+      "section": "agent-business",
+      "name": "销售额预测: used tools",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "销售额预测: tool calls succeeded",
+      "ok": false,
+      "detail": {
+        "failures": [
+          {
+            "tool": "run_sql",
+            "ok": false,
+            "summary": "工具执行失败",
+            "error": {
+              "code": "SQLITE_ERROR",
+              "message": "no such function: STDDEV"
+            }
+          }
+        ],
+        "tools": [
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "forecast_chart",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "render_chart",
+          "render_chart",
+          "run_sql",
+          "run_sql"
+        ]
+      }
+    },
+    {
+      "section": "agent-business",
+      "name": "销售额预测: business expectation",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "城市客单价 SQL: turn finished",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "城市客单价 SQL: used tools",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "城市客单价 SQL: tool calls succeeded",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "城市客单价 SQL: business expectation",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "/chart 渠道占比: turn finished",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "/chart 渠道占比: used tools",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "/chart 渠道占比: tool calls succeeded",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "/chart 渠道占比: business expectation",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "/report 经营报告: turn finished",
+      "ok": false,
+      "detail": {
+        "elapsed": 240012,
+        "tools": [
+          "update_plan",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "update_plan",
+          "render_chart",
+          "run_sql",
+          "render_chart",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "render_chart",
+          "render_chart",
+          "run_sql",
+          "run_sql",
+          "update_plan",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "render_chart",
+          "run_sql",
+          "analyze_chart",
+          "update_plan",
+          "run_sql",
+          "run_sql",
+          "render_chart",
+          "render_chart",
+          "run_sql",
+          "run_sql"
+        ]
+      }
+    },
+    {
+      "section": "agent-business",
+      "name": "/report 经营报告: used tools",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "/report 经营报告: tool calls succeeded",
+      "ok": false,
+      "detail": {
+        "failures": [
+          {
+            "tool": "run_sql",
+            "ok": false,
+            "summary": "工具执行失败",
+            "error": {
+              "code": "SQLITE_ERROR",
+              "message": "no such column: oi.amount_cents"
+            }
+          },
+          {
+            "tool": "run_sql",
+            "ok": false,
+            "summary": "工具执行失败",
+            "error": {
+              "code": "SQLITE_ERROR",
+              "message": "no such column: r.refund_cents"
+            }
+          }
+        ],
+        "tools": [
+          "update_plan",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "update_plan",
+          "render_chart",
+          "run_sql",
+          "render_chart",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "render_chart",
+          "render_chart",
+          "run_sql",
+          "run_sql",
+          "update_plan",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "render_chart",
+          "run_sql",
+          "analyze_chart",
+          "update_plan",
+          "run_sql",
+          "run_sql",
+          "render_chart",
+          "render_chart",
+          "run_sql",
+          "run_sql"
+        ]
+      }
+    },
+    {
+      "section": "agent-business",
+      "name": "/report 经营报告: business expectation",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "/init 数据库说明: turn finished",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "/init 数据库说明: used tools",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "/init 数据库说明: tool calls succeeded",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-business",
+      "name": "/init 数据库说明: business expectation",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "agent-write",
+      "name": "agent write: turn finished",
+      "ok": true,
+      "detail": {
+        "tools": [
+          "update_plan",
+          "run_sql",
+          "update_plan",
+          "run_sql",
+          "update_plan",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "update_plan"
+        ],
+        "text": "已完成，表建在 `main` 库（连接 QA · Agent 沙箱，SQLite）。\n\n**1. 建表 DDL**\n\n```sql\nCREATE TABLE IF NOT EXISTS customer_feedback (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  customer_id INTEGER NOT NULL,\n  content TEXT NOT NULL,\n  rating INTEGER NOT NULL,\n  created_at TEXT NOT NULL,\n  FOREIGN KEY (customer_id) REFEREN"
+      }
+    },
+    {
+      "section": "agent-write",
+      "name": "agent write: table created with rows",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "count": 3,
+        "tools": [
+          "update_plan",
+          "run_sql",
+          "update_plan",
+          "run_sql",
+          "update_plan",
+          "run_sql",
+          "run_sql",
+          "run_sql",
+          "update_plan"
+        ]
+      }
+    },
+    {
+      "section": "agent-approval",
+      "name": "ask mode raises approval for destructive write",
+      "ok": true,
+      "detail": {
+        "events": [
+          "start",
+          "memory_used",
+          "thinking_delta",
+          "text_delta",
+          "usage",
+          "tool_call",
+          "tool_result",
+          "approval_required",
+          "approval_resolved",
+          "turn_usage",
+          "done",
+          "suggestions"
+        ]
+      }
+    },
+    {
+      "section": "agent-approval",
+      "name": "approval deny resolved",
+      "ok": true,
+      "detail": {
+        "resolved": {
+          "type": "approval_resolved",
+          "approvalId": "8c1fe242-11a2-42b3-955c-e038f9d3da24",
+          "decision": "deny",
+          "scope": "once",
+          "__raw": "event: approval_resolved\ndata: {\"type\":\"approval_resolved\",\"approvalId\":\"8c1fe242-11a2-42b3-955c-e038f9d3da24\",\"decision\":\"deny\",\"scope\":\"once\"}"
+        },
+        "events": [
+          "start",
+          "memory_used",
+          "thinking_delta",
+          "text_delta",
+          "usage",
+          "tool_call",
+          "tool_result",
+          "approval_required",
+          "approval_resolved",
+          "turn_usage",
+          "done",
+          "suggestions"
+        ]
+      }
+    },
+    {
+      "section": "agent-approval",
+      "name": "denied action did not execute",
+      "ok": true,
+      "detail": {
+        "deniedResults": [
+          {
+            "code": "APPROVAL_DENIED",
+            "message": "用户拒绝执行该工具调用。",
+            "hint": "不要重试；询问用户希望如何调整。"
+          }
+        ]
+      }
+    },
+    {
+      "section": "agent-session-api",
+      "name": "session create",
+      "ok": "319c6b1e-132b-414f-98cf-303f7c54bbe4",
+      "detail": {
+        "status": 201
+      }
+    },
+    {
+      "section": "agent-session-api",
+      "name": "session patch",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"session\":{\"id\":\"319c6b1e-132b-414f-98cf-303f7c54bbe4\",\"connectionId\":\"8c3545e8-859b-485b-a98c-6326baaf9164\",\"database\":\"C:/Users/Administrator/.aidb/demo/demo-retail.sqlite\",\"title\":\"QA 会话管理（已改名）\",\"permissionMode\":\"readonly\",\"status\":\"idle\",\"tokensIn\":0,\"tokensOut\":0,\"turns\":0,\"steps\":0,\"cacheHitTokens\":0,\"cacheMissTokens\":0,\"contextTokens\":0,\"createdAt\":\"2026-11-03T00:24:31.774Z\",\"updatedAt\":\"2"
+      }
+    },
+    {
+      "section": "agent-session-api",
+      "name": "session detail readable",
+      "ok": true,
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "agent-session-api",
+      "name": "session delete",
+      "ok": true,
+      "detail": {
+        "status": 404
+      }
+    },
+    {
+      "section": "agent-session-api",
+      "name": "agent suggestions",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "{\"suggestions\":[{\"id\":\"trend:C:/Users/Administrator/.aidb/demo/demo-retail.sqlite:orders::27\",\"kind\":\"trend\",\"prompt\":\"近 12 个月 订单 的 goods_cents 趋势\",\"reason\":\"orders 有时间列 created_at、数值列 goods_cents\",\"table\":\"orders\",\"database\":\"C:/Users/Administrator/.aidb/demo/demo-retail.sqlite\"},{\"id\":\"group:C:/Users/Administrator/.aidb/demo/demo-retail.sqlite:orders::33\",\"kind\":\"group\",\"prompt\":\"按 order_no 统计 订"
+      }
+    },
+    {
+      "section": "agent-session-api",
+      "name": "agent model discovery",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "models": [
+          "agnes",
+          "DeepSeek-V4.1-Flash-1017",
+          "qwen3.8-flash-next",
+          "qwen3.8-flash-next-iq3_s"
+        ]
+      }
+    }
+  ]
+}
