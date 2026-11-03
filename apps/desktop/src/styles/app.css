@@ -978,6 +978,9 @@ details[open] > summary::before { transform: rotate(45deg); opacity: .7; }
 .context-item.danger { color: var(--danger); }
 .context-item:disabled { opacity: .45; cursor: default; }
 .context-item svg { flex: 0 0 12px; }
+.pair-panel { display: flex; gap: 14px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+.pair-qr { width: 148px; height: 148px; padding: 6px; border-radius: 8px; background: #fff; flex: 0 0 auto; }
+.pair-info { flex: 1; min-width: 220px; }
 .pane-splitter { flex: 0 0 5px; cursor: col-resize; position: relative; z-index: 4; touch-action: none; }
 .pane-splitter::after { content: ''; position: absolute; top: 0; bottom: 0; left: 2px; right: 2px; transition: background .12s ease; }
 .pane-splitter:hover::after, .pane-splitter.dragging::after { background: var(--accent); opacity: .55; }

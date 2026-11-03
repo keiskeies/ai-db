@@ -14,6 +14,8 @@ export interface GatewayConfig {
   port: number;
   token: string;
   secret: string;
+  /** 反代/公网访问时的外部地址，例如 https://db.example.com；用于配对二维码与提示。 */
+  publicUrl?: string;
   demoDir: string;
   exportDir: string;
   importDir: string;
@@ -39,6 +41,21 @@ function loadSecret(home: string): string {
   return secret;
 }
 
+function publicUrlOf(value?: string): string | undefined {
+  const raw = value?.trim();
+  if (!raw) return undefined;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`AIDB_PUBLIC_URL 不是合法地址：${raw}`);
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`AIDB_PUBLIC_URL 只支持 http/https：${raw}`);
+  }
+  return url.origin;
+}
+
 export function loadConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
   const home = overrides.home ?? process.env.AIDB_HOME ?? join(homedir(), '.aidb');
   ensureDir(home);
@@ -53,6 +70,7 @@ export function loadConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfi
     port: overrides.port ?? Number(process.env.AIDB_PORT ?? 8787),
     token,
     secret: overrides.secret ?? loadSecret(home),
+    publicUrl: publicUrlOf(overrides.publicUrl ?? process.env.AIDB_PUBLIC_URL),
     demoDir: overrides.demoDir ?? ensureDir(join(home, 'demo')),
     exportDir: overrides.exportDir ?? ensureDir(join(home, 'exports')),
     importDir: overrides.importDir ?? ensureDir(join(home, 'imports')),

@@ -31,3 +31,4 @@ export * from './agent/providers';
 export * from './capabilities/types';
 export * from './capabilities/validate';
 export * from './capabilities';
+export * from './pairing';

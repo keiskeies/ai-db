@@ -798,7 +798,7 @@ export const api = {
   runJob: (id: string) => request<{ ok: boolean; message: string }>(`/jobs/${id}/run`, { method: 'POST' }),
   restoreBackup: (id: string) => request<{ batch: QueryBatchResult }>(`/backups/${id}/restore`, { method: 'POST' }),
 
-  pairStart: () => request<{ code: string; expiresIn: number; qrPayload: string; host: string; port: number }>('/pair/start', { method: 'POST' }),
+  pairStart: () => request<{ code: string; expiresIn: number; qrPayload: string; host: string; port: number; url: string }>('/pair/start', { method: 'POST' }),
   devices: () => request<{ devices: DeviceInfo[] }>('/devices'),
   revokeDevice: (id: string) => request<void>(`/devices/${id}`, { method: 'DELETE' }),
 };

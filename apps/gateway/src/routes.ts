@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import {
   COMMANDS,
@@ -126,6 +127,19 @@ function localIp(): string {
   return '127.0.0.1';
 }
 
+/**
+ * 配对二维码与移动端提示要使用“客户端实际访问到的地址”。
+ * 反代场景优先读取 Host / X-Forwarded-Proto；显式配置 AIDB_PUBLIC_URL 时以其为准。
+ */
+function pairingOrigin(req: Request, config: GatewayConfig): { url: string; host: string; port: number } {
+  const fallbackHost = config.host === '0.0.0.0' || config.host === '::' ? localIp() : config.host;
+  const publicHost = req.get('x-forwarded-host') ?? req.get('host') ?? `${fallbackHost}:${config.port}`;
+  const raw = config.publicUrl ?? `${req.protocol}://${publicHost}`;
+  const parsed = new URL(raw);
+  const port = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+  return { url: parsed.origin, host: parsed.hostname, port };
+}
+
 function defaultSchema(conn: ConnectionConfig): string | undefined {
   if (!engineUsesSchema(conn.engine)) return undefined;
   if (conn.engine === 'sqlserver') return 'dbo';
@@ -172,6 +186,26 @@ function reportDeckOutline(result: any): string {
 export function createApiRouter(deps: ApiDeps): Router {
   const { store, manager, host, config, scheduler, commands, executor, skills, skillWorker, skillRunner } = deps;
   const router = Router();
+
+  // 配对码是 6 位数字，必须限制尝试频率；/pair/start 也需要限流，避免已认证端被滥用刷码。
+  const pairHits = new Map<string, number[]>();
+  const allowPairHit = (bucket: string, req: Request, limit: number, windowMs: number): boolean => {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const key = `${bucket}:${ip}`;
+    const now = Date.now();
+    const hits = (pairHits.get(key) ?? []).filter((at) => now - at < windowMs);
+    if (hits.length >= limit) {
+      pairHits.set(key, hits);
+      return false;
+    }
+    hits.push(now);
+    pairHits.set(key, hits);
+    return true;
+  };
+  const pairRateLimited = (res: Response, seconds: number): void => {
+    res.setHeader('Retry-After', String(seconds));
+    res.status(429).json({ error: { code: 'RATE_LIMITED', message: '请求过于频繁，请稍后再试' } });
+  };
 
   router.use((req, res, next) => {
     const open = req.path === '/health' || req.path === '/pair/claim' || req.path.startsWith('/bots/');
@@ -1969,7 +2003,9 @@ export function createApiRouter(deps: ApiDeps): Router {
       if (!set) throw Object.assign(new Error('没有可导出的结果'), { code: 'EMPTY_RESULT', status: 400 });
       const file = writeExportFile({ dir: config.exportDir, format, columns: set.columns.map((c) => c.name), rows: set.rows, tableName, engine: conn.engine });
       store.addAudit({ actor: 'user', connectionId, database, tool: 'export', sql, risk: 'read', approval: 'manual', status: 'ok', meta: { path: file.path, format } });
-      res.json({ file, format });
+      // 移动端没有服务器文件系统路径；inline 时把文件内容一并返回，便于下载/分享。
+      const inline = body.inline === true ? { content: readFileSync(file.path).toString('base64'), encoding: 'base64' as const } : {};
+      res.json({ file, format, ...inline });
     }),
   );
 
@@ -2511,16 +2547,21 @@ export function createApiRouter(deps: ApiDeps): Router {
   router.post(
     '/pair/start',
     ah(async (req, res) => {
+      if (!allowPairHit('start', req, 30, 60_000)) {
+        pairRateLimited(res, 60);
+        return;
+      }
       const code = pairingCode();
       deps.pairCodes.set(code, { expiresAt: Date.now() + 5 * 60 * 1000 });
       for (const [k, v] of deps.pairCodes) if (v.expiresAt < Date.now()) deps.pairCodes.delete(k);
-      const host = config.host === '0.0.0.0' || config.host === '::' ? localIp() : config.host;
+      const origin = pairingOrigin(req, config);
       res.json({
         code,
         expiresIn: 300,
-        qrPayload: JSON.stringify({ v: 1, host, port: config.port, code }),
-        host,
-        port: config.port,
+        qrPayload: JSON.stringify({ v: 1, url: origin.url, host: origin.host, port: origin.port, code }),
+        host: origin.host,
+        port: origin.port,
+        url: origin.url,
       });
     }),
   );
@@ -2528,6 +2569,10 @@ export function createApiRouter(deps: ApiDeps): Router {
   router.post(
     '/pair/claim',
     ah(async (req, res) => {
+      if (!allowPairHit('claim', req, 10, 5 * 60_000)) {
+        pairRateLimited(res, 300);
+        return;
+      }
       const body = obj(req.body, 'body');
       const code = String(body.code ?? '').trim();
       const entry = deps.pairCodes.get(code);
@@ -2539,10 +2584,11 @@ export function createApiRouter(deps: ApiDeps): Router {
         platform: str(body.platform) ?? 'unknown',
         tokenHash: hashToken(token),
       });
+      const origin = pairingOrigin(req, config);
       res.json({
         token,
         device,
-        bridge: { host: config.host === '0.0.0.0' ? localIp() : config.host, port: config.port, version: config.version },
+        bridge: { host: origin.host, port: origin.port, url: origin.url, version: config.version },
       });
     }),
   );

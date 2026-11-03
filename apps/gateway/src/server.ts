@@ -84,6 +84,8 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
 
   const app = express();
   app.disable('x-powered-by');
+  // 反代部署时用 X-Forwarded-Proto/Host 生成配对地址；仅监听回环时该设置无副作用。
+  app.set('trust proxy', true);
   app.use(
     cors({
       origin: true,

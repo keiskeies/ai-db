@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import QRCode from 'qrcode';
 import {
   Bot,
   ChevronDown,
@@ -65,6 +66,26 @@ export function SettingsModal() {
   const startPairing = useApp((s) => s.startPairing);
   const loadDevices = useApp((s) => s.loadDevices);
   const revokeDevice = useApp((s) => s.revokeDevice);
+
+  const [pairingQr, setPairingQr] = useState('');
+  useEffect(() => {
+    let alive = true;
+    if (!pairing) {
+      setPairingQr('');
+      return;
+    }
+    const payload = pairing.qrPayload ?? JSON.stringify({ v: 1, url: pairing.url ?? `http://${pairing.host}:${pairing.port}`, host: pairing.host, port: pairing.port, code: pairing.code });
+    QRCode.toDataURL(payload, { margin: 1, width: 336, color: { dark: '#0b0d0d', light: '#ffffff' } })
+      .then((url) => {
+        if (alive) setPairingQr(url);
+      })
+      .catch(() => {
+        if (alive) setPairingQr('');
+      });
+    return () => {
+      alive = false;
+    };
+  }, [pairing]);
 
   const [tab, setTab] = useState<TabKey>('appearance');
   const [navQuery, setNavQuery] = useState('');
@@ -1010,17 +1031,23 @@ export function SettingsModal() {
                     </button>
                   </div>
                   {pairing ? (
-                    <>
-                      <div className="row" style={{ marginTop: 10 }}>
-                        <span className="mono" style={{ fontSize: 26, letterSpacing: 8, color: 'var(--agent)' }}>{pairing.code}</span>
-                        <span className="badge write">5 分钟有效</span>
-                        <div className="spacer" />
-                        <button className="icon-btn" onClick={() => void navigator.clipboard.writeText(pairing.code)}>
-                          <ShieldCheck size={14} />
-                        </button>
+                    <div className="pair-panel">
+                      {pairingQr ? <img className="pair-qr" data-testid="pairing-qr" src={pairingQr} alt="移动端配对二维码" /> : null}
+                      <div className="pair-info">
+                        <div className="row">
+                          <span className="mono" style={{ fontSize: 26, letterSpacing: 8, color: 'var(--agent)' }}>{pairing.code}</span>
+                          <span className="badge write">5 分钟有效</span>
+                          <div className="spacer" />
+                          <button className="icon-btn" title="复制配对码" onClick={() => void navigator.clipboard.writeText(pairing.code)}>
+                            <ShieldCheck size={14} />
+                          </button>
+                        </div>
+                        <p className="hint">手机打开「扫码配对」扫描左侧二维码；也可填写 Bridge 地址：{pairing.url ?? `${pairing.host}:${pairing.port}`}，再输入上方配对码。远程访问请置于 TLS 反向代理之后（可用 AIDB_PUBLIC_URL 固定二维码地址）。</p>
+                        {/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])([:/]|$)/.test(pairing.url ?? '') ? (
+                          <p className="hint" style={{ color: 'var(--warning)' }}>当前是回环地址，手机无法访问；请改用局域网地址，或通过 AIDB_PUBLIC_URL / 反向代理打开桌面端后再生成二维码。</p>
+                        ) : null}
                       </div>
-                      <p className="hint">移动端填写：{pairing.host}:{pairing.port} + 上方配对码。建议仅在内网使用；远程访问请置于 TLS 反向代理之后。</p>
-                    </>
+                    </div>
                   ) : (
                     <p className="hint" style={{ marginTop: 8 }}>{t('pairHint')}</p>
                   )}

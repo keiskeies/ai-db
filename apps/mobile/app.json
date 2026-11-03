@@ -6,10 +6,16 @@
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "aidb",
-    "platforms": ["ios", "android", "web"],
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ],
     "android": {
       "package": "com.aidb.studio",
-      "permissions": ["INTERNET"]
+      "permissions": [
+        "INTERNET"
+      ]
     },
     "ios": {
       "bundleIdentifier": "com.aidb.studio",
@@ -24,7 +30,15 @@
       "bundler": "metro",
       "output": "single"
     },
-    "plugins": ["expo-secure-store"],
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "允许 AiDB Studio 扫描桌面端配对二维码"
+        }
+      ]
+    ],
     "extra": {
       "eas": {
         "projectId": "00000000-0000-0000-0000-000000000000"

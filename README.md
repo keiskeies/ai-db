@@ -82,6 +82,7 @@ AI 原生、全平台数据库工作台。Navicat 式的完整数据库操作 + 
 - 桌面端内置 Bridge；也可作为独立 Linux 服务部署（Dockerfile 提供）。
 - 移动端通过 **6 位配对码** 换取设备令牌，共享会话、记忆与权限模型；移动端默认只读。
 - REST + SSE（桌面 / Web）+ WebSocket（移动端）。
+- 反向代理/公网部署：设置 `AIDB_PUBLIC_URL=https://db.example.com` 固定配对二维码与提示地址；未设置时按请求的 `Host` / `X-Forwarded-*` 推导。`/pair/claim` 按来源限流（10 次 / 5 分钟），超限返回 429 `RATE_LIMITED`。
 
 ## 截图
 
@@ -152,9 +153,30 @@ iOS：`ios/` 原生工程已生成。在 macOS 上执行 `cd ios && pod install`
 
 配对步骤：
 
-1. 桌面端打开 **设置 → Bridge → 为移动端配对**，获得 6 位码。
-2. 移动端输入 Bridge 地址（如 `http://192.168.1.10:8787`）与配对码。
+1. 桌面端打开 **设置 → Bridge → 为移动端配对**，获得二维码与 6 位码。
+2. 手机打开移动端，点 **扫码配对** 扫描二维码（自动填入 Bridge 地址与配对码）；也可手动输入地址与配对码。
 3. 连接成功后，移动端与桌面共享连接、会话与记忆。
+
+对话页支持模型/思考档位/权限模式切换与数据库选择；底部「工具」提供 SQL 查询、数据增删改、表结构、导入导出、备份、仪表板、搜索、数据字典、服务器监控、Skills/MCP 开关与图片附件。
+
+> 浏览器扫码需要 HTTPS（或 localhost）；局域网 HTTP 页面请手动输入，或把 Bridge 放到 TLS 反向代理之后。
+
+反向代理（例如 Nginx 将 `https://db.example.com` 转到 `127.0.0.1:8787`）：
+
+```nginx
+location / {
+  proxy_pass http://127.0.0.1:8787;
+  proxy_http_version 1.1;
+  proxy_set_header Host $host;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection "upgrade";
+  proxy_read_timeout 900s;
+  proxy_buffering off; # Agent 的 SSE 流
+}
+```
+
+启动 Bridge 时设置 `AIDB_PUBLIC_URL=https://db.example.com`，配对二维码/提示即可直接使用公网地址；手机也可手动填写该地址 + 配对码。
 
 ## 命令
 

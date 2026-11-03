@@ -212,7 +212,7 @@ interface AppStore {
   closeTools: () => void;
   connectionEditor?: ConnectionEditorState;
   toasts: Toast[];
-  pairing?: { code: string; expiresIn: number; host: string; port: number };
+  pairing?: { code: string; expiresIn: number; host: string; port: number; url?: string; qrPayload?: string };
   devices: DeviceInfo[];
 
   boot: () => Promise<void>;

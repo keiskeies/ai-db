@@ -3131,7 +3131,8 @@ await mobile.getByTestId('m-tab-data').click();
 await mobile.waitForSelector('[data-testid="m-table-orders"]', { timeout: 15000 });
 await mobile.getByTestId('m-table-orders').click();
 await mobile.waitForTimeout(1500);
-check('mobile data is read-only', (await mobile.locator('body').innerText()).includes('只读'));
+check('mobile data exposes row editing on writable connection', (await mobile.locator('body').innerText()).includes('可编辑'));
+check('mobile data offers insert action', (await mobile.getByTestId('m-row-insert').count()) === 1);
 await mobile.screenshot({ path: join(shots, 'mobile-data.png') });
 
 await mobile.getByTestId('m-tab-memory').click();
