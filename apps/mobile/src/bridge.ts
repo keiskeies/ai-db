@@ -19,6 +19,8 @@ import type {
 export interface BridgeConfig {
   baseUrl: string;
   token: string;
+  /** 配对成功时下发的设备 id，用于在设备列表标记「当前设备」并防止误吊销。 */
+  deviceId?: string;
 }
 
 export interface BootstrapData {
@@ -332,9 +334,50 @@ export class BridgeClient {
   devices() {
     return this.request<{ devices: DeviceInfo[] }>('/devices');
   }
+
+  revokeDevice(id: string) {
+    return this.request<void>(`/devices/${id}`, { method: 'DELETE' });
+  }
+
+  history(connectionId?: string, search?: string, limit = 100) {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (connectionId) params.set('connectionId', connectionId);
+    if (search) params.set('search', search);
+    return this.request<{ items: Array<{ id: string; sql: string; status: 'ok' | 'error'; durationMs?: number; rowCount?: number; favorite?: boolean; createdAt: string; database?: string }> }>(`/history?${params.toString()}`);
+  }
+
+  favoriteHistory(id: string, favorite: boolean) {
+    return this.request<{ id: string; favorite: boolean }>(`/history/${id}/favorite`, { method: 'POST', body: JSON.stringify({ favorite }) });
+  }
+
+  audit(connectionId?: string, limit = 100) {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (connectionId) params.set('connectionId', connectionId);
+    return this.request<{ entries: Array<{ id: string; actor: string; tool?: string; sql?: string; status: string; createdAt: string; database?: string }> }>(`/audit?${params.toString()}`);
+  }
+
+  artifacts(limit = 50) {
+    return this.request<{ artifacts: Array<{ id: string; type: string; title: string; status: string; updatedAt: string }> }>(`/artifacts?limit=${limit}`);
+  }
+
+  artifactDetail(id: string) {
+    return this.request<{ artifact: { id: string; type: string; title: string; status: string; spec: unknown } }>(`/artifacts/${id}`);
+  }
+
+  exportArtifact(id: string, format: 'xlsx' | 'pptx') {
+    return this.request<{ path: string; bytes: number; rows?: number; format: string; content?: string; encoding?: string }>(`/artifacts/${id}/export?format=${format}&inline=1`);
+  }
+
+  deleteArtifact(id: string) {
+    return this.request<void>(`/artifacts/${id}`, { method: 'DELETE' });
+  }
+
+  updateSession(id: string, patch: { title?: string; archived?: boolean }) {
+    return this.request<{ session: AgentSessionMeta }>(`/agent/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
+  }
 }
 
-export async function claimPairing(baseUrl: string, code: string, platform: string): Promise<{ token: string; bridge: { host: string; port: number; version: string } }> {
+export async function claimPairing(baseUrl: string, code: string, platform: string): Promise<{ token: string; device?: { id: string }; bridge: { host: string; port: number; version: string } }> {
   const res = await fetch(`${normalizeBaseUrl(baseUrl)}/api/pair/claim`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

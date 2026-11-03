@@ -2697,7 +2697,9 @@ export function createApiRouter(deps: ApiDeps): Router {
     '/artifacts/:id/export',
     ah(async (req, res) => {
       const format = str(req.query.format) === 'pptx' ? 'pptx' : 'xlsx';
-      res.json(await exportArtifact(store, config, req.params.id, format));
+      const result = await exportArtifact(store, config, req.params.id, format);
+      const inline = str(req.query.inline) === '1' ? { content: readFileSync(result.path).toString('base64'), encoding: 'base64' as const } : {};
+      res.json({ ...result, ...inline });
     }),
   );
 

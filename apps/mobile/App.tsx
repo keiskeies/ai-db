@@ -30,6 +30,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Database,
+  FileCode2,
   Gauge,
   History,
   ImagePlus,
@@ -299,7 +300,7 @@ function PairScreen({ onConnected }: { onConnected: (config: BridgeConfig) => vo
       if (method === 'pair') {
         if (!/^\d{6}$/.test(code.trim())) throw new Error('请输入 6 位配对码');
         const result = await claimPairing(baseUrl, code.trim(), Platform.OS);
-        const cfg = { baseUrl, token: result.token };
+        const cfg = { baseUrl, token: result.token, deviceId: result.device?.id };
         await saveBridgeConfig(cfg);
         onConnected(cfg);
       } else {
@@ -456,8 +457,9 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
   const [memoryDraft, setMemoryDraft] = useState<{ id?: string; kind: string; title: string; content: string } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
-  const [toolPage, setToolPage] = useState<'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'dictionary' | 'monitor' | 'search' | null>(null);
+  const [toolPage, setToolPage] = useState<'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'dictionary' | 'monitor' | 'search' | 'history' | 'audit' | 'artifacts' | null>(null);
   const [toolTable, setToolTable] = useState<string | undefined>(undefined);
+  const [toolSql, setToolSql] = useState<string | undefined>(undefined);
 
   const wsRef = useRef<WebSocket | null>(null);
   const sessionIdRef = useRef<string | undefined>(undefined);
@@ -1065,7 +1067,7 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
 
         {tab === 'tools' ? (
           toolPage === 'query' ? (
-            <QueryScreen client={client} connection={activeConnection} database={activeDatabase} onBack={() => setToolPage(null)} />
+            <QueryScreen client={client} connection={activeConnection} database={activeDatabase} initialSql={toolSql} onBack={() => setToolPage(null)} />
           ) : toolPage === 'backups' ? (
             <BackupScreen client={client} connection={activeConnection} onBack={() => setToolPage(null)} />
           ) : toolPage === 'dashboards' ? (
@@ -1080,6 +1082,12 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
             <MonitorScreen client={client} connection={activeConnection} onBack={() => setToolPage(null)} />
           ) : toolPage === 'search' ? (
             <SearchScreen client={client} connection={activeConnection} database={activeDatabase} onBack={() => setToolPage(null)} />
+          ) : toolPage === 'history' ? (
+            <HistoryScreen client={client} connection={activeConnection} onBack={() => setToolPage(null)} onPick={(sql) => { setToolSql(sql); setToolPage('query'); }} />
+          ) : toolPage === 'audit' ? (
+            <AuditScreen client={client} connection={activeConnection} onBack={() => setToolPage(null)} />
+          ) : toolPage === 'artifacts' ? (
+            <ArtifactsScreen client={client} onBack={() => setToolPage(null)} />
           ) : (
             <ToolsScreen
               connection={activeConnection}
@@ -1096,7 +1104,10 @@ function Main({ config, onDisconnect }: { config: BridgeConfig; onDisconnect: ()
                 setInput(`/${id} `);
                 setTab('chat');
               }}
-              onOpen={(page) => setToolPage(page)}
+              onOpen={(page) => {
+                if (page === 'query') setToolSql(undefined);
+                setToolPage(page);
+              }}
             />
           )
         ) : null}
@@ -2122,12 +2133,14 @@ function SettingsScreen({
 }) {
   const [skills, setSkills] = useState<Array<{ id: string; name: string; description: string; enabled: boolean; builtin?: boolean }>>([]);
   const [mcps, setMcps] = useState<Array<{ id: string; name: string; command: string; enabled: boolean; builtin?: boolean }>>([]);
+  const [devices, setDevices] = useState<Array<{ id: string; name: string; platform: string; pairedAt: string; revoked: boolean }>>([]);
   useEffect(() => {
     void (async () => {
       try {
-        const [skillResult, mcpResult] = await Promise.all([client.skills(true), client.mcpServers()]);
+        const [skillResult, mcpResult, deviceResult] = await Promise.all([client.skills(true), client.mcpServers(), client.devices()]);
         setSkills(skillResult.skills);
         setMcps(mcpResult.servers);
+        setDevices(deviceResult.devices.filter((device) => !device.revoked));
       } catch {
         /* 扩展列表失败不影响其余设置 */
       }
@@ -2155,6 +2168,40 @@ function SettingsScreen({
           <Text style={styles.sectionLabel}>AGENT</Text>
           <Text style={styles.settingValue}>{boot?.settings.agent.provider === 'local' ? 'Local（离线）' : boot?.settings.agent.model}</Text>
           <Text style={styles.listMeta}>{boot?.tools.length ?? 18} 个工具 · 四层记忆 · {boot?.sessions.length ?? 0} 个会话</Text>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.sectionLabel}>已配对设备</Text>
+          {devices.map((device) => (
+            <View key={device.id} style={[styles.rowBetween, { paddingVertical: 6 }]}>
+              <View style={{ flex: 1, paddingRight: 10 }}>
+                <Text style={styles.listTitle}>{device.name}{device.id === config.deviceId ? '（当前设备）' : ''}</Text>
+                <Text style={styles.listMeta}>{device.platform} · 配对于 {new Date(device.pairedAt).toLocaleString()}</Text>
+              </View>
+              {device.id === config.deviceId ? (
+                <Text style={styles.listMeta}>本机</Text>
+              ) : (
+                <Pressable
+                  style={styles.modeChip}
+                  onPress={async () => {
+                    if (!(await confirmAction('吊销设备', `${device.name} 需要重新配对才能访问 Bridge`, '吊销'))) return;
+                    try {
+                      await client.revokeDevice(device.id);
+                      setDevices((prev) => prev.filter((item) => item.id !== device.id));
+                    } catch (err: any) {
+                      notify('吊销失败', err?.message ?? '');
+                    }
+                  }}
+                >
+                  <Text style={[styles.modeChipText, { color: colors.danger }]}>吊销</Text>
+                </Pressable>
+              )}
+            </View>
+          ))}
+          {!devices.length ? <Text style={styles.hint}>没有已配对设备。</Text> : null}
+        </View>
+
+        <View style={styles.card}>
           <Text style={[styles.sectionLabel, { marginTop: 12 }]}>默认权限</Text>
           <View style={{ flexDirection: 'row', marginTop: 6 }}>
             <PermissionSelect mode={mode} onChange={onMode} testID="m-settings-mode" />
@@ -2247,14 +2294,19 @@ function QueryScreen({
   client,
   connection,
   database,
+  initialSql,
   onBack,
 }: {
   client: BridgeClient;
   connection?: ConnectionConfig;
   database?: string;
+  initialSql?: string;
   onBack: () => void;
 }) {
-  const [sql, setSql] = useState('SELECT * FROM ');
+  const [sql, setSql] = useState(initialSql ?? 'SELECT * FROM ');
+  useEffect(() => {
+    if (initialSql) setSql(initialSql);
+  }, [initialSql]);
   const [sets, setSets] = useState<SqlSet[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -2972,6 +3024,196 @@ function SearchScreen({ client, connection, database, onBack }: { client: Bridge
   );
 }
 
+function HistoryScreen({ client, connection, onBack, onPick }: { client: BridgeClient; connection?: ConnectionConfig; onBack: () => void; onPick: (sql: string) => void }) {
+  const [items, setItems] = useState<Array<{ id: string; sql: string; status: 'ok' | 'error'; durationMs?: number; rowCount?: number; favorite?: boolean; createdAt: string }>>([]);
+  const [query, setQuery] = useState('');
+  const load = async (search = '') => {
+    try {
+      setItems((await client.history(connection?.id, search || undefined, 150)).items);
+    } catch (err: any) {
+      notify('加载失败', err?.message ?? '');
+    }
+  };
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connection?.id]);
+  return (
+    <View style={{ flex: 1 }}>
+      <View style={styles.tableHead}>
+        <Pressable testID="m-history-back" style={styles.iconButton} onPress={onBack}><ChevronLeft size={18} color={colors.text} /></Pressable>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.listTitle}>查询历史</Text>
+          <Text style={styles.listMeta}>{connection?.name ?? '全部连接'}</Text>
+        </View>
+      </View>
+      <View style={styles.searchRow}>
+        <Search size={14} color={colors.muted} />
+        <TextInput style={styles.searchInput} value={query} onChangeText={setQuery} placeholder="搜索 SQL…" placeholderTextColor={colors.muted} returnKeyType="search" onSubmitEditing={() => void load(query)} />
+        <Pressable style={styles.iconButton} onPress={() => void load(query)}><Search size={14} color={colors.text} /></Pressable>
+      </View>
+      <ScrollView contentContainerStyle={{ padding: 14, gap: 8 }}>
+        {items.map((item) => (
+          <Pressable key={item.id} testID={`m-history-${item.id}`} style={styles.rowCard} onPress={() => onPick(item.sql)}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={[styles.listMeta, { flex: 1 }]}>{new Date(item.createdAt).toLocaleString()} · {item.status}{item.durationMs ? ` · ${item.durationMs}ms` : ''}{item.rowCount ? ` · ${item.rowCount} 行` : ''}</Text>
+              <Pressable
+                hitSlop={8}
+                onPress={async (event) => {
+                  event.stopPropagation();
+                  try {
+                    await client.favoriteHistory(item.id, !item.favorite);
+                    setItems((prev) => prev.map((row) => (row.id === item.id ? { ...row, favorite: !row.favorite } : row)));
+                  } catch (err: any) {
+                    notify('操作失败', err?.message ?? '');
+                  }
+                }}
+              >
+                <Text style={{ color: item.favorite ? colors.warning : colors.muted }}>{item.favorite ? '★' : '☆'}</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.sqlSnippet} numberOfLines={3}>{item.sql}</Text>
+          </Pressable>
+        ))}
+        {!items.length ? <Text style={styles.hint}>没有历史记录。</Text> : null}
+      </ScrollView>
+    </View>
+  );
+}
+
+function AuditScreen({ client, connection, onBack }: { client: BridgeClient; connection?: ConnectionConfig; onBack: () => void }) {
+  const [entries, setEntries] = useState<Array<{ id: string; actor: string; tool?: string; sql?: string; status: string; createdAt: string }>>([]);
+  useEffect(() => {
+    void (async () => {
+      try {
+        setEntries((await client.audit(connection?.id, 200)).entries);
+      } catch (err: any) {
+        notify('加载失败', err?.message ?? '');
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connection?.id]);
+  return (
+    <View style={{ flex: 1 }}>
+      <View style={styles.tableHead}>
+        <Pressable testID="m-audit-back" style={styles.iconButton} onPress={onBack}><ChevronLeft size={18} color={colors.text} /></Pressable>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.listTitle}>审计日志</Text>
+          <Text style={styles.listMeta}>{connection?.name ?? '全部连接'} · {entries.length} 条</Text>
+        </View>
+      </View>
+      <ScrollView contentContainerStyle={{ padding: 14, gap: 8 }}>
+        {entries.map((entry) => (
+          <View key={entry.id} style={styles.rowCard}>
+            <Text style={styles.listMeta}>{new Date(entry.createdAt).toLocaleString()} · {entry.actor} · {entry.tool ?? '—'} · {entry.status}</Text>
+            {entry.sql ? <Text style={styles.sqlSnippet} numberOfLines={2}>{entry.sql}</Text> : null}
+          </View>
+        ))}
+        {!entries.length ? <Text style={styles.hint}>没有审计记录。</Text> : null}
+      </ScrollView>
+    </View>
+  );
+}
+
+function ArtifactsScreen({ client, onBack }: { client: BridgeClient; onBack: () => void }) {
+  const [items, setItems] = useState<Array<{ id: string; type: string; title: string; status: string; updatedAt: string }>>([]);
+  const [detail, setDetail] = useState<{ artifact: { id: string; type: string; title: string; status: string; spec: unknown }; run?: { status: string; result?: unknown; error?: string } } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = async () => {
+    try {
+      setItems((await client.artifacts(100)).artifacts);
+    } catch (err: any) {
+      notify('加载失败', err?.message ?? '');
+    }
+  };
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const open = async (id: string) => {
+    try {
+      const artifact = (await client.artifactDetail(id)).artifact;
+      const runs = (await client.artifactRuns(id, 1)).runs;
+      setDetail({ artifact, run: runs[0] });
+    } catch (err: any) {
+      notify('加载失败', err?.message ?? '');
+    }
+  };
+  const exportArtifact = async (format: 'xlsx' | 'pptx') => {
+    if (!detail) return;
+    setBusy(true);
+    try {
+      const result = await client.exportArtifact(detail.artifact.id, format);
+      if (!result.content) throw new Error('导出内容为空');
+      await shareBase64(result.content, format);
+      notify('导出完成', `${format.toUpperCase()} ${humanBytes(result.bytes)}`);
+    } catch (err: any) {
+      notify('导出失败', err?.message ?? '');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <View style={{ flex: 1 }}>
+      <View style={styles.tableHead}>
+        <Pressable testID="m-artifacts-back" style={styles.iconButton} onPress={onBack}><ChevronLeft size={18} color={colors.text} /></Pressable>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.listTitle}>报告与产物</Text>
+          <Text style={styles.listMeta}>{items.length} 个产物</Text>
+        </View>
+      </View>
+      <ScrollView contentContainerStyle={{ padding: 14, gap: 8 }}>
+        {items.map((item) => (
+          <Pressable key={item.id} testID={`m-artifact-${item.id}`} style={styles.rowCard} onPress={() => void open(item.id)}>
+            <Text style={styles.listTitle}>{item.title}</Text>
+            <Text style={styles.listMeta}>{item.type} · {item.status} · {new Date(item.updatedAt).toLocaleString()}</Text>
+          </Pressable>
+        ))}
+        {!items.length ? <Text style={styles.hint}>还没有报告或对比产物。可在对话中使用 /report、/diff、/recon。</Text> : null}
+      </ScrollView>
+      {detail ? (
+        <Modal visible transparent animationType="slide" onRequestClose={() => setDetail(null)}>
+          <View style={styles.modalBackdrop}>
+            <View style={[styles.sheet, { maxHeight: '86%' }]}>
+              <View style={styles.sheetHead}>
+                <Text style={styles.sheetTitle}>{detail.artifact.title}</Text>
+                <Pressable testID="m-artifact-close" style={styles.iconButton} onPress={() => setDetail(null)}><X size={16} color={colors.text} /></Pressable>
+              </View>
+              <ScrollView contentContainerStyle={{ padding: 14, gap: 10 }}>
+                <Text style={styles.listMeta}>{detail.artifact.type} · {detail.artifact.status}{detail.run ? ` · 运行 ${detail.run.status}` : ''}</Text>
+                {detail.run?.error ? <Text style={styles.error}>{detail.run.error}</Text> : null}
+                <Text style={styles.sectionLabel}>运行结果</Text>
+                <Text selectable style={styles.sqlSnippet}>{detail.run?.result ? JSON.stringify(detail.run.result, null, 2) : '没有运行结果'}</Text>
+                <Text style={styles.sectionLabel}>规格</Text>
+                <Text selectable style={styles.sqlSnippet}>{JSON.stringify(detail.artifact.spec, null, 2)}</Text>
+                <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                  <Pressable style={[styles.modeChip, busy && { opacity: 0.5 }]} disabled={busy} onPress={() => void exportArtifact('xlsx')}><Text style={styles.modeChipText}>导出 XLSX</Text></Pressable>
+                  <Pressable style={[styles.modeChip, busy && { opacity: 0.5 }]} disabled={busy} onPress={() => void exportArtifact('pptx')}><Text style={styles.modeChipText}>导出 PPTX</Text></Pressable>
+                  <Pressable
+                    style={styles.modeChip}
+                    onPress={async () => {
+                      if (!(await confirmAction('删除产物', detail.artifact.title, '删除'))) return;
+                      try {
+                        await client.deleteArtifact(detail.artifact.id);
+                        setDetail(null);
+                        await load();
+                      } catch (err: any) {
+                        notify('删除失败', err?.message ?? '');
+                      }
+                    }}
+                  >
+                    <Text style={[styles.modeChipText, { color: colors.danger }]}>删除</Text>
+                  </Pressable>
+                </View>
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+      ) : null}
+    </View>
+  );
+}
+
 const QUICK_PROMPTS = [
   '给当前数据库做一次完整体检，并列出可修复项',
   '生成当前库的数据字典摘要',
@@ -3000,7 +3242,7 @@ function ToolsScreen({
   memories: Memory[];
   onRunPrompt: (text: string) => void;
   onRunCommand: (id: string) => void;
-  onOpen: (page: 'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'dictionary' | 'monitor' | 'search') => void;
+  onOpen: (page: 'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'dictionary' | 'monitor' | 'search' | 'history' | 'audit' | 'artifacts') => void;
 }) {
   return (
     <View style={{ flex: 1 }}>
@@ -3026,6 +3268,9 @@ function ToolsScreen({
           { page: 'search' as const, label: '数据库搜索', desc: '按对象与数据全文查找', icon: <Search size={15} color={colors.accent} /> },
           { page: 'dictionary' as const, label: '数据字典', desc: 'Markdown 结构说明', icon: <Database size={15} color={colors.accent} /> },
           { page: 'monitor' as const, label: '服务器监控', desc: '指标与会话概览', icon: <Gauge size={15} color={colors.accent} /> },
+          { page: 'history' as const, label: '查询历史', desc: '搜索、收藏、回填 SQL', icon: <History size={15} color={colors.accent} /> },
+          { page: 'audit' as const, label: '审计日志', desc: '谁在什么时候改了什么', icon: <ShieldAlert size={15} color={colors.accent} /> },
+          { page: 'artifacts' as const, label: '报告与产物', desc: '报告/对比结果与导出', icon: <FileCode2 size={15} color={colors.accent} /> },
         ].map((entry) => (
           <Pressable key={entry.page} testID={`m-tool-${entry.page}`} style={styles.listRow} onPress={() => onOpen(entry.page)}>
             {entry.icon}
@@ -3393,6 +3638,7 @@ const styles = StyleSheet.create({
 
   composer: { borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.panel, paddingHorizontal: 10, paddingTop: 8 },
   composerTop: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingBottom: 7 },
+  sqlSnippet: { color: colors.secondary, fontSize: 10.5, lineHeight: 16, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', marginTop: 4 },
   dictionaryText: { color: colors.text, fontSize: 11.5, lineHeight: 18, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
   queryInput: { minHeight: 130, borderRadius: radius.md, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.elevated, padding: 10, color: colors.text, fontSize: 12, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', textAlignVertical: 'top' },
   resultCard: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, backgroundColor: colors.panel, padding: 8, overflow: 'hidden' },
