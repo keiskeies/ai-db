@@ -267,7 +267,7 @@ export default function App() {
     return (
       <div className="boot-screen">
         <div className="boot-card">
-          <div className="brand-mark" style={{ width: 46, height: 46, fontSize: 17, margin: '0 auto' }}>AI</div>
+          <img className="brand-mark" src="/logo-mark.svg" alt="" style={{ width: 46, height: 46, margin: '0 auto' }} />
           <h1>AiDB Studio</h1>
           {bootError ? (
             <>
@@ -320,7 +320,7 @@ export default function App() {
     <div className="app" data-testid="app-root">
       <div className="titlebar">
         <div className="brand">
-          <div className="brand-mark">AI</div>
+          <img className="brand-mark" src="/logo-mark.svg" alt="" />
           <div>
             <div className="brand-name">AiDB Studio</div>
             <div className="brand-sub">AI-native database workbench</div>

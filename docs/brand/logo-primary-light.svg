@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 320" role="img" aria-labelledby="title desc">
+  <title id="title">AiDB Studio 主标志</title>
+  <desc id="desc">尖顶、圆弧外鼓、矮胖的 A，底部梯形镂空，中间是镂空饼图扇形；右侧 i 由数据库圆柱与三根柱状图构成。</desc>
+  <g transform="translate(40 40) scale(.46875)"><defs>
+<linearGradient id="a" x1="140" y1="440" x2="372" y2="80" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#45c8c3"/><stop offset="1" stop-color="#8eddb2"/></linearGradient>
+<linearGradient id="ring" x1="56" y1="40" x2="456" y2="472" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#62e3da" stop-opacity=".55"/><stop offset="1" stop-color="#e5b76c" stop-opacity=".45"/></linearGradient>
+<radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(118 92) rotate(42) scale(260)" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#45c8c3" stop-opacity=".22"/><stop offset="1" stop-color="#45c8c3" stop-opacity="0"/></radialGradient>
+<radialGradient id="glow2" cx="0" cy="0" r="1" gradientTransform="translate(424 430) rotate(-138) scale(220)" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#e0af63" stop-opacity=".15"/><stop offset="1" stop-color="#e0af63" stop-opacity="0"/></radialGradient>
+</defs><rect width="512" height="512" rx="120" fill="#0b0e0d"/><rect width="512" height="512" rx="120" fill="url(#glow)"/><rect width="512" height="512" rx="120" fill="url(#glow2)"/><rect x="1.5" y="1.5" width="509" height="509" rx="118.5" fill="none" stroke="url(#ring)" stroke-width="3"/><g transform="translate(256 256) scale(.955) translate(-256 -256)"><g transform="translate(6 0) translate(190 0) scale(.89 1) translate(-190 0)"><path d="M185 90 A280 280 0 0 0 10 430 C8 438 14 444 24 444 H122 C130 444 136 440 140 432 L158 392 H218 L236 432 C240 440 246 444 254 444 H344 C354 444 360 438 358 430 A280 280 0 0 0 185 90 Z M185 210 L256.7 312.4 A125 125 0 0 1 113.3 312.4 Z" fill="url(#a)" fill-rule="evenodd"/><path d="M185 210 L211 333 M185 210 L159 333" stroke="#b8f4ec" stroke-width="7" stroke-linecap="round"/></g><g fill="url(#a)"><rect x="376" y="364" width="24" height="84" rx="10"/><rect x="406" y="296" width="24" height="152" rx="10"/><rect x="436" y="334" width="24" height="114" rx="10"/></g><ellipse cx="418" cy="160" rx="48" ry="14" fill="#e0af63"/><path d="M370 160v54a48 14 0 0 0 96 0v-54" fill="#e0af63"/><path d="M370 184a48 14 0 0 0 96 0 M370 202a48 14 0 0 0 96 0" fill="none" stroke="#0b0e0d" stroke-width="4"/></g></g>
+  <g font-family="Inter, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif">
+    <text x="338" y="164" fill="#101413" font-size="104" font-weight="700" letter-spacing="-3">AiDB</text>
+    <text x="345" y="214" fill="#5f6964" font-size="19" font-weight="600" letter-spacing="12">STUDIO</text>
+  </g>
+</svg>

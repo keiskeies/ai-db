@@ -1,167 +1,596 @@
-# AiDB Studio
+<p align="center">
+  <img src="docs/brand/logo-mark-256.png" width="92" alt="AiDB Studio" />
+</p>
 
-AI 原生、全平台数据库工作台。Navicat 式的完整数据库操作 + Claude Code 式的 AI 搭档。
+<h1 align="center">AiDB Studio</h1>
 
-支持 **Windows · macOS · Linux · Android · iOS**。内置一个可全权操作数据库的 AI Agent：52 个工具、四级权限、四层记忆、工具轨迹可视化、审批与审计；外加 15 个模块的 Navicat 级工具箱。
+<p align="center"><strong>A database workbench. Also a database agent.</strong></p>
 
-![Desktop](docs/screenshots/desktop-welcome.png)
-![Toolbox](docs/screenshots/desktop-toolbox.png)
+<p align="center">
+  <a href="./README.md">English</a> ·
+  <a href="./README.zh-CN.md">简体中文</a>
+</p>
 
-## 核心能力
+<p align="center">
+  <img alt="TypeScript 5.7" src="https://img.shields.io/badge/TypeScript-5.7-3178C6?style=flat-square&logo=typescript&logoColor=white" />
+  <img alt="Node.js ≥ 22.5" src="https://img.shields.io/badge/Node.js-%E2%89%A522.5-339933?style=flat-square&logo=nodedotjs&logoColor=white" />
+  <img alt="Electron 45" src="https://img.shields.io/badge/Electron-45-47848F?style=flat-square&logo=electron&logoColor=white" />
+  <img alt="React 18" src="https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=0B0E0D" />
+  <img alt="Expo 52" src="https://img.shields.io/badge/Expo-52-000020?style=flat-square&logo=expo&logoColor=white" />
+</p>
 
-### Navicat 式主界面
-- **顶部功能区**：连接、新建查询、表、视图、函数、用户、其它、查询、备份、自动运行、模型、仪表板共 12 个大图标入口。
-- **对象树**：连接 → 数据库 / Schema → **表 / 视图分组**，并固定提供函数 / 存储过程、查询、备份入口。
-- **数据库右键菜单**：关闭、编辑 / 新建 / 删除数据库、新建表、新建查询、命令列、运行 SQL 文件、转储 SQL、逆向到模型、在数据库中查找、刷新。
-- **表右键菜单**：打开、设计、新建、重命名、复制（结构 / 结构+数据）、查看 DDL、维护、对象信息、设置权限、导入 / 导出向导、清空、截断、删除、逆向到模型。
+<p align="center">
+  <img alt="41 database engines" src="https://img.shields.io/badge/Engines-41-45C8C3?style=flat-square" />
+  <img alt="52 agent tools" src="https://img.shields.io/badge/Agent%20Tools-52-45C8C3?style=flat-square" />
+  <img alt="macOS, Windows, Linux" src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-0B0E0D?style=flat-square" />
+  <img alt="MIT license" src="https://img.shields.io/badge/License-MIT-E0AF63?style=flat-square" />
+  <a href="https://github.com/keiskeies/ai-db"><img alt="GitHub stars" src="https://img.shields.io/github/stars/keiskeies/ai-db?style=flat-square&logo=github&label=Stars&color=E0AF63" /></a>
+</p>
 
-### 数据库工作台
-- **连接管理**：**41 种引擎** — 关系型 SQLite / MySQL / MariaDB / PostgreSQL / TimescaleDB / CockroachDB / SQL Server / Oracle / ClickHouse / 达梦 DM8 / DuckDB，时序 TDengine / InfluxDB，文档型 MongoDB（支持写入、CSV 导入与单文档编辑），键值型 Redis（含 Redis Stack 模块与 RediSearch 索引浏览），宽列 Cassandra / ScyllaDB，图数据库 Neo4j / Memgraph / FalkorDB / ArangoDB，向量数据库 Qdrant / Milvus / Weaviate，搜索 Elasticsearch / OpenSearch，以及金仓 / openGauss / GaussDB / OceanBase / TiDB / PolarDB / TDSQL / GBase 8a / Doris / StarRocks / 瀚高 / Vastbase / IvorySQL / GreatSQL / GoldenDB 等国产库（协议别名复用 PG/MySQL 驱动；达梦走官方 dmdb）；SSH 隧道、环境标签（DEV / STG / PROD）、只读模式、AES-256-GCM 加密凭据、测试连接。详见 [多引擎架构](docs/09-multi-engine.md)。
-- **非关系型与向量工作台**：MongoDB 集合浏览 + 采样字段推断 + JSON MQL；Redis DB 索引、SCAN 键浏览与命令控制台；Cassandra/ScyllaDB keyspace/table 浏览 + CQL 控制台；Neo4j / Memgraph / FalkorDB / ArangoDB 图浏览 + Cypher/AQL + 力导向图视图；Qdrant / Milvus / Weaviate 集合浏览 + 向量检索；Elasticsearch / OpenSearch 索引/mapping + `_search` DSL；TDengine 超级表/子表浏览 + SQL 控制台；pgvector 关系表向量检索 + Embedding 配置。非 SQL 引擎的 DDL、结构同步、备份等 SQL 专属功能会明确禁用。
-- **对象浏览器**：连接 → 库 / Schema → 表 / 视图 → 列 / 索引 / 外键，搜索、右键菜单、懒加载；表和视图分组展示。
-- **数据网格**：行号、分页、排序、WHERE 过滤、**可视化筛选构建器**、**排序对话框**、**文本视图**、双击编辑、新增/删除行、**行多选**、**复制 / 粘贴 / 复制行 / 批量删除**、**查找替换**、主键安全定位、记录区间与页码；**CSV 导入向导**（分隔符 / 表头 / 预览 / 列映射），导出 CSV / JSON / SQL / XML。
-- **SQL 工作台**：CodeMirror 6、按方言高亮（含国产协议别名）、**连接 / 数据库下拉**、Ctrl/⌘+Enter 执行、多结果集、消息面板、查询历史、EXPLAIN、**保存 / 打开 SQL 文件**、**查询创建工具**、**美化 SQL**、**SQL 片段库**、**结果图表**（柱状 / 堆叠 / 折线 / 饼 / 散点 / 热力 / 雷达），以及 **AI 解释 / AI 优化** 一键送入 Agent。MongoDB / Redis 连接自动切换为 JSON / 命令模式，并隐藏 SQL 专属工具。
-- **表设计器**：可视化列定义、增删列、类型变更，**可视化索引设计**，DDL 实时预览与执行。
-- **表操作**：新建、设计、重命名、复制（仅结构 / 结构+数据）、查看 DDL、对象信息、清空、截断、删除、维护（分析 / 优化 / 检查 / 修复 / 回收空间）。
-- **数据库操作**：按引擎能力新建 / 重命名 / 删除数据库、逻辑转储、数据库内查找、命令列、运行 SQL 文件。
-- **关系图**：基于外键的只读 ER 视图，表结构卡片 + 连线，点击进入数据，**导出 SVG**。
-- **备份**：逻辑 SQL dump；**从备份 SQL 恢复**；破坏性操作前自动备份（可配置）。
-- **审计 / 历史**：所有用户与 Agent 操作、审批结果、耗时、风险等级；支持导出 CSV。
-- **Appearance**：深色 / 浅色主题、固定紧凑密度、中 / 英壳层。
+AiDB is not a chat box bolted onto a database client. It treats the Agent as the primary entry point, unifying connections, schema, SQL, data, dashboards, reports, and audit into one executable context. You start with a business goal; the Agent investigates, executes, verifies, and delivers using the same tools a human would.
 
-### 工具箱（Navicat 级生产力）
-工具箱入口位于左侧导航，12 个模块全部连接同一 Bridge 与权限模型。每个模块都有一份**能力契约**（`packages/core/src/capabilities/*.json`），声明字段、类型、约束与状态，同时驱动 Agent 能力目录、REST 参数校验与 UI 表单渲染，详见 [功能能力契约](docs/16-capability-contract.md)：
+From 41 database engines to 13 productivity modules, from 52 tools to 6 command workflows, every capability follows one principle: **what the Agent can do must be visible, controllable, and auditable; what it cannot do, it must never pretend to do.**
 
-| 模块 | 能力 | Agent 可直接调用 |
-|---|---|---|
-| 数据库搜索 | 对象名 / 注释 + 数据文本列全文查找，结果可直接打开 | `search_objects`（仅对象名） |
-| 查询构建器 | 选表、连接、列、WHERE、排序、行数，生成 SQL 送入编辑器 | — （`run_sql` 等价） |
-| 结构对比同步 | 两连接 DDL diff，生成目标方言语，确认后执行同步 | `schema_diff`（仅对比） |
-| 数据对比 | 行数 + 主键指纹差异，按表替换同步 | — |
-| 数据传输 | 跨连接复制表结构与数据，自动建表，追加 / 清空后写入 | `transfer_data` |
-| 数据生成 | 按列语义、类型与外键造 1–5000 行测试数据，预览后插入 | `generate_data` |
-| 服务器监控 | 引擎指标、会话列表，10s 刷新，终止会话 | — |
-| 自动化任务 | 定时 SQL / 备份任务，最小 30s 间隔，立即运行、启停、状态 | — |
-| 用户与权限 | 账户 / 角色列表、创建、删除、授权（SQLite 除外） | — |
-| 数据字典 | Markdown / DDL / JSON 导出，含列类型、默认值、注释 | — |
-| 高级对象 | 触发器 / 函数 / 存储过程 / 序列 / 事件及定义查看 | — |
-| Agent 上下文 | 表 / 列启用状态、业务别名、描述、手工关联与术语 | 读取隐式注入（写入刻意不开放） |
+The desktop app is built with Electron + React and also runs in the browser. The mobile app uses Expo / React Native and shares connections, sessions, memory, and settings with the desktop through the Bridge. Windows, macOS, Linux, Android, iOS, and Web are supported.
 
-> 无 Agent 工具的功能不会让模型假装能执行：能力目录会明确要求它引导用户到对应工具箱模块操作。
+![AI Agent completing an analysis task in the workbench](docs/screenshots/readme/agent.png)
 
-### 支持的数据库引擎（8 种）
+## Agent first
 
-| 引擎 | 协议 / 驱动 | 说明 |
-|---|---|---|
-| SQLite | `node:sqlite` | 文件型，内置示例库 |
-| MySQL | `mysql2` | 主流关系型 |
-| MariaDB | `mysql2` | MySQL 协议兼容 |
-| PostgreSQL | `pg` | 完整对象关系 |
-| CockroachDB | `pg` | 分布式 SQL |
-| SQL Server | `mssql` / tedious | 企业关系型 |
-| Oracle | `oracledb` thin | 无需 Instant Client |
-| ClickHouse | HTTP (`fetch`) | 列式分析，8123 端口 |
+The hard part of putting AI inside a database tool is not the model integration. It is giving the model the same working conditions as a senior engineer: see the real schema, get real data, execute real SQL, and own the outcome.
 
-> 连接表单会按引擎自动切换默认端口、数据库字段（Oracle 服务名 / SQLite 文件路径）与 SSL / SSH 能力。
+AiDB puts the Agent on the main path of the task, not in a sidebar. Here, the Agent is not the last item in a feature list — it is how every feature is organized.
 
-### AI Agent（核心差异）
-- **Claude Code 式对话**：`❯` 输入、`⏺` 工具卡、参数 / 结果 / SQL 可折叠、Todo 计划、结束统计、思考过程、`@table` 引用、斜杠命令、中断。
-- **命令即目的**：`/compare`、`/diff`、`/recon`、`/fix`、`/report` 全部在 Agent 内联执行，不弹参数表单；Agent 从语义和上下文推断对象，自己选工具、出对比表/双柱图、结构差异清单或对账差异行。
-- **52 个 Agent 工具**：结构检查、搜索、SQL / MQL / Cypher / AQL / Redis 命令 / 向量检索 / 搜索 DSL / 向量与文档写入删除、时序行协议写入、执行计划、样例、列画像、**数据库体检**、**数据质量检查**、**图表生成**、建表、改表、删表、索引、集合/索引建删、导入、导出、备份、历史、计划、记忆写入 / 检索；内置 MCP（文件系统、Git 只读、网页抓取）把本地代码与文档纳入上下文；`grep_files` 优先走 ripgrep，缺失时回退 JS。
-- **聚合网络搜索**：12 个后端并发 fan-out — Exa / Parallel (MCP)、Bing (RSS) 免密钥且国内直连可用，DuckDuckGo (HTML) 需出站代理、SearXNG 需自建实例（公共实例禁用 JSON）；Brave / Tavily / Serper / Mojeek / DeepSeek / Anthropic / OpenAI 填 Key 即用；URL 去重合并、相关性重排、单后端失败隔离、每后端健康遥测与一键探测，失败原因带 DNS/超时/代理可辨的连接诊断；Key 走加密凭证库，界面只显示是否已配置。
-- **`/init` 数据库交接文档**：扫描当前库生成 `AI_DB.md`（引擎/规模、业务地图、核心表手册、Join 路径、指标口径、性能与坑、全量清单），后续对话自动加载；全量清单确定性生成，模型只加注，结构变化用 hash 提示重跑；每次 `/init` 全量刷新自动段落，只有数据流与人工补充段落保留。
-- **SQL Copilot**：编辑器内一键“AI 解释 / AI 优化”，自动把选中 SQL 送入 Agent，输出改写 SQL、精确索引 DDL 与验证查询。
-- **审计闭环**：体检/质量发现的每条问题都附带可执行 SQL，可一键打开到编辑器；写操作前自动备份，审批结果全部落审计。
-- **四级权限**：只读 / 询问 / 自动 / 全自动；只读连接服务端强制；生产环境破坏性操作强制审批；会话级 / 连接级 Allow 规则。
-- **四层记忆**：工作记忆（会话 + 摘要）、情景记忆（会话沉淀）、语义记忆（事实 / 偏好 / 结构）、程序记忆（流程）；混合词法 + 作用域评分检索；去重合并、衰减、可编辑 / 置顶 / 遗忘；桌面与移动端共享。
-- **离线可用**：无 API Key 时使用内置 Local Reasoner（规则推理），完整演示查询、建表、索引、备份、导出、记忆。
-- **云端模型**：Anthropic Messages API、OpenAI 兼容端点（DeepSeek / Qwen / Ollama / vLLM），SSE 流式与原生 tool calling。
-- **安全护栏**：SQL 静态风险分类、自动 LIMIT、只读拦截、审批超时、审计、破坏性操作前备份、路径白名单。
+- **One execution surface**: The Agent sees the same connections, schema, data, and executor as the user. There is no second, looser entry point.
+- **One risk boundary**: Read-only mode, approvals, backups, and audit are hard executor constraints, not suggestions inside a prompt.
+- **One context**: Schema, business glossary, Agent context, long-term memory, and the `AI_DB.md` handoff document together determine how the Agent understands your database.
+- **Deliverable results**: Answers are not the endpoint. Charts, reports, repair plans, and reconciliation diffs can be saved, refreshed, and exported.
+- **Compounding experience**: Session memory, long-term memory, and manually curated business semantics mean the next task does not start from zero.
 
-### Bridge 网关 & 多端
-- 桌面端内置 Bridge；也可作为独立 Linux 服务部署（Dockerfile 提供）。
-- 移动端通过 **6 位配对码** 换取设备令牌，共享会话、记忆与权限模型；移动端默认只读。
-- REST + SSE（桌面 / Web）+ WebSocket（移动端）。
-- 反向代理/公网部署：设置 `AIDB_PUBLIC_URL=https://db.example.com` 固定配对二维码与提示地址；未设置时按请求的 `Host` / `X-Forwarded-*` 推导。`/pair/claim` 按来源限流（10 次 / 5 分钟），超限返回 429 `RATE_LIMITED`。
-
-## 截图
-
-| | |
+| Layer | What the Agent gets |
 |---|---|
-| ![SQL](docs/screenshots/desktop-query.png) | ![Query chart](docs/screenshots/desktop-query-chart.png) |
-| ![Table menu](docs/screenshots/desktop-table-menu.png) | ![Relations](docs/screenshots/desktop-relations.png) |
-| ![Chart](docs/screenshots/desktop-chart.png) | ![Approval](docs/screenshots/desktop-approval.png) |
-| ![Audit](docs/screenshots/desktop-audit.png) | ![Memory](docs/screenshots/desktop-memory.png) |
-| ![Engines](docs/screenshots/desktop-connection-engines.png) | ![Light](docs/screenshots/desktop-light.png) |
-| ![Toolbox](docs/screenshots/desktop-toolbox.png) | ![Mobile](docs/screenshots/mobile-chat.png) |
-| ![Mobile data](docs/screenshots/mobile-data.png) | |
+| Intent | Natural language, `@table`, images, slash commands, and command workflows |
+| Execution | 52 tools covering queries, writes, DDL, transactions, charts, health audits, comparison, and migration |
+| Context | Real schema, business aliases, glossary, example SQL, long-term memory, and candidate-table retrieval for large databases |
+| Control | Read-only / ask / auto / full-auto, approvals, backups, audit, and execution traces |
+| Delivery | Charts, PDF, dashboard cards, reports, Excel / PPTX, and rerunnable artifacts |
+| Extension | Skills, MCP, web search, bot notifications, and external systems |
 
-## 平台与验证状态
+## Capabilities at a glance
 
-| 平台 | 实现 | 本地验证 |
-|---|---|---|
-| Windows | Electron 45 + React | ✅ 打包 `win-unpacked`，启动真实安装产物，内置 Bridge、数据网格、Agent 全部可用 |
-| Linux | Electron 45 + React | ✅ 交叉构建 `linux-unpacked`；离线服务 Dockerfile 通过 `docker build --check` |
-| macOS | Electron 45 + React | ⚠️ 配置完整；electron-builder 明确要求在 macOS 宿主产出 `.app` / dmg（Windows 交叉构建被拒绝） |
-| Android | Expo SDK 52 / RN 0.76 | ✅ TypeScript 通过、Expo Web 冒烟、`expo prebuild` 生成原生工程、Gradle `assembleDebug`（见报告） |
-| iOS | Expo SDK 52 / RN 0.76 | ✅ iOS 原生工程已生成（Linux 容器）、类型与 Expo Web 通过；⚠️ IPA 需 macOS / EAS 编译 |
+- **52 Agent tools**: queries, schema changes, data writes, charts, health audits, comparison, migration, Skills, and MCP.
+- **6 command workflows**: `/report`, `/compare`, `/diff`, `/recon`, `/fix`, `/ask`, plus `/init` for a database handoff document.
+- **41 database engines**: relational, document, key-value, graph, vector, search, wide-column, and time-series.
+- **13 toolbox modules**: reports, search, query builder, schema sync, data comparison, transfer, generation, monitoring, automation, users, dictionary, advanced objects, and Agent context.
+- **7 chart types**: bar, stacked bar, line, pie, scatter, heatmap, and radar; line charts support forecast intervals and dual axes.
+- **4 permission modes**: read-only, ask, auto, and full-auto; read-only connections are enforced server-side.
 
-> 自动化验证：文档契约 **136/136**、Core **40/40**、Bridge **10/10**、E2E **37/37**；桌面产物已启动真实 exe 复核 Ribbon、连接与数据网格。
+## Contents
 
-> 详细的命令输出、缺陷修复与未覆盖项见 [验证报告](docs/07-verification-report.md)。
+- [Agent first](#agent-first)
+- [Capabilities at a glance](#capabilities-at-a-glance)
+- [Quick start](#quick-start)
+- [AI Agent](#ai-agent)
+- [Reports and command workflows](#reports-and-command-workflows)
+- [The workbench](#the-workbench)
+- [Connections and engines](#connections-and-engines)
+- [Object tree and database operations](#object-tree-and-database-operations)
+- [Data grid](#data-grid)
+- [SQL workbench](#sql-workbench)
+- [Table designer and relationship diagram](#table-designer-and-relationship-diagram)
+- [Dashboard](#dashboard)
+- [Toolbox](#toolbox)
+- [Mobile](#mobile)
+- [Settings](#settings)
+- [Integrations: notifications, Skills, MCP, web search](#integrations-notifications-skills-mcp-web-search)
+- [Architecture](#architecture)
+- [Commands](#commands)
+- [Security model](#security-model)
+- [Design boundaries](#design-boundaries)
+- [Design documents](#design-documents)
 
-## 快速开始
+## Quick start
 
-要求：**Node.js ≥ 22.5**（Bridge 使用内置 `node:sqlite`），npm 10+。
+Requires **Node.js ≥ 22.5** (the Bridge uses the built-in `node:sqlite`) and npm 10+.
 
 ```bash
 npm install
-npm run dev            # Bridge :8787 + Web UI :5180
-# 打开 http://localhost:5180
+npm run dev
+# Web UI:  http://localhost:5180
+# Bridge:  http://127.0.0.1:8787
 ```
 
-首次启动会自动创建并填充示例电商库（users / products / orders / order_items / events，最近 120 天）。
+On first launch, a sample e-commerce database is created and seeded at `~/.aidb/demo` (users / products / orders / order_items / events). Open **Demo · Shop DB** in the left sidebar to try SQL, charts, and AI questions immediately.
 
-桌面应用（Electron 45）：
+Desktop app:
 
 ```bash
 npm run dev:desktop    # Bridge + Vite + Electron
-npm run build:desktop  # 打包安装包（当前平台）
+npm run build:desktop  # Package an installer for the current platform
 ```
 
-移动端（Expo）：
+Mobile:
 
 ```bash
-npm --workspace apps/mobile run start       # Expo Go / 模拟器
-npm --workspace apps/mobile run web         # 浏览器预览
-npm --workspace apps/mobile run android     # 本地 Android 工程
+npm --workspace apps/mobile run start    # Expo Go / simulator
+npm --workspace apps/mobile run web      # Browser preview
+npm --workspace apps/mobile run android  # Local Android project
 ```
 
-Android 原生构建（需 JDK 17+ 与 Android SDK 35）：
+Mobile pairing: on desktop, go to **Settings → Bridge → Pair a mobile device** to generate a QR code and a 6-digit pairing code. Scan the code, enter the pairing code, or connect through the `aidb://pair` deep link / same-network discovery. Once paired, both ends share connections, sessions, memory, and model settings.
+
+> The Bridge binds to `127.0.0.1` by default. For public or reverse-proxy deployments, set `AIDB_PUBLIC_URL=https://db.example.com` and read the [security model](#security-model).
+
+## AI Agent
+
+The Agent's capability is not a claim of "natural language support." It is defined by six things: what it can see, what it can do, what constrains it, what it remembers, how it delivers, and how it extends. A task moves through six phases inside AiDB — understand, plan, execute, verify, deliver, retain — and every step leaves UI evidence.
+
+![Charts, definitions, and traceable data in an AI answer](docs/screenshots/readme/agent-chart.png)
+
+### What it finishes end to end
+
+- **Data Q&A**: Starts from a business question, confirms definitions, selects tables, writes SQL, validates results, and returns conclusions, charts, and baselines instead of a wall of SQL.
+- **Health audit and repair**: Checks primary keys, foreign-key indexes, duplicate indexes, empty tables, and data quality; produces a graded repair plan; backs up before execution and verifies after.
+- **Schema changes**: Creates tables, alters columns, manages indexes, collections, and document writes; schema changes refresh the object tree and data pages.
+- **Comparison and migration**: Cross-database schema diff, row-level reconciliation, and cross-connection data transfer, with confirmable and reviewable difference lists.
+- **Delivery**: Turns analysis into saved charts, dashboard cards, reports, Excel / PPTX, or PDF instead of leaving it in chat history.
+
+### How it works
+
+- **Claude Code–style conversation**: `❯` user messages, `⏺` tool cards, collapsible parameters / results / SQL, Todo plan, execution stats, collapsible reasoning, and a completion summary.
+- **Activity strip**: Shows "understanding the question / breaking down the task / running tools / waiting for approval / assembling results" in real time, not just a spinner.
+- **Plan**: `update_plan` drives the checklist with live ✓ / ◐ / ○ states; expandable at any time.
+- **Tool trace**: Parameters, results, duration, SQL, and errors for every call; results can open in the editor.
+- **Smart scrolling**: Follows new output only when you are at the bottom; when you scroll up, a "back to latest" button appears instead of yanking you down.
+- **Follow-up suggestions**: After each turn, offers clickable next questions based on the tables involved, generated locally with no extra tokens.
+- **Model and effort**: Capsules at the bottom of the composer switch model and reasoning effort; effort comes from the current model profile.
+- **Permission capsule**: Read-only / ask / auto / full-auto can be switched at any time; the current mode is always visible.
+- **@ references**: `@table` injects schema into context; multiple tables and databases are supported.
+- **Image attachments**: Up to 4 images per message; picker and removal are supported.
+- **Sessions**: Isolated by connection + database, auto-resume the latest session for that database, search, rename, delete, archive / restore.
+- **Export**: Answers export to PDF with chart backgrounds preserved in print styles; copying is also supported.
+- **Interrupt**: Stop the current turn; output already produced is kept, and the running tool is marked aborted after it finishes.
+
+### Toolset: 52 executable actions
+
+| Group | Tools |
+|---|---|
+| Connections and schema | `list_connections`, `inspect_schema`, `search_objects`, `get_query_history` |
+| SQL execution and transactions | `run_sql`, `explain_sql`, `sample_rows`, `profile_column`, `begin_transaction`, `commit_transaction`, `rollback_transaction` |
+| Multi-dialect statements and retrieval | `run_mql`, `run_redis`, `run_cypher`, `run_cql`, `run_aql`, `search_index`, `vector_search` |
+| Collections and documents | `create_collection`, `delete_collection`, `upsert_document`, `import_documents`, `delete_documents`, `write_line_protocol` |
+| Schema and data changes | `create_table`, `alter_table`, `drop_object`, `manage_index`, `import_csv`, `export_result`, `generate_data` |
+| Analysis, charts, and audits | `audit_database`, `check_data_quality`, `render_chart`, `analyze_chart`, `forecast_chart` |
+| Comparison and migration | `schema_diff`, `recon_data`, `transfer_data` |
+| Operations | `backup_database` |
+| Planning and memory | `update_plan`, `memory_write`, `memory_search` |
+| Skills | `skill_list`, `skill_read`, `skill_write`, `skill_run`, `skill_list_files`, `skill_worker_run` |
+| MCP | `mcp_list_servers`, `mcp_list_tools`, `mcp_call` |
+
+Tool inputs use JSON Schema (`additionalProperties: false`), with risk levels ordered `read < write < ddl < destructive`. Command-private tools (such as `compose_report` and `submit_fix_plan`) are only available inside their command and are not counted among the 52 global tools.
+
+### Capability catalog: making boundaries explicit
+
+Beyond tools, the system prompt injects a **capability catalog** built from 13 contracts in `packages/core/src/capabilities/*.json`. Each contract declares what a feature is, which fields it requires, which states it has, and whether an Agent tool exists:
+
+- Features with a tool: name the tool, parameters, and state; the model calls it directly.
+- Features without a tool: compressed to "guide the user to Toolbox → X", with an explicit ban on inventing parameters or claiming completion.
+- The same contract drives Agent prompts, REST parameter validation, and UI form rendering.
+
+### Permissions: capabilities are gated
+
+| Mode | Behavior |
+|---|---|
+| Read-only | All writes rejected; read-only connections are enforced server-side |
+| Ask | Reads run directly; writes and DDL need approval; destructive operations always need approval |
+| Auto | Reads, writes, and DDL pass automatically; destructive operations still need approval |
+| Full-auto | Everything passes; destructive operations in production still require confirmation |
+
+Approvals support "allow once / allow for this session / always allow." Destructive operations in production always go through approval; MCP write tools require approval by default, and approval signatures include the path / URL, so approving one file never authorizes another path.
+
+### Context and memory
+
+- **Session memory**: Sessions are persisted and automatically compacted into summaries when they grow too long; archived sessions can be restored at any time.
+- **Long-term memory**: Seven types — facts, preferences, schema, episodes, procedures, glossary, and SQL examples. Hybrid lexical + scoped scoring retrieval; deduplication, decay, pinning, editing, and forgetting.
+- **Agent context**: Per-database table / column enablement, business aliases, descriptions, value meanings, manual relationships, glossary, and example SQL. All of it is injected into prompts and directly improves answer accuracy.
+- **Disabled-table guardrails**: Disabled tables are hidden from prompts, and object-level tools such as `run_sql`, `sample_rows`, `inspect_schema`, `profile_column`, and `manage_index` reject them at execution time; metadata enumeration is blocked too.
+- **Large-schema retrieval**: Above 150 tables or 2,500 columns, candidate-table retrieval activates, selects tables for the question, and adds one hop of related tables instead of stuffing the entire database into the prompt.
+- **SQL auto-repair**: On failure, the error, real column names, and edit-distance suggestions are fed back to the model for up to 2 automatic repairs; repaired SQL still goes through the full permission and approval path.
+- **`/init` handoff document**: Scans the current database and generates `AI_DB.md`, which later conversations load automatically; generated sections refresh on every `/init`, while manually written sections are preserved.
+
+### Models and reasoning
+
+Model configuration is **provider-centric**, not model-centric:
+
+- Configure an API endpoint and key once per provider, then attach multiple models to it;
+- Each model can define context window, max output, image input, and reasoning effort;
+- Switch the current model and effort from the bottom of the AI composer without leaving the workspace;
+- Supports **Local (offline)**, **Anthropic Messages API**, and **OpenAI-compatible endpoints** (DeepSeek / Qwen / Ollama / vLLM, etc.);
+- Keys are stored encrypted. Without a key, the built-in Local Reasoner still demonstrates queries, table creation, indexes, backups, exports, and memory.
+
+### Execution guardrails
+
+- The Bridge binds to `127.0.0.1` by default; mobile pairing issues revocable device tokens.
+- Static SQL risk classification, automatic LIMIT, multi-statement statements disabled by default, and read-only enforcement.
+- Automatic backup before destructive operations (configurable); every operation and approval is written to the audit log.
+- The Agent and manual operations share the same executor and policy layer; there is no bypass.
+- Skills run in a declarative permission sandbox; external MCP processes require explicit configuration; the built-in filesystem / Git / Web servers enforce directory allowlists, domain restrictions, and size limits.
+
+## Reports and command workflows
+
+The Agent's main path is not only free-form chat. AiDB distills high-frequency business actions into commands: a command defines the goal and the deliverable, while the Agent gathers evidence from the real database, executes, and organizes the conclusion. Parameters are inferred from semantics, context, and the existing schema rather than stacked forms. Commands run inside the conversation on desktop; mobile provides equivalent command workflows.
+
+A command is not a menu — it is a task contract that defines the risk ceiling, available tools, execution method, and final artifact. Every Agent run leaves steps, evidence, and a rerunnable result.
+
+| Command | Purpose | Output |
+|---|---|---|
+| `/report` | Builds a conclusion-first business report for a topic, time range, and audience; numbers carry same-definition baselines | A report that can be saved, refreshed, and exported to Excel / PPT |
+| `/compare` | Same-definition comparison across two periods, groups, queries, or data sources | Comparison conclusions, metrics, and charts |
+| `/diff` | Schema differences between two databases and target-dialect DDL | A schema difference list that can be confirmed and synchronized |
+| `/recon` | Row-level reconciliation between two sources, including SQL tables and Redis key spaces | Count / key-level / field-level differences with executable fixes |
+| `/fix` | Database health audit, repair plan, and safe execution | Audit summary, risk grading, repair SQL, backup, and verification |
+| `/ask` | Talk to the Agent directly without starting a command | Free-form Q&A |
+| `/init` | Scans the current database and generates an `AI_DB.md` handoff document | Engines and scale, business map, core table handbook, join paths, metric definitions, performance pitfalls, and a full inventory |
+
+![Report workspace](docs/screenshots/readme/reports.png)
+
+Reports and artifacts are persisted:
+
+- **Reports**: summary, 2–5 sections, per-section conclusions, metric baselines, charts, tables, and action items; save and rerun to refresh.
+- **Artifacts**: reports, comparisons, schema diffs, reconciliations, and audits all have `artifact + run` history; every run's status and results are visible.
+- **Export**: reports support XLSX / PPTX; installing the PPT Master Skill enables native AI-generated PPTX.
+- **Scheduled runs**: artifacts can be bound to a fixed interval, rerun automatically, and push summaries to notification channels.
+- **Audit loop**: every issue found by an audit or quality check comes with executable SQL that can open in the editor; repairs follow backup, dry-run, approval, and verification.
+
+## The workbench
+
+The workbench is not an accessory to the Agent — it is the reality the Agent reasons about. Connections, object tree, data, SQL, designer, dashboards, and reports form an execution surface the Agent can observe, operate, and verify; users start tasks, inspect the process, and take over results in the same interface.
+
+### Welcome: home for the current database
+
+![Welcome page: tables, audit summary, and AI suggestions for the current database](docs/screenshots/readme/welcome.png)
+
+The first screen is the workbench for the **current connection + current database**, not a global dashboard:
+
+- **Current database header**: connection name, database name, engine, environment tag, read-only marker, table / view / estimated-row counts; multi-database connections can switch the current database in place.
+- **What is in this database**: tables sorted by row count, with column counts, row counts, and no-primary-key markers; views are labeled separately.
+- **Audit summary**: primary-key coverage / missing keys, empty tables, and row-estimate coverage, directly below the table list.
+- **What you can do next**: clickable AI suggestions generated from the current schema (trends, grouped statistics, Top N, referential integrity, etc.) that open the Agent.
+- **AI shortcuts**: database audit, distill business definitions, new query, open dashboard; an empty database offers "let AI create tables."
+- **Recently run**: recent queries filtered to the current database; click to load one into the SQL editor.
+- **Scope separation**: the home page and the Agent each target their own database; when they differ, the UI says so and offers one-click alignment.
+
+### Main workspace
+
+The main workspace is a high-density, Navicat-style environment:
+
+- **Ribbon**: connections, new query, tables, views, functions, users, other, query, backup, automation, models, and dashboards — 12 entry points.
+- **Tabbed workspace**: data, query, designer, relationship diagram, and dashboard each get a tab; right-click to close, close others, or close all.
+- **Command palette**: `⌘/Ctrl + K` to search or run commands, open connections, run backups, and switch themes.
+- **Draggable layout**: the sidebar and AI panel can be resized and collapsed; the AI panel expands to 58% width.
+- **Status bar**: Bridge status, current connection and database, current tab, current model, and connection count.
+- **Theme and language**: dark / light / follow system, Chinese / English switched instantly.
+- **Auto-refresh**: the Bridge emits `schema_changed`; the object tree, data page, and designer invalidate and refresh after schema changes. When the designer detects a concurrent change, it offers to reload or keep local edits.
+
+Common shortcuts:
+
+| Shortcut | Action |
+|---|---|
+| `⌘/Ctrl + K` | Command palette |
+| `⌘/Ctrl + T` | New query |
+| `⌘/Ctrl + B` | Show / hide the connection sidebar |
+| `⌘/Ctrl + Shift + A` | Show / hide the AI assistant |
+| `⌘/Ctrl + Shift + L` | Focus the AI composer |
+| `⌘/Ctrl + W` | Close the current tab |
+| `⌘/Ctrl + ,` | Open settings |
+| `F5` | Refresh the current connection schema |
+| `⌘/Ctrl + Enter` | Run the current statement in the query page |
+
+## Connections and engines
+
+41 engines are not a support list — they are 41 places the Agent can enter. Connection definitions, protocol capabilities, read-only rules, and SSH boundaries are shared exactly between users and the Agent; the Agent gets no looser entry point.
+
+The connection form switches default port, database field, SSL / SSH capability, and test method per engine.
+
+- **Connection properties**: name, color, environment tag (DEV / STG / PROD), group, notes, read-only, SSL, and SSH tunnel (password or private key).
+- **Credential security**: connection passwords, SSH private keys, model keys, notification webhooks, and MCP environment variables are encrypted with AES-256-GCM; list APIs return redacted information only.
+- **Test connection**: validates driver, network, and authentication before saving.
+- **Read-only connections**: writes are blocked by the Bridge server-side, for both the Agent and manual operations; the status bar and connection tree mark them.
+- **Connection / database memory**: each connection remembers its last database and sidebar expansion state and restores them on switch; the app never expands or switches to a database the user did not choose.
+- **No credential distribution**: mobile reads connection configuration only; database passwords and SSH private keys are never sent to the phone.
+
+![New connection and engine catalog](docs/screenshots/readme/engines.png)
+
+### 41 supported engines
+
+| Family | Engines |
+|---|---|
+| File / embedded | SQLite, DuckDB |
+| MySQL protocol | MySQL, MariaDB, OceanBase, TiDB, PolarDB, TDSQL, GBase 8a, Apache Doris, StarRocks, GreatSQL, GoldenDB |
+| PostgreSQL protocol | PostgreSQL, TimescaleDB, CockroachDB, KingbaseES, openGauss, GaussDB, HighGo, Vastbase, IvorySQL |
+| Enterprise / columnar | SQL Server, Oracle (thin), ClickHouse, DM8 |
+| Document | MongoDB |
+| Key-value | Redis |
+| Graph | Neo4j, Memgraph, FalkorDB, ArangoDB |
+| Vector | Qdrant, Milvus, Weaviate |
+| Search | Elasticsearch, OpenSearch |
+| Wide-column | Cassandra, ScyllaDB |
+| Time-series | TDengine, InfluxDB |
+
+Protocol aliases reuse the same driver but keep their own default ports and capability boundaries: DM8 uses the official `dmdb`, DuckDB uses a file driver, and OceanBase currently connects in MySQL mode only. Object tree, query language, DDL, backup, user management, and transactions are trimmed per engine; unsupported features are explicitly disabled instead of offering a button that will fail.
+
+### Non-relational workbenches
+
+- **MongoDB**: collection browsing, sampled field inference, `collection / op / filter / pipeline` JSON queries, document writes, single-document editing, CSV import, collection and index creation/deletion, and TTL / unique / sparse indexes.
+- **Redis**: DB index switching, SCAN key browsing, String / Hash / List / Set / ZSet viewing, command console, and key creation.
+- **Cassandra / ScyllaDB**: keyspace / table browsing and a CQL console.
+- **Neo4j / Memgraph / FalkorDB / ArangoDB**: node label and relationship type browsing, Cypher / AQL console, and a force-directed graph view.
+- **Qdrant / Milvus / Weaviate**: collection and dimension browsing, vector search panels; collection lifecycle, payload indexes, and field expansion are exposed per engine capability.
+- **Elasticsearch / OpenSearch**: index / mapping browsing, `_search` JSON DSL, document writes, and index management.
+- **TDengine**: super-table / sub-table browsing and a SQL console.
+- **InfluxDB**: InfluxDB 3 SQL queries and a line-protocol write panel.
+- **PostgreSQL + pgvector**: vector search panel and embedding configuration.
+
+## Object tree and database operations
+
+The object tree is both the user's map and the Agent's directory. It organizes connections, databases, schemas, tables, views, functions, and backups into one navigable object model; whatever a user does through the context menu, the Agent does through the same objects and executor.
+
+The tree is organized as **connection → database / schema → table / view**, with fixed entry points for functions / stored procedures, queries, and backups.
+
+- **Fast location**: search connections or objects, collapse by group, and remember expansion state; tables and views are grouped separately, with estimated row counts shown directly in the tree.
+- **Database context menu**: close, edit / create / drop database, new table, new query, command column, run SQL file, dump SQL, reverse engineer to model, open dashboard, find in database, refresh.
+- **Table context menu**: open, new query, design, new table, rename, copy (structure only / structure + data), view DDL, create shortcut (Windows), print table, maintain, object information, set privileges, import / export wizard, truncate, drop, reverse engineer to model, AI explain, AI data quality.
+- **View context menu**: data, new query, view DDL, print, drop view, AI explain this view.
+- **Connection context menu**: edit, test, refresh, new query, new table, design, relationship diagram, AI database audit, copy name, delete.
+- **Create / drop database**: executed per engine capability; MySQL / MariaDB do not support renaming databases, SQLite / Oracle do not support creating or dropping databases, and the UI explains why.
+- **Entry points outside the tree**: new connection, relationship diagram, dashboard, and refresh at the bottom; the Ribbon items "Tables / Views / Functions / Users / Other / Automation" open the corresponding workspaces.
+
+### Database and table operations
+
+- **Table maintenance**: analyze, optimize, check, repair, and reclaim space, shown per engine capability.
+- **DDL view and copy**: both tables and views expose their DDL.
+- **Copy table**: structure only, or structure + data.
+- **Truncate / drop**: dangerous operations require a second confirmation, and production forces approval.
+- **Import / export wizard**: the data page supports import preview and column mapping; export supports CSV / JSON / SQL / XML / XLSX.
+- **Backup and restore**: logical SQL dump; restore from Settings → Data & Backups; destructive operations can back up automatically (on by default).
+
+## Data grid
+
+![Data grid, filters, and row operations](docs/screenshots/readme/data.png)
+
+The data page is where users verify Agent results and where they edit data by hand. Both share the same pagination, filtering, sorting, and write semantics: when the Agent says "3 rows changed," the user can see those 3 rows in the same grid.
+
+The data page is not a read-only table but a grid for everyday data maintenance:
+
+- **Browsing**: row numbers, pagination, page size, record range and page number, double-click / form editing, text view, and form view (row-by-row editing).
+- **Location**: WHERE filtering, a visual filter builder, a multi-column sort dialog, and safe single-row location by primary key.
+- **Editing**: add row, delete row, multi-row selection, copy / paste (TSV), copy selected rows to the end of the table, batch delete, and find & replace (preview the match count before executing).
+- **Column management**: hide columns, restore all columns, and auto-fit column width and content.
+- **Non-relational**: MongoDB document editing, Redis key-value panels, vector search, and line-protocol writes.
+- **Import**: CSV / TSV / TXT / JSON / XML / XLSX, with delimiter, header row, preview, and column mapping; up to 5,000 rows per batch, inserted in bulk.
+- **Export**: CSV / JSON / SQL / XML / XLSX; large tables export up to a configurable limit.
+- **Print**: print preview, printable from the browser / Electron, or saved as PDF.
+- **Error handling**: a failed write preserves the original error and the current edit state; data is never silently dropped.
+
+## SQL workbench
+
+![SQL query and chart](docs/screenshots/readme/query-chart.png)
+
+SQL remains the hard currency of database work. AiDB does not hide SQL; it makes SQL a language the Agent and the user edit and verify together. Statements written by the Agent can return to the editor, and SQL selected by the user can be handed to the Agent for explanation or optimization at any time.
+
+- **Editor**: CodeMirror 6 with dialect highlighting (SQLite / MySQL / PostgreSQL / SQL Server / Oracle / ClickHouse; standard SQL elsewhere) and autocomplete for the current connection's tables and columns.
+- **Execution**: `⌘/Ctrl + Enter` runs the current statement, or only the selection when text is selected; full scripts, multiple result sets, and a messages panel; optional auto-LIMIT and multi-statement switches.
+- **Connection and database**: switch both inside the page, with completion based on the current database schema.
+- **Transactions**: engines supporting `BEGIN / COMMIT / ROLLBACK` can start, commit, and roll back inside the page; the transaction stays on one Bridge-side connection.
+- **Results**:
+  - Table results with copy, multiple result sets, and export to CSV / JSON / SQL / XML / XLSX;
+  - Chart results with bar / stacked bar / line / pie / scatter / heatmap / radar, X / Y switching, comparison columns, dual axes, CSV / PNG export, zoom, and the underlying SQL;
+  - Graph database results automatically switch to a graph view;
+  - Query results pin to the current database's dashboard in one click.
+- **Assistance**: format SQL, execution plan, query history (search / favorite / reload), SQL snippet library, save / open `.sql` files, and a visual query builder.
+- **AI Copilot**: with SQL selected, "AI explain" or "AI optimize" sends it to the Agent, which returns rewritten SQL, precise index DDL, and verification queries.
+- **Multi-language modes**: MongoDB switches to MQL JSON, Redis to command mode, graph databases to Cypher / AQL, Cassandra to CQL, search to `_search` DSL, and vector databases to vector-search JSON; SQL-only tools are hidden.
+
+## Table designer and relationship diagram
+
+A schema change is not a single DDL statement; it is an engineering action that needs preview, confirmation, and pre-execution review. The designer turns columns, indexes, foreign keys, triggers, and options into a reviewable model, while the relationship diagram maps dependencies between tables.
+
+- **Visual table design**: seven tabs — columns, indexes, foreign keys, triggers, options, comments, and SQL preview.
+- **Live DDL preview**: changing a column, type, default, nullability, comment, or index generates target-dialect DDL in real time for review before execution.
+- **Concurrent schema changes**: when an external change is detected, the designer offers to reload or keep local edits, preventing silent overwrites.
+- **Relationship diagram**: a read-only ER view based on foreign keys, with schema cards and edges; click a table to open its data; export to SVG.
+- **Model entry points**: reverse engineer to model from a connection / database / table context menu.
+
+## Dashboard
+
+![A live dashboard for every database](docs/screenshots/readme/dashboard.png)
+
+The dashboard turns the Agent's analysis from a one-off answer into cards that stay observable. It stores SQL, not screenshots; opening it renders the last snapshot first, then reruns in the background so conclusions keep pace with the database.
+
+The dashboard is a **frequently asked questions panel for this database**, not a BI canvas:
+
+- **Per-database isolation**: scoped to `connectionId + database`, one board per database.
+- **Live cards**: cards store SQL, not screenshots; opening renders the last result snapshot, then re-executes in the background.
+- **AI drafts vs pinned cards**: AI-generated cards are drafts (`pinned = 0`) and can be discarded in bulk; user-pinned cards (`pinned = 1`) are never overwritten by AI.
+- **Three sources**: ask AI for a batch, import from favorite queries, or write SQL manually; one sentence can generate a single card and a trial run.
+- **Board controls**: all time / last 7 days / last 30 days / last 90 days / last year; scheduled refresh (5 minutes / 30 minutes / 2 hours / daily); per-card refresh, widen / narrow, pin, and delete.
+- **Export for reporting**: turn current card results into a paginated report (PPTX), or use `/report` for a fuller business report.
+- **Read-only guardrails**: dashboard SQL must be read-only, auto-LIMIT applies, disabled tables are blocked at execution, and all card metadata is written only to `~/.aidb`, never to the target database.
+
+## Toolbox
+
+The toolbox lives under the Ribbon's "Other" tab; all 13 modules share the same Bridge and permission model. Each module has a capability contract declaring fields, types, constraints, and states, which simultaneously drives the Agent capability catalog, REST validation, and UI form rendering.
+
+This means the Agent does not merely "see that these buttons exist"; it knows which parameters each module needs, which states it returns, and which actions the user must perform personally. Capability contracts separate "can the model use it" from "does the feature exist," preventing the model from inventing a nonexistent API.
+
+| Module | Capability | Agent availability |
+|---|---|---|
+| Reports | Conclusion-first reports by topic, time range, and audience; save, refresh, export Excel / PPT | `/report` command + command-private tools |
+| Database search | Full-text search across object names / comments and text data columns; open results directly | `search_objects` (object names only) |
+| Query builder | Select tables, joins, columns, WHERE, sort, and row limit; generate SQL into the editor | No dedicated tool (`run_sql` equivalent) |
+| Schema compare & sync | DDL diff between two connections, target-dialect SQL, execute after confirmation | `schema_diff` (comparison only) |
+| Data comparison | Row-count + primary-key fingerprint differences; per-table replace sync | No dedicated tool (`recon_data` covers row-level reconciliation) |
+| Data transfer | Copy table schema and data across connections, auto-create tables, append / clear-then-write | `transfer_data` |
+| Data generation | Generate 1–5,000 test rows from column semantics, types, and foreign keys; preview then insert | `generate_data` |
+| Server monitoring | Engine metrics and session list, refreshed every 10s; kill sessions | No |
+| Automation | Scheduled SQL / backup tasks, minimum 30s interval; run now, enable / disable, status | No |
+| Users and privileges | Account / role lists, create, drop, grant | No |
+| Data dictionary | Markdown / DDL / JSON export with column types, defaults, and comments | No |
+| Advanced objects | Triggers / functions / stored procedures / sequences / events and their definitions | No |
+| Agent context | Table / column enablement, business aliases, descriptions, manual relationships, and glossary | Read implicitly injected; writes intentionally not exposed |
+
+Features without an Agent tool never let the model pretend to execute: the capability catalog requires it to guide the user to the corresponding toolbox module.
+
+## Mobile
+
+The Agent should not be pinned to the desktop. Mobile brings the same Agent to the phone through the Bridge: the same connections, sessions, memory, models, and permissions, so work can continue on a commute, in a meeting, or in the field.
+
+Mobile is not a shrunken desktop — it is a complete pocket workspace.
+
+<p align="center">
+  <img src="docs/screenshots/readme/mobile-chat.png" width="250" alt="Mobile AI conversation" />
+  <img src="docs/screenshots/readme/mobile-tools.png" width="250" alt="Mobile toolbox" />
+  <img src="docs/screenshots/readme/mobile-data.png" width="250" alt="Mobile data grid" />
+</p>
+
+- **Pairing**: QR code, 6-digit pairing code, `aidb://pair` deep link, native mDNS discovery / same-network scan; credentials live only in secure device storage.
+- **Top-level navigation**: Chat / Data / Tools / Me.
+- **Chat**: model and reasoning effort, permission mode, database switching, @ table references, image attachments, session search / rename / delete / archive, and memory CRUD.
+- **Data**: connection + database selection, table / card views, horizontal scrolling for all columns, edit / delete by primary key, add rows, and pagination.
+- **Tools (12 database tools)**: SQL query, table schema, import / export, backup, dashboards, database search, data dictionary, server monitoring, query history, audit log, reports and artifacts, and users and privileges.
+- **SQL**: multi-statement switch, result table, export to CSV / JSON / XML / SQL / XLSX, and save as a dashboard card.
+- **Table schema**: view columns / indexes, add columns, create / drop indexes, rename, truncate, drop table, and visual table creation.
+- **Import / export**: CSV import; CSV / JSON / XML / SQL / XLSX export; web download and native sharing.
+- **Backup**: backup list, back up now, and restore (with confirmation).
+- **Dashboards**: card list, refresh, mini trends, and delete; card layout editing remains on desktop.
+- **Reports and artifacts**: view spec / run results, export XLSX / PPTX, and delete.
+- **Command workflows**: render data sources, parameters, enums / booleans from the command definition; start and poll for results.
+- **Me**: connection list, memory, paired devices, theme (dark / light / follow system), language (Chinese / English), Skills / MCP switches, and unpair.
+- **Charts**: bar / line / pie / scatter / heatmap / radar with the same palette and heatmap scale as desktop.
+- **Read-only by default**: mobile starts in read-only mode and can switch explicitly; database credentials are never sent to the device.
+
+> Browser QR scanning requires HTTPS (or localhost); for LAN HTTP pages, enter the Bridge address manually or put the Bridge behind a TLS reverse proxy.
+
+## Settings
+
+![Settings: model providers, model profiles, and embeddings](docs/screenshots/readme/settings.png)
+
+Settings determine the Agent's field of view, force, and boundaries: which model thinks, how many steps it can take, whether it remembers automatically, whether it backs up before writes, which Skills and MCP servers are available, and where search results come from. This is not a preferences page — it is part of the Agent's behavior.
+
+Settings has 11 sections:
+
+| Section | Contents |
+|---|---|
+| Appearance | Dark / light / follow system, Chinese / English |
+| Editor | Default row limit, query timeout, history retention count / days, multi-statement switch, auto-LIMIT |
+| Models | Providers and multiple models, API endpoint / key, model profiles (context, output, images, reasoning effort), temperature, max steps, auto-memory, follow-up suggestions, backup before writes, large-schema retrieval, embeddings |
+| Notifications and bots | Outbound Feishu, WeCom, DingTalk, Slack, Discord, Telegram, QQ (OneBot); inbound read-only Q&A for Feishu / OneBot |
+| Agent Skills | Enable / disable, install, inspect files, run tasks, secrets, and output files |
+| MCP and tools | stdio MCP servers, 3 built-in servers, and the Agent tool catalog |
+| Capability contracts | Fields, states, and tool mappings for the 13 contracts |
+| Web search | Enablement, keys, proxies, health telemetry, and probes for 12 search backends |
+| Bridge | Mobile pairing QR code / code, paired devices, and revocation |
+| Data and backups | Recent audit, export audit CSV, backup list, and restore |
+| About | Version, license, and dependencies |
+
+![Light theme](docs/screenshots/readme/light.png)
+
+## Integrations: notifications, Skills, MCP, web search
+
+The Agent's value extends beyond the database. Notifications, Skills, MCP, and web search extend its reach into external systems while keeping permissions and audit inside the Bridge.
+
+### Notifications and bots
+
+- **7 outbound platforms**: Feishu, WeCom, DingTalk, Slack, Discord, Telegram, and QQ (OneBot HTTP).
+- **Inbound read-only Q&A**: Feishu event callbacks and OneBot message events can trigger a read-only Agent and reply in place; WeCom inbound is not supported yet.
+- **Scheduled reports**: after an artifact completes, a summary is sent to the bound channels; a failure in one channel does not affect the others.
+- **Audit**: every send records `notification.send`.
+
+### Agent Skills
+
+- **Built-in skills**: report writing, SQL review, and data dictionary; installed automatically on first launch.
+- **Import methods**: local directory, zip, Git repository, or npm package; each Skill contains a `SKILL.md`.
+- **Execution**: the Skill Host provides a declarative sandbox for file I/O, processes, Python packages, and network permissions; Worker sub-agents, secret injection, and output files are supported.
+- **PPT Master**: after installing the third-party Skill with one click, reports can generate native PPTX with brand templates and quality gates.
+- **Switch**: Settings → Agent Skills master switch; when off, skills remain manageable but the Agent no longer receives Skill tools.
+
+### MCP
+
+- **External MCP servers**: stdio JSON-RPC, lazy start, process reuse; tool discovery and invocation are supported.
+- **3 built-in servers**:
+  - `builtin-filesystem`: directory allowlist, realpath validation, read/write limits; `grep_files` prefers ripgrep;
+  - `builtin-git`: read-only `status / log / diff / show` with a fixed argument allowlist;
+  - `builtin-web`: `fetch_url` / `web_search`, blocking loopback, private network, link-local, and cloud metadata addresses.
+- **AiDB as an MCP server (outbound)**: `scripts/aidb-mcp-server.mjs` exposes AiDB's read-only tools to external MCP clients.
+- **Tool catalog**: Settings → MCP and Tools lets you search and browse all 52 Agent tools by group, including their risk constraints.
+
+### Web search
+
+12 backends fan out concurrently:
+
+- No key required: Exa, Parallel (MCP), Bing (RSS), DuckDuckGo (HTML, proxy required), SearXNG (self-hosted);
+- Key required: Brave, Tavily, Serper, Mojeek, DeepSeek, Anthropic, OpenAI.
+
+Result URLs are deduplicated and relevance-reranked; failures are isolated per backend; each backend has health telemetry and a one-click probe; failure reasons distinguish DNS, timeout, proxy, and other issues. Only Exa / Parallel / Bing are enabled by default after reachability testing; the rest can be enabled as needed.
+
+## Architecture
+
+```
+apps/desktop     Electron 45 + React 18 + Vite 6 (also runs in a plain browser)
+apps/gateway     Bridge: drivers, metadata database, REST / SSE / WS, Agent host, scheduler
+apps/mobile      Expo SDK 52 / React Native 0.76 (Android / iOS / Web)
+packages/core    Platform-agnostic core: SQL classification and dialects, DDL, Agent runtime, tools, permissions, memory, providers, capability contracts
+docs/            Design documents, verification reports, screenshots
+scripts/         Documentation contracts, seed data, E2E, QA, standalone MCP server
+```
+
+- **Bridge**: the local gateway managing connections, drivers, metadata, executor, and the Agent runtime; bundled with desktop and deployable independently.
+- **Metadata**: `~/.aidb/aidb.db` by default (connections, sessions, memory, artifacts, dashboards, audit, Skills, MCP, notifications, devices); sample databases in `~/.aidb/demo`; exports and backups in `~/.aidb/exports` / `~/.aidb/backups`.
+- **Transport**: REST + SSE (desktop / web) + WebSocket (mobile and schema-change events).
+- **Execution**: manual operations, Agent tools, command workflows, dashboards, and reports share the same ConnectionManager / ToolExecutor / policy layer.
+- **Mobile**: never connects to databases directly; it reaches the Bridge over REST / WS, and connection credentials stay in the Bridge.
+
+Deploy the Bridge independently with Docker:
 
 ```bash
-cd apps/mobile
-npx expo prebuild --platform android   # 已提交 android/ 工程；必要时可重新生成
-# 设置 ANDROID_HOME，或在 android/local.properties 写 sdk.dir
-cd android && ./gradlew assembleDebug
-# 产物：android/app/build/outputs/apk/debug/app-debug.apk
+docker build -f apps/gateway/Dockerfile -t aidb-bridge .
+docker run -p 8787:8787 -v aidb-data:/data \
+  -e AIDB_TOKEN=change-me \
+  -e AIDB_PUBLIC_URL=https://db.example.com \
+  aidb-bridge
 ```
 
-> 已在本机使用 Java 21 + SDK 35 成功构建 debug APK（119 MB）。原生工程固定 Kotlin 1.9.24 以匹配 Expo Compose 编译器。
+## Commands
 
-iOS：`ios/` 原生工程已生成。在 macOS 上执行 `cd ios && pod install` 后用 Xcode 打开 `AiDBStudio.xcworkspace`，或使用 `eas build -p ios`。
+| Command | Description |
+|---|---|
+| `npm run dev` | Bridge (tsx hot reload) + Vite UI |
+| `npm run dev:desktop` | Bridge + Vite + Electron |
+| `npm run seed` | Create / validate the built-in sample SQLite database |
+| `npm run seed:business` | Generate a retail business database and mirror (with schema drift and row-level differences) |
+| `npm run typecheck` | Typecheck all four workspaces |
+| `npm test` | Core unit tests + Bridge integration tests |
+| `npm run build` | Core / Bridge bundle / desktop UI / mobile web |
+| `npm run build:desktop` | Electron installer (Windows NSIS / macOS dmg / Linux AppImage) |
+| `npm run build:mobile` | Expo web export |
+| `npm run e2e` | Headless browser: desktop web + mobile web + Electron shell |
+| `npm run verify:docs` | Design document contracts |
+| `npm run verify:controls` | Form control audit |
+| `npm run verify` | Docs contracts → controls → types → tests → build → E2E |
+| `npm run bench` | Agent accuracy benchmark |
 
-配对步骤（支持扫码、`aidb://pair` 深链、mDNS 原生发现 / 同网段扫描）：
+## Security model
 
-1. 桌面端打开 **设置 → Bridge → 为移动端配对**，获得二维码与 6 位码。
-2. 手机打开移动端，点 **扫码配对** 扫描二维码（自动填入 Bridge 地址与配对码）；也可手动输入地址与配对码。
-3. 连接成功后，移动端与桌面共享连接、会话与记忆。
+AiDB builds security into the Agent rather than patching it afterward. Read-only mode, approvals, backups, and audit are hard executor boundaries, not prompt-level suggestions.
 
-对话页支持模型/思考档位/权限模式切换与数据库选择；底部为 4 个一级入口：对话 / 数据 / 工具 / 我的（连接、记忆、设置收进「我的」）；「工具」提供 SQL 查询、数据增删改、表结构、导入导出、备份、仪表板、搜索、数据字典、服务器监控、查询历史、审计、报告产物、用户与权限（账户/授权/删除）、Skills/MCP 开关与图片附件；会话支持归档/恢复；设置里可管理已配对设备、切换深/浅/跟随系统主题；配对支持扫码、深链与同网段发现；图表支持柱/折线/饼/散点/热力/雷达；界面支持中文 / English 即时切换。
+- **Network boundary**: the Bridge binds to `127.0.0.1` by default; mobile exchanges a 6-digit pairing code for a revocable device token; `/pair/claim` is rate-limited by source.
+- **Credentials**: connection passwords, SSH private keys, model keys, webhooks, and MCP environment variables use AES-256-GCM; a standalone Bridge derives its key from `AIDB_SECRET`.
+- **Database boundary**: read-only connections are enforced server-side; SQL is statically classified; auto-LIMIT applies; multi-statement requests are denied by default; destructive operations in production require approval.
+- **Agent boundary**: no shell; filesystem restricted by directory allowlists; network limited to model APIs / search backends / web MCP; every tool call passes through the policy layer.
+- **Skill / MCP boundary**: Skills run in a declarative permission sandbox; external MCP servers require explicit configuration; the built-in filesystem / git / web servers enforce path, command, domain, and size limits.
+- **Traceability**: manual and Agent operations both write to the audit log; approvals, duration, risk level, and affected SQL are searchable and exportable to CSV.
 
-> 浏览器扫码需要 HTTPS（或 localhost）；局域网 HTTP 页面请手动输入，或把 Bridge 放到 TLS 反向代理之后。
-
-反向代理（例如 Nginx 将 `https://db.example.com` 转到 `127.0.0.1:8787`）：
+Reverse proxy example (Nginx forwarding `https://db.example.com` to `127.0.0.1:8787`):
 
 ```nginx
 location / {
@@ -172,96 +601,42 @@ location / {
   proxy_set_header Upgrade $http_upgrade;
   proxy_set_header Connection "upgrade";
   proxy_read_timeout 900s;
-  proxy_buffering off; # Agent 的 SSE 流
+  proxy_buffering off; # Agent SSE stream
 }
 ```
 
-启动 Bridge 时设置 `AIDB_PUBLIC_URL=https://db.example.com`，配对二维码/提示即可直接使用公网地址；手机也可手动填写该地址 + 配对码。
+When starting the Bridge, set `AIDB_PUBLIC_URL=https://db.example.com` so pairing QR codes and suggested addresses use the public URL directly.
 
-## 命令
+## Design boundaries
 
-| 命令 | 说明 |
-|---|---|
-| `npm run dev` | Bridge（tsx 热重载）+ Vite UI |
-| `npm run seed` | 创建 / 校验示例 SQLite 库 |
-| `npm run typecheck` | 四个 workspace 全量类型检查 |
-| `npm test` | Core 单测 + Bridge 集成测试 |
-| `npm run build` | Core / Bridge bundle / 桌面 UI / 移动 Web |
-| `npm run build:desktop` | Electron 安装包（Windows NSIS / macOS dmg / Linux AppImage） |
-| `npm run build:mobile` | Expo Web 导出 |
-| `npm run e2e` | 无头浏览器：桌面 Web + 移动 Web + Electron Shell |
-| `npm run verify` | 文档契约 → 类型 → 测试 → 构建 → E2E |
-| `npm run verify:docs` | 设计文档契约（136 项） |
+- AiDB Studio is a Navicat-style database client, not a BI platform: dashboards are per-database question panels, without a free-form drag canvas, drill-down linking, or cross-source JOINs.
+- Mobile is a pocket workspace: connection credentials are never distributed, and complex layout editing and some administration capabilities remain on desktop.
+- Graph, vector, search, time-series, and wide-column engines work in their own query languages rather than forcing SQL semantics; unsupported DDL, backup, and user management are disabled.
+- Data edits currently commit immediately; cross-request transactions use `BEGIN / COMMIT / ROLLBACK` on engines that support them.
+- macOS installers and iOS IPAs require the corresponding host / EAS build; Windows / Linux packaging configuration is included.
 
-## 目录
+## Design documents
 
-```
-docs/                   设计文档 + 验证报告 + 截图
-packages/core/          平台无关内核：SQL、Agent、工具、权限、记忆、Provider
-apps/gateway/           Bridge：驱动、元数据库、REST/SSE/WS、Agent 宿主、Dockerfile
-apps/desktop/           Electron 45 + React 渲染层（也可纯浏览器运行）
-apps/mobile/            Expo React Native（Android / iOS / Web）
-scripts/                文档契约、种子、E2E、Electron 启动器
-```
-
-## 模型配置
-
-应用内 **设置 → Agent**：
-
-| Provider | 说明 |
-|---|---|
-| Local（离线） | 无 Key；覆盖结构、查询、建表、备份、导出、记忆等基础指令 |
-| Anthropic | `/v1/messages` + tools + SSE |
-| OpenAI Compatible | `/v1/chat/completions`，兼容 Ollama / DeepSeek / Qwen / vLLM |
-
-API Key 加密存储；也可用环境变量 `AIDB_API_KEY`（Bridge）覆盖。无 Key 时可随时回退 Local。
-
-## 安全模型
-
-- Bridge 默认仅监听 `127.0.0.1`；移动端配对生成可吊销的设备令牌；远程部署建议 TLS。
-- 连接密码 / SSH 私钥 / 模型 Key 使用 AES-256-GCM 加密；独立 Bridge 由 `AIDB_SECRET` 派生密钥。
-- 只读连接在服务端强制；SQL 静态分类；默认拒绝多语句；自动 LIMIT；生产环境破坏性操作强制审批。
-- 所有操作与审批写入审计日志；Agent 与手工操作使用同一套执行器与策略。
-
-## 已知限制（v0.3）
-
-- SQLite 完成真实集成；其余 7 种引擎的驱动与方言已实现并通过单测/编译，但本机无实例，未做服务器级集成验证（Oracle 为 thin 模式）。
-- SSH 隧道代码完整，未连接真实堡垒机验证。
-- 云端 Provider 的 SSE / tool-call 解析使用模拟流测试，未使用真实 API Key 发起调用。
-- 自动记忆在离线模式下为保守的显式规则抽取 + 会话摘要；云端模型的额外抽取调用未启用。
-- 结构同步覆盖建表、删表、加列 / 改列与索引；不做对象重命名推断，跨对象依赖按表 / 索引分层执行，复杂存储过程依赖未排序。
-- 数据对比使用行数 + 主键指纹，不做逐行内容校验 / 双向合并；同步方式为整表替换。
-- 自动化任务仅在 Bridge 运行时生效，不支持 cron 表达式与跨节点调度；最小间隔 30s。
-- 服务器监控与用户管理依赖账号权限，返回字段随引擎能力裁剪；SQLite 不支持用户管理。
-- SQL Server 暂不支持自动 EXPLAIN；ClickHouse 不支持独立二级索引（工具会返回明确提示）。
-- 图表支持柱状 / 堆叠 / 折线 / 饼 / 散点 / 热力 / 雷达；柱/折线可多列对比，单附加列可切右轴；热力需要两个分类列加一个数值度量，雷达需要 3–8 个同单位指标。
-- 导入支持 CSV（含分隔符 / 表头 / 列映射预览）；Excel 与 XML 仅导出，不导入。
-- 高级对象为只读查看，暂不支持可视化编辑触发器 / 存储过程。
-- 数据编辑当前即时提交；尚未提供 Navicat 式“开始事务 / 提交 / 回滚”的跨请求事务模式。
-- 数据库新建 / 删除 / 重命名为引擎相关能力：MySQL/MariaDB 不支持重命名数据库；SQLite 与 Oracle 不支持新建 / 删除数据库。
-- 表菜单中的打印、创建打开表快捷方式、管理组尚未实现；复制表拆分为“仅结构 / 结构+数据”两项。
-- “导入向导”当前打开表数据页后选择 CSV 文件，尚未做成独立的全屏向导；导出支持格式选择与向导式参数。
-- macOS 安装包、iOS IPA 需对应宿主系统 / EAS 构建；Android APK 构建结果见验证报告。
-- 移动端默认只读，写操作与工具箱未开放。
-- 明确不做（非目标）：报表设计器、云同步 / 团队协作、ER 模型反向编辑。
-
-## 设计文档
-
-- [产品总览](docs/00-product-overview.md)
-- [技术架构](docs/01-tech-architecture.md)
-- [功能规格](docs/02-feature-spec.md)
-- [UI/UX](docs/03-ui-ux-design.md)
-- [AI Agent](docs/04-ai-agent-design.md)
-- [数据模型与协议](docs/05-data-and-api.md)
-- [交付与验证](docs/06-delivery-and-verification.md)
-- [验证报告](docs/07-verification-report.md)
-- [Agent 准确率计划](docs/08-agent-accuracy-plan.md)
-- [多引擎架构](docs/09-multi-engine.md)
-- [真实 MySQL 只读回归](docs/10-real-mysql-readonly-regression.md)
-- [命令化 Agent 工作流](docs/11-command-workflows.md)
-- [机器人与 MCP 插件](docs/12-bots-and-mcp.md)
-- [Skill Host 设计](docs/13-skill-host-plan.md)
-- [仪表板设计](docs/14-dashboard-design.md)
+- [Product overview](docs/00-product-overview.md)
+- [Technical architecture](docs/01-tech-architecture.md)
+- [Feature specification](docs/02-feature-spec.md)
+- [UI/UX design](docs/03-ui-ux-design.md)
+- [AI Agent design](docs/04-ai-agent-design.md)
+- [Data model and protocol](docs/05-data-and-api.md)
+- [Delivery and verification](docs/06-delivery-and-verification.md)
+- [Verification report](docs/07-verification-report.md)
+- [Agent accuracy plan](docs/08-agent-accuracy-plan.md)
+- [Multi-engine architecture](docs/09-multi-engine.md)
+- [Real MySQL read-only regression](docs/10-real-mysql-readonly-regression.md)
+- [Command-driven Agent workflows](docs/11-command-workflows.md)
+- [Bots and MCP plugins](docs/12-bots-and-mcp.md)
+- [Skill Host design](docs/13-skill-host-plan.md)
+- [Dashboard design](docs/14-dashboard-design.md)
+- [Command scoping](docs/15-command-scoping.md)
+- [Capability contracts](docs/16-capability-contract.md)
+- [Welcome page design](docs/17-welcome-home-design.md)
+- [Home / Agent decoupling](docs/18-agent-home-decoupling.md)
+- [Schema change events](docs/19-schema-change-events.md)
 
 ## License
 

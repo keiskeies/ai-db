@@ -5,6 +5,7 @@ copyright: Copyright © 2026 AiDB
 directories:
   output: release
   buildResources: build
+icon: build/icon.png
 files:
   - dist/**/*
   - electron/**/*

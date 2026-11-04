@@ -26,8 +26,9 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Linking from 'expo-linking';
 import Zeroconf from 'react-native-zeroconf';
 import * as Sharing from 'expo-sharing';
-import Svg, { Circle, Defs, G, Line, LinearGradient, Path, Polyline, Rect, Stop, SvgXml, Text as SvgText } from 'react-native-svg';
+import Svg, { Circle, G, Line, Path, Polyline, Rect, SvgXml, Text as SvgText } from 'react-native-svg';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import brandMark from './assets/brand-mark.png';
 import {
   Archive,
   ArchiveRestore,
@@ -143,23 +144,9 @@ function Text(props: React.ComponentProps<typeof RNText>) {
   return <RNText {...props}>{children}</RNText>;
 }
 
-/** 与桌面端 .brand-mark 一致的固定品牌渐变，不随主题变化。 */
-function BrandMark({ size, radius: corner, fontSize }: { size: number; radius: number; fontSize: number }) {
-  const gradientId = `brandMark${size}`;
-  return (
-    <View style={{ width: size, height: size, borderRadius: corner, alignItems: 'center', justifyContent: 'center' }}>
-      <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ position: 'absolute' }}>
-        <Defs>
-          <LinearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
-            <Stop offset="0" stopColor={colors.brandA} />
-            <Stop offset="1" stopColor={colors.brandB} />
-          </LinearGradient>
-        </Defs>
-        <Rect width={size} height={size} rx={corner} fill={`url(#${gradientId})`} />
-      </Svg>
-      <Text style={{ color: colors.onBrand, fontWeight: '800', fontSize }}>AI</Text>
-    </View>
-  );
+/** 与桌面端 .brand-mark 同一份品牌资源，不随主题变化。 */
+function BrandMark({ size }: { size: number }) {
+  return <Image source={brandMark} style={{ width: size, height: size }} resizeMode="contain" accessibilityIgnoresInvertColors />;
 }
 
 /** 引擎官方 logo：与桌面 EngineIcon 同一套资源；暗色下反转接近黑色的 logo。 */
@@ -343,7 +330,7 @@ function Root({ themeMode, resolvedTheme, onThemeMode, locale, onLocale }: { the
   if (!ready) {
     return (
       <View style={styles.splash}>
-        <BrandMark size={48} radius={14} fontSize={17} />
+        <BrandMark size={48} />
         <ActivityIndicator color={colors.accent} style={{ marginTop: 16 }} />
       </View>
     );
@@ -538,7 +525,7 @@ function PairScreen({ onConnected }: { onConnected: (config: BridgeConfig) => vo
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.bg }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={[styles.pairWrap, { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 30 }]} keyboardShouldPersistTaps="handled">
-        <BrandMark size={64} radius={18} fontSize={23} />
+        <BrandMark size={64} />
         <Text style={styles.pairTitle}>AiDB Studio</Text>
         <Text style={styles.pairSubtitle}>移动端通过 Bridge 安全访问数据库。会话、记忆与桌面端同步。</Text>
 
@@ -1293,7 +1280,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
       <View style={[styles.topSafe, { paddingTop: insets.top }]} />
       <View style={styles.topbar}>
         <View style={styles.brandRow}>
-          <BrandMark size={30} radius={9} fontSize={11} />
+          <BrandMark size={30} />
           <View>
             <Text style={styles.brand}>AiDB Studio</Text>
             <Text style={styles.brandSub}>{provider} · {connected ? 'Bridge 在线' : '重连中…'}</Text>

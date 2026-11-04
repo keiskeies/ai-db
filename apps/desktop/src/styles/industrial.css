@@ -20,9 +20,7 @@ body {
   width: 20px;
   height: 20px;
   border-radius: 6px;
-  background: linear-gradient(140deg, var(--brand-a), var(--brand-b));
   box-shadow: 0 0 10px var(--glow-accent);
-  font-size: 9.5px;
 }
 .brand-name { font-size: 12px; font-weight: 700; letter-spacing: 0.15px; }
 .brand-sub { font-size: 9px; letter-spacing: 0.2px; }
