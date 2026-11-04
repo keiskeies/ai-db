@@ -1033,8 +1033,12 @@ details[open] > summary::before { transform: rotate(45deg); opacity: .7; }
 .statusbar .dot.off { background: var(--text-muted); }
 .statusbar .dot.warn { background: var(--warning); }
 .statusbar .sep { height: 12px; width: 1px; background: var(--border-subtle); }
-.toasts { position: fixed; right: 14px; bottom: 38px; z-index: 100; display: flex; flex-direction: column; gap: 8px; width: min(360px, 92vw); }
-.toast { border: 1px solid var(--border-strong); background: var(--bg-elevated); border-radius: var(--radius-md); box-shadow: var(--shadow-pop); padding: 9px 11px; display: flex; gap: 9px; align-items: flex-start; animation: slideUp .18s ease-out; }
+.toasts {
+  position: fixed; top: calc(var(--titlebar-h) + var(--ribbon-h) + 10px); left: 50%; transform: translateX(-50%);
+  z-index: 100; display: flex; flex-direction: column; align-items: stretch; gap: 8px; width: min(400px, 92vw);
+  pointer-events: none;
+}
+.toast { pointer-events: auto; border: 1px solid var(--border-strong); background: var(--bg-elevated); border-radius: var(--radius-md); box-shadow: var(--shadow-pop); padding: 9px 11px; display: flex; gap: 9px; align-items: flex-start; animation: dropIn .18s ease-out; }
 .toast .t-icon { margin-top: 1px; }
 .toast.success .t-icon { color: var(--success); }
 .toast.error .t-icon { color: var(--danger); }
@@ -1057,6 +1061,7 @@ details[open] > summary::before { transform: rotate(45deg); opacity: .7; }
 @keyframes skeleton { 50% { opacity: .45; } }
 @keyframes slideUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes slideIn { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
+@keyframes dropIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
 
 @media (max-width: 1240px) {
   /* 欢迎页的响应式规则见 home.css */
@@ -1156,7 +1161,7 @@ details[open] > summary::before { transform: rotate(45deg); opacity: .7; }
 
 /* ---------- Navicat-style ribbon ---------- */
 .ribbon {
-  flex: 0 0 68px; height: 68px; display: flex; align-items: center; gap: 2px;
+  flex: 0 0 var(--ribbon-h); height: var(--ribbon-h); display: flex; align-items: center; gap: 2px;
   padding: 4px 10px; border-bottom: 1px solid var(--border-panel);
   background: var(--bg-ribbon);
   overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
@@ -1200,7 +1205,7 @@ details[open] > summary::before { transform: rotate(45deg); opacity: .7; }
 .ribbon-btn[data-tone='lime'] .ribbon-icon svg { stroke: url(#rb-lime); }
 .ribbon-btn[data-tone='cyan'] .ribbon-icon svg { stroke: url(#rb-cyan); }
 .ribbon-btn[data-tone='fuchsia'] .ribbon-icon svg { stroke: url(#rb-fuchsia); }
-[data-density='compact'] .ribbon { flex-basis: 60px; height: 60px; }
+[data-density='compact'] { --ribbon-h: 60px; }
 [data-density='compact'] .ribbon-btn { min-width: 54px; height: 52px; }
 .tree-count { margin-left: auto; font-size: 9px; color: var(--text-muted); padding-right: 6px; }
 .folder-node { color: var(--text-secondary); font-weight: 500; }

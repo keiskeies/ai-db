@@ -279,7 +279,7 @@ body {
 .erd-node { box-shadow: 0 6px 18px rgba(0,0,0,.24); }
 .statusbar { height: 24px; flex-basis: 24px; font-size: 9.5px; gap: 9px; padding: 0 8px; }
 .statusbar .dot { width: 5px; height: 5px; box-shadow: 0 0 6px currentColor; }
-.toasts { bottom: 32px; right: 10px; width: min(340px, 92vw); }
+.toasts { width: min(340px, 92vw); }
 .toast { padding: 8px 10px; }
 .toast .t-title { font-size: 11px; }
 .palette input { height: 42px; font-size: 12.5px; }

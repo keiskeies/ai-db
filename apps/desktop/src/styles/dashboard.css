@@ -74,9 +74,8 @@
 .skill-text em { font-style: normal; font-size: 9px; color: var(--text-muted); line-height: 1.4; }
 .composer-perm-label { font-size: 9px; color: var(--text-muted); letter-spacing: 0.3px; }
 
-.toasts { left: 300px; right: auto; bottom: 32px; }
 @media (max-width: 1000px) {
-  .toasts { left: 14px; right: 14px; width: auto; }
+  .toasts { width: min(340px, calc(100vw - 28px)); }
 }
 
 /* ---------- 仪表板：跟着库走的活查询卡片 ---------- */
