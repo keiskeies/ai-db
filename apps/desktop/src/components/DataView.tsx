@@ -33,6 +33,7 @@ import { formatDuration } from '../lib/format';
 import { jsonToCsv, xmlToCsv } from '../lib/importConvert';
 import { xlsxToCsv } from '../lib/xlsx';
 import { xlsToCsv } from '../lib/biff';
+import { t as tr } from '../i18n';
 
 type DataTab = Extract<Tab, { kind: 'data' }>;
 
@@ -164,7 +165,7 @@ export function DataView({ tab }: { tab: DataTab }) {
       });
       setPage(result);
     } catch (err: any) {
-      setError(err?.message ?? '加载失败');
+      setError(err?.message ?? tr("加载失败"));
       setPage(null);
     } finally {
       setLoading(false);
@@ -187,7 +188,7 @@ export function DataView({ tab }: { tab: DataTab }) {
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const head = columns.map((column) => `<th>${escape(column.name)}</th>`).join('');
     const body = sourceRows.map((row) => `<tr>${row.map((cell) => `<td>${escape(typeof cell === 'object' && cell !== null ? JSON.stringify(cell) : cell)}</td>`).join('')}</tr>`).join('');
-    const scope = printRows ? (printRows.length < sourceTotal ? `预览前 ${printRows.length} 条（共 ${sourceTotal} 条）` : `全部 ${sourceTotal} 条`) : `当前页 ${sourceRows.length} 条（共 ${sourceTotal} 条）`;
+    const scope = printRows ? (printRows.length < sourceTotal ? tr("预览前 {0} 条（共 {1} 条）", [printRows.length, sourceTotal]) : tr("全部 {0} 条", [sourceTotal])) : tr("当前页 {0} 条（共 {1} 条）", [sourceRows.length, sourceTotal]);
     return `<!doctype html><html><head><meta charset="utf-8"><title>${escape(tab.table)}</title><style>body{font-family:system-ui,sans-serif;color:#111;margin:24px}h1{font-size:18px;margin:0 0 4px}.meta{font-size:11px;color:#555;margin-bottom:12px}table{border-collapse:collapse;width:100%;font-size:11px}th,td{border:1px solid #ccc;padding:4px 6px;text-align:left;vertical-align:top}th{background:#f1f2f3}</style></head><body><h1>${escape(tab.table)}</h1><div class="meta">${escape(tab.database ?? '')} · ${scope}</div><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></body></html>`;
   }, [columns, rows, tab.table, tab.database, total, printRows, printTotal]);
   const totalPages = Math.max(1, Math.ceil(total / limit));
@@ -295,7 +296,7 @@ export function DataView({ tab }: { tab: DataTab }) {
   const copySelected = async () => {
     const indices = selectedIndices.length ? selectedIndices : rows.map((_, index) => index);
     if (!indices.length) {
-      notify('warning', '没有可复制的行');
+      notify('warning', tr("没有可复制的行"));
       return;
     }
     const text = [
@@ -304,15 +305,15 @@ export function DataView({ tab }: { tab: DataTab }) {
     ].join('\n');
     try {
       await navigator.clipboard.writeText(text);
-      notify('success', `已复制 ${indices.length} 行`, 'TSV 格式，可直接粘贴到表格或 Excel');
+      notify('success', tr("已复制 {0} 行", [indices.length]), tr("TSV 格式，可直接粘贴到表格或 Excel"));
     } catch (err: any) {
-      notify('error', '复制失败', err?.message);
+      notify('error', tr("复制失败"), err?.message);
     }
   };
 
   const duplicateSelected = async () => {
     if (!selectedIndices.length) {
-      notify('warning', '请先勾选要复制的行');
+      notify('warning', tr("请先勾选要复制的行"));
       return;
     }
     const auto = new Set((tableInfo?.columns ?? []).filter((column) => column.autoIncrement).map((column) => column.name));
@@ -325,39 +326,39 @@ export function DataView({ tab }: { tab: DataTab }) {
     });
     try {
       const { result } = await api.rows({ connectionId: tab.connectionId, database: tab.database, table: tab.table, op: 'insertMany', rows: records });
-      notify('success', `已复制 ${records.length} 行`, `影响 ${result.affected ?? records.length} 行`);
+      notify('success', tr("已复制 {0} 行", [records.length]), tr("影响 {0} 行", [result.affected ?? records.length]));
       setSelected(new Set());
       setRefreshKey((key) => key + 1);
     } catch (err: any) {
-      notify('error', '复制行失败', err?.message);
+      notify('error', tr("复制行失败"), err?.message);
     }
   };
 
   const deleteSelected = async () => {
     if (!selectedIndices.length) {
-      notify('warning', '请先勾选要删除的行');
+      notify('warning', tr("请先勾选要删除的行"));
       return;
     }
     const keys = selectedIndices.map((index) => rowKey(index));
     if (keys.some((key) => !key)) {
-      notify('warning', '所选行缺少主键，无法安全批量删除');
+      notify('warning', tr("所选行缺少主键，无法安全批量删除"));
       return;
     }
-    if (!(await askConfirm({ message: `删除所选 ${keys.length} 行？`, detail: '此操作不可恢复。', danger: true, confirmLabel: '删除' }))) return;
+    if (!(await askConfirm({ message: tr("删除所选 {0} 行？", [keys.length]), detail: tr("此操作不可恢复。"), danger: true, confirmLabel: tr("删除") }))) return;
     try {
       const { result } = await api.rows({ connectionId: tab.connectionId, database: tab.database, table: tab.table, op: 'deleteMany', keys });
-      notify('success', `已删除 ${result.affected ?? keys.length} 行`);
+      notify('success', tr("已删除 {0} 行", [result.affected ?? keys.length]));
       setSelected(new Set());
       setRefreshKey((key) => key + 1);
     } catch (err: any) {
-      notify('error', '批量删除失败', err?.message);
+      notify('error', tr("批量删除失败"), err?.message);
     }
   };
 
   const confirmPaste = async () => {
     const lines = pasteText.replace(/\r/g, '').split('\n').filter((line) => line.trim().length);
     if (!lines.length) {
-      notify('warning', '粘贴内容为空');
+      notify('warning', tr("粘贴内容为空"));
       return;
     }
     const matrix = lines.map((line) => line.split('\t'));
@@ -376,23 +377,23 @@ export function DataView({ tab }: { tab: DataTab }) {
       })
       .filter((record) => Object.keys(record).length);
     if (!records.length) {
-      notify('warning', '没有可导入的行');
+      notify('warning', tr("没有可导入的行"));
       return;
     }
     try {
       const { result } = await api.rows({ connectionId: tab.connectionId, database: tab.database, table: tab.table, op: 'insertMany', rows: records });
-      notify('success', `已粘贴 ${result.affected ?? records.length} 行`);
+      notify('success', tr("已粘贴 {0} 行", [result.affected ?? records.length]));
       setPasteOpen(false);
       setPasteText('');
       setRefreshKey((key) => key + 1);
     } catch (err: any) {
-      notify('error', '粘贴失败', err?.message);
+      notify('error', tr("粘贴失败"), err?.message);
     }
   };
 
   const runReplace = async (preview: boolean) => {
     if (!replaceDraft.column || !replaceDraft.find) {
-      notify('warning', '请选择列并填写查找内容');
+      notify('warning', tr("请选择列并填写查找内容"));
       return;
     }
     setReplaceBusy(true);
@@ -409,16 +410,16 @@ export function DataView({ tab }: { tab: DataTab }) {
       });
       if (preview) {
         setReplacePreview(result.affected);
-        notify('info', `匹配 ${result.affected} 行`, result.sql);
+        notify('info', tr("匹配 {0} 行", [result.affected]), result.sql);
       } else {
-        if (!(await askConfirm({ message: `将修改 ${replacePreview ?? '匹配'} 行。`, detail: '替换会直接写入，不保留原值。', danger: true, confirmLabel: '替换' }))) return;
-        notify('success', `已替换 ${result.affected} 行`);
+        if (!(await askConfirm({ message: tr("将修改 {0} 行。", [replacePreview ?? tr("匹配")]), detail: tr("替换会直接写入，不保留原值。"), danger: true, confirmLabel: tr("替换") }))) return;
+        notify('success', tr("已替换 {0} 行", [result.affected]));
         setReplaceOpen(false);
         setReplacePreview(null);
         setRefreshKey((key) => key + 1);
       }
     } catch (err: any) {
-      notify('error', preview ? '预览失败' : '替换失败', err?.message);
+      notify('error', preview ? tr("预览失败") : tr("替换失败"), err?.message);
     } finally {
       setReplaceBusy(false);
     }
@@ -448,7 +449,7 @@ export function DataView({ tab }: { tab: DataTab }) {
   const updateCell = async (rowIndex: number, colIndex: number, value: string) => {
     const key = rowKey(rowIndex);
     if (!key) {
-      notify('warning', '该表没有主键，无法安全更新');
+      notify('warning', tr("该表没有主键，无法安全更新"));
       return;
     }
     const column = columns[colIndex]?.name;
@@ -462,10 +463,10 @@ export function DataView({ tab }: { tab: DataTab }) {
         values: { [column]: value === '' ? null : value },
         key,
       });
-      notify('success', '已更新 1 行', column);
+      notify('success', tr("已更新 1 行"), column);
       setRefreshKey((k) => k + 1);
     } catch (err: any) {
-      notify('error', '更新失败', err?.message);
+      notify('error', tr("更新失败"), err?.message);
     }
   };
 
@@ -473,7 +474,7 @@ export function DataView({ tab }: { tab: DataTab }) {
     if (!formDraft) return;
     const key = rowKey(formRow);
     if (!key) {
-      notify('warning', '该表没有主键，无法安全更新');
+      notify('warning', tr("该表没有主键，无法安全更新"));
       return;
     }
     const original = draftOfRow(formRow);
@@ -484,7 +485,7 @@ export function DataView({ tab }: { tab: DataTab }) {
       if (next !== (original[column.name] ?? '')) changes[column.name] = next === '' ? null : next;
     });
     if (!Object.keys(changes).length) {
-      notify('info', '没有改动');
+      notify('info', tr("没有改动"));
       return;
     }
     setFormSaving(true);
@@ -497,10 +498,10 @@ export function DataView({ tab }: { tab: DataTab }) {
         values: changes,
         key,
       });
-      notify('success', '已更新 1 行', Object.keys(changes).join(', '));
+      notify('success', tr("已更新 1 行"), Object.keys(changes).join(', '));
       setRefreshKey((value) => value + 1);
     } catch (err: any) {
-      notify('error', '更新失败', err?.message);
+      notify('error', tr("更新失败"), err?.message);
     } finally {
       setFormSaving(false);
     }
@@ -509,16 +510,16 @@ export function DataView({ tab }: { tab: DataTab }) {
   const deleteRow = async (rowIndex: number) => {
     const key = rowKey(rowIndex);
     if (!key) {
-      notify('warning', '该表没有主键，无法安全删除');
+      notify('warning', tr("该表没有主键，无法安全删除"));
       return;
     }
-    if (!(await askConfirm({ message: '删除这一行？', detail: JSON.stringify(key), danger: true, confirmLabel: '删除' }))) return;
+    if (!(await askConfirm({ message: tr("删除这一行？"), detail: JSON.stringify(key), danger: true, confirmLabel: tr("删除") }))) return;
     try {
       await api.rows({ connectionId: tab.connectionId, database: tab.database, table: tab.table, op: 'delete', key });
-      notify('success', '已删除 1 行');
+      notify('success', tr("已删除 1 行"));
       setRefreshKey((k) => k + 1);
     } catch (err: any) {
-      notify('error', '删除失败', err?.message);
+      notify('error', tr("删除失败"), err?.message);
     }
   };
 
@@ -533,16 +534,16 @@ export function DataView({ tab }: { tab: DataTab }) {
       values[col.name] = raw;
     });
     if (!Object.keys(values).length) {
-      notify('warning', '请至少填写一列');
+      notify('warning', tr("请至少填写一列"));
       return;
     }
     try {
       await api.rows({ connectionId: tab.connectionId, database: tab.database, table: tab.table, op: 'insert', values });
       setNewRow(null);
       setRefreshKey((k) => k + 1);
-      notify('success', '已插入 1 行');
+      notify('success', tr("已插入 1 行"));
     } catch (err: any) {
-      notify('error', '插入失败', err?.message);
+      notify('error', tr("插入失败"), err?.message);
     }
   };
 
@@ -558,11 +559,11 @@ export function DataView({ tab }: { tab: DataTab }) {
   const openExportMenu = (event: React.MouseEvent<HTMLButtonElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     openContextMenu(rect.left, rect.bottom + 4, [
-      { label: '导出为 CSV', onClick: () => void exportData('csv') },
-      { label: '导出为 JSON', onClick: () => void exportData('json') },
-      { label: '导出为 SQL', onClick: () => void exportData('sql') },
-      { label: '导出为 XML', onClick: () => void exportData('xml') },
-      { label: '导出为 XLSX', onClick: () => void exportData('xlsx') },
+      { label: tr("导出为 CSV"), onClick: () => void exportData('csv') },
+      { label: tr("导出为 JSON"), onClick: () => void exportData('json') },
+      { label: tr("导出为 SQL"), onClick: () => void exportData('sql') },
+      { label: tr("导出为 XML"), onClick: () => void exportData('xml') },
+      { label: tr("导出为 XLSX"), onClick: () => void exportData('xlsx') },
     ]);
   };
 
@@ -594,7 +595,7 @@ export function DataView({ tab }: { tab: DataTab }) {
       setPrintTotal(expected);
       setPrintOpen(true);
     } catch (err: any) {
-      notify('error', '打印预览失败', err?.message);
+      notify('error', tr("打印预览失败"), err?.message);
     } finally {
       setPrintLoading(false);
     }
@@ -611,7 +612,7 @@ export function DataView({ tab }: { tab: DataTab }) {
       else if (name.endsWith('.xls')) csv = xlsToCsv(await file.arrayBuffer());
       const rows = parseCsvPreview(csv, delimiter);
       if (!rows.length) {
-        notify('warning', 'CSV 没有内容');
+        notify('warning', tr("CSV 没有内容"));
         return;
       }
       const header = rows[0];
@@ -633,7 +634,7 @@ export function DataView({ tab }: { tab: DataTab }) {
       .filter(([, index]) => index >= 0)
       .map(([column, sourceIndex]) => ({ column, sourceIndex }));
     if (!mapping.length) {
-      notify('warning', '请至少映射一列');
+      notify('warning', tr("请至少映射一列"));
       return;
     }
     setImporting(true);
@@ -647,7 +648,7 @@ export function DataView({ tab }: { tab: DataTab }) {
         delimiter: importDraft.delimiter,
         mapping,
       });
-      notify('success', t('import'), `${result.inserted} 行 → ${tab.table}`);
+      notify('success', t('import'), tr("{0} 行 → {1}", [result.inserted, tab.table]));
       setImportDraft(null);
       setRefreshKey((k) => k + 1);
     } catch (err: any) {
@@ -664,8 +665,8 @@ export function DataView({ tab }: { tab: DataTab }) {
           <RefreshCw size={14} />
         </button>
         {canLineProtocol && conn && !conn.readonly ? (
-          <button className="btn small ai" title="写入行协议" onClick={() => setLineOpen(true)} data-testid="open-line-protocol">
-            <Upload size={12} /> <span className="btn-text">写入行协议</span>
+          <button className="btn small ai" title={tr("写入行协议")} onClick={() => setLineOpen(true)} data-testid="open-line-protocol">
+            <Upload size={12} /> <span className="btn-text">{tr("写入行协议")}</span>
           </button>
         ) : null}
         <div className="sep" />
@@ -699,48 +700,47 @@ export function DataView({ tab }: { tab: DataTab }) {
           ) : null}
         </div>
         <div className="sep" />
-        <button className="btn small" title="筛选构建器" onClick={() => setFilterOpen(true)} data-testid="data-filter-builder">
-          <ListFilter size={12} /> <span className="btn-text">筛选</span>
+        <button className="btn small" title={tr("筛选构建器")} onClick={() => setFilterOpen(true)} data-testid="data-filter-builder">
+          <ListFilter size={12} /> <span className="btn-text">{tr("筛选")}</span>
         </button>
-        <button className="btn small" title="排序" onClick={() => { setSortDraft(sorts.length ? sorts : [{ column: columns[0]?.name ?? '', dir: 'asc' }]); setSortOpen(true); }} data-testid="data-sort">
-          <ArrowUpDown size={12} /> <span className="btn-text">排序</span>
+        <button className="btn small" title={tr("排序")} onClick={() => { setSortDraft(sorts.length ? sorts : [{ column: columns[0]?.name ?? '', dir: 'asc' }]); setSortOpen(true); }} data-testid="data-sort">
+          <ArrowUpDown size={12} /> <span className="btn-text">{tr("排序")}</span>
         </button>
-        <button className={`btn small ${textMode ? 'active' : ''}`} title="文本视图" onClick={() => setTextMode((value) => !value)} data-testid="data-text-mode">
-          <Type size={12} /> <span className="btn-text">文本</span>
+        <button className={`btn small ${textMode ? 'active' : ''}`} title={tr("文本视图")} onClick={() => setTextMode((value) => !value)} data-testid="data-text-mode">
+          <Type size={12} /> <span className="btn-text">{tr("文本")}</span>
         </button>
-        <button className={`btn small ${formMode ? 'active' : ''}`} title="表单视图（逐行编辑）" onClick={() => { setFormMode((value) => !value); setFormRow(0); }} data-testid="data-form-mode">
-          <Rows3 size={12} /> <span className="btn-text">表单</span>
+        <button className={`btn small ${formMode ? 'active' : ''}`} title={tr("表单视图（逐行编辑）")} onClick={() => { setFormMode((value) => !value); setFormRow(0); }} data-testid="data-form-mode">
+          <Rows3 size={12} /> <span className="btn-text">{tr("表单")}</span>
         </button>
-        <button className={`btn small ${hiddenColumns.length ? 'active' : ''}`} title="列显示管理" onClick={() => setColumnsOpen(true)} data-testid="data-columns">
-          <Columns3 size={12} /> <span className="btn-text">列{hiddenColumns.length ? ` ${hiddenColumns.length}` : ''}</span>
+        <button className={`btn small ${hiddenColumns.length ? 'active' : ''}`} title={tr("列显示管理")} onClick={() => setColumnsOpen(true)} data-testid="data-columns">
+          <Columns3 size={12} /> <span className="btn-text">{tr("列")}{hiddenColumns.length ? ` ${hiddenColumns.length}` : ''}</span>
         </button>
-        <button className="btn small" title="查找替换" onClick={() => setReplaceOpen(true)} disabled={!writable} data-testid="data-find-replace">
-          <Search size={12} /> <span className="btn-text">查找</span>
+        <button className="btn small" title={tr("查找替换")} onClick={() => setReplaceOpen(true)} disabled={!writable} data-testid="data-find-replace">
+          <Search size={12} /> <span className="btn-text">{tr("查找")}</span>
         </button>
       </div>
 
       <div className="toolbar data-toolbar-2">
-        <button className="btn small" title="复制所选行（TSV）" onClick={() => void copySelected()} data-testid="data-copy-rows">
-          <ClipboardCopy size={12} /> <span className="btn-text">复制</span>
+        <button className="btn small" title={tr("复制所选行（TSV）")} onClick={() => void copySelected()} data-testid="data-copy-rows">
+          <ClipboardCopy size={12} /> <span className="btn-text">{tr("复制")}</span>
         </button>
-        <button className="btn small" title="粘贴行" onClick={() => setPasteOpen(true)} disabled={!writable} data-testid="data-paste-rows">
-          <ClipboardPaste size={12} /> <span className="btn-text">粘贴</span>
+        <button className="btn small" title={tr("粘贴行")} onClick={() => setPasteOpen(true)} disabled={!writable} data-testid="data-paste-rows">
+          <ClipboardPaste size={12} /> <span className="btn-text">{tr("粘贴")}</span>
         </button>
-        <button className="btn small" title="复制所选行到表尾" onClick={() => void duplicateSelected()} disabled={!selectedIndices.length || !canEdit} data-testid="data-duplicate-rows">
-          <CopyPlus size={12} /> <span className="btn-text">复制行</span>
+        <button className="btn small" title={tr("复制所选行到表尾")} onClick={() => void duplicateSelected()} disabled={!selectedIndices.length || !canEdit} data-testid="data-duplicate-rows">
+          <CopyPlus size={12} /> <span className="btn-text">{tr("复制行")}</span>
         </button>
-        <button className="btn small danger" title="删除所选行" onClick={() => void deleteSelected()} disabled={!selectedIndices.length || !canEdit} data-testid="data-delete-rows">
-          <Trash2 size={12} /> <span className="btn-text">删除所选</span>
+        <button className="btn small danger" title={tr("删除所选行")} onClick={() => void deleteSelected()} disabled={!selectedIndices.length || !canEdit} data-testid="data-delete-rows">
+          <Trash2 size={12} /> <span className="btn-text">{tr("删除所选")}</span>
         </button>
-        {selectedIndices.length ? <span className="badge write">已选 {selectedIndices.length}</span> : null}
+        {selectedIndices.length ? <span className="badge write">{tr("已选 ")}{selectedIndices.length}</span> : null}
         <div className="spacer" />
         {newRow ? (
           <>
             <button className="btn primary small" onClick={() => void saveNewRow()} data-testid="data-save-new-row">
-              保存新行
-            </button>
-            <button className="btn small" title="取消新增（Esc）" onClick={() => setNewRow(null)} data-testid="data-cancel-new-row">
-              <X size={12} /> <span className="btn-text">取消</span>
+              {tr(" 保存新行 ")}</button>
+            <button className="btn small" title={tr("取消新增（Esc）")} onClick={() => setNewRow(null)} data-testid="data-cancel-new-row">
+              <X size={12} /> <span className="btn-text">{tr("取消")}</span>
             </button>
           </>
         ) : (
@@ -766,8 +766,8 @@ export function DataView({ tab }: { tab: DataTab }) {
         <button className="btn small" title={t('export')} onClick={openExportMenu} data-testid="data-export">
           <Download size={12} /> <span className="btn-text">{t('export')}</span> <ChevronDown size={10} className="btn-caret" />
         </button>
-        <button className="btn small" title="打印" onClick={() => void openPrint()} disabled={!rows.length || printLoading} data-testid="data-print">
-          <Printer size={12} /> <span className="btn-text">打印</span>
+        <button className="btn small" title={tr("打印")} onClick={() => void openPrint()} disabled={!rows.length || printLoading} data-testid="data-print">
+          <Printer size={12} /> <span className="btn-text">{tr("打印")}</span>
         </button>
         <button className="btn small" title={t('design')} onClick={() => openDesign(tab.connectionId, tab.table, tab.database)}>
           <Wrench size={12} /> <span className="btn-text">{t('design')}</span>
@@ -789,12 +789,12 @@ export function DataView({ tab }: { tab: DataTab }) {
           <div style={{ padding: 12, overflow: 'auto' }} data-testid="data-form-view">
             <div className="row gap-8" style={{ marginBottom: 10, alignItems: 'center' }}>
               <button className="btn small" disabled={formRow <= 0} onClick={() => setFormRow((value) => Math.max(0, value - 1))} data-testid="form-prev">‹</button>
-              <span className="muted">第 {Math.min(formRow, rows.length - 1) + 1} / {rows.length} 行（当前页）</span>
+              <span className="muted">{tr("第 ")}{Math.min(formRow, rows.length - 1) + 1} / {rows.length}{tr(" 行（当前页）")}</span>
               <button className="btn small" disabled={formRow >= rows.length - 1} onClick={() => setFormRow((value) => Math.min(rows.length - 1, value + 1))} data-testid="form-next">›</button>
               <div className="spacer" />
-              <button className="btn small" onClick={() => setFormDraft(draftOfRow(formRow))} data-testid="form-reset">重置</button>
+              <button className="btn small" onClick={() => setFormDraft(draftOfRow(formRow))} data-testid="form-reset">{tr("重置")}</button>
               <button className="btn primary small" onClick={() => void saveForm()} disabled={!canEdit || formSaving} data-testid="form-save">
-                {formSaving ? '保存中…' : '保存'}
+                {formSaving ? tr("保存中…") : tr("保存")}
               </button>
             </div>
             <div className="form-grid">
@@ -802,7 +802,7 @@ export function DataView({ tab }: { tab: DataTab }) {
                 const isPk = pkColumns.some((pk) => pk.name === column.name);
                 return (
                   <label className="field" key={column.name}>
-                    <span>{column.name}{isPk ? ' · 主键' : ''}{column.type ? <span className="muted" style={{ fontSize: 11 }}> · {column.type}</span> : null}</span>
+                    <span>{column.name}{isPk ? tr(" · 主键") : ''}{column.type ? <span className="muted" style={{ fontSize: 11 }}> · {column.type}</span> : null}</span>
                     <input
                       className="input mono"
                       value={formDraft?.[column.name] ?? ''}
@@ -814,7 +814,7 @@ export function DataView({ tab }: { tab: DataTab }) {
                 );
               })}
             </div>
-            {!writable ? <div className="muted" style={{ marginTop: 8, fontSize: 11 }}>只读连接，表单不可保存。</div> : !canEdit ? <div className="muted" style={{ marginTop: 8, fontSize: 11 }}>该表没有主键，表单只读。</div> : null}
+            {!writable ? <div className="muted" style={{ marginTop: 8, fontSize: 11 }}>{tr("只读连接，表单不可保存。")}</div> : !canEdit ? <div className="muted" style={{ marginTop: 8, fontSize: 11 }}>{tr("该表没有主键，表单只读。")}</div> : null}
           </div>
         ) : (
         <DataGrid
@@ -845,24 +845,22 @@ export function DataView({ tab }: { tab: DataTab }) {
         </div>
       ) : (
         <EmptyState icon={<Table2 size={20} />} title={t('noResults')}>
-          {!writable ? '只读连接，当前以只读方式展示。' : canEdit ? '这张表还没有数据，点击“新增行”开始。' : '该表没有主键，当前以只读方式展示。'}
+          {!writable ? tr("只读连接，当前以只读方式展示。") : canEdit ? tr("这张表还没有数据，点击“新增行”开始。") : tr("该表没有主键，当前以只读方式展示。")}
         </EmptyState>
       )}
 
       <div className="grid-foot">
         <span>
-          第 {total ? offset + 1 : 0}-{Math.min(offset + rows.length, total)} 条记录（共 {total.toLocaleString()} 条）· 第 {currentPage}/{totalPages} 页
-          {page?.batch.sets[0] ? ` · ${formatDuration(page.batch.durationMs)}` : ''}
-          {selectedIndices.length ? ` · 已选 ${selectedIndices.length} 行` : ''}
-          {!writable ? ' · 只读连接' : !canEdit ? ' · 只读（无主键）' : ''}
+          {tr("第 {0}-{1} 条，共 {2} 条 · 第 {3}/{4} 页", [total ? offset + 1 : 0, Math.min(offset + rows.length, total), total.toLocaleString(), currentPage, totalPages])}{page?.batch.sets[0] ? ` · ${formatDuration(page.batch.durationMs)}` : ''}
+          {selectedIndices.length ? tr(" · 已选 {0} 行", [selectedIndices.length]) : ''}
+          {!writable ? tr(" · 只读连接") : !canEdit ? tr(" · 只读（无主键）") : ''}
         </span>
-        {page?.batch.sets[0]?.truncated ? <span className="badge write">结果已截断</span> : null}
+        {page?.batch.sets[0]?.truncated ? <span className="badge write">{tr("结果已截断")}</span> : null}
         <div className="pager">
           <Select className="select" style={{ height: 24, fontSize: 11 }} value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setOffset(0); }} data-testid="data-page-size">
             {[50, 100, 200, 500].map((n) => (
               <Option key={n} value={n}>
-                {n} / 页
-              </Option>
+                {n}{tr(" / 页 ")}</Option>
             ))}
           </Select>
           <button className="btn ghost" disabled={offset <= 0} onClick={() => setOffset(Math.max(0, offset - limit))}>
@@ -879,16 +877,16 @@ export function DataView({ tab }: { tab: DataTab }) {
 
       {importDraft ? (
         <Modal
-          title={`导入数据 · ${importDraft.name}`}
+          title={tr("导入数据 · {0}", [importDraft.name])}
           onClose={() => setImportDraft(null)}
           footer={
             <>
               <span className="hint" style={{ marginRight: 'auto' }}>
-                预览 {Math.max(0, importDraft.rows.length - (importDraft.hasHeader ? 1 : 0))} 行 · 目标 {tab.table}
+                {tr(" 预览 ")}{Math.max(0, importDraft.rows.length - (importDraft.hasHeader ? 1 : 0))}{tr(" 行 · 目标 ")}{tab.table}
               </span>
               <button className="btn" onClick={() => setImportDraft(null)}>{t('cancel')}</button>
               <button className="btn primary" onClick={() => void confirmImport()} disabled={importing} data-testid="import-confirm">
-                {importing ? '导入中…' : t('import')}
+                {importing ? tr("导入中…") : t('import')}
               </button>
             </>
           }
@@ -900,8 +898,7 @@ export function DataView({ tab }: { tab: DataTab }) {
                   type="checkbox"
                   checked={importDraft.hasHeader}
                   onChange={(e) => setImportDraft({ ...importDraft, hasHeader: e.target.checked })}
-                /> 首行为表头
-              </label>
+                /> {tr(" 首行为表头 ")}</label>
               <div className="field" style={{ width: 150 }}>
                 <Select
                   className="select"
@@ -911,8 +908,8 @@ export function DataView({ tab }: { tab: DataTab }) {
                     setImportDraft({ ...importDraft, delimiter, rows: parseCsvPreview(importDraft.csv, delimiter) });
                   }}
                 >
-                  <Option value=",">逗号 ,</Option>
-                  <Option value=";">分号 ;</Option>
+                  <Option value=",">{tr("逗号 ,")}</Option>
+                  <Option value=";">{tr("分号 ;")}</Option>
                   <Option value="\t">Tab</Option>
                 </Select>
               </div>
@@ -922,7 +919,7 @@ export function DataView({ tab }: { tab: DataTab }) {
                 <thead>
                   <tr>
                     <th>#</th>
-                    {(importDraft.hasHeader ? importDraft.rows[0] : importDraft.rows[0]?.map((_, index) => `列 ${index + 1}`))?.map((header, index) => (
+                    {(importDraft.hasHeader ? importDraft.rows[0] : importDraft.rows[0]?.map((_, index) => tr("列 {0}", [index + 1])))?.map((header, index) => (
                       <th key={index}>{header}</th>
                     ))}
                   </tr>
@@ -938,7 +935,7 @@ export function DataView({ tab }: { tab: DataTab }) {
               </table>
             </div>
             <div>
-              <div className="tool-section-title">列映射</div>
+              <div className="tool-section-title">{tr("列映射")}</div>
               <div className="mapping-grid">
                 {(tableInfo?.columns ?? columns).map((column) => (
                   <div key={column.name} className="mapping-row">
@@ -949,8 +946,8 @@ export function DataView({ tab }: { tab: DataTab }) {
                       value={importDraft.mapping[column.name] ?? -1}
                       onChange={(e) => setImportDraft({ ...importDraft, mapping: { ...importDraft.mapping, [column.name]: Number(e.target.value) } })}
                     >
-                      <Option value={-1}>不导入</Option>
-                      {(importDraft.hasHeader ? importDraft.rows[0] : importDraft.rows[0]?.map((_, index) => `列 ${index + 1}`) ?? []).map((header, index) => (
+                      <Option value={-1}>{tr("不导入")}</Option>
+                      {(importDraft.hasHeader ? importDraft.rows[0] : importDraft.rows[0]?.map((_, index) => tr("列 {0}", [index + 1])) ?? []).map((header, index) => (
                         <Option key={index} value={index}>{header} (#{index + 1})</Option>
                       ))}
                     </Select>
@@ -963,12 +960,12 @@ export function DataView({ tab }: { tab: DataTab }) {
       ) : null}
       {printOpen ? (
         <Modal
-          title={`打印预览 · ${tab.table}`}
+          title={tr("打印预览 · {0}", [tab.table])}
           onClose={() => setPrintOpen(false)}
           footer={
             <>
-              <button className="btn" onClick={() => setPrintOpen(false)}>关闭</button>
-              <button className="btn primary" onClick={() => printFrameRef.current?.contentWindow?.print()} data-testid="print-confirm">打印</button>
+              <button className="btn" onClick={() => setPrintOpen(false)}>{tr("关闭")}</button>
+              <button className="btn primary" onClick={() => printFrameRef.current?.contentWindow?.print()} data-testid="print-confirm">{tr("打印")}</button>
             </>
           }
         >
@@ -984,12 +981,12 @@ export function DataView({ tab }: { tab: DataTab }) {
 
       {columnsOpen ? (
         <Modal
-          title={`列显示 · ${tab.table}`}
+          title={tr("列显示 · {0}", [tab.table])}
           onClose={() => setColumnsOpen(false)}
           footer={
             <>
-              <button className="btn" onClick={() => applyHiddenColumns([])} data-testid="columns-reset">全部显示</button>
-              <button className="btn primary" onClick={() => setColumnsOpen(false)}>完成</button>
+              <button className="btn" onClick={() => applyHiddenColumns([])} data-testid="columns-reset">{tr("全部显示")}</button>
+              <button className="btn primary" onClick={() => setColumnsOpen(false)}>{tr("完成")}</button>
             </>
           }
         >
@@ -1023,19 +1020,18 @@ export function DataView({ tab }: { tab: DataTab }) {
 
       {sortOpen ? (
         <Modal
-          title={`排序 · ${tab.table}`}
+          title={tr("排序 · {0}", [tab.table])}
           onClose={() => setSortOpen(false)}
           footer={
             <>
-              <button className="btn" onClick={() => { setSorts([]); setOffset(0); setSortOpen(false); }} data-testid="sort-clear">不排序</button>
+              <button className="btn" onClick={() => { setSorts([]); setOffset(0); setSortOpen(false); }} data-testid="sort-clear">{tr("不排序")}</button>
               <button className="btn" onClick={() => setSortOpen(false)}>{t('cancel')}</button>
               <button
                 className="btn primary"
                 onClick={() => { setSorts(sortDraft.filter((rule) => rule.column).slice(0, 3)); setOffset(0); setSortOpen(false); }}
                 data-testid="sort-apply"
               >
-                应用
-              </button>
+                {tr(" 应用 ")}</button>
             </>
           }
         >
@@ -1048,7 +1044,7 @@ export function DataView({ tab }: { tab: DataTab }) {
                   onChange={(e) => setSortDraft((prev) => prev.map((item, i) => (i === index ? { ...item, column: e.target.value } : item)))}
                   data-testid={`sort-column-${index}`}
                 >
-                  <Option value="">选择排序列</Option>
+                  <Option value="">{tr("选择排序列")}</Option>
                   {columns.map((column) => <Option key={column.name} value={column.name}>{column.name}</Option>)}
                 </Select>
                 <Select
@@ -1057,11 +1053,11 @@ export function DataView({ tab }: { tab: DataTab }) {
                   onChange={(e) => setSortDraft((prev) => prev.map((item, i) => (i === index ? { ...item, dir: e.target.value as 'asc' | 'desc' } : item)))}
                   data-testid={`sort-dir-${index}`}
                 >
-                  <Option value="asc">升序 ASC</Option>
-                  <Option value="desc">降序 DESC</Option>
+                  <Option value="asc">{tr("升序 ASC")}</Option>
+                  <Option value="desc">{tr("降序 DESC")}</Option>
                 </Select>
                 {sortDraft.length > 1 ? (
-                  <button className="icon-btn" title="移除该排序条件" onClick={() => setSortDraft((prev) => prev.filter((_, i) => i !== index))} data-testid={`sort-remove-${index}`}>
+                  <button className="icon-btn" title={tr("移除该排序条件")} onClick={() => setSortDraft((prev) => prev.filter((_, i) => i !== index))} data-testid={`sort-remove-${index}`}>
                     <X size={12} />
                   </button>
                 ) : null}
@@ -1069,23 +1065,22 @@ export function DataView({ tab }: { tab: DataTab }) {
             ))}
             {sortDraft.length < 3 ? (
               <button className="btn small" onClick={() => setSortDraft((prev) => [...prev, { column: '', dir: 'asc' }])} data-testid="sort-add">
-                <Plus size={12} /> 添加排序条件
-              </button>
+                <Plus size={12} /> {tr(" 添加排序条件 ")}</button>
             ) : null}
-            <div className="muted" style={{ fontSize: 11 }}>先按第一列排序，值相同的行再按后续列排序（最多 3 列）。</div>
+            <div className="muted" style={{ fontSize: 11 }}>{tr("先按第一列排序，值相同的行再按后续列排序（最多 3 列）。")}</div>
           </div>
         </Modal>
       ) : null}
 
       {filterOpen ? (
         <Modal
-          title="筛选构建器"
+          title={tr("筛选构建器")}
           onClose={() => setFilterOpen(false)}
           footer={
             <>
-              <button className="btn" onClick={() => setConditions([{ column: columns[0]?.name ?? '', op: '=', value: '', connector: 'AND' }])}>重置</button>
+              <button className="btn" onClick={() => setConditions([{ column: columns[0]?.name ?? '', op: '=', value: '', connector: 'AND' }])}>{tr("重置")}</button>
               <button className="btn" onClick={() => setFilterOpen(false)}>{t('cancel')}</button>
-              <button className="btn primary" onClick={applyFilterBuilder} data-testid="filter-apply">应用筛选</button>
+              <button className="btn primary" onClick={applyFilterBuilder} data-testid="filter-apply">{tr("应用筛选")}</button>
             </>
           }
         >
@@ -1109,7 +1104,7 @@ export function DataView({ tab }: { tab: DataTab }) {
                   value={condition.column}
                   onChange={(e) => setConditions((prev) => prev.map((item, i) => (i === index ? { ...item, column: e.target.value } : item)))}
                 >
-                  <Option value="">选择列</Option>
+                  <Option value="">{tr("选择列")}</Option>
                   {columns.map((column) => <Option key={column.name} value={column.name}>{column.name}</Option>)}
                 </Select>
                 <Select
@@ -1123,12 +1118,12 @@ export function DataView({ tab }: { tab: DataTab }) {
                 </Select>
                 <input
                   className="input mono"
-                  placeholder={condition.op === 'IN' ? 'a, b, c' : condition.op.includes('NULL') ? '—' : '值'}
+                  placeholder={condition.op === 'IN' ? 'a, b, c' : condition.op.includes('NULL') ? '—' : tr("值")}
                   value={condition.value}
                   disabled={condition.op.includes('NULL')}
                   onChange={(e) => setConditions((prev) => prev.map((item, i) => (i === index ? { ...item, value: e.target.value } : item)))}
                 />
-                <button className="icon-btn" title="移除条件" onClick={() => setConditions((prev) => prev.filter((_, i) => i !== index))}>
+                <button className="icon-btn" title={tr("移除条件")} onClick={() => setConditions((prev) => prev.filter((_, i) => i !== index))}>
                   <X size={12} />
                 </button>
               </div>
@@ -1138,21 +1133,20 @@ export function DataView({ tab }: { tab: DataTab }) {
               style={{ alignSelf: 'flex-start' }}
               onClick={() => setConditions((prev) => [...prev, { column: columns[0]?.name ?? '', op: '=', value: '', connector: 'AND' }])}
             >
-              <Plus size={12} /> 添加条件
-            </button>
+              <Plus size={12} /> {tr(" 添加条件 ")}</button>
           </div>
         </Modal>
       ) : null}
 
       {replaceOpen ? (
         <Modal
-          title={`查找替换 · ${tab.table}`}
+          title={tr("查找替换 · {0}", [tab.table])}
           onClose={() => { setReplaceOpen(false); setReplacePreview(null); }}
           footer={
             <>
               <button className="btn" onClick={() => { setReplaceOpen(false); setReplacePreview(null); }}>{t('cancel')}</button>
-              <button className="btn" onClick={() => void runReplace(true)} disabled={replaceBusy} data-testid="replace-preview">预览匹配</button>
-              <button className="btn primary" onClick={() => void runReplace(false)} disabled={replaceBusy} data-testid="replace-apply">替换</button>
+              <button className="btn" onClick={() => void runReplace(true)} disabled={replaceBusy} data-testid="replace-preview">{tr("预览匹配")}</button>
+              <button className="btn primary" onClick={() => void runReplace(false)} disabled={replaceBusy} data-testid="replace-apply">{tr("替换")}</button>
             </>
           }
         >
@@ -1167,31 +1161,30 @@ export function DataView({ tab }: { tab: DataTab }) {
               </Select>
               <input
                 className="input mono"
-                placeholder="查找内容"
+                placeholder={tr("查找内容")}
                 value={replaceDraft.find}
                 onChange={(e) => { setReplaceDraft({ ...replaceDraft, find: e.target.value }); setReplacePreview(null); }}
                 data-testid="replace-find"
               />
               <input
                 className="input mono"
-                placeholder="替换为"
+                placeholder={tr("替换为")}
                 value={replaceDraft.replace}
                 onChange={(e) => setReplaceDraft({ ...replaceDraft, replace: e.target.value })}
                 data-testid="replace-with"
               />
             </div>
             <label className="checkbox">
-              <input type="checkbox" checked={replaceDraft.scoped} onChange={(e) => setReplaceDraft({ ...replaceDraft, scoped: e.target.checked })} /> 仅作用于当前筛选条件
-            </label>
-            <p className="hint" style={{ margin: 0 }}>按文本匹配；建议先预览匹配行数，再执行替换。</p>
-            {replacePreview !== null ? <div className="badge write">当前条件匹配 {replacePreview} 行</div> : null}
+              <input type="checkbox" checked={replaceDraft.scoped} onChange={(e) => setReplaceDraft({ ...replaceDraft, scoped: e.target.checked })} /> {tr(" 仅作用于当前筛选条件 ")}</label>
+            <p className="hint" style={{ margin: 0 }}>{tr("按文本匹配；建议先预览匹配行数，再执行替换。")}</p>
+            {replacePreview !== null ? <div className="badge write">{tr("当前条件匹配 ")}{replacePreview}{tr(" 行")}</div> : null}
           </div>
         </Modal>
       ) : null}
 
       {pasteOpen ? (
         <Modal
-          title="粘贴行（TSV）"
+          title={tr("粘贴行（TSV）")}
           onClose={() => setPasteOpen(false)}
           footer={
             <>
@@ -1202,20 +1195,18 @@ export function DataView({ tab }: { tab: DataTab }) {
                   try {
                     setPasteText(await navigator.clipboard.readText());
                   } catch {
-                    notify('warning', '无法读取剪贴板，请手动粘贴');
+                    notify('warning', tr("无法读取剪贴板，请手动粘贴"));
                   }
                 }}
               >
-                从剪贴板读取
-              </button>
-              <button className="btn primary" onClick={() => void confirmPaste()} data-testid="paste-confirm">插入数据</button>
+                {tr(" 从剪贴板读取 ")}</button>
+              <button className="btn primary" onClick={() => void confirmPaste()} data-testid="paste-confirm">{tr("插入数据")}</button>
             </>
           }
         >
           <div className="col gap-10">
             <p className="hint" style={{ margin: 0 }}>
-              支持从 Excel / Navicat 复制的制表符分隔文本；首行若为列名会自动映射，否则按列顺序写入。
-            </p>
+              {tr(" 支持从 Excel / Navicat 复制的制表符分隔文本；首行若为列名会自动映射，否则按列顺序写入。 ")}</p>
             <textarea
               className="textarea grow"
               style={{ minHeight: 180 }}

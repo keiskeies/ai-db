@@ -626,6 +626,8 @@
 .home-health {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  row-gap: 4px;
   gap: 10px;
   padding: 7px 10px;
   border-top: 1px solid var(--border-subtle);
@@ -638,6 +640,8 @@
 .home-health-title {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
+  white-space: nowrap;
   gap: 4px;
   font-weight: 600;
   color: var(--text-secondary);
@@ -646,6 +650,8 @@
 .home-health-item {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
+  white-space: nowrap;
   gap: 4px;
 }
 

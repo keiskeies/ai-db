@@ -9,34 +9,35 @@ import { ChartView } from './ChartView';
 import { buildChartSpec, numericColumnNames, type ChartDataset } from './buildChartSpec';
 import { DatabaseSelect } from './DatabaseSelect';
 import { Option, Select, Spinner } from './ui';
+import { t as tr } from '../i18n';
 
 type DashboardTab = Extract<Tab, { kind: 'dashboard' }>;
 
 const CHART_LABELS: Record<DashboardChartType, string> = {
-  bar: '柱状图',
-  stacked: '堆叠柱状图',
-  line: '折线图',
-  pie: '饼图',
-  scatter: '散点图',
-  heatmap: '热力图',
-  radar: '雷达图',
+  bar: tr("柱状图"),
+  stacked: tr("堆叠柱状图"),
+  line: tr("折线图"),
+  pie: tr("饼图"),
+  scatter: tr("散点图"),
+  heatmap: tr("热力图"),
+  radar: tr("雷达图"),
 };
 
 const RANGES: Array<{ value: string; label: string; days?: number }> = [
-  { value: 'all', label: '全部时间' },
-  { value: '7d', label: '近 7 天', days: 7 },
-  { value: '30d', label: '近 30 天', days: 30 },
-  { value: '90d', label: '近 90 天', days: 90 },
-  { value: '365d', label: '近 1 年', days: 365 },
+  { value: 'all', label: tr("全部时间") },
+  { value: '7d', label: tr("近 7 天"), days: 7 },
+  { value: '30d', label: tr("近 30 天"), days: 30 },
+  { value: '90d', label: tr("近 90 天"), days: 90 },
+  { value: '365d', label: tr("近 1 年"), days: 365 },
 ];
 
 /** 定时刷新默认关闭：后台默默跑查询对生产库是风险，必须逐板显式开。 */
 const SCHEDULES: Array<{ value: number; label: string }> = [
-  { value: 0, label: '不定时刷新' },
-  { value: 300, label: '每 5 分钟' },
-  { value: 1800, label: '每 30 分钟' },
-  { value: 7200, label: '每 2 小时' },
-  { value: 86400, label: '每天' },
+  { value: 0, label: tr("不定时刷新") },
+  { value: 300, label: tr("每 5 分钟") },
+  { value: 1800, label: tr("每 30 分钟") },
+  { value: 7200, label: tr("每 2 小时") },
+  { value: 86400, label: tr("每天") },
 ];
 
 function timeRangeOf(value: string): DashboardTimeRange | undefined {
@@ -169,10 +170,10 @@ function DashboardCardView({
             <div>{card.title}</div>
             <div className="dash-card-empty-hint">
               {card.lastStatus === 'error'
-                ? card.lastError || '查询失败'
+                ? card.lastError || tr("查询失败")
                 : card.lastRunAt
-                  ? '这条查询返回 0 行（时间范围内没有数据？）'
-                  : '还没有结果，点刷新执行这条查询'}
+                  ? tr("这条查询返回 0 行（时间范围内没有数据？）")
+                  : tr("还没有结果，点刷新执行这条查询")}
             </div>
             <code className="dash-card-sql">{card.sql}</code>
           </div>
@@ -180,12 +181,12 @@ function DashboardCardView({
       </div>
       <div className="dash-card-foot">
         <span className={`dash-tag ${card.source === 'ai' ? 'ai' : ''}`}>
-          {card.source === 'ai' ? (card.pinned ? 'AI · 已固定' : 'AI 草稿') : card.source === 'favorite' ? '收藏' : '手动'}
+          {card.source === 'ai' ? (card.pinned ? tr("AI · 已固定") : tr("AI 草稿")) : card.source === 'favorite' ? tr("收藏") : tr("手动")}
         </span>
         {card.lastRunAt ? (
-          <span className="dash-meta mono" title={`上次刷新 ${card.lastRunAt}`}>
-            {card.lastStatus === 'error' ? '失败' : '已刷新'}
-            {rangeActive && card.timeColumn ? (card.lastError ? ' · 筛选未生效' : ' · 已筛选') : null}
+          <span className="dash-meta mono" title={tr("上次刷新 {0}", [card.lastRunAt])}>
+            {card.lastStatus === 'error' ? tr("失败") : tr("已刷新")}
+            {rangeActive && card.timeColumn ? (card.lastError ? tr(" · 筛选未生效") : tr(" · 已筛选")) : null}
           </span>
         ) : null}
         <span className="dash-foot-space" />
@@ -193,39 +194,39 @@ function DashboardCardView({
           <Select
             className="select dash-time"
             value={card.timeColumn ?? ''}
-            title="时间列：板级时间范围只作用于标了时间列的卡片"
+            title={tr("时间列：板级时间范围只作用于标了时间列的卡片")}
             onChange={(event) => onPatch({ timeColumn: event.target.value })}
             data-testid="dashboard-card-time"
           >
-            <Option value="">不参与时间筛选</Option>
+            <Option value="">{tr("不参与时间筛选")}</Option>
             {columns.map((name) => (
               <Option key={name} value={name}>
-                时间列：{name}
+                {tr(" 时间列：")}{name}
               </Option>
             ))}
           </Select>
         ) : null}
-        <button className="icon-btn" title="刷新此卡片" onClick={onRefresh} disabled={busy} data-testid="dashboard-card-refresh">
+        <button className="icon-btn" title={tr("刷新此卡片")} onClick={onRefresh} disabled={busy} data-testid="dashboard-card-refresh">
           {busy ? <Spinner /> : <RefreshCw size={12} />}
         </button>
         <button
           className="icon-btn"
-          title={card.pinned ? '取消固定（可被 AI 草稿替换）' : '固定（AI 生成不会覆盖）'}
+          title={card.pinned ? tr("取消固定（可被 AI 草稿替换）") : tr("固定（AI 生成不会覆盖）")}
           onClick={() => onPatch({ pinned: !card.pinned })}
           data-testid="dashboard-card-pin"
         >
           {card.pinned ? <PinOff size={12} /> : <Pin size={12} />}
         </button>
-        <button className="icon-btn" title={card.span === 2 ? '变窄' : '加宽'} onClick={() => onPatch({ span: card.span === 2 ? 1 : 2 })} data-testid="dashboard-card-span">
+        <button className="icon-btn" title={card.span === 2 ? tr("变窄") : tr("加宽")} onClick={() => onPatch({ span: card.span === 2 ? 1 : 2 })} data-testid="dashboard-card-span">
           {card.span === 2 ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
         </button>
-        <button className="icon-btn" title="前移" onClick={() => onMove(-1)} disabled={card.position <= 1}>
+        <button className="icon-btn" title={tr("前移")} onClick={() => onMove(-1)} disabled={card.position <= 1}>
           <ChevronUp size={12} />
         </button>
-        <button className="icon-btn" title="后移" onClick={() => onMove(1)} disabled={card.position >= limit}>
+        <button className="icon-btn" title={tr("后移")} onClick={() => onMove(1)} disabled={card.position >= limit}>
           <ChevronDown size={12} />
         </button>
-        <button className="icon-btn danger" title="从仪表板移除" onClick={onDelete} data-testid="dashboard-card-delete">
+        <button className="icon-btn danger" title={tr("从仪表板移除")} onClick={onDelete} data-testid="dashboard-card-delete">
           <Trash2 size={12} />
         </button>
       </div>
@@ -261,7 +262,7 @@ function PreviewTable({ preview }: { preview: DashboardPreview }) {
           ))}
         </tbody>
       </table>
-      {!rows.length ? <div className="dash-preview-empty">查询返回 0 行</div> : null}
+      {!rows.length ? <div className="dash-preview-empty">{tr("查询返回 0 行")}</div> : null}
     </div>
   );
 }
@@ -312,7 +313,7 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
       setSupported(response.supported);
       setSchedule((await api.dashboardSchedule({ connectionId: conn.id, database }).catch(() => ({ schedule: null })))?.schedule ?? null);
     } catch (err: any) {
-      notify('error', '读取仪表板失败', err?.message);
+      notify('error', tr("读取仪表板失败"), err?.message);
     } finally {
       setLoading(false);
     }
@@ -331,11 +332,11 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
         const response = await api.dashboardRefresh({ connectionId: conn.id, database, cardIds, range: timeRangeOf(rangeValue) });
         setCards(response.cards);
         const failed = response.results.filter((result: DashboardCardResult) => result.status === 'error');
-        if (failed.length) notify('warning', `${failed.length} 张卡片刷新失败`, failed[0].error);
+        if (failed.length) notify('warning', tr("{0} 张卡片刷新失败", [failed.length]), failed[0].error);
         const skipped = response.results.filter((result: DashboardCardResult) => result.filterSkipped);
-        if (skipped.length) notify('info', '时间范围对部分卡片未生效', `${skipped.length} 张卡片的结果里没有那一列，已按原查询展示`);
+        if (skipped.length) notify('info', tr("时间范围对部分卡片未生效"), tr("{0} 张卡片的结果里没有那一列，已按原查询展示", [skipped.length]));
       } catch (err: any) {
-        notify('error', '刷新失败', err?.message);
+        notify('error', tr("刷新失败"), err?.message);
       } finally {
         setRefreshing(false);
         setPending([]);
@@ -395,7 +396,7 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
         setCards(response.cards);
         return response.card;
       } catch (err: any) {
-        notify('error', '卡片保存失败', err?.message);
+        notify('error', tr("卡片保存失败"), err?.message);
         return undefined;
       }
     },
@@ -416,7 +417,7 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
   const addCard = async () => {
     const sql = draft.sql.trim();
     if (!sql) {
-      notify('warning', '请先写查询或让 AI 生成一版');
+      notify('warning', tr("请先写查询或让 AI 生成一版"));
       return;
     }
     const card = await saveCard({
@@ -445,7 +446,7 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
     if (!conn) return;
     const prompt = requirement.trim();
     if (!prompt) {
-      notify('warning', '先写一句需求', '例如：近 30 天每天的订单量和成交额');
+      notify('warning', tr("先写一句需求"), tr("例如：近 30 天每天的订单量和成交额"));
       return;
     }
     setComposing(true);
@@ -463,10 +464,10 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
       });
       setPreview({ sql: result.sql, ...result.preview });
       setComposeNotes(result.notes);
-      if (result.preview.error) notify('warning', 'SQL 已生成，但试跑未通过', result.preview.error);
-      else notify('success', result.usedModel ? 'AI 已生成 SQL，试跑通过' : '已按内置口径生成 SQL，试跑通过');
+      if (result.preview.error) notify('warning', tr("SQL 已生成，但试跑未通过"), result.preview.error);
+      else notify('success', result.usedModel ? tr("AI 已生成 SQL，试跑通过") : tr("已按内置口径生成 SQL，试跑通过"));
     } catch (err: any) {
-      setComposeError(err?.message ?? '生成失败');
+      setComposeError(err?.message ?? tr("生成失败"));
       setComposeNotes([]);
     } finally {
       setComposing(false);
@@ -478,7 +479,7 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
     if (!conn) return;
     const sql = draft.sql.trim();
     if (!sql) {
-      notify('warning', 'SQL 为空', '先写查询，或让 AI 生成一版');
+      notify('warning', tr("SQL 为空"), tr("先写查询，或让 AI 生成一版"));
       return;
     }
     setPreviewing(true);
@@ -487,9 +488,9 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
       const { preview: result } = await api.dashboardPreview({ connectionId: conn.id, database, sql });
       setPreview({ sql, ...result });
       setComposeNotes([]);
-      if (result.error) notify('warning', '预览失败', result.error);
+      if (result.error) notify('warning', tr("预览失败"), result.error);
     } catch (err: any) {
-      setComposeError(err?.message ?? '预览失败');
+      setComposeError(err?.message ?? tr("预览失败"));
     } finally {
       setPreviewing(false);
     }
@@ -498,7 +499,7 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
   const previewSpec = useMemo(() => {
     if (!preview || preview.error) return null;
     return buildCardSpec(
-      { title: draft.title.trim() || '查询预览', sql: preview.sql, chartType: draft.chartType, x: draft.x, y: draft.y },
+      { title: draft.title.trim() || tr("查询预览"), sql: preview.sql, chartType: draft.chartType, x: draft.x, y: draft.y },
       { columns: preview.columns, rows: preview.rows, statement: preview.sql },
     );
   }, [preview, draft.title, draft.chartType, draft.x, draft.y]);
@@ -510,10 +511,10 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
     try {
       const response = await api.dashboardGenerate({ connectionId: conn.id, database });
       setCards(response.cards);
-      if (!response.created) notify('warning', '没有生成新草稿', response.notes[0] ?? '候选都已被固定或试跑未通过');
-      else notify('success', `已生成 ${response.created} 张草稿卡片`, response.notes[0] ?? (response.usedModel ? '按库结构与口径挑选，试跑通过' : ''));
+      if (!response.created) notify('warning', tr("没有生成新草稿"), response.notes[0] ?? tr("候选都已被固定或试跑未通过"));
+      else notify('success', tr("已生成 {0} 张草稿卡片", [response.created]), response.notes[0] ?? (response.usedModel ? tr("按库结构与口径挑选，试跑通过") : ''));
     } catch (err: any) {
-      notify('error', '生成草稿失败', err?.message);
+      notify('error', tr("生成草稿失败"), err?.message);
     } finally {
       setGenerating(false);
     }
@@ -526,9 +527,9 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
     try {
       const { artifact } = await api.dashboardReport({ connectionId: conn.id, database });
       const file = await api.exportArtifact(artifact.id, 'pptx');
-      await deliverExport(file, '仪表板报告已导出');
+      await deliverExport(file, tr("仪表板报告已导出"));
     } catch (err: any) {
-      notify('error', '导出报告失败', err?.message);
+      notify('error', tr("导出报告失败"), err?.message);
     } finally {
       setExporting(false);
     }
@@ -538,9 +539,9 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
     try {
       const response = await api.dashboardDiscardDrafts({ connectionId: conn.id, database });
       setCards(response.cards);
-      notify('success', `已丢弃 ${response.discarded} 张草稿`);
+      notify('success', tr("已丢弃 {0} 张草稿", [response.discarded]));
     } catch (err: any) {
-      notify('error', '丢弃草稿失败', err?.message);
+      notify('error', tr("丢弃草稿失败"), err?.message);
     }
   };
 
@@ -552,7 +553,7 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
       const response = await api.history({ connectionId: conn.id, limit: 200 });
       setFavorites(response.items.filter((item) => item.favorite && item.status === 'ok'));
     } catch (err: any) {
-      notify('error', '读取收藏失败', err?.message);
+      notify('error', tr("读取收藏失败"), err?.message);
     } finally {
       setFavoritesLoading(false);
     }
@@ -561,7 +562,7 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
   const importFavorites = async () => {
     const chosen = favorites.filter((item) => picked.includes(item.id));
     if (!chosen.length) {
-      notify('warning', '先勾选要钉上来的收藏查询');
+      notify('warning', tr("先勾选要钉上来的收藏查询"));
       return;
     }
     for (const item of chosen) {
@@ -570,7 +571,7 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
     }
     setPicked([]);
     setFavoritesOpen(false);
-    notify('success', `已钉上来 ${chosen.length} 张卡片`);
+    notify('success', tr("已钉上来 {0} 张卡片", [chosen.length]));
   };
 
   const move = async (card: DashboardCard, direction: -1 | 1) => {
@@ -584,7 +585,7 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
       const response = await api.dashboardReorderCards(order);
       setCards(response.cards);
     } catch (err: any) {
-      notify('error', '排序失败', err?.message);
+      notify('error', tr("排序失败"), err?.message);
     }
   };
 
@@ -593,7 +594,7 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
       <header className="dash-head">
         <div className="dash-title">
           <LayoutDashboard size={14} />
-          <span>仪表板</span>
+          <span>{tr("仪表板")}</span>
           <DatabaseSelect connectionId={tab.connectionId} value={database ?? ''} onChange={(value) => updateTab(tab.id, { database: value })} testId="dashboard-database" />
         </div>
         <div className="dash-actions">
@@ -604,7 +605,7 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
             <Select
               className="select"
               value={rangeValue}
-              title="板级时间范围：只作用于标了时间列的卡片"
+              title={tr("板级时间范围：只作用于标了时间列的卡片")}
               onChange={(event) => {
                 setDashboardRange(scopeKey, event.target.value);
               }}
@@ -622,8 +623,8 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
             value={String(schedule?.intervalSeconds ?? 0)}
             title={
               schedule?.intervalSeconds
-                ? `后台定时刷新已开启${schedule.lastRunAt ? `，上次 ${schedule.lastRunAt}${schedule.lastError ? ` · ${schedule.lastError}` : ''}` : ''}`
-                : '定时刷新默认关闭：后台跑查询对生产库是风险，需要逐板显式开启'
+                ? tr("后台定时刷新已开启{0}", [schedule.lastRunAt ? tr("，上次 {0}{1}", [schedule.lastRunAt, schedule.lastError ? ` · ${schedule.lastError}` : '']) : ''])
+                : tr("定时刷新默认关闭：后台跑查询对生产库是风险，需要逐板显式开启")
             }
             onChange={(event) => {
               const intervalSeconds = Number(event.target.value);
@@ -633,10 +634,10 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
                   setSchedule(response.schedule);
                   notify(
                     'success',
-                    intervalSeconds ? `已开启定时刷新：${SCHEDULES.find((item) => item.value === intervalSeconds)?.label}` : '已关闭定时刷新',
+                    intervalSeconds ? tr("已开启定时刷新：{0}", [SCHEDULES.find((item) => item.value === intervalSeconds)?.label]) : tr("已关闭定时刷新"),
                   );
                 })
-                .catch((err: any) => notify('error', '定时刷新设置失败', err?.message));
+                .catch((err: any) => notify('error', tr("定时刷新设置失败"), err?.message));
             }}
             data-testid="dashboard-schedule"
           >
@@ -647,28 +648,23 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
             ))}
           </Select>
           <button className="btn small" onClick={() => void refresh()} disabled={refreshing || !cards.length} data-testid="dashboard-refresh">
-            {refreshing ? <Spinner /> : <RefreshCw size={12} />} 刷新
-          </button>
+            {refreshing ? <Spinner /> : <RefreshCw size={12} />}{tr(" 刷新 ")}</button>
           <button className="btn small" onClick={openFavorites} disabled={!supported} data-testid="dashboard-favorites">
-            <Heart size={12} /> 从收藏导入
-          </button>
+            <Heart size={12} /> {tr(" 从收藏导入 ")}</button>
           <button className="btn small" onClick={() => setComposerOpen((open) => !open)} disabled={!supported} data-testid="dashboard-add">
-            <Plus size={12} /> 新建卡片
-          </button>
+            <Plus size={12} /> {tr(" 新建卡片 ")}</button>
           <button className="btn small primary" onClick={generate} disabled={generating || !supported} data-testid="dashboard-generate">
-            {generating ? <Spinner /> : <Sparkles size={12} />} 让 AI 补一批
-          </button>
+            {generating ? <Spinner /> : <Sparkles size={12} />}{tr(" 让 AI 补一批 ")}</button>
           <button
             className="btn small"
             onClick={exportReport}
             disabled={exporting || !cards.length}
-            title="把当前结果整理成可汇报的分页报告（PPTX）"
+            title={tr("把当前结果整理成可汇报的分页报告（PPTX）")}
             data-testid="dashboard-export-report"
           >
-            {exporting ? <Spinner /> : <FileDown size={12} />} 导出为报告
-          </button>
+            {exporting ? <Spinner /> : <FileDown size={12} />}{tr(" 导出为报告 ")}</button>
           {drafts ? (
-            <button className="icon-btn" title={`丢弃 ${drafts} 张草稿（固定卡片不动）`} onClick={discardDrafts} data-testid="dashboard-discard">
+            <button className="icon-btn" title={tr("丢弃 {0} 张草稿（固定卡片不动）", [drafts])} onClick={discardDrafts} data-testid="dashboard-discard">
               <X size={13} />
             </button>
           ) : null}
@@ -681,7 +677,7 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
             <Sparkles size={13} className="dash-ai-icon" />
             <input
               className="input"
-              placeholder="一句话说清想看的指标，例如：近 30 天每天的订单量和成交额"
+              placeholder={tr("一句话说清想看的指标，例如：近 30 天每天的订单量和成交额")}
               value={requirement}
               onChange={(event) => setRequirement(event.target.value)}
               onKeyDown={(event) => {
@@ -690,13 +686,13 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
               data-testid="dashboard-card-prompt"
             />
             <button className="btn small primary" onClick={() => void composeCard()} disabled={composing || !requirement.trim()} data-testid="dashboard-card-compose">
-              {composing ? <Spinner /> : <Sparkles size={12} />} {composing ? '生成中…' : 'AI 生成并预览'}
+              {composing ? <Spinner /> : <Sparkles size={12} />} {composing ? tr("生成中…") : tr("AI 生成并预览")}
             </button>
           </div>
-          <div className="dash-ai-hint">AI 只写单条只读聚合查询，先在当前库试跑 200 行；生成后仍可直接改 SQL。</div>
+          <div className="dash-ai-hint">{tr("AI 只写单条只读聚合查询，先在当前库试跑 200 行；生成后仍可直接改 SQL。")}</div>
           <input
             className="input"
-            placeholder="卡片标题，例如 近 30 天日订单量"
+            placeholder={tr("卡片标题，例如 近 30 天日订单量")}
             value={draft.title}
             onChange={(event) => setDraft({ ...draft, title: event.target.value })}
             data-testid="dashboard-card-title"
@@ -717,16 +713,16 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
           {preview ? (
             <div className="dash-preview" data-testid="dashboard-card-preview">
               <div className="dash-preview-head">
-                <span className={`dash-tag ${draft.source === 'ai' ? 'ai' : ''}`}>{draft.source === 'ai' ? 'AI 预览' : '预览'}</span>
+                <span className={`dash-tag ${draft.source === 'ai' ? 'ai' : ''}`}>{draft.source === 'ai' ? tr("AI 预览") : tr("预览")}</span>
                 <span className="dash-meta">
-                  {preview.error ? '试跑失败' : `${preview.rowCount} 行 · ${preview.durationMs} ms`}
-                  {preview.truncated ? ' · 仅前 200 行' : ''}
+                  {preview.error ? tr("试跑失败") : tr("{0} 行 · {1} ms", [preview.rowCount, preview.durationMs])}
+                  {preview.truncated ? tr(" · 仅前 200 行") : ''}
                 </span>
-                {previewStale ? <span className="dash-preview-stale">SQL 已修改，重新预览后为准</span> : null}
+                {previewStale ? <span className="dash-preview-stale">{tr("SQL 已修改，重新预览后为准")}</span> : null}
                 <span className="dash-foot-space" />
                 <button
                   className="icon-btn"
-                  title="收起预览"
+                  title={tr("收起预览")}
                   onClick={() => {
                     setPreview(null);
                     setComposeNotes([]);
@@ -767,12 +763,10 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
             </Select>
             <span className="dash-foot-space" />
             <button className="btn small" onClick={() => void previewCard()} disabled={previewing || !draft.sql.trim()} data-testid="dashboard-card-preview-btn">
-              {previewing ? <Spinner /> : <Eye size={12} />} 预览
-            </button>
+              {previewing ? <Spinner /> : <Eye size={12} />}{tr(" 预览 ")}</button>
             <button className="btn small primary" onClick={addCard} data-testid="dashboard-card-save">
-              保存到仪表板
-            </button>
-            <button className="icon-btn" title="收起" onClick={() => setComposerOpen(false)}>
+              {tr(" 保存到仪表板 ")}</button>
+            <button className="icon-btn" title={tr("收起")} onClick={() => setComposerOpen(false)}>
               <X size={12} />
             </button>
           </div>
@@ -782,22 +776,21 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
       {favoritesOpen ? (
         <div className="dash-composer panel" data-testid="dashboard-favorites-dialog">
           <div className="dash-favorites-head">
-            <strong>收藏的 SQL</strong>
-            <span className="dash-meta">挑几个钉到看板上——比让 AI 猜你的口径更准。</span>
+            <strong>{tr("收藏的 SQL")}</strong>
+            <span className="dash-meta">{tr("挑几个钉到看板上——比让 AI 猜你的口径更准。")}</span>
             <span className="dash-foot-space" />
             <button className="btn small" onClick={importFavorites} data-testid="dashboard-favorites-import">
-              钉上来 {picked.length ? `(${picked.length})` : ''}
+              {tr(" 钉上来 ")}{picked.length ? `(${picked.length})` : ''}
             </button>
-            <button className="icon-btn" title="关闭" onClick={() => setFavoritesOpen(false)}>
+            <button className="icon-btn" title={tr("关闭")} onClick={() => setFavoritesOpen(false)}>
               <X size={12} />
             </button>
           </div>
           {favoritesLoading ? (
             <div className="dash-empty">
-              <Spinner /> 正在读取收藏的查询…
-            </div>
+              <Spinner /> {tr(" 正在读取收藏的查询… ")}</div>
           ) : !favorites.length ? (
-            <div className="dash-empty">还没有收藏的查询。在查询编辑器里点星标即可收藏。</div>
+            <div className="dash-empty">{tr("还没有收藏的查询。在查询编辑器里点星标即可收藏。")}</div>
           ) : null}
           {favorites.map((item) => (
             <label key={item.id} className="dash-favorite">
@@ -814,29 +807,22 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
 
       {loading ? (
         <div className="dash-loading">
-          <Spinner /> 正在读取仪表板…
-        </div>
+          <Spinner /> {tr(" 正在读取仪表板… ")}</div>
       ) : !supported ? (
         <div className="dash-empty panel">
-          <strong>{conn ? conn.name : '未选择连接'}</strong> 不是 SQL 系引擎，仪表板只面向查询类数据源。
-        </div>
+          <strong>{conn ? conn.name : tr("未选择连接")}</strong> {tr(" 不是 SQL 系引擎，仪表板只面向查询类数据源。 ")}</div>
       ) : !cards.length ? (
         <div className="dash-empty panel" data-testid="dashboard-empty">
-          <strong>这块板还是空的。</strong>
+          <strong>{tr("这块板还是空的。")}</strong>
           <p>
-            仪表板属于「{database ? database.split(/[\\/]+/).filter(Boolean).pop() : '默认库'}」这一个库——每个库的重点不一样，卡片也各管各的。
-            可以让 AI 按库结构与口径生成一版草稿，或把收藏的查询钉上来，也可以自己写 SQL。
-          </p>
+            {tr(" 仪表板属于「")}{database ? database.split(/[\\/]+/).filter(Boolean).pop() : tr("默认库")}{tr("」这一个库——每个库的重点不一样，卡片也各管各的。 可以让 AI 按库结构与口径生成一版草稿，或把收藏的查询钉上来，也可以自己写 SQL。 ")}</p>
           <div className="dash-empty-actions">
             <button className="btn small primary" onClick={generate} disabled={generating} data-testid="dashboard-empty-generate">
-              {generating ? <Spinner /> : <Sparkles size={12} />} 让 AI 生成草稿
-            </button>
+              {generating ? <Spinner /> : <Sparkles size={12} />}{tr(" 让 AI 生成草稿 ")}</button>
             <button className="btn small" onClick={openFavorites} data-testid="dashboard-empty-favorites">
-              <Heart size={12} /> 从收藏导入
-            </button>
+              <Heart size={12} /> {tr(" 从收藏导入 ")}</button>
             <button className="btn small" onClick={() => setComposerOpen(true)} data-testid="dashboard-empty-add">
-              <Plus size={12} /> 新建卡片
-            </button>
+              <Plus size={12} /> {tr(" 新建卡片 ")}</button>
           </div>
         </div>
       ) : (
@@ -856,7 +842,7 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
                     const response = await api.dashboardDeleteCard(card.id);
                     setCards(response.cards);
                   } catch (err: any) {
-                    notify('error', '删除失败', err?.message);
+                    notify('error', tr("删除失败"), err?.message);
                   }
                 })()}
                 onPatch={(patch) => patchCard(card, patch)}

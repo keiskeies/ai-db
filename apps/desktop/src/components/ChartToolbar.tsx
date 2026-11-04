@@ -1,5 +1,6 @@
 import { BarChart3, Download, Grid3x3, Layers, LineChart, Maximize2, PieChart, Radar, ScatterChart } from 'lucide-react';
 import { CopyButton, Option, Select } from './ui';
+import { getI18nLocale, t as tr } from '../i18n';
 
 /**
  * 只包含图形类型：明细/表格是 AgentPanel 与 QueryView 自己的结果 tab，
@@ -8,13 +9,13 @@ import { CopyButton, Option, Select } from './ui';
 export type ChartType = 'bar' | 'stacked' | 'line' | 'pie' | 'scatter' | 'heatmap' | 'radar';
 
 const TYPES: Array<{ value: ChartType; label: string; icon: typeof BarChart3 }> = [
-  { value: 'bar', label: '柱状图', icon: BarChart3 },
-  { value: 'stacked', label: '堆叠柱状图', icon: Layers },
-  { value: 'line', label: '折线图', icon: LineChart },
-  { value: 'pie', label: '饼图', icon: PieChart },
-  { value: 'scatter', label: '散点图', icon: ScatterChart },
-  { value: 'heatmap', label: '热力图', icon: Grid3x3 },
-  { value: 'radar', label: '雷达图', icon: Radar },
+  { value: 'bar', label: tr("柱状图"), icon: BarChart3 },
+  { value: 'stacked', label: tr("堆叠柱状图"), icon: Layers },
+  { value: 'line', label: tr("折线图"), icon: LineChart },
+  { value: 'pie', label: tr("饼图"), icon: PieChart },
+  { value: 'scatter', label: tr("散点图"), icon: ScatterChart },
+  { value: 'heatmap', label: tr("热力图"), icon: Grid3x3 },
+  { value: 'radar', label: tr("雷达图"), icon: Radar },
 ];
 
 export interface ChartToolbarProps {
@@ -44,7 +45,7 @@ export function ChartToolbar({ type, onType, columns, x, y, onX, onY, sql, onExp
   const showAxes = Boolean(columns?.length && onX && onY);
   return (
     <div className="chart-toolbar" data-testid="chart-toolbar">
-      <div className="chart-types" role="group" aria-label="图表类型">
+      <div className="chart-types" role="group" aria-label={tr("图表类型")}>
         {TYPES.map((item) => {
           const fit = suitability?.[item.value];
           // 当前正在显示的类型即使被判为不适配也保持可点，避免出现一个禁用的 active 按钮
@@ -54,7 +55,7 @@ export function ChartToolbar({ type, onType, columns, x, y, onX, onY, sql, onExp
               key={item.value}
               type="button"
               className={`chart-type${type === item.value ? ' active' : ''}${blocked ? ' unsuitable' : ''}`}
-              title={blocked ? `${item.label}：${fit.reason ?? '当前数据不适合'}` : item.label}
+              title={blocked ? `${tr(item.label)}${/^(zh|ja)/i.test(getI18nLocale()) ? '：' : ': '}${tr(fit.reason ?? '当前数据不适合')}` : item.label}
               aria-pressed={type === item.value}
               aria-disabled={blocked || undefined}
               disabled={blocked}
@@ -72,14 +73,14 @@ export function ChartToolbar({ type, onType, columns, x, y, onX, onY, sql, onExp
           <label className="chart-axis-pick">
             <span>X</span>
             <Select className="select" value={x ?? ''} onChange={(e) => onX?.(e.target.value)} data-testid="chart-x">
-              <Option value="">自动</Option>
+              <Option value="">{tr("自动")}</Option>
               {columns!.map((column) => <Option key={column} value={column}>{column}</Option>)}
             </Select>
           </label>
           <label className="chart-axis-pick">
             <span>Y</span>
             <Select className="select" value={y ?? ''} onChange={(e) => onY?.(e.target.value)} data-testid="chart-y">
-              <Option value="">自动</Option>
+              <Option value="">{tr("自动")}</Option>
               {columns!.map((column) => <Option key={column} value={column}>{column}</Option>)}
             </Select>
           </label>
@@ -90,17 +91,17 @@ export function ChartToolbar({ type, onType, columns, x, y, onX, onY, sql, onExp
 
       {sql ? <CopyButton text={sql} /> : null}
       {onExportCsv && sql ? (
-        <button type="button" className="icon-btn" title="导出 CSV" data-testid="chart-export-csv" onClick={onExportCsv}>
+        <button type="button" className="icon-btn" title={tr("导出 CSV")} data-testid="chart-export-csv" onClick={onExportCsv}>
           <Download size={12} />
         </button>
       ) : null}
       {onExportPng ? (
-        <button type="button" className="icon-btn" title="导出 PNG" data-testid="chart-export-png" disabled={exporting} onClick={onExportPng}>
+        <button type="button" className="icon-btn" title={tr("导出 PNG")} data-testid="chart-export-png" disabled={exporting} onClick={onExportPng}>
           <Download size={12} />
         </button>
       ) : null}
       {onZoom ? (
-        <button type="button" className="icon-btn" title="放大" data-testid="chart-zoom" onClick={onZoom}>
+        <button type="button" className="icon-btn" title={tr("放大")} data-testid="chart-zoom" onClick={onZoom}>
           <Maximize2 size={12} />
         </button>
       ) : null}

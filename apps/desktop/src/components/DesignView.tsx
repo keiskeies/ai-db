@@ -20,6 +20,7 @@ import { tableSignature } from '../lib/schemaSignature';
 import { useApp, type Tab } from '../store';
 import { askConfirm } from './AskDialog';
 import { Select, Option } from './ui';
+import { t as tr } from '../i18n';
 
 type DesignTab = Extract<Tab, { kind: 'design' }>;
 type DesignerTab = 'fields' | 'indexes' | 'foreignKeys' | 'triggers' | 'options' | 'comments' | 'sql';
@@ -92,13 +93,13 @@ const FK_ACTIONS = ['RESTRICT', 'CASCADE', 'SET NULL', 'NO ACTION', 'SET DEFAULT
 const INDEX_METHODS = ['BTREE', 'HASH', 'FULLTEXT', 'RTREE'];
 
 const TABS: Array<{ id: DesignerTab; label: string }> = [
-  { id: 'fields', label: '字段' },
-  { id: 'indexes', label: '索引' },
-  { id: 'foreignKeys', label: '外键' },
-  { id: 'triggers', label: '触发器' },
-  { id: 'options', label: '选项' },
-  { id: 'comments', label: '注释' },
-  { id: 'sql', label: 'SQL 预览' },
+  { id: 'fields', label: tr("字段") },
+  { id: 'indexes', label: tr("索引") },
+  { id: 'foreignKeys', label: tr("外键") },
+  { id: 'triggers', label: tr("触发器") },
+  { id: 'options', label: tr("选项") },
+  { id: 'comments', label: tr("注释") },
+  { id: 'sql', label: tr("SQL 预览") },
 ];
 
 let rowSeq = 0;
@@ -390,7 +391,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
 
   const loadAux = async (which: 'triggers' | 'options') => {
     if (!tab.table) {
-      if (which === 'options') setOptionsNote('新建表还没有表级选项');
+      if (which === 'options') setOptionsNote(tr("新建表还没有表级选项"));
       return;
     }
     const key = auxKey(which);
@@ -416,11 +417,11 @@ export function DesignView({ tab }: { tab: DesignTab }) {
       } else {
         const result = await api.tableOptions(tab.connectionId, tableName, tab.database);
         setOptions(result.options ?? []);
-        setOptionsNote(result.supported ? '' : result.note ?? '该引擎暂不提供表级选项读取');
+        setOptionsNote(result.supported ? '' : result.note ?? tr("该引擎暂不提供表级选项读取"));
       }
     } catch (err: any) {
       delete loadedAux.current[key];
-      setError(err?.message ?? '读取失败');
+      setError(err?.message ?? tr("读取失败"));
     }
   };
 
@@ -486,11 +487,11 @@ export function DesignView({ tab }: { tab: DesignTab }) {
     setError(null);
     const target = (tableName || tab.table || '').trim();
     if (!target) {
-      setError('请填写表名');
+      setError(tr("请填写表名"));
       return null;
     }
     if (!activeColumns.length) {
-      setError('至少需要一列');
+      setError(tr("至少需要一列"));
       return null;
     }
     try {
@@ -538,7 +539,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
       setStatements(result);
       return result;
     } catch (err: any) {
-      setError(err?.message ?? '生成 DDL 失败');
+      setError(err?.message ?? tr("生成 DDL 失败"));
       return null;
     }
   }
@@ -556,16 +557,16 @@ export function DesignView({ tab }: { tab: DesignTab }) {
       const preview = await buildPreview();
       if (!preview) return;
       if (!preview.length) {
-        notify('info', '保存', '没有需要执行的变更');
+        notify('info', tr("保存"), tr("没有需要执行的变更"));
         return;
       }
       const destructive = preview.some((sql) => /\b(drop|alter)\b/i.test(sql));
       if (destructive) {
         const ok = await askConfirm({
-          message: '即将执行包含 DROP / ALTER 的结构变更。',
-          detail: '已被删除的列与索引及其数据无法恢复。',
+          message: tr("即将执行包含 DROP / ALTER 的结构变更。"),
+          detail: tr("已被删除的列与索引及其数据无法恢复。"),
           danger: true,
-          confirmLabel: '继续执行',
+          confirmLabel: tr("继续执行"),
         });
         if (!ok) {
           setBusy(false);
@@ -573,12 +574,12 @@ export function DesignView({ tab }: { tab: DesignTab }) {
         }
       }
       await api.ddlExecute({ connectionId: tab.connectionId, database: tab.database, statements: preview });
-      notify('success', tab.table ? '表结构已更新' : `表 ${tableName} 已创建`);
+      notify('success', tab.table ? tr("表结构已更新") : tr("表 {0} 已创建", [tableName]));
       await loadSchema(tab.connectionId, true, tab.database);
       if (!tab.table) openData(tab.connectionId, tableName.trim(), tab.database);
       closeTab(tab.id);
     } catch (err: any) {
-      setError(err?.message ?? '执行失败');
+      setError(err?.message ?? tr("执行失败"));
       notify('error', t('error'), err?.message);
     } finally {
       setBusy(false);
@@ -630,7 +631,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
   const togglePrimaryKey = () => {
     if (!selectedColumn) return;
     if (selectedColumn.originalName) {
-      notify('info', '主键', '已有列的主键需要重建表才能调整');
+      notify('info', tr("主键"), tr("已有列的主键需要重建表才能调整"));
       return;
     }
     const turnOn = !selectedColumn.primaryKey;
@@ -689,7 +690,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
     [columns, indexes, foreignKeys, tableComment, originalComment, activeColumns, tab.table],
   );
 
-  const saveButton = <ToolButton icon={<Save size={14} />} label="保存" onClick={() => void apply()} disabled={busy || isView} primary testId="design-apply" />;
+  const saveButton = <ToolButton icon={<Save size={14} />} label={tr("保存")} onClick={() => void apply()} disabled={busy || isView} primary testId="design-apply" />;
 
   const toolbar = () => {
     if (designerTab === 'fields') {
@@ -697,14 +698,14 @@ export function DesignView({ tab }: { tab: DesignTab }) {
         <>
           {saveButton}
           <span className="designer-sep" />
-          <ToolButton icon={<Plus size={14} />} label="添加字段" onClick={() => addColumn()} testId="design-add-column" />
-          <ToolButton icon={<ArrowLeftToLine size={14} />} label="插入字段" onClick={() => addColumn(selColumn)} disabled={!selectedColumn} />
-          <ToolButton icon={<Trash2 size={14} />} label="删除字段" onClick={() => removeColumn(selectedColumn!.id)} disabled={!selectedColumn} />
+          <ToolButton icon={<Plus size={14} />} label={tr("添加字段")} onClick={() => addColumn()} testId="design-add-column" />
+          <ToolButton icon={<ArrowLeftToLine size={14} />} label={tr("插入字段")} onClick={() => addColumn(selColumn)} disabled={!selectedColumn} />
+          <ToolButton icon={<Trash2 size={14} />} label={tr("删除字段")} onClick={() => removeColumn(selectedColumn!.id)} disabled={!selectedColumn} />
           <span className="designer-sep" />
-          <ToolButton icon={<KeyRound size={14} />} label="主键" onClick={togglePrimaryKey} disabled={!selectedColumn} />
+          <ToolButton icon={<KeyRound size={14} />} label={tr("主键")} onClick={togglePrimaryKey} disabled={!selectedColumn} />
           <span className="designer-sep" />
-          <ToolButton icon={<ArrowUp size={14} />} label="上移" onClick={() => moveColumn(-1)} disabled={selColumn <= 0} />
-          <ToolButton icon={<ArrowDown size={14} />} label="下移" onClick={() => moveColumn(1)} disabled={selColumn >= columns.length - 1} />
+          <ToolButton icon={<ArrowUp size={14} />} label={tr("上移")} onClick={() => moveColumn(-1)} disabled={selColumn <= 0} />
+          <ToolButton icon={<ArrowDown size={14} />} label={tr("下移")} onClick={() => moveColumn(1)} disabled={selColumn >= columns.length - 1} />
         </>
       );
     }
@@ -713,8 +714,8 @@ export function DesignView({ tab }: { tab: DesignTab }) {
         <>
           {saveButton}
           <span className="designer-sep" />
-          <ToolButton icon={<Plus size={14} />} label="添加索引" onClick={addIndex} />
-          <ToolButton icon={<Trash2 size={14} />} label="删除索引" onClick={removeIndex} disabled={!selectedIndex || selectedIndex.primary} />
+          <ToolButton icon={<Plus size={14} />} label={tr("添加索引")} onClick={addIndex} />
+          <ToolButton icon={<Trash2 size={14} />} label={tr("删除索引")} onClick={removeIndex} disabled={!selectedIndex || selectedIndex.primary} />
         </>
       );
     }
@@ -723,8 +724,8 @@ export function DesignView({ tab }: { tab: DesignTab }) {
         <>
           {saveButton}
           <span className="designer-sep" />
-          <ToolButton icon={<Plus size={14} />} label="添加外键" onClick={addFk} />
-          <ToolButton icon={<Trash2 size={14} />} label="删除外键" onClick={removeFk} disabled={!selectedFk} />
+          <ToolButton icon={<Plus size={14} />} label={tr("添加外键")} onClick={addFk} />
+          <ToolButton icon={<Trash2 size={14} />} label={tr("删除外键")} onClick={removeFk} disabled={!selectedFk} />
         </>
       );
     }
@@ -733,10 +734,10 @@ export function DesignView({ tab }: { tab: DesignTab }) {
         <>
           {saveButton}
           <span className="designer-sep" />
-          <ToolButton icon={<Wand2 size={14} />} label="在查询窗口编写触发器" onClick={() => openQuery(tab.connectionId, 'CREATE TRIGGER ')} />
+          <ToolButton icon={<Wand2 size={14} />} label={tr("在查询窗口编写触发器")} onClick={() => openQuery(tab.connectionId, 'CREATE TRIGGER ')} />
           <ToolButton
             icon={<RefreshCw size={14} />}
-            label="刷新"
+            label={tr("刷新")}
             onClick={() => {
               delete loadedAux.current[auxKey('triggers')];
               void loadAux('triggers');
@@ -752,7 +753,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
           <span className="designer-sep" />
           <ToolButton
             icon={<RefreshCw size={14} />}
-            label="刷新"
+            label={tr("刷新")}
             onClick={() => {
               delete loadedAux.current[auxKey('options')];
               void loadAux('options');
@@ -766,7 +767,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
         <>
           {saveButton}
           <span className="designer-sep" />
-          <ToolButton icon={<RefreshCw size={14} />} label="刷新预览" onClick={() => void buildPreview()} testId="design-preview" />
+          <ToolButton icon={<RefreshCw size={14} />} label={tr("刷新预览")} onClick={() => void buildPreview()} testId="design-preview" />
         </>
       );
     }
@@ -777,11 +778,11 @@ export function DesignView({ tab }: { tab: DesignTab }) {
     if (designerTab === 'fields' && selectedColumn) {
       return (
         <div className="designer-detail">
-          <div className="designer-detail-title">{selectedColumn.name || '(新字段)'}</div>
+          <div className="designer-detail-title">{selectedColumn.name || tr("(新字段)")}</div>
           <div className="designer-detail-body">
             <label className="designer-form-row">
-              <span>默认:</span>
-              <input className="input" value={selectedColumn.defaultValue} placeholder="（无）" onChange={(e) => patchColumn(selectedColumn.id, { defaultValue: e.target.value })} />
+              <span>{tr("默认:")}</span>
+              <input className="input" value={selectedColumn.defaultValue} placeholder={tr("（无）")} onChange={(e) => patchColumn(selectedColumn.id, { defaultValue: e.target.value })} />
             </label>
             <label className="designer-check">
               <input
@@ -790,18 +791,15 @@ export function DesignView({ tab }: { tab: DesignTab }) {
                 disabled={Boolean(selectedColumn.originalName)}
                 onChange={(e) => patchColumn(selectedColumn.id, { autoIncrement: e.target.checked })}
               />
-              自动递增
-            </label>
+              {tr(" 自动递增 ")}</label>
             <label className="designer-check">
               <input type="checkbox" checked={selectedColumn.unsigned} onChange={(e) => patchColumn(selectedColumn.id, { unsigned: e.target.checked })} />
-              无符号
-            </label>
+              {tr(" 无符号 ")}</label>
             <label className="designer-check">
               <input type="checkbox" checked={selectedColumn.zerofill} onChange={(e) => patchColumn(selectedColumn.id, { zerofill: e.target.checked })} />
-              填充零
-            </label>
+              {tr(" 填充零 ")}</label>
             <span className="designer-summary">
-              <span>完整类型</span>
+              <span>{tr("完整类型")}</span>
               <code>{composeType(selectedColumn) || '—'}</code>
             </span>
           </div>
@@ -812,10 +810,10 @@ export function DesignView({ tab }: { tab: DesignTab }) {
       const kind = selectedIndex.method === 'FULLTEXT' ? 'FULLTEXT ' : selectedIndex.unique ? 'UNIQUE ' : '';
       return (
         <div className="designer-detail">
-          <div className="designer-detail-title">{selectedIndex.name || '(自动命名)'}</div>
+          <div className="designer-detail-title">{selectedIndex.name || tr("(自动命名)")}</div>
           <div className="designer-detail-body">
             <pre className="ddl-box inline">
-              {`CREATE ${kind}INDEX ${selectedIndex.name || '(自动命名)'} ON ${tableName} (${toList(selectedIndex.columns).join(', ') || '...'})${
+              {`CREATE ${kind}INDEX ${selectedIndex.name || tr('(自动命名)')} ON ${tableName} (${toList(selectedIndex.columns).join(', ') || '...'})${
                 selectedIndex.method && selectedIndex.method !== 'FULLTEXT' ? ` USING ${selectedIndex.method}` : ''
               }`}
             </pre>
@@ -826,11 +824,11 @@ export function DesignView({ tab }: { tab: DesignTab }) {
     if (designerTab === 'foreignKeys' && selectedFk) {
       return (
         <div className="designer-detail">
-          <div className="designer-detail-title">{selectedFk.name || '(自动命名)'}</div>
+          <div className="designer-detail-title">{selectedFk.name || tr("(自动命名)")}</div>
           <div className="designer-detail-body">
             <pre className="ddl-box inline">
-              {`CONSTRAINT ${selectedFk.name || '(自动命名)'} FOREIGN KEY (${toList(selectedFk.columns).join(', ') || '...'}) REFERENCES ${
-                [selectedFk.refSchema, selectedFk.refTable].filter(Boolean).join('.') || '(未选择)'
+              {`CONSTRAINT ${selectedFk.name || tr('(自动命名)')} FOREIGN KEY (${toList(selectedFk.columns).join(', ') || '...'}) REFERENCES ${
+                [selectedFk.refSchema, selectedFk.refTable].filter(Boolean).join('.') || tr('(未选择)')
               } (${toList(selectedFk.refColumns).join(', ') || '...'})${selectedFk.onDelete ? ` ON DELETE ${selectedFk.onDelete}` : ''}${
                 selectedFk.onUpdate ? ` ON UPDATE ${selectedFk.onUpdate}` : ''
               }`}
@@ -853,10 +851,10 @@ export function DesignView({ tab }: { tab: DesignTab }) {
   };
 
   const statusText = () => {
-    const parts = [`字段数: ${activeColumns.length}`];
-    if (designerTab === 'indexes' || designerTab === 'sql' || designerTab === 'comments') parts.push(`索引数: ${activeIndexes.length}`);
-    if (designerTab === 'foreignKeys' || designerTab === 'sql') parts.push(`外键数: ${activeFks.length}`);
-    if (designerTab === 'triggers') parts.push(`触发器数: ${triggers.length}`);
+    const parts = [tr("字段数: {0}", [activeColumns.length])];
+    if (designerTab === 'indexes' || designerTab === 'sql' || designerTab === 'comments') parts.push(tr("索引数: {0}", [activeIndexes.length]));
+    if (designerTab === 'foreignKeys' || designerTab === 'sql') parts.push(tr("外键数: {0}", [activeFks.length]));
+    if (designerTab === 'triggers') parts.push(tr("触发器数: {0}", [triggers.length]));
     return parts;
   };
 
@@ -865,14 +863,14 @@ export function DesignView({ tab }: { tab: DesignTab }) {
       <div className="designer-toolbar">
         {toolbar()}
         <div className="spacer" />
-        {isView ? <span className="designer-hint">视图不可编辑结构</span> : null}
+        {isView ? <span className="designer-hint">{tr("视图不可编辑结构")}</span> : null}
         <label className="designer-tabname">
           <span>{t('name')}</span>
           <input
             className="input"
             style={{ width: 210 }}
             value={tableName}
-            placeholder="表名"
+            placeholder={tr("表名")}
             disabled={Boolean(tab.table)}
             onChange={(e) => setTableName(e.target.value)}
             data-testid="design-table-name"
@@ -893,7 +891,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
 
       {pendingReload ? (
         <div className="risk-banner designer-conflict" data-testid="designer-conflict">
-          <span>此表已在别处被修改。</span>
+          <span>{tr("此表已在别处被修改。")}</span>
           <button
             className="btn small"
             data-testid="designer-conflict-reload"
@@ -903,8 +901,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
               setPendingReload(false);
             }}
           >
-            重新加载
-          </button>
+            {tr(" 重新加载 ")}</button>
           <button
             className="btn small"
             data-testid="designer-conflict-keep"
@@ -916,8 +913,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
               setPendingReload(false);
             }}
           >
-            保留我的修改
-          </button>
+            {tr(" 保留我的修改 ")}</button>
         </div>
       ) : null}
 
@@ -931,12 +927,12 @@ export function DesignView({ tab }: { tab: DesignTab }) {
                 <th className="col-mark" style={{ width: 26 }} />
                 <th style={{ minWidth: 150 }}>{t('name')}</th>
                 <th style={{ minWidth: 190 }}>{t('type')}</th>
-                <th style={{ width: 64 }}>长度</th>
-                <th style={{ width: 64 }}>小数</th>
-                <th style={{ width: 64 }}>非空</th>
-                <th style={{ width: 56 }}>虚拟</th>
-                <th style={{ width: 52 }}>键</th>
-                <th style={{ minWidth: 160 }}>注释</th>
+                <th style={{ width: 64 }}>{tr("长度")}</th>
+                <th style={{ width: 64 }}>{tr("小数")}</th>
+                <th style={{ width: 64 }}>{tr("非空")}</th>
+                <th style={{ width: 56 }}>{tr("虚拟")}</th>
+                <th style={{ width: 52 }}>{tr("键")}</th>
+                <th style={{ minWidth: 160 }}>{tr("注释")}</th>
               </tr>
             </thead>
             <tbody>
@@ -949,7 +945,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
                   <td>
                     <div className="type-cell">
                       <input value={col.base} title={composeType(col)} onChange={(e) => patchColumn(col.id, { base: e.target.value })} />
-                      <button className="icon-btn type-pick" title="选择类型" onClick={(event) => openTypeMenu(event, col)}>
+                      <button className="icon-btn type-pick" title={tr("选择类型")} onClick={(event) => openTypeMenu(event, col)}>
                         <ChevronDown size={11} />
                       </button>
                     </div>
@@ -972,7 +968,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
                       type="checkbox"
                       checked={col.generated === 'virtual' || col.generated === 'stored'}
                       disabled
-                      title={col.generated ? `生成列（${col.generated}）` : '生成列请通过 SQL 维护'}
+                      title={col.generated ? tr("生成列（{0}）", [col.generated]) : tr("生成列请通过 SQL 维护")}
                     />
                   </td>
                   <td className="cell-center">
@@ -998,10 +994,10 @@ export function DesignView({ tab }: { tab: DesignTab }) {
               <tr>
                 <th className="col-mark" style={{ width: 26 }} />
                 <th style={{ minWidth: 190 }}>{t('name')}</th>
-                <th style={{ minWidth: 200 }}>字段</th>
-                <th style={{ width: 130 }}>索引类型</th>
-                <th style={{ width: 130 }}>索引方法</th>
-                <th style={{ minWidth: 160 }}>注释</th>
+                <th style={{ minWidth: 200 }}>{tr("字段")}</th>
+                <th style={{ width: 130 }}>{tr("索引类型")}</th>
+                <th style={{ width: 130 }}>{tr("索引方法")}</th>
+                <th style={{ minWidth: 160 }}>{tr("注释")}</th>
               </tr>
             </thead>
             <tbody>
@@ -1012,7 +1008,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
                     <input
                       value={idx.name}
                       disabled={idx.primary}
-                      placeholder="自动命名"
+                      placeholder={tr("自动命名")}
                       onChange={(e) => setIndexes((prev) => prev.map((i) => (i.id === idx.id ? { ...i, name: e.target.value } : i)))}
                     />
                   </td>
@@ -1046,7 +1042,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
                   </td>
                   <td>
                     <Select value={idx.method} disabled={idx.primary} onChange={(e) => setIndexes((prev) => prev.map((i) => (i.id === idx.id ? { ...i, method: e.target.value } : i)))}>
-                      <Option value="">（默认）</Option>
+                      <Option value="">{tr("（默认）")}</Option>
                       {INDEX_METHODS.map((method) => (
                         <Option key={method} value={method}>
                           {method}
@@ -1062,8 +1058,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
               {!indexes.length ? (
                 <tr>
                   <td className="designer-empty" colSpan={6}>
-                    该表没有索引。
-                  </td>
+                    {tr(" 该表没有索引。 ")}</td>
                 </tr>
               ) : null}
             </tbody>
@@ -1076,12 +1071,12 @@ export function DesignView({ tab }: { tab: DesignTab }) {
               <tr>
                 <th className="col-mark" style={{ width: 26 }} />
                 <th style={{ minWidth: 170 }}>{t('name')}</th>
-                <th style={{ minWidth: 130 }}>字段</th>
-                <th style={{ minWidth: 110 }}>被引用的模式</th>
-                <th style={{ minWidth: 150 }}>被引用的表（父）</th>
-                <th style={{ minWidth: 120 }}>被引用的字段</th>
-                <th style={{ minWidth: 120 }}>删除时</th>
-                <th style={{ minWidth: 120 }}>更新时</th>
+                <th style={{ minWidth: 130 }}>{tr("字段")}</th>
+                <th style={{ minWidth: 110 }}>{tr("被引用的模式")}</th>
+                <th style={{ minWidth: 150 }}>{tr("被引用的表（父）")}</th>
+                <th style={{ minWidth: 120 }}>{tr("被引用的字段")}</th>
+                <th style={{ minWidth: 120 }}>{tr("删除时")}</th>
+                <th style={{ minWidth: 120 }}>{tr("更新时")}</th>
               </tr>
             </thead>
             <tbody>
@@ -1089,7 +1084,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
                 <tr key={fk.id} className={`${selFk === index ? 'selected' : ''} ${fk.removed ? 'removed' : ''}`} onClick={() => setSelFk(index)}>
                   <td className="col-mark">{selFk === index ? <ChevronRight size={12} className="open" /> : null}</td>
                   <td>
-                    <input value={fk.name} placeholder="自动命名" onChange={(e) => setForeignKeys((prev) => prev.map((f) => (f.id === fk.id ? { ...f, name: e.target.value } : f)))} />
+                    <input value={fk.name} placeholder={tr("自动命名")} onChange={(e) => setForeignKeys((prev) => prev.map((f) => (f.id === fk.id ? { ...f, name: e.target.value } : f)))} />
                   </td>
                   <td>
                     <input value={fk.columns} onChange={(e) => setForeignKeys((prev) => prev.map((f) => (f.id === fk.id ? { ...f, columns: e.target.value } : f)))} />
@@ -1105,7 +1100,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
                   </td>
                   <td>
                     <Select value={fk.onDelete} onChange={(e) => setForeignKeys((prev) => prev.map((f) => (f.id === fk.id ? { ...f, onDelete: e.target.value } : f)))}>
-                      <Option value="">（默认）</Option>
+                      <Option value="">{tr("（默认）")}</Option>
                       {FK_ACTIONS.map((action) => (
                         <Option key={action} value={action}>
                           {action}
@@ -1115,7 +1110,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
                   </td>
                   <td>
                     <Select value={fk.onUpdate} onChange={(e) => setForeignKeys((prev) => prev.map((f) => (f.id === fk.id ? { ...f, onUpdate: e.target.value } : f)))}>
-                      <Option value="">（默认）</Option>
+                      <Option value="">{tr("（默认）")}</Option>
                       {FK_ACTIONS.map((action) => (
                         <Option key={action} value={action}>
                           {action}
@@ -1128,8 +1123,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
               {!foreignKeys.length ? (
                 <tr>
                   <td className="designer-empty" colSpan={8}>
-                    该表没有外键。
-                  </td>
+                    {tr(" 该表没有外键。 ")}</td>
                 </tr>
               ) : null}
             </tbody>
@@ -1142,10 +1136,10 @@ export function DesignView({ tab }: { tab: DesignTab }) {
               <tr>
                 <th className="col-mark" style={{ width: 26 }} />
                 <th style={{ minWidth: 200 }}>{t('name')}</th>
-                <th style={{ width: 120 }}>触发</th>
-                <th style={{ width: 80 }}>插入</th>
-                <th style={{ width: 80 }}>更新</th>
-                <th style={{ width: 80 }}>删除</th>
+                <th style={{ width: 120 }}>{tr("触发")}</th>
+                <th style={{ width: 80 }}>{tr("插入")}</th>
+                <th style={{ width: 80 }}>{tr("更新")}</th>
+                <th style={{ width: 80 }}>{tr("删除")}</th>
               </tr>
             </thead>
             <tbody>
@@ -1172,8 +1166,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
               {!triggers.length ? (
                 <tr>
                   <td className="designer-empty" colSpan={6}>
-                    该表没有触发器。触发器的创建与删除请在查询窗口执行 SQL。
-                  </td>
+                    {tr(" 该表没有触发器。触发器的创建与删除请在查询窗口执行 SQL。 ")}</td>
                 </tr>
               ) : null}
             </tbody>
@@ -1194,7 +1187,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
               {!options.length ? (
                 <tr>
                   <td className="designer-empty" colSpan={2}>
-                    {optionsNote || '没有可读取的表选项。'}
+                    {optionsNote || tr("没有可读取的表选项。")}
                   </td>
                 </tr>
               ) : null}
@@ -1205,15 +1198,15 @@ export function DesignView({ tab }: { tab: DesignTab }) {
         {designerTab === 'comments' ? (
           <div className="designer-comments">
             <label className="designer-form-row wide">
-              <span>表注释:</span>
-              <textarea className="input" rows={2} value={tableComment} onChange={(e) => setTableComment(e.target.value)} placeholder="为该表填写业务含义说明" />
+              <span>{tr("表注释:")}</span>
+              <textarea className="input" rows={2} value={tableComment} onChange={(e) => setTableComment(e.target.value)} placeholder={tr("为该表填写业务含义说明")} />
             </label>
             <table className="designer-grid">
               <thead>
                 <tr>
                   <th className="col-mark" style={{ width: 26 }} />
                   <th style={{ minWidth: 180 }}>{t('name')}</th>
-                  <th style={{ minWidth: 320 }}>注释</th>
+                  <th style={{ minWidth: 320 }}>{tr("注释")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1240,7 +1233,7 @@ export function DesignView({ tab }: { tab: DesignTab }) {
             {statements.length ? (
               <pre className="ddl-box">{statements.join('\n\n')}</pre>
             ) : (
-              <div className="designer-empty-inline">没有待执行的变更。修改字段、索引、外键或注释后，这里会生成 DDL。</div>
+              <div className="designer-empty-inline">{tr("没有待执行的变更。修改字段、索引、外键或注释后，这里会生成 DDL。")}</div>
             )}
           </div>
         ) : null}
@@ -1253,9 +1246,9 @@ export function DesignView({ tab }: { tab: DesignTab }) {
           <span key={text}>{text}</span>
         ))}
         <div className="spacer" />
-        <span className={dirty ? 'changed' : ''}>{dirty ? '有未保存的变更' : '无变更'}</span>
+        <span className={dirty ? 'changed' : ''}>{dirty ? tr("有未保存的变更") : tr("无变更")}</span>
         <span>
-          <Wrench size={11} /> {tab.table ? `设计 · ${tab.table}` : t('newTable')}
+          <Wrench size={11} /> {tab.table ? tr("设计 · {0}", [tab.table]) : t('newTable')}
         </span>
       </div>
     </div>

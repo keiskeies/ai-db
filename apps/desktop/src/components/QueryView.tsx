@@ -27,6 +27,7 @@ import { RedisKeyDialog } from './RedisKeyDialog';
 import { RedisKeyCreateDialog } from './RedisKeyCreateDialog';
 import { LineProtocolPanel } from './LineProtocolPanel';
 import { Option, Select, Spinner } from './ui';
+import { t as tr } from '../i18n';
 
 type QueryTab = Extract<Tab, { kind: 'query' }>;
 
@@ -260,9 +261,9 @@ export function QueryView({ tab }: { tab: QueryTab }) {
     try {
       await api.beginTransaction({ connectionId: conn.id, sessionId, database: tab.database });
       setTxSession(sessionId);
-      notify('info', '事务已开启', '提交前数据不会落库');
+      notify('info', tr("事务已开启"), tr("提交前数据不会落库"));
     } catch (err: any) {
-      notify('error', '开启事务失败', err?.message);
+      notify('error', tr("开启事务失败"), err?.message);
     }
   };
 
@@ -272,17 +273,17 @@ export function QueryView({ tab }: { tab: QueryTab }) {
       if (mode === 'commit') await api.commitTransaction({ sessionId: txSession });
       else await api.rollbackTransaction({ sessionId: txSession });
       setTxSession(null);
-      notify('success', mode === 'commit' ? '事务已提交' : '事务已回滚', '');
+      notify('success', mode === 'commit' ? tr("事务已提交") : tr("事务已回滚"), '');
       void loadSchema(tab.connectionId, true, tab.database).catch(() => undefined);
     } catch (err: any) {
-      notify('error', mode === 'commit' ? '提交失败' : '回滚失败', err?.message);
+      notify('error', mode === 'commit' ? tr("提交失败") : tr("回滚失败"), err?.message);
     }
   };
 
   const run = async (override?: string) => {
     const text = (override ?? currentSql()).trim();
     if (!text) {
-      notify('warning', '请输入查询');
+      notify('warning', tr("请输入查询"));
       return;
     }
     setRunning(true);
@@ -299,9 +300,9 @@ export function QueryView({ tab }: { tab: QueryTab }) {
       setBatch(result);
       setActiveSet(0);
       setResultTab('results');
-      if (result.sets.length > 1) notify('info', `执行成功，返回 ${result.sets.length} 个结果集`);
+      if (result.sets.length > 1) notify('info', tr("执行成功，返回 {0} 个结果集", [result.sets.length]));
     } catch (err: any) {
-      setError(`${err?.message ?? '执行失败'}${err?.hint ? `\n${err.hint}` : ''}`);
+      setError(`${err?.message ?? tr('执行失败')}${err?.hint ? `\n${err.hint}` : ''}`);
       setBatch(null);
       setResultTab('messages');
     } finally {
@@ -329,7 +330,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
       setActiveSet(0);
       setResultTab('results');
     } catch (err: any) {
-      setError(err?.message ?? '执行计划失败');
+      setError(err?.message ?? tr("执行计划失败"));
       setResultTab('messages');
     } finally {
       setRunning(false);
@@ -387,7 +388,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const runScript = async () => {
     const text = currentSql().trim();
     if (!text) {
-      notify('warning', '请输入 SQL 脚本');
+      notify('warning', tr("请输入 SQL 脚本"));
       return;
     }
     setRunning(true);
@@ -404,9 +405,9 @@ export function QueryView({ tab }: { tab: QueryTab }) {
       setBatch(result);
       setActiveSet(0);
       setResultTab('results');
-      notify('info', '脚本执行完成', `${result.sets.length} 个结果集`);
+      notify('info', tr("脚本执行完成"), tr("{0} 个结果集", [result.sets.length]));
     } catch (err: any) {
-      setError(`${err?.message ?? '执行失败'}${err?.hint ? `\n${err.hint}` : ''}`);
+      setError(`${err?.message ?? tr('执行失败')}${err?.hint ? `\n${err.hint}` : ''}`);
       setBatch(null);
       setResultTab('messages');
     } finally {
@@ -421,7 +422,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
     sqlRef.current = text;
     setSql(text);
     updateTab(tab.id, { sql: text });
-    notify('success', 'SQL 文件已载入', file.name);
+    notify('success', tr("SQL 文件已载入"), file.name);
   };
 
   const saveSqlFile = () => {
@@ -438,21 +439,13 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const askCopilot = (kind: 'explain' | 'optimize') => {
     const text = currentSql().trim();
     if (!text) {
-      notify('warning', '请输入或选中 SQL');
+      notify('warning', tr("请输入或选中 SQL"));
       return;
     }
     const prompt =
       kind === 'explain'
-        ? `解释下面这段 SQL 的执行计划、瓶颈与索引建议，给出具体到列和 DDL 的优化方案：
-
-\`\`\`sql
-${text}
-\`\`\``
-        : `优化下面这段 SQL：请给出改写后的 SQL、精确的 CREATE INDEX DDL、EXPLAIN 依据和验证查询：
-
-\`\`\`sql
-${text}
-\`\`\``;
+        ? tr("解释下面这段 SQL 的执行计划、瓶颈与索引建议，给出具体到列和 DDL 的优化方案：\n\n```sql\n{0}\n```", [text])
+        : tr("优化下面这段 SQL：请给出改写后的 SQL、精确的 CREATE INDEX DDL、EXPLAIN 依据和验证查询：\n\n```sql\n{0}\n```", [text]);
     prefillAgent(prompt);
   };
 
@@ -461,9 +454,9 @@ ${text}
     if (!text) return;
     try {
       const { file } = await api.exportData({ connectionId: tab.connectionId, database: tab.database, sql: text, format: 'csv', limit: 20000 });
-      await deliverExport(file, '已导出 CSV');
+      await deliverExport(file, tr("已导出 CSV"));
     } catch (err: any) {
-      notify('error', '导出失败', err?.message);
+      notify('error', tr("导出失败"), err?.message);
     }
   };
 
@@ -511,17 +504,17 @@ ${text}
   const saveSnippet = async () => {
     const sql = currentSql().trim();
     if (!sql) {
-      notify('warning', '编辑器为空');
+      notify('warning', tr("编辑器为空"));
       return;
     }
-    const name = await askPrompt({ title: '保存 SQL 片段', message: '片段名称', value: tab.title, placeholder: '未命名片段', confirmLabel: '保存' });
+    const name = await askPrompt({ title: tr("保存 SQL 片段"), message: tr("片段名称"), value: tab.title, placeholder: tr("未命名片段"), confirmLabel: tr("保存") });
     if (!name) return;
     try {
       await api.createSnippet({ name, sql });
       await loadSnippets();
-      notify('success', 'SQL 片段已保存');
+      notify('success', tr("SQL 片段已保存"));
     } catch (err: any) {
-      notify('error', '保存失败', err?.message);
+      notify('error', tr("保存失败"), err?.message);
     }
   };
 
@@ -541,7 +534,7 @@ ${text}
   // 图表背后的 SQL 就是卡片本身：钉到仪表板后每次打开都会重新执行，不是截图。
   const pinToDashboard = async () => {
     if (!chartSpec?.sql) {
-      notify('warning', '这张图没有可复用的 SQL');
+      notify('warning', tr("这张图没有可复用的 SQL"));
       return;
     }
     try {
@@ -556,9 +549,9 @@ ${text}
         pinned: true,
         source: 'manual',
       });
-      notify('success', '已钉到仪表板', `${chartSpec.title} · 打开仪表板会重新执行这条查询`);
+      notify('success', tr("已钉到仪表板"), tr("{0} · 打开仪表板会重新执行这条查询", [chartSpec.title]));
     } catch (err: any) {
-      notify('error', '加入仪表板失败', err?.message);
+      notify('error', tr("加入仪表板失败"), err?.message);
     }
   };
 
@@ -616,7 +609,7 @@ ${text}
           onChange={(e) => updateTab(tab.id, { database: e.target.value || undefined })}
           data-testid="query-database"
         >
-          <Option value="">默认数据库</Option>
+          <Option value="">{tr("默认数据库")}</Option>
           {databases.map((database) => <Option key={database} value={database}>{database}</Option>)}
         </Select>
         <div className="spacer" />
@@ -625,10 +618,10 @@ ${text}
           style={{ width: 96 }}
           value={String(queryLimit)}
           onChange={(event) => setQueryLimit(Number(event.target.value))}
-          title="本次查询的行数上限"
+          title={tr("本次查询的行数上限")}
           data-testid="query-limit"
         >
-          {limitOptions.map((value) => <Option key={value} value={value}>{value} 行</Option>)}
+          {limitOptions.map((value) => <Option key={value} value={value}>{value}{tr(" 行")}</Option>)}
         </Select>
         <button className="btn primary small" onClick={() => void run()} disabled={running} data-testid="query-run">
           {running ? <Spinner /> : <Play size={12} />} {t('run')}
@@ -639,75 +632,65 @@ ${text}
         {isSql ? (
           <>
             <button className="btn small" onClick={saveSqlFile}>
-              <FileDown size={12} /> 保存
-            </button>
-            <button className="btn small" onClick={() => openTools('builder')} title="打开可视化查询构建器">
-              <Wrench size={12} /> 查询创建工具
-            </button>
+              <FileDown size={12} /> {tr(" 保存 ")}</button>
+            <button className="btn small" onClick={() => openTools('builder')} title={tr("打开可视化查询构建器")}>
+              <Wrench size={12} /> {tr(" 查询创建工具 ")}</button>
             <button className="btn small" onClick={format}>
-              <AlignLeft size={12} /> 美化 SQL
-            </button>
-            <button className="btn small" onClick={() => setResultTab('snippets')} title="SQL 代码段">
-              <Bookmark size={12} /> 代码段
-            </button>
+              <AlignLeft size={12} /> {tr(" 美化 SQL ")}</button>
+            <button className="btn small" onClick={() => setResultTab('snippets')} title={tr("SQL 代码段")}>
+              <Bookmark size={12} /> {tr(" 代码段 ")}</button>
             <div className="sep" />
             <button className="btn small" onClick={() => void explain()} disabled={running}>
               <WandSparkles size={12} /> {t('explain')}
             </button>
-            <button className="btn small ai" onClick={() => askCopilot('explain')} title="AI 解释执行计划">
-              <Sparkles size={12} /> AI 解释
-            </button>
-            <button className="btn small ai" onClick={() => askCopilot('optimize')} title="AI 优化 SQL 与索引">
-              <Sparkles size={12} /> AI 优化
-            </button>
+            <button className="btn small ai" onClick={() => askCopilot('explain')} title={tr("AI 解释执行计划")}>
+              <Sparkles size={12} /> {tr(" AI 解释 ")}</button>
+            <button className="btn small ai" onClick={() => askCopilot('optimize')} title={tr("AI 优化 SQL 与索引")}>
+              <Sparkles size={12} /> {tr(" AI 优化 ")}</button>
           </>
         ) : (
           <span className="muted" style={{ fontSize: 11 }}>
             {conn && engineMeta(conn.engine).languages.includes('mql')
-              ? 'MongoDB：使用 JSON 结构化查询（collection / op / filter / pipeline）'
+              ? tr("MongoDB：使用 JSON 结构化查询（collection / op / filter / pipeline）")
               : conn && engineMeta(conn.engine).languages.includes('aql')
-                ? 'ArangoDB：输入 AQL，例如 FOR d IN person LIMIT 100 RETURN d'
+                ? tr("ArangoDB：输入 AQL，例如 FOR d IN person LIMIT 100 RETURN d")
                 : conn && engineMeta(conn.engine).languages.includes('cypher')
-                ? 'Neo4j：输入 Cypher，例如 MATCH (n) RETURN n LIMIT 100'
+                ? tr("Neo4j：输入 Cypher，例如 MATCH (n) RETURN n LIMIT 100")
                 : conn && engineMeta(conn.engine).model === 'vector'
-                  ? '向量库：输入 JSON，例如 {"collection":"docs","vector":[...],"topK":5}；scroll 可浏览全部点'
+                  ? tr("向量库：输入 JSON，例如 {\"collection\":\"docs\",\"vector\":[...],\"topK\":5}；scroll 可浏览全部点")
                   : conn && engineMeta(conn.engine).model === 'search'
-                    ? '搜索：输入 JSON，例如 {"index":"logs","query":{"match_all":{}},"size":20}'
+                    ? tr("搜索：输入 JSON，例如 {\"index\":\"logs\",\"query\":{\"match_all\":{}},\"size\":20}")
                     : conn && engineMeta(conn.engine).model === 'widecolumn'
-                      ? 'Cassandra：输入 CQL，例如 SELECT * FROM ks.tbl LIMIT 100（不支持 JOIN）'
-                      : 'Redis：输入单条命令，例如 SCAN 0 COUNT 100 或 HGETALL user:1'}
+                      ? tr("Cassandra：输入 CQL，例如 SELECT * FROM ks.tbl LIMIT 100（不支持 JOIN）")
+                      : tr("Redis：输入单条命令，例如 SCAN 0 COUNT 100 或 HGETALL user:1")}
           </span>
         )}
         <div className="spacer" />
         {canWriteDocuments ? (
           <button className="btn small ai" onClick={() => setWriteOpen(true)} data-testid="open-document-write">
-            <FilePlus size={12} /> 写入 JSON
-          </button>
+            <FilePlus size={12} /> {tr(" 写入 JSON ")}</button>
         ) : null}
         {canVector ? (
           <button className="btn small ai" onClick={() => setVectorOpen(true)} data-testid="open-vector-search">
-            <Sparkles size={12} /> 向量检索
-          </button>
+            <Sparkles size={12} /> {tr(" 向量检索 ")}</button>
         ) : null}
         {conn && conn.engine === 'redis' && !conn.readonly ? (
           <button className="btn small ai" onClick={() => setKeyCreateOpen(true)} data-testid="open-key-create">
-            <Plus size={12} /> 新建键
-          </button>
+            <Plus size={12} /> {tr(" 新建键 ")}</button>
         ) : null}
         {canLineProtocol && conn && !conn.readonly ? (
           <button className="btn small ai" onClick={() => setLineOpen(true)} data-testid="open-line-protocol">
-            <FilePlus size={12} /> 写入行协议
-          </button>
+            <FilePlus size={12} /> {tr(" 写入行协议 ")}</button>
         ) : null}
         {canTransaction && conn && !conn.readonly ? (
           txSession ? (
             <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }} data-testid="tx-active">
-              <span className="badge">事务中</span>
-              <button className="btn small" onClick={() => void finishTx('commit')} data-testid="tx-commit">提交</button>
-              <button className="btn small danger" onClick={() => void finishTx('rollback')} data-testid="tx-rollback">回滚</button>
+              <span className="badge">{tr("事务中")}</span>
+              <button className="btn small" onClick={() => void finishTx('commit')} data-testid="tx-commit">{tr("提交")}</button>
+              <button className="btn small danger" onClick={() => void finishTx('rollback')} data-testid="tx-rollback">{tr("回滚")}</button>
             </span>
           ) : (
-            <button className="btn small" onClick={() => void startTx()} data-testid="tx-begin">开始事务</button>
+            <button className="btn small" onClick={() => void startTx()} data-testid="tx-begin">{tr("开始事务")}</button>
           )
         ) : null}
         <Select
@@ -715,7 +698,7 @@ ${text}
           style={{ height: 23, width: 72, fontSize: 10 }}
           value={queryExportFormat}
           onChange={(event) => setQueryExportFormat(event.target.value as typeof queryExportFormat)}
-          title="导出当前语句结果的格式"
+          title={tr("导出当前语句结果的格式")}
           data-testid="query-export-format"
         >
           <Option value="csv">CSV</Option>
@@ -724,15 +707,15 @@ ${text}
           <Option value="xml">XML</Option>
           <Option value="xlsx">XLSX</Option>
         </Select>
-        <button className="icon-btn" title="导出当前语句结果" onClick={() => void exportResult()} data-testid="query-export">
+        <button className="icon-btn" title={tr("导出当前语句结果")} onClick={() => void exportResult()} data-testid="query-export">
           <Download size={13} />
         </button>
         {isSql ? (
           <>
-            <button className="icon-btn" title="执行整个脚本（允许多语句）" onClick={() => void runScript()} disabled={running}>
+            <button className="icon-btn" title={tr("执行整个脚本（允许多语句）")} onClick={() => void runScript()} disabled={running}>
               <ListChecks size={13} />
             </button>
-            <button className="icon-btn" title="打开 SQL 文件" onClick={() => fileInputRef.current?.click()}>
+            <button className="icon-btn" title={tr("打开 SQL 文件")} onClick={() => fileInputRef.current?.click()}>
               <FileUp size={13} />
             </button>
             <input
@@ -775,13 +758,13 @@ ${text}
             {batch
               ? batch.sets.map((s, i) => (
                   <button key={i} className={`result-tab ${resultTab === 'results' && activeSet === i ? 'active' : ''}`} onClick={() => { setResultTab('results'); setActiveSet(i); }}>
-                    <Table2 size={11} /> {`结果 ${i + 1}`}
+                    <Table2 size={11} /> {tr("结果 {0}", [i + 1])}
                     <span className="muted">{s.columns.length ? s.rowCount : s.affected ?? 0}</span>
                   </button>
                 ))
               : null}
             <button className={`result-tab ${resultTab === 'messages' ? 'active' : ''}`} onClick={() => setResultTab('messages')} data-testid="query-messages">
-              消息 {error ? <span style={{ color: 'var(--danger)' }}>!</span> : null}
+              {tr(" 消息 ")}{error ? <span style={{ color: 'var(--danger)' }}>!</span> : null}
             </button>
             {set && set.resultKind === 'graph' && set.graph ? (
               <>
@@ -790,30 +773,26 @@ ${text}
                   onClick={() => { setResultTab('results'); setResultMode('table'); }}
                   data-testid="result-mode-table"
                 >
-                  <Table2 size={11} /> 表格
-                </button>
+                  <Table2 size={11} /> {tr(" 表格 ")}</button>
                 <button
                   className={`result-tab ${resultMode === 'graph' ? 'active' : ''}`}
                   onClick={() => { setResultTab('results'); setResultMode('graph'); }}
                   data-testid="result-mode-graph"
                 >
-                  <Network size={11} /> 图
-                </button>
+                  <Network size={11} /> {tr(" 图 ")}</button>
               </>
             ) : null}
             {set && set.columns.length > 1 ? (
-              <button className={`result-tab ${resultTab === 'chart' ? 'active' : ''}`} onClick={() => setResultTab('chart')}>
-                <BarChart3 size={11} /> 图表
-              </button>
+              <button className={`result-tab ${resultTab === 'chart' ? 'active' : ''}`} onClick={() => setResultTab('chart')} data-testid="query-chart">
+                <BarChart3 size={11} /> {tr(" 图表 ")}</button>
             ) : null}
             <button className={`result-tab ${resultTab === 'history' ? 'active' : ''}`} onClick={() => setResultTab('history')} data-testid="query-history">
               <History size={11} /> {t('history')}
             </button>
             <button className={`result-tab ${resultTab === 'snippets' ? 'active' : ''}`} onClick={() => setResultTab('snippets')}>
-              <Bookmark size={11} /> 片段
-            </button>
+              <Bookmark size={11} /> {tr(" 片段 ")}</button>
             <div className="spacer" />
-            {set?.truncated ? <span className="badge write" data-testid="query-truncated">结果已截断</span> : null}
+            {set?.truncated ? <span className="badge write" data-testid="query-truncated">{tr("结果已截断")}</span> : null}
             {batch ? <span className="muted">{formatDuration(batch.durationMs)}</span> : null}
           </div>
 
@@ -855,8 +834,8 @@ ${text}
               )
             ) : set ? (
               <div className="messages-panel">
-                <div className="ok">执行成功</div>
-                <div>影响 {set.affected ?? 0} 行</div>
+                <div className="ok">{tr("执行成功")}</div>
+                <div>{tr("影响 ")}{set.affected ?? 0}{tr(" 行")}</div>
                 {set.lastInsertId !== undefined ? <div>lastInsertId: {String(set.lastInsertId)}</div> : null}
               </div>
             ) : (
@@ -878,7 +857,7 @@ ${text}
                 <>
                 {numericColumns.length > 1 ? (
                   <div className="row gap-4" style={{ padding: '6px 10px', flexWrap: 'wrap' }} data-testid="chart-extra-columns">
-                    <span className="muted" style={{ fontSize: 11 }}>对比列</span>
+                    <span className="muted" style={{ fontSize: 11 }}>{tr("对比列")}</span>
                     {numericColumns
                       .filter((name) => name !== chartSpec.yLabel)
                       .map((name) => (
@@ -898,18 +877,16 @@ ${text}
                           setChartDual((value) => !value);
                           if (chartType === 'stacked') setChartType('bar');
                         }}
-                        title="附加列使用右侧独立刻度"
+                        title={tr("附加列使用右侧独立刻度")}
                         data-testid="chart-dual"
                       >
-                        双轴
-                      </button>
+                        {tr(" 双轴 ")}</button>
                     ) : null}
                   </div>
                 ) : null}
                 <div className="row gap-4" style={{ padding: '6px 10px 0' }}>
-                  <button className="btn small" onClick={() => void pinToDashboard()} title="把这张图钉到当前库的仪表板" data-testid="chart-pin-dashboard">
-                    <Pin size={12} /> 加入仪表板
-                  </button>
+                  <button className="btn small" onClick={() => void pinToDashboard()} title={tr("把这张图钉到当前库的仪表板")} data-testid="chart-pin-dashboard">
+                    <Pin size={12} /> {tr(" 加入仪表板 ")}</button>
                 </div>
                 <ChartView
                   chart={chartSpec}
@@ -925,7 +902,7 @@ ${text}
                 />
                 </>
               ) : (
-                <div className="dash-empty">当前结果没有可绘制的数值列。</div>
+                <div className="dash-empty">{tr("当前结果没有可绘制的数值列。")}</div>
               )}
             </div>
           ) : null}
@@ -933,17 +910,17 @@ ${text}
           {resultTab === 'messages' ? (
             <div className="messages-panel">
               {error ? <div className="err" style={{ whiteSpace: 'pre-wrap' }}>{error}</div> : null}
-              {!error ? messages.length ? messages.map((m, i) => <div key={i} className="ok">{m}</div>) : <div className="muted">暂无消息</div> : null}
-              {batch && !error ? <div className="muted" style={{ marginTop: 8 }}>总计 {formatDuration(batch.durationMs)}</div> : null}
+              {!error ? messages.length ? messages.map((m, i) => <div key={i} className="ok">{m}</div>) : <div className="muted">{tr("暂无消息")}</div> : null}
+              {batch && !error ? <div className="muted" style={{ marginTop: 8 }}>{tr("总计 ")}{formatDuration(batch.durationMs)}</div> : null}
             </div>
           ) : null}
 
           {resultTab === 'snippets' ? (
             <div className="history-panel">
               <div className="tool-row" style={{ borderBottom: '1px solid var(--border-subtle)', padding: '6px 8px' }}>
-                <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>已保存 SQL 片段</span>
+                <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{tr("已保存 SQL 片段")}</span>
                 <div className="spacer" />
-                <button className="btn small primary" onClick={() => void saveSnippet()}><Plus size={11} /> 保存当前 SQL</button>
+                <button className="btn small primary" onClick={() => void saveSnippet()}><Plus size={11} /> {tr(" 保存当前 SQL")}</button>
               </div>
               {snippetsLoading ? <div className="loading-inline" style={{ padding: 12 }}><Spinner /> {t('loading')}</div> : null}
               {snippets.map((snippet) => (
@@ -958,7 +935,7 @@ ${text}
                   </button>
                 </div>
               ))}
-              {!snippets.length && !snippetsLoading ? <div className="muted" style={{ padding: 12 }}>暂无片段。保存常用 SQL，点击即可插入编辑器。</div> : null}
+              {!snippets.length && !snippetsLoading ? <div className="muted" style={{ padding: 12 }}>{tr("暂无片段。保存常用 SQL，点击即可插入编辑器。")}</div> : null}
             </div>
           ) : null}
 
@@ -967,19 +944,18 @@ ${text}
               <div style={{ padding: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
                 <input
                   className="input"
-                  placeholder="搜索历史（SQL / 错误）"
+                  placeholder={tr("搜索历史（SQL / 错误）")}
                   value={historyQuery}
                   onChange={(event) => setHistoryQuery(event.target.value)}
                   data-testid="history-search"
                 />
                 <button
                   className={`btn small ${favoriteOnly ? 'active' : ''}`}
-                  title="只看收藏"
+                  title={tr("只看收藏")}
                   onClick={() => setFavoriteOnly((value) => !value)}
                   data-testid="history-favorite-only"
                 >
-                  <Star size={12} fill={favoriteOnly ? 'currentColor' : 'none'} /> 收藏
-                </button>
+                  <Star size={12} fill={favoriteOnly ? 'currentColor' : 'none'} /> {tr(" 收藏 ")}</button>
               </div>
               {historyLoading ? (
                 <div className="loading-inline" style={{ padding: 14 }}>
@@ -987,18 +963,18 @@ ${text}
                 </div>
               ) : historyMatched.length ? (
                 historyMatched.map((item) => (
-                  <div key={item.id} className="history-item" onClick={() => applyHistory(item.sql)} title="点击插入编辑器">
+                  <div key={item.id} className="history-item" onClick={() => applyHistory(item.sql)} title={tr("点击插入编辑器")}>
                     <span className={`badge ${item.status === 'ok' ? 'read' : 'destructive'}`}>{item.status}</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div className="sql">{item.sql.replace(/\s+/g, ' ')}</div>
                       {item.error ? <div className="meta" style={{ color: 'var(--danger)' }}>{item.error}</div> : null}
                     </div>
                     <span className="meta">
-                      {item.rowCount ?? 0} 行 · {formatDuration(item.durationMs)}
+                      {item.rowCount ?? 0}{tr(" 行 · ")}{formatDuration(item.durationMs)}
                     </span>
                     <button
                       className={`icon-btn ${item.favorite ? 'favorited' : ''}`}
-                      title={item.favorite ? '取消收藏' : '收藏'}
+                      title={item.favorite ? tr("取消收藏") : tr("收藏")}
                       onClick={async (event) => {
                         event.stopPropagation();
                         const next = !item.favorite;
@@ -1012,7 +988,7 @@ ${text}
                   </div>
                 ))
               ) : (
-                <div className="muted" style={{ padding: 14 }}>{history.length ? '没有匹配的历史' : '暂无历史'}</div>
+                <div className="muted" style={{ padding: 14 }}>{history.length ? tr("没有匹配的历史") : tr("暂无历史")}</div>
               )}
             </div>
           ) : null}

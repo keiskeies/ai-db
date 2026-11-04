@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { Risk } from '@aidb/core';
 import { RiskBadge } from './ui';
+import { t as tr } from '../i18n';
 
 interface FixFinding {
   severity: string;
@@ -21,7 +22,7 @@ interface FixResult {
   note?: string;
 }
 
-const SEVERITY_LABEL: Record<string, string> = { high: '高', medium: '中', low: '低', info: '提示' };
+const SEVERITY_LABEL: Record<string, string> = { high: tr("高"), medium: tr("中"), low: tr("低"), info: tr("提示") };
 
 export function FixView({ result, onExecute }: { result: FixResult; onExecute?: (steps: number[]) => void }) {
   const summary = result.summary ?? {};
@@ -31,11 +32,11 @@ export function FixView({ result, onExecute }: { result: FixResult; onExecute?: 
     <div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
         {[
-          ['表', summary.tablesChecked ?? 0],
-          ['高风险', summary.high ?? 0],
-          ['中风险', summary.medium ?? 0],
-          ['低风险', summary.low ?? 0],
-          ['提示', summary.info ?? 0],
+          [tr("表"), summary.tablesChecked ?? 0],
+          [tr("高风险"), summary.high ?? 0],
+          [tr("中风险"), summary.medium ?? 0],
+          [tr("低风险"), summary.low ?? 0],
+          [tr("提示"), summary.info ?? 0],
         ].map(([label, value]) => (
           <div key={String(label)} className="panel" style={{ padding: '8px 12px', minWidth: 80 }}>
             <div className="muted" style={{ fontSize: 10 }}>{label}</div>
@@ -45,7 +46,7 @@ export function FixView({ result, onExecute }: { result: FixResult; onExecute?: 
       </div>
       {result.findings.length ? (
         <div className="panel">
-          <div className="panel-head">发现 <span className="badge">{result.findings.length}</span></div>
+          <div className="panel-head">{tr("发现 ")}<span className="badge">{result.findings.length}</span></div>
           <div style={{ maxHeight: 260, overflow: 'auto' }}>
             {result.findings.map((finding, index) => (
               <div key={`${finding.code}-${index}`} className="transfer-row" style={{ alignItems: 'flex-start' }}>
@@ -63,11 +64,11 @@ export function FixView({ result, onExecute }: { result: FixResult; onExecute?: 
           </div>
         </div>
       ) : (
-        <div className="dash-empty">没有发现需要处理的问题。</div>
+        <div className="dash-empty">{tr("没有发现需要处理的问题。")}</div>
       )}
       {result.plan.length ? (
         <div className="panel" style={{ marginTop: 8 }}>
-          <div className="panel-head">修复计划 <span className="badge">{result.plan.length}</span></div>
+          <div className="panel-head">{tr("修复计划 ")}<span className="badge">{result.plan.length}</span></div>
           <div style={{ maxHeight: 120, overflow: 'auto', padding: '0 8px' }}>
             {result.plan.map((step, index) => (
               <label key={`${step.finding}-${index}`} className="transfer-row" style={{ padding: '3px 0' }}>
@@ -87,7 +88,7 @@ export function FixView({ result, onExecute }: { result: FixResult; onExecute?: 
             ))}
           </div>
           <pre className="code-block" style={{ maxHeight: 220 }}>
-            {result.plan.map((step) => `-- ${step.title}${step.requiresBackup ? '（需备份）' : ''}\n${step.sql}`).join('\n\n')}
+            {result.plan.map((step) => `-- ${step.title}${step.requiresBackup ? tr('（需备份）') : ''}\n${step.sql}`).join('\n\n')}
           </pre>
         </div>
       ) : null}

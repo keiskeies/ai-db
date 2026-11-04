@@ -35,7 +35,8 @@ import type { ConnectionConfig, DatabaseSchema, Engine, TableInfo } from '@aidb/
 import { addField, engineMeta, managesIndexes, managesObjects } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp, type ContextMenuItem } from '../store';
-import { desktopBridge } from '../lib/desktop';
+import { desktopBridge, desktopDialogUi } from '../lib/desktop';
+import { groupFromLabel, groupLabel, groupOfConnection } from '../lib/groups';
 import { deliverExport } from '../lib/exportDelivery';
 import { EngineIcon } from './EngineIcon';
 import { TableOpsDialog, type TableDialogKind } from './TableOpsDialog';
@@ -44,6 +45,7 @@ import { CreateObjectDialog } from './CreateObjectDialog';
 import { DropObjectDialog } from './DropObjectDialog';
 import { askConfirm, askPrompt } from './AskDialog';
 import { TableInfoDialog } from './TableInfoDialog';
+import { t as tr } from '../i18n';
 
 const COLORS: Record<string, string> = {
   blue: '#5b93ff',
@@ -138,7 +140,7 @@ export function Sidebar() {
     });
     const map = new Map<string, ConnectionConfig[]>();
     for (const conn of ordered) {
-      const key = conn.groupName || '默认';
+      const key = groupOfConnection(conn.groupName);
       map.set(key, [...(map.get(key) ?? []), conn]);
     }
     const indexOf = new Map(groupOrder.map((name, index) => [name, index]));
@@ -156,49 +158,51 @@ export function Sidebar() {
   };
 
   const renameGroup = async (group: string) => {
-    const next = await askPrompt({ title: '重命名分组', message: `分组「${group}」重命名为：`, value: group, confirmLabel: '重命名' });
-    if (!next || !next.trim() || next.trim() === group) return;
+    const next = await askPrompt({ title: tr("重命名分组"), message: tr("分组「{0}」重命名为：", [groupLabel(group)]), value: groupLabel(group), confirmLabel: tr("重命名") });
+    const renamed = groupFromLabel((next ?? '').trim());
+    if (!renamed || renamed === group) return;
     try {
-      await api.renameGroup(group, next.trim());
+      await api.renameGroup(group, renamed);
       await useApp.getState().boot();
-      notify('success', '分组已重命名', next.trim());
+      notify('success', tr("分组已重命名"), groupLabel(renamed));
     } catch (err: any) {
-      notify('error', '重命名失败', err?.message);
+      notify('error', tr("重命名失败"), err?.message);
     }
   };
 
   const createShortcut = async (conn: ConnectionConfig, schema: DatabaseSchema, table: TableInfo) => {
     if (!desktopBridge) return;
     const result = await desktopBridge.createTableShortcut({
+      ui: desktopDialogUi(),
       connectionId: conn.id,
       database: schema.name,
       table: table.name,
       name: `${conn.name}-${table.name}`,
     });
-    if (result.ok) notify('success', '快捷方式已创建', result.path ?? '');
-    else notify('error', '创建失败', result.error ?? '未知错误');
+    if (result.ok) notify('success', tr("快捷方式已创建"), result.path ?? '');
+    else notify('error', tr("创建失败"), result.error ?? tr("未知错误"));
   };
 
   const moveConnectionToGroup = async (connectionId: string, group: string) => {
     const conn = connections.find((item) => item.id === connectionId);
-    if (!conn || (conn.groupName || '默认') === group) return;
+    if (!conn || groupOfConnection(conn.groupName) === group) return;
     try {
       await api.updateConnection(connectionId, { groupName: group });
       await useApp.getState().boot();
-      notify('success', '连接已移动', `${conn.name} → ${group}`);
+      notify('success', tr("连接已移动"), `${conn.name} → ${group}`);
     } catch (err: any) {
-      notify('error', '移动失败', err?.message);
+      notify('error', tr("移动失败"), err?.message);
     }
   };
 
   const removeGroup = async (group: string) => {
-    if (!(await askConfirm({ message: `删除分组「${group}」？`, detail: '组内连接会移动到「默认」，不会删除连接本身。', danger: true, confirmLabel: '删除' }))) return;
+    if (!(await askConfirm({ message: tr("删除分组「{0}」？", [groupLabel(group)]), detail: tr("组内连接会移动到「默认」，不会删除连接本身。"), danger: true, confirmLabel: tr("删除") }))) return;
     try {
       await api.deleteGroup(group);
       await useApp.getState().boot();
-      notify('success', '分组已删除', group);
+      notify('success', tr("分组已删除"), group);
     } catch (err: any) {
-      notify('error', '删除失败', err?.message);
+      notify('error', tr("删除失败"), err?.message);
     }
   };
 
@@ -224,19 +228,19 @@ export function Sidebar() {
   const quickTableOp = async (kind: 'truncate' | 'empty' | 'drop', conn: ConnectionConfig, schema: DatabaseSchema, table: TableInfo) => {
     const isDrop = kind === 'drop';
     const isTruncate = kind === 'truncate';
-    const label = table.type === 'view' ? '视图' : '表';
+    const label = table.type === 'view' ? tr("视图") : tr("表");
     const message = isDrop
-      ? `删除${label}「${table.name}」？此操作不可恢复。`
+      ? tr("删除{0}「{1}」？此操作不可恢复。", [label, table.name])
       : isTruncate
-        ? `截断表「${table.name}」并重置自增计数？此操作不可恢复。`
-        : `清空表「${table.name}」中的全部数据？自增计数不会重置。`;
-    if (!(await askConfirm({ message, danger: true, confirmLabel: isDrop ? '删除' : isTruncate ? '截断' : '清空' }))) return;
+        ? tr("截断表「{0}」并重置自增计数？此操作不可恢复。", [table.name])
+        : tr("清空表「{0}」中的全部数据？自增计数不会重置。", [table.name]);
+    if (!(await askConfirm({ message, danger: true, confirmLabel: isDrop ? tr("删除") : isTruncate ? tr("截断") : tr("清空") }))) return;
     try {
       await api.tableOps({ connectionId: conn.id, database: schema.name, table: table.name, op: kind });
-      notify('success', isDrop ? `${label}已删除` : isTruncate ? '表已截断' : '表已清空', table.name);
+      notify('success', isDrop ? tr("{0}已删除", [label]) : isTruncate ? tr("表已截断") : tr("表已清空"), table.name);
       await loadSchema(conn.id, true);
     } catch (err: any) {
-      notify('error', isDrop ? '删除失败' : '清空失败', err?.message);
+      notify('error', isDrop ? tr("删除失败") : tr("清空失败"), err?.message);
     }
   };
 
@@ -250,9 +254,9 @@ export function Sidebar() {
     const isAql = meta.languages.includes('aql');
     const isEdge = table.kind === 'edge_label';
     const isRedisIndex = meta.model === 'keyvalue' && table.kind === 'index';
-    const objectLabel = isRedisIndex ? '搜索索引' : isAql ? (isEdge ? '边集合' : '文档集合') : isMongo ? '集合' : isGraph ? (isEdge ? '关系类型' : '节点标签') : isVector ? '向量集合' : isSearch ? '索引' : isWide ? '表' : '键空间';
-    const openLabel = isRedisIndex ? '打开索引' : isAql ? (isEdge ? '打开边集合' : '打开集合') : isMongo ? '打开集合' : isGraph ? (isEdge ? '打开关系类型' : '打开节点标签') : isVector ? '浏览集合' : isSearch ? '打开索引' : isWide ? '打开表' : '浏览键';
-    const newQueryLabel = isRedisIndex ? '新建 RediSearch 查询' : isAql ? '新建 AQL 查询' : isMongo ? '新建 MQL 查询' : isGraph ? '新建 Cypher 查询' : isVector ? '新建向量查询' : isSearch ? '新建搜索查询' : isWide ? '新建 CQL 查询' : '命令列';
+    const objectLabel = isRedisIndex ? tr("搜索索引") : isAql ? (isEdge ? tr("边集合") : tr("文档集合")) : isMongo ? tr("集合") : isGraph ? (isEdge ? tr("关系类型") : tr("节点标签")) : isVector ? tr("向量集合") : isSearch ? tr("索引") : isWide ? tr("表") : tr("键空间");
+    const openLabel = isRedisIndex ? tr("打开索引") : isAql ? (isEdge ? tr("打开边集合") : tr("打开集合")) : isMongo ? tr("打开集合") : isGraph ? (isEdge ? tr("打开关系类型") : tr("打开节点标签")) : isVector ? tr("浏览集合") : isSearch ? tr("打开索引") : isWide ? tr("打开表") : tr("浏览键");
+    const newQueryLabel = isRedisIndex ? tr("新建 RediSearch 查询") : isAql ? tr("新建 AQL 查询") : isMongo ? tr("新建 MQL 查询") : isGraph ? tr("新建 Cypher 查询") : isVector ? tr("新建向量查询") : isSearch ? tr("新建搜索查询") : isWide ? tr("新建 CQL 查询") : tr("命令列");
     const vectorQuery = JSON.stringify({ collection: table.name, op: 'scroll', topK: 20 }, null, 2);
     const searchQuery = JSON.stringify({ index: table.name, query: { match_all: {} }, size: 100 }, null, 2);
     const cqlQuery = `SELECT * FROM "${schema.name}"."${table.name}" LIMIT 100;`;
@@ -295,31 +299,31 @@ export function Sidebar() {
         onClick: () => openQuery(conn.id, newQueryText, undefined, schema.name),
       },
       {
-        label: 'AI 解释此对象',
+        label: tr("AI 解释此对象"),
         icon: <Sparkles size={13} />,
         onClick: () =>
           prefillAgent(
             isRedisIndex
-              ? `解释 RediSearch 索引 ${table.name} 的字段定义与查询语法，并给出 3 个 FT.SEARCH 示例。`
+              ? tr("解释 RediSearch 索引 {0} 的字段定义与查询语法，并给出 3 个 FT.SEARCH 示例。", [table.name])
               : isMongo
-              ? `解释集合 ${table.name} 的字段、索引与典型用途，并给出 3 个 MQL 查询示例。`
+              ? tr("解释集合 {0} 的字段、索引与典型用途，并给出 3 个 MQL 查询示例。", [table.name])
               : isAql
-                ? `解释${objectLabel} ${table.name} 的属性和关系，并给出 3 个 AQL 查询示例。`
+                ? tr("解释{0} {1} 的属性和关系，并给出 3 个 AQL 查询示例。", [objectLabel, table.name])
                 : isGraph
-                ? `解释${objectLabel} ${table.name} 的属性和关系，并给出 3 个 Cypher 查询示例。`
+                ? tr("解释{0} {1} 的属性和关系，并给出 3 个 Cypher 查询示例。", [objectLabel, table.name])
                 : isVector
-                  ? `解释向量集合 ${table.name} 的维度、距离与 payload 字段，并给出向量检索示例。`
+                  ? tr("解释向量集合 {0} 的维度、距离与 payload 字段，并给出向量检索示例。", [table.name])
                   : isSearch
-                    ? `解释索引 ${table.name} 的 mapping 与字段用途，并给出 3 个 _search DSL 示例。`
+                    ? tr("解释索引 {0} 的 mapping 与字段用途，并给出 3 个 _search DSL 示例。", [table.name])
                     : isWide
-                      ? `解释 Cassandra 表 ${table.name} 的主键、分区键与查询限制，并给出 3 个 CQL 示例。`
-                      : `总结 Redis 键空间 ${schema.name} 的键类型与常见前缀，并给出浏览与排查命令。`,
+                      ? tr("解释 Cassandra 表 {0} 的主键、分区键与查询限制，并给出 3 个 CQL 示例。", [table.name])
+                      : tr("总结 Redis 键空间 {0} 的键类型与常见前缀，并给出浏览与排查命令。", [schema.name]),
           ),
       },
       { label: '', icon: null, sep: true, onClick: () => undefined },
       ...(table.indexes?.length || managesIndexes(conn.engine) || addField(conn.engine)
         ? [{
-            label: '对象信息',
+            label: tr("对象信息"),
             icon: <Info size={13} />,
             onClick: () =>
               setInfoTable({
@@ -344,7 +348,7 @@ export function Sidebar() {
     if (managesObjects(conn.engine) || isRedisIndex) {
       items.push({ label: '', icon: null, sep: true, onClick: () => undefined });
       items.push({
-        label: isRedisIndex || meta.model === 'search' ? '删除索引…' : isEdge ? '删除边集合…' : '删除集合…',
+        label: isRedisIndex || meta.model === 'search' ? tr("删除索引…") : isEdge ? tr("删除边集合…") : tr("删除集合…"),
         icon: <Trash2 size={13} />,
         danger: true,
         onClick: () => setDropDialog({ conn, database: schema.name, name: table.name }),
@@ -400,14 +404,14 @@ export function Sidebar() {
                     onClick: () => openQuery(conn.id, `SELECT * FROM ${quoteName(table.name, conn.engine)} LIMIT 100;`),
                   },
                   { label: '', icon: null, sep: true, onClick: () => undefined },
-                  { label: '查看 DDL', icon: <FileCode2 size={13} />, onClick: () => setTableDialog({ kind: 'ddl', conn, schema, table }) },
-                  ...(desktopBridge?.platform === 'win32' ? [{ label: '创建快捷方式', icon: <Archive size={13} />, onClick: () => void createShortcut(conn, schema, table) } as ContextMenuItem] : []),
-                  { label: '打印表', icon: <Printer size={13} />, onClick: () => { openData(conn.id, table.name, schema.name); useApp.getState().requestPrint(); } },
-                  { label: '删除视图', icon: <Trash2 size={13} />, danger: true, onClick: () => void quickTableOp('drop', conn, schema, table) },
+                  { label: tr("查看 DDL"), icon: <FileCode2 size={13} />, onClick: () => setTableDialog({ kind: 'ddl', conn, schema, table }) },
+                  ...(desktopBridge?.platform === 'win32' ? [{ label: tr("创建快捷方式"), icon: <Archive size={13} />, onClick: () => void createShortcut(conn, schema, table) } as ContextMenuItem] : []),
+                  { label: tr("打印表"), icon: <Printer size={13} />, onClick: () => { openData(conn.id, table.name, schema.name); useApp.getState().requestPrint(); } },
+                  { label: tr("删除视图"), icon: <Trash2 size={13} />, danger: true, onClick: () => void quickTableOp('drop', conn, schema, table) },
                   {
-                    label: 'AI 解释此视图',
+                    label: tr("AI 解释此视图"),
                     icon: <Sparkles size={13} />,
-                    onClick: () => prefillAgent(`解释视图 ${table.name} 的字段、来源表与用途，并给出常用查询示例。`),
+                    onClick: () => prefillAgent(tr("解释视图 {0} 的字段、来源表与用途，并给出常用查询示例。", [table.name])),
                   },
                   {
                     label: t('copy'),
@@ -427,37 +431,37 @@ export function Sidebar() {
                     icon: <Wrench size={13} />,
                     onClick: () => openDesign(conn.id, table.name, schema.name),
                   },
-                  { label: '新建表', icon: <Plus size={13} />, onClick: () => openDesign(conn.id, undefined, schema.name) },
+                  { label: tr("新建表"), icon: <Plus size={13} />, onClick: () => openDesign(conn.id, undefined, schema.name) },
                   { label: '', icon: null, sep: true, onClick: () => undefined },
-                  { label: '重命名表…', icon: <Pencil size={13} />, onClick: () => setTableDialog({ kind: 'rename', conn, schema, table }) },
-                  { label: '复制表（结构 + 数据）…', icon: <Copy size={13} />, onClick: () => setTableDialog({ kind: 'duplicate', conn, schema, table, withData: true }) },
-                  { label: '复制表（仅结构）…', icon: <Copy size={13} />, onClick: () => setTableDialog({ kind: 'duplicate', conn, schema, table, withData: false }) },
+                  { label: tr("重命名表…"), icon: <Pencil size={13} />, onClick: () => setTableDialog({ kind: 'rename', conn, schema, table }) },
+                  { label: tr("复制表（结构 + 数据）…"), icon: <Copy size={13} />, onClick: () => setTableDialog({ kind: 'duplicate', conn, schema, table, withData: true }) },
+                  { label: tr("复制表（仅结构）…"), icon: <Copy size={13} />, onClick: () => setTableDialog({ kind: 'duplicate', conn, schema, table, withData: false }) },
                   { label: '', icon: null, sep: true, onClick: () => undefined },
-                  { label: '查看 DDL', icon: <FileCode2 size={13} />, onClick: () => setTableDialog({ kind: 'ddl', conn, schema, table }) },
-                  ...(desktopBridge?.platform === 'win32' ? [{ label: '创建快捷方式', icon: <Archive size={13} />, onClick: () => void createShortcut(conn, schema, table) } as ContextMenuItem] : []),
-                  { label: '打印表', icon: <Printer size={13} />, onClick: () => { openData(conn.id, table.name, schema.name); useApp.getState().requestPrint(); } },
-                  { label: '维护表…', icon: <Hammer size={13} />, onClick: () => setTableDialog({ kind: 'maintenance', conn, schema, table }) },
-                  { label: '对象信息', icon: <Info size={13} />, onClick: () => setInfoTable({ table, database: schema.name }) },
-                  { label: '设置权限…', icon: <KeyRound size={13} />, onClick: () => openTools('users') },
+                  { label: tr("查看 DDL"), icon: <FileCode2 size={13} />, onClick: () => setTableDialog({ kind: 'ddl', conn, schema, table }) },
+                  ...(desktopBridge?.platform === 'win32' ? [{ label: tr("创建快捷方式"), icon: <Archive size={13} />, onClick: () => void createShortcut(conn, schema, table) } as ContextMenuItem] : []),
+                  { label: tr("打印表"), icon: <Printer size={13} />, onClick: () => { openData(conn.id, table.name, schema.name); useApp.getState().requestPrint(); } },
+                  { label: tr("维护表…"), icon: <Hammer size={13} />, onClick: () => setTableDialog({ kind: 'maintenance', conn, schema, table }) },
+                  { label: tr("对象信息"), icon: <Info size={13} />, onClick: () => setInfoTable({ table, database: schema.name }) },
+                  { label: tr("设置权限…"), icon: <KeyRound size={13} />, onClick: () => openTools('users') },
                   { label: '', icon: null, sep: true, onClick: () => undefined },
-                  { label: '导入向导…', icon: <Upload size={13} />, onClick: () => openData(conn.id, table.name, schema.name) },
-                  { label: '导出向导…', icon: <Download size={13} />, onClick: () => void exportTable(conn, table, schema.name) },
+                  { label: tr("导入向导…"), icon: <Upload size={13} />, onClick: () => openData(conn.id, table.name, schema.name) },
+                  { label: tr("导出向导…"), icon: <Download size={13} />, onClick: () => void exportTable(conn, table, schema.name) },
                   { label: '', icon: null, sep: true, onClick: () => undefined },
-                  { label: '清空表', icon: <Eraser size={13} />, danger: true, onClick: () => void quickTableOp('empty', conn, schema, table) },
-                  { label: '截断表', icon: <Hammer size={13} />, danger: true, onClick: () => void quickTableOp('truncate', conn, schema, table) },
-                  { label: '删除表', icon: <Trash2 size={13} />, danger: true, onClick: () => void quickTableOp('drop', conn, schema, table) },
+                  { label: tr("清空表"), icon: <Eraser size={13} />, danger: true, onClick: () => void quickTableOp('empty', conn, schema, table) },
+                  { label: tr("截断表"), icon: <Hammer size={13} />, danger: true, onClick: () => void quickTableOp('truncate', conn, schema, table) },
+                  { label: tr("删除表"), icon: <Trash2 size={13} />, danger: true, onClick: () => void quickTableOp('drop', conn, schema, table) },
                   { label: '', icon: null, sep: true, onClick: () => undefined },
-                  { label: '逆向表到模型…', icon: <Network size={13} />, onClick: () => openRelations(conn.id, schema.name) },
+                  { label: tr("逆向表到模型…"), icon: <Network size={13} />, onClick: () => openRelations(conn.id, schema.name) },
                   { label: t('refresh'), icon: <RefreshCw size={13} />, onClick: () => void loadSchema(conn.id, true) },
                   {
-                    label: 'AI 解释此表',
+                    label: tr("AI 解释此表"),
                     icon: <Sparkles size={13} />,
-                    onClick: () => prefillAgent(`解释表 ${table.name} 的结构、索引与用途，并给出常用查询示例。`),
+                    onClick: () => prefillAgent(tr("解释表 {0} 的结构、索引与用途，并给出常用查询示例。", [table.name])),
                   },
                   {
-                    label: 'AI 数据质量',
+                    label: tr("AI 数据质量"),
                     icon: <Sparkles size={13} />,
-                    onClick: () => prefillAgent(`检查 ${table.name} 的空值、空串和重复主键，并给出排查 SQL。`),
+                    onClick: () => prefillAgent(tr("检查 {0} 的空值、空串和重复主键，并给出排查 SQL。", [table.name])),
                   },
                   {
                     label: t('copy'),
@@ -509,7 +513,7 @@ export function Sidebar() {
             <button className="icon-btn" title={t('newConnection')} onClick={() => openConnectionEditor('new')}>
               <Plus size={14} />
             </button>
-            <button className="icon-btn" title="隐藏连接栏 (⌘B)" data-testid="sidebar-collapse" onClick={toggleSidebar}>
+            <button className="icon-btn" title={tr("隐藏连接栏 (⌘B)")} data-testid="sidebar-collapse" onClick={toggleSidebar}>
               <PanelLeftClose size={14} />
             </button>
           </div>
@@ -560,8 +564,8 @@ export function Sidebar() {
               onContextMenu={(event) => {
                 event.preventDefault();
                 openMenu(event, [
-                  { label: '重命名分组', icon: <Pencil size={13} />, onClick: () => void renameGroup(group) },
-                  { label: '删除分组', icon: <Trash2 size={13} />, danger: true, onClick: () => void removeGroup(group) },
+                  { label: tr("重命名分组"), icon: <Pencil size={13} />, onClick: () => void renameGroup(group) },
+                  { label: tr("删除分组"), icon: <Trash2 size={13} />, danger: true, onClick: () => void removeGroup(group) },
                 ]);
               }}
               draggable
@@ -590,7 +594,7 @@ export function Sidebar() {
               }}
             >
               <ChevronRight size={11} className={`conn-toggle ${collapsed ? '' : 'open'}`} />
-              {group}
+              {groupLabel(group)}
               <span className="group-count">{list.length}</span>
             </div>
             {list.map((conn) => {
@@ -618,8 +622,8 @@ export function Sidebar() {
                       event.stopPropagation();
                       const source = connections.find((item) => item.id === draggedId);
                       if (!source) return;
-                      if ((source.groupName || '默认') !== (conn.groupName || '默认')) {
-                        void moveConnectionToGroup(draggedId, conn.groupName || '默认');
+                      if (groupOfConnection(source.groupName) !== groupOfConnection(conn.groupName)) {
+                        void moveConnectionToGroup(draggedId, groupOfConnection(conn.groupName));
                         return;
                       }
                       const ids = [...connections]
@@ -644,10 +648,10 @@ export function Sidebar() {
                         { label: t('refresh'), icon: <RefreshCw size={13} />, onClick: () => void loadSchema(conn.id, true) },
                         { label: '', icon: null, sep: true, onClick: () => undefined },
                         { label: t('newQuery'), icon: <TerminalSquare size={13} />, onClick: () => openQuery(conn.id) },
-                        { label: '新建表', icon: <Plus size={13} />, onClick: () => openDesign(conn.id) },
+                        { label: tr("新建表"), icon: <Plus size={13} />, onClick: () => openDesign(conn.id) },
                         { label: t('design'), icon: <Wrench size={13} />, onClick: () => openDesign(conn.id) },
-                        { label: '关系图', icon: <Network size={13} />, onClick: () => openRelations(conn.id) },
-                        { label: 'AI 数据库体检', icon: <Sparkles size={13} />, onClick: () => prefillAgent('对当前数据库做一次体检：缺少主键、外键缺索引、重复索引与空表，并给出修复 SQL。') },
+                        { label: tr("关系图"), icon: <Network size={13} />, onClick: () => openRelations(conn.id) },
+                        { label: tr("AI 数据库体检"), icon: <Sparkles size={13} />, onClick: () => prefillAgent(tr("对当前数据库做一次体检：缺少主键、外键缺索引、重复索引与空表，并给出修复 SQL。")) },
                         { label: t('copy'), icon: <Copy size={13} />, onClick: () => void navigator.clipboard.writeText(conn.name) },
                         { label: '', icon: null, sep: true, onClick: () => undefined },
                         {
@@ -655,7 +659,7 @@ export function Sidebar() {
                           icon: <Trash2 size={13} />,
                           danger: true,
                           onClick: async () => {
-                            if (await askConfirm({ message: `删除连接「${conn.name}」？`, detail: '仅移除配置，不会删除数据库。', danger: true, confirmLabel: t('delete') })) void deleteConnection(conn.id);
+                            if (await askConfirm({ message: tr("删除连接「{0}」？", [conn.name]), detail: tr("仅移除配置，不会删除数据库。"), danger: true, confirmLabel: t('delete') })) void deleteConnection(conn.id);
                           },
                         },
                       ])
@@ -678,16 +682,16 @@ export function Sidebar() {
                           { label: t('test'), icon: <Radio size={13} />, onClick: () => void testConnection(conn) },
                           { label: t('refresh'), icon: <RefreshCw size={13} />, onClick: () => void loadSchema(conn.id, true) },
                           { label: t('newQuery'), icon: <TerminalSquare size={13} />, onClick: () => openQuery(conn.id) },
-                          { label: '新建表', icon: <Plus size={13} />, onClick: () => openDesign(conn.id) },
+                          { label: tr("新建表"), icon: <Plus size={13} />, onClick: () => openDesign(conn.id) },
                           { label: t('design'), icon: <Wrench size={13} />, onClick: () => openDesign(conn.id) },
-                          { label: '关系图', icon: <Network size={13} />, onClick: () => openRelations(conn.id) },
-                          { label: 'AI 数据库体检', icon: <Sparkles size={13} />, onClick: () => prefillAgent('对当前数据库做一次体检：缺少主键、外键缺索引、重复索引与空表，并给出修复 SQL。') },
+                          { label: tr("关系图"), icon: <Network size={13} />, onClick: () => openRelations(conn.id) },
+                          { label: tr("AI 数据库体检"), icon: <Sparkles size={13} />, onClick: () => prefillAgent(tr("对当前数据库做一次体检：缺少主键、外键缺索引、重复索引与空表，并给出修复 SQL。")) },
                           {
                             label: t('delete'),
                             icon: <Trash2 size={13} />,
                             danger: true,
                             onClick: async () => {
-                              if (await askConfirm({ message: `删除连接「${conn.name}」？`, detail: '仅移除配置，不会删除数据库。', danger: true, confirmLabel: t('delete') })) void deleteConnection(conn.id);
+                              if (await askConfirm({ message: tr("删除连接「{0}」？", [conn.name]), detail: tr("仅移除配置，不会删除数据库。"), danger: true, confirmLabel: t('delete') })) void deleteConnection(conn.id);
                             },
                           },
                         ]);
@@ -721,9 +725,9 @@ export function Sidebar() {
                               onContextMenu={(e) =>
                                 !engineMeta(conn.engine).languages.includes('sql')
                                   ? openMenu(e, [
-                                      { label: '关闭数据库', icon: <FolderOpen size={13} />, onClick: () => toggleSchema(schemaKey) },
+                                      { label: tr("关闭数据库"), icon: <FolderOpen size={13} />, onClick: () => toggleSchema(schemaKey) },
                                       {
-                                        label: '新建查询',
+                                        label: tr("新建查询"),
                                         icon: <TerminalSquare size={13} />,
                                         onClick: () =>
                                           openQuery(
@@ -747,26 +751,26 @@ export function Sidebar() {
                                       },
                                       { label: t('refresh'), icon: <RefreshCw size={13} />, onClick: () => void loadSchema(conn.id, true) },
                                       {
-                                        label: '复制名称',
+                                        label: tr("复制名称"),
                                         icon: <Copy size={13} />,
                                         onClick: () => void navigator.clipboard.writeText(schema.name).then(() => notify('success', t('copied'))),
                                       },
                                     ])
                                   : openMenu(e, [
-                                  { label: '关闭数据库', icon: <FolderOpen size={13} />, onClick: () => toggleSchema(schemaKey) },
-                                  { label: '编辑数据库…', icon: <Pencil size={13} />, onClick: () => setDbDialog({ kind: 'rename', conn, database: schema.name }) },
-                                  { label: '新建数据库…', icon: <Plus size={13} />, onClick: () => setDbDialog({ kind: 'create', conn, database: '' }) },
-                                  { label: '删除数据库…', icon: <Trash2 size={13} />, danger: true, onClick: () => setDbDialog({ kind: 'drop', conn, database: schema.name }) },
+                                  { label: tr("关闭数据库"), icon: <FolderOpen size={13} />, onClick: () => toggleSchema(schemaKey) },
+                                  { label: tr("编辑数据库…"), icon: <Pencil size={13} />, onClick: () => setDbDialog({ kind: 'rename', conn, database: schema.name }) },
+                                  { label: tr("新建数据库…"), icon: <Plus size={13} />, onClick: () => setDbDialog({ kind: 'create', conn, database: '' }) },
+                                  { label: tr("删除数据库…"), icon: <Trash2 size={13} />, danger: true, onClick: () => setDbDialog({ kind: 'drop', conn, database: schema.name }) },
                                   { label: '', icon: null, sep: true, onClick: () => undefined },
-                                  { label: '新建表', icon: <Table2 size={13} />, onClick: () => openDesign(conn.id, undefined, schema.name) },
-                                  { label: '新建查询', icon: <TerminalSquare size={13} />, onClick: () => openQuery(conn.id) },
-                                  { label: '命令列界面…', icon: <FileCode2 size={13} />, onClick: () => openQuery(conn.id) },
-                                  { label: '运行 SQL 文件…', icon: <FileCode2 size={13} />, onClick: () => openQuery(conn.id) },
-                                  { label: '转储 SQL 文件…', icon: <Archive size={13} />, onClick: () => setDbDialog({ kind: 'dump', conn, database: schema.name }) },
+                                  { label: tr("新建表"), icon: <Table2 size={13} />, onClick: () => openDesign(conn.id, undefined, schema.name) },
+                                  { label: tr("新建查询"), icon: <TerminalSquare size={13} />, onClick: () => openQuery(conn.id) },
+                                  { label: tr("命令列界面…"), icon: <FileCode2 size={13} />, onClick: () => openQuery(conn.id) },
+                                  { label: tr("运行 SQL 文件…"), icon: <FileCode2 size={13} />, onClick: () => openQuery(conn.id) },
+                                  { label: tr("转储 SQL 文件…"), icon: <Archive size={13} />, onClick: () => setDbDialog({ kind: 'dump', conn, database: schema.name }) },
                                   { label: '', icon: null, sep: true, onClick: () => undefined },
-                                  { label: '逆向数据库到模型…', icon: <Network size={13} />, onClick: () => openRelations(conn.id, schema.name) },
-                                  { label: '打开仪表板', icon: <LayoutDashboard size={13} />, onClick: () => openDashboard(conn.id, schema.name) },
-                                  { label: '在数据库中查找…', icon: <FileSearch size={13} />, onClick: () => openTools('search') },
+                                  { label: tr("逆向数据库到模型…"), icon: <Network size={13} />, onClick: () => openRelations(conn.id, schema.name) },
+                                  { label: tr("打开仪表板"), icon: <LayoutDashboard size={13} />, onClick: () => openDashboard(conn.id, schema.name) },
+                                  { label: tr("在数据库中查找…"), icon: <FileSearch size={13} />, onClick: () => openTools('search') },
                                   { label: '', icon: null, sep: true, onClick: () => undefined },
                                   {
                                     label: t('refresh'),
@@ -774,7 +778,7 @@ export function Sidebar() {
                                     onClick: () => void loadSchema(conn.id, true),
                                   },
                                   {
-                                    label: '复制名称',
+                                    label: tr("复制名称"),
                                     icon: <Copy size={13} />,
                                     onClick: () => void navigator.clipboard.writeText(schema.name).then(() => notify('success', t('copied'))),
                                   },
@@ -797,7 +801,7 @@ export function Sidebar() {
                                     <span className="spinner" style={{ width: 10, height: 10, margin: 0, borderWidth: 1.5 }} /> {t('loading')}
                                   </div>
                                 ) : !loaded ? (
-                                  <div className="muted" style={{ paddingLeft: INDENT.tableLeaf, fontSize: 11, lineHeight: '24px' }}>未加载表 · 点击库名重试</div>
+                                  <div className="muted" style={{ paddingLeft: INDENT.tableLeaf, fontSize: 11, lineHeight: '24px' }}>{tr("未加载表 · 点击库名重试")}</div>
                                 ) : query.trim() ? (
                                   tables.map((table) => renderTable(conn, schema, table, INDENT.folderLeaf))
                                 ) : (
@@ -822,7 +826,7 @@ export function Sidebar() {
                                                 if (!managesObjects(conn.engine)) return;
                                                 openMenu(event, [
                                                   {
-                                                    label: model === 'search' ? '新建索引…' : '新建集合…',
+                                                    label: model === 'search' ? tr("新建索引…") : tr("新建集合…"),
                                                     icon: <Plus size={13} />,
                                                     onClick: () => setObjectDialog({ conn, database: schema.name }),
                                                   },
@@ -836,7 +840,7 @@ export function Sidebar() {
                                               ) : (
                                                 <Database size={13} style={{ color: 'var(--accent)' }} />
                                               )}
-                                              <span className="node-label">{engineMeta(conn.engine).languages.includes('aql') ? '集合' : model === 'document' ? '集合' : model === 'graph' ? '标签' : model === 'vector' ? '向量集合' : model === 'search' ? '索引' : model === 'widecolumn' ? '表' : '键空间'}</span>
+                                              <span className="node-label">{engineMeta(conn.engine).languages.includes('aql') ? tr("集合") : model === 'document' ? tr("集合") : model === 'graph' ? tr("标签") : model === 'vector' ? tr("向量集合") : model === 'search' ? tr("索引") : model === 'widecolumn' ? tr("表") : tr("键空间")}</span>
                                               <span className="tree-count">{tables.length}</span>
                                             </div>
                                             {tablesOpen ? tables.map((table) => renderTable(conn, schema, table, INDENT.tableLeaf)) : null}
@@ -863,7 +867,7 @@ export function Sidebar() {
                                               }
                                             >
                                               <TerminalSquare size={13} style={{ color: 'var(--text-muted)' }} />
-                                              <span className="node-label">查询</span>
+                                              <span className="node-label">{tr("查询")}</span>
                                             </div>
                                           </>
                                         );
@@ -873,28 +877,28 @@ export function Sidebar() {
                                           <div className="tree-node folder-node" style={{ paddingLeft: INDENT.folder }} onClick={() => setGroupOpen((prev) => ({ ...prev, [tableKey]: !tablesOpen }))}>
                                             <ChevronRight size={12} className={`conn-toggle ${tablesOpen ? 'open' : ''}`} />
                                             <Table2 size={13} style={{ color: 'var(--accent)' }} />
-                                            <span className="node-label">表</span>
+                                            <span className="node-label">{tr("表")}</span>
                                             <span className="tree-count">{tableList.length}</span>
                                           </div>
                                           {tablesOpen ? tableList.map((table) => renderTable(conn, schema, table, INDENT.tableLeaf)) : null}
                                           <div className="tree-node folder-node" style={{ paddingLeft: INDENT.folder }} onClick={() => setGroupOpen((prev) => ({ ...prev, [viewKey]: !viewsOpen }))}>
                                             <ChevronRight size={12} className={`conn-toggle ${viewsOpen ? 'open' : ''}`} />
                                             <Eye size={13} style={{ color: 'var(--text-muted)' }} />
-                                            <span className="node-label">视图</span>
+                                            <span className="node-label">{tr("视图")}</span>
                                             <span className="tree-count">{viewList.length}</span>
                                           </div>
                                           {viewsOpen ? viewList.map((table) => renderTable(conn, schema, table, INDENT.tableLeaf)) : null}
                                           <div className="tree-node obj-node" style={{ paddingLeft: INDENT.folderLeaf }} onClick={() => openTools('objects')}>
                                             <Code2 size={13} style={{ color: 'var(--text-muted)' }} />
-                                            <span className="node-label">函数 / 存储过程</span>
+                                            <span className="node-label">{tr("函数 / 存储过程")}</span>
                                           </div>
                                           <div className="tree-node obj-node" style={{ paddingLeft: INDENT.folderLeaf }} onClick={() => openQuery(conn.id)}>
                                             <TerminalSquare size={13} style={{ color: 'var(--text-muted)' }} />
-                                            <span className="node-label">查询</span>
+                                            <span className="node-label">{tr("查询")}</span>
                                           </div>
                                           <div className="tree-node obj-node" style={{ paddingLeft: INDENT.folderLeaf }} onClick={() => setSettingsOpen(true)}>
                                             <Archive size={13} style={{ color: 'var(--text-muted)' }} />
-                                            <span className="node-label">备份</span>
+                                            <span className="node-label">{tr("备份")}</span>
                                           </div>
                                         </>
                                       );
@@ -918,17 +922,17 @@ export function Sidebar() {
           </div>
           );
         })}
-        {connections.length && !filtered.length ? <div className="muted" style={{ padding: 14, fontSize: 11.5 }}>没有匹配的连接或表</div> : null}
+        {connections.length && !filtered.length ? <div className="muted" style={{ padding: 14, fontSize: 11.5 }}>{tr("没有匹配的连接或表")}</div> : null}
         </div>
       </div>
       <div className="sidebar-foot">
         <button className="btn" data-testid="sidebar-new-connection" style={{ flex: 1 }} onClick={() => openConnectionEditor('new')}>
           <Plus size={13} /> {t('newConnection')}
         </button>
-        <button className="icon-btn" title="关系图" data-testid="open-relations" onClick={() => openRelations()} disabled={!activeConnectionId}>
+        <button className="icon-btn" title={tr("关系图")} data-testid="open-relations" onClick={() => openRelations()} disabled={!activeConnectionId}>
           <Network size={14} />
         </button>
-        <button className="icon-btn" title="仪表板" data-testid="open-dashboard" onClick={() => openDashboard()} disabled={!activeConnectionId}>
+        <button className="icon-btn" title={tr("仪表板")} data-testid="open-dashboard" onClick={() => openDashboard()} disabled={!activeConnectionId}>
           <LayoutDashboard size={14} />
         </button>
         <button className="icon-btn" title={t('refresh')} onClick={() => void refreshAll()}>

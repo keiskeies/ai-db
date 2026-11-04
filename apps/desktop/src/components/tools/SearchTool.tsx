@@ -4,6 +4,7 @@ import { applyCapabilityDefaults, CAPABILITIES, getCapability, type Capability }
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
 import { CapabilityForm } from './CapabilityForm';
+import { t as tr } from '../../i18n';
 
 interface ObjectMatch {
   kind: string;
@@ -33,7 +34,7 @@ export function SearchTool() {
 
   const run = async () => {
     if (!activeConnectionId) {
-      notify('warning', '请先选择连接');
+      notify('warning', tr("请先选择连接"));
       return;
     }
     if (!query.trim()) return;
@@ -47,7 +48,7 @@ export function SearchTool() {
       });
       setResult(res);
     } catch (err: any) {
-      notify('error', '搜索失败', err?.message);
+      notify('error', tr("搜索失败"), err?.message);
     } finally {
       setLoading(false);
     }
@@ -56,13 +57,12 @@ export function SearchTool() {
   return (
     <div className="tool-pane">
       <div className="tool-pane-head">
-        <FileSearch size={15} /> 数据库搜索
-        <span className="muted">对象名称、注释与文本列内容</span>
+        <FileSearch size={15} /> {tr(" 数据库搜索 ")}<span className="muted">{tr("对象名称、注释与文本列内容")}</span>
       </div>
       <div className="tool-row">
         <div className="search-box" style={{ flex: 1 }}>
           <Search size={13} />
-          <input value={query} onChange={(e) => setValues((current) => ({ ...current, query: e.target.value }))} onKeyDown={(e) => e.key === 'Enter' && void run()} placeholder="表名、列名或任意文本…" autoFocus />
+          <input value={query} onChange={(e) => setValues((current) => ({ ...current, query: e.target.value }))} onKeyDown={(e) => e.key === 'Enter' && void run()} placeholder={tr("表名、列名或任意文本…")} autoFocus />
         </div>
         <CapabilityForm
           capability={capability}
@@ -75,18 +75,17 @@ export function SearchTool() {
           omit={['query']}
         />
         <button className="btn primary" onClick={() => void run()} disabled={loading}>
-          {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <Search size={12} />} 搜索
-        </button>
+          {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <Search size={12} />}{tr(" 搜索 ")}</button>
       </div>
       <div className="tool-scroll">
         {result ? (
           <>
             <div className="tool-summary">
-              扫描 {result.scannedTables} 张表 · 对象 {result.objects.length} · 数据命中 {result.data.length}
+              {tr(" 扫描 ")}{result.scannedTables}{tr(" 张表 · 对象 ")}{result.objects.length}{tr(" · 数据命中 ")}{result.data.length}
             </div>
             {result.objects.length ? (
               <div className="tool-section">
-                <div className="tool-section-title">对象</div>
+                <div className="tool-section-title">{tr("对象")}</div>
                 {result.objects.map((item, index) => (
                   <button
                     key={`${item.table}_${item.column ?? ''}_${index}`}
@@ -107,17 +106,16 @@ export function SearchTool() {
             ) : null}
             {result.data.length ? (
               <div className="tool-section">
-                <div className="tool-section-title">数据命中</div>
+                <div className="tool-section-title">{tr("数据命中")}</div>
                 {result.data.map((match) => (
                   <div key={match.table} className="data-match">
                     <div className="tool-row" style={{ marginBottom: 4 }}>
                       <span className="badge agent">rows</span>
                       <strong className="mono">{match.table}</strong>
-                      <span className="muted" style={{ fontSize: 10 }}>{match.rows.length} 行</span>
+                      <span className="muted" style={{ fontSize: 10 }}>{match.rows.length}{tr(" 行")}</span>
                       <span className="spacer" />
                       <button className="btn ghost small" onClick={() => { openData(activeConnectionId!, match.table, database || conn?.database); closeTools(); }}>
-                        打开表
-                      </button>
+                        {tr(" 打开表 ")}</button>
                     </div>
                     <div className="mini-table-wrap">
                       <table className="tool-table">
@@ -137,10 +135,10 @@ export function SearchTool() {
                 ))}
               </div>
             ) : null}
-            {!result.objects.length && !result.data.length ? <div className="dash-empty">没有匹配结果。</div> : null}
+            {!result.objects.length && !result.data.length ? <div className="dash-empty">{tr("没有匹配结果。")}</div> : null}
           </>
         ) : (
-          <div className="dash-empty">输入关键词，跨表搜索表名、列名、注释与文本内容（最多扫描 25 张表）。</div>
+          <div className="dash-empty">{tr("输入关键词，跨表搜索表名、列名、注释与文本内容（最多扫描 25 张表）。")}</div>
         )}
       </div>
     </div>

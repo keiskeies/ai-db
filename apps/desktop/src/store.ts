@@ -15,10 +15,11 @@ import type {
   Risk,
   ToolResult,
 } from '@aidb/core';
-import { DEFAULT_SETTINGS, engineMeta } from '@aidb/core';
+import { DEFAULT_SETTINGS, engineMeta, normalizeLocale } from '@aidb/core';
 import { ApiError, api, streamTurn, type BootstrapData } from './lib/api';
 import { startSchemaEvents } from './lib/schemaEvents';
-import { translate, type I18nKey, type Locale } from './i18n';
+import { getI18nLocale, setI18nLocale, translate, type I18nKey, type I18nVars } from './i18n';
+import { t as tr } from './i18n';
 export type Tab =
   | { id: string; kind: 'welcome'; title: string }
   | { id: string; kind: 'data'; title: string; connectionId: string; database?: string; table: string }
@@ -216,7 +217,7 @@ interface AppStore {
   devices: DeviceInfo[];
 
   boot: () => Promise<void>;
-  t: (key: I18nKey) => string;
+  t: (key: I18nKey | string, vars?: I18nVars) => string;
   notify: (kind: Toast['kind'], message: string, detail?: string) => void;
   dismissToast: (id: string) => void;
 
@@ -306,7 +307,7 @@ interface AppStore {
  */
 let restoreSeq = 0;
 
-const WELCOME: Tab = { id: 'welcome', kind: 'welcome', title: '欢迎' };
+const WELCOME: Tab = { id: 'welcome', kind: 'welcome', title: tr("欢迎") };
 let tabSeq = 1;
 let currentAbort: AbortController | undefined;
 const toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -414,7 +415,7 @@ export const useApp = create<AppStore>((set, get) => ({
   toasts: [],
   devices: [],
 
-  t: (key) => translate(get().settings.locale as Locale, key),
+  t: (key, vars) => translate(get().settings.locale, key, vars),
 
   notify: (kind, message, detail) => {
     const id = `t_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
@@ -433,11 +434,19 @@ export const useApp = create<AppStore>((set, get) => ({
   boot: async () => {
     try {
       const data = await api.bootstrap();
+      const settings: AppSettings = { ...data.settings, locale: normalizeLocale(data.settings.locale) };
+      // 模块级文案在 import 时按缓存语言定稿：与设置不一致就重载一次，避免中英混排。
+      const cachedLocale = getI18nLocale();
+      setI18nLocale(settings.locale);
+      if (settings.locale !== cachedLocale) {
+        window.location.reload();
+        return;
+      }
       set({
         booted: true,
         bootError: undefined,
         connections: data.connections,
-        settings: data.settings,
+        settings,
         sessions: data.sessions,
         tools: data.tools,
         agentMode: (data.sessions[0]?.permissionMode as PermissionMode) ?? 'ask',
@@ -620,7 +629,7 @@ export const useApp = create<AppStore>((set, get) => ({
     const tab: Tab = {
       id,
       kind: 'query',
-      title: title ?? `查询 ${count}`,
+      title: title ?? tr("查询 {0}", [count]),
       connectionId: connId,
       database: database ?? get().connections.find((c) => c.id === connId)?.database,
       sql: sql ?? '',
@@ -643,13 +652,13 @@ export const useApp = create<AppStore>((set, get) => ({
     const conn = get().connections.find((c) => c.id === connId);
     const meta = conn ? engineMeta(conn.engine) : undefined;
     if (meta && !meta.capabilities.ddl) {
-      get().notify('warning', '该引擎不支持可视化建表', `${meta.label} 请直接执行 DDL`);
+      get().notify('warning', tr("该引擎不支持可视化建表"), tr("{0} 请直接执行 DDL", [meta.label]));
       return;
     }
     const tab: Tab = {
       id,
       kind: 'design',
-      title: table ? `设计 · ${table}` : get().t('newTable'),
+      title: table ? tr("设计 · {0}", [table]) : get().t('newTable'),
       connectionId: connId,
       database,
       table,
@@ -667,7 +676,7 @@ export const useApp = create<AppStore>((set, get) => ({
     }
     const conn = get().connections.find((c) => c.id === connId);
     if (conn && engineMeta(conn.engine).model !== 'relational') {
-      get().notify('warning', '该引擎没有关系图', engineMeta(conn.engine).label);
+      get().notify('warning', tr("该引擎没有关系图"), engineMeta(conn.engine).label);
       return;
     }
     const id = `relations:${connId}:${database ?? ''}`;
@@ -676,7 +685,7 @@ export const useApp = create<AppStore>((set, get) => ({
       set({ activeTabId: id });
       return;
     }
-    const tab: Tab = { id, kind: 'relations', title: '关系图', connectionId: connId, database };
+    const tab: Tab = { id, kind: 'relations', title: tr("关系图"), connectionId: connId, database };
     set((s) => ({ tabs: [...s.tabs.filter((t) => t.id !== 'welcome'), tab], activeTabId: id, activeConnectionId: connId }));
     if (!get().schemas[connId]) void get().loadSchema(connId);
     else if (database && !(get().loadedDatabases[connId] ?? []).includes(database)) void get().loadSchema(connId, false, database);
@@ -690,7 +699,7 @@ export const useApp = create<AppStore>((set, get) => ({
     }
     const conn = get().connections.find((c) => c.id === connId);
     if (conn && !engineMeta(conn.engine).languages.includes('sql')) {
-      get().notify('warning', '该引擎没有仪表板', `${engineMeta(conn.engine).label} 的查询结果不是表格图表，放不进卡片`);
+      get().notify('warning', tr("该引擎没有仪表板"), tr("{0} 的查询结果不是表格图表，放不进卡片", [engineMeta(conn.engine).label]));
       return;
     }
     const db = database ?? conn?.database;
@@ -699,7 +708,7 @@ export const useApp = create<AppStore>((set, get) => ({
       set({ activeTabId: id, activeConnectionId: connId });
       return;
     }
-    const tab: Tab = { id, kind: 'dashboard', title: '仪表板', connectionId: connId, database: db };
+    const tab: Tab = { id, kind: 'dashboard', title: tr("仪表板"), connectionId: connId, database: db };
     set((s) => ({ tabs: [...s.tabs.filter((t) => t.id !== 'welcome'), tab], activeTabId: id, activeConnectionId: connId }));
     if (!get().schemas[connId]) void get().loadSchema(connId);
   },
@@ -854,7 +863,7 @@ export const useApp = create<AppStore>((set, get) => ({
   requestAgentTask: async (prompt) => {
     const live = get().live;
     if (live && (live.status === 'streaming' || live.status === 'awaiting')) {
-      get().notify('warning', 'Agent 正在回答，请等这一轮结束再操作');
+      get().notify('warning', tr("Agent 正在回答，请等这一轮结束再操作"));
       return false;
     }
     // 先把目标库对齐、等会话真的换过去，再填词：否则用户可能在旧会话里
@@ -1102,7 +1111,7 @@ export const useApp = create<AppStore>((set, get) => ({
     const trimmed = text.trim();
     if (!trimmed) return;
     if (get().live && (get().live!.status === 'streaming' || get().live!.status === 'awaiting')) {
-      get().notify('warning', 'Agent 正在运行，请先停止');
+      get().notify('warning', tr("Agent 正在运行，请先停止"));
       return;
     }
     let sessionId = get().agentSessionId;
@@ -1252,7 +1261,9 @@ export const useApp = create<AppStore>((set, get) => ({
   saveSettings: async (patch) => {
     try {
       const { settings } = await api.updateSettings(patch);
-      set({ settings });
+      const normalized: AppSettings = { ...settings, locale: normalizeLocale(settings.locale) };
+      setI18nLocale(normalized.locale);
+      set({ settings: normalized });
       get().notify('success', get().t('savedSettings'));
     } catch (err) {
       get().notify('error', get().t('error'), errorText(err));
@@ -1292,7 +1303,7 @@ export const useApp = create<AppStore>((set, get) => ({
     if (!conn) return;
     try {
       const { backup } = await api.createBackup({ connectionId: conn });
-      get().notify('success', '备份完成', backup.path);
+      get().notify('success', tr("备份完成"), backup.path);
     } catch (err) {
       get().notify('error', get().t('error'), errorText(err));
     }

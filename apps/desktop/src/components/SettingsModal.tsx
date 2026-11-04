@@ -39,6 +39,7 @@ import {
 import { api, TOKEN } from '../lib/api';
 import { formatBytes, formatRelative } from '../lib/format';
 import { useApp, type SettingsTab } from '../store';
+import { LOCALES } from '../i18n';
 import { Option, RiskBadge, Select } from './ui';
 import { askConfirm } from './AskDialog';
 import { SkillsTool } from './tools/SkillsTool';
@@ -46,6 +47,7 @@ import { WebSearchTool } from './tools/WebSearchTool';
 import { McpTool } from './tools/McpTool';
 import { CapabilitiesTool } from './tools/CapabilitiesTool';
 import { NotificationsTool } from './tools/NotificationsTool';
+import { t as tr } from '../i18n';
 
 type TabKey = SettingsTab;
 
@@ -284,7 +286,7 @@ export function SettingsModal() {
     if (!draft) return;
     const ids = presetModelIds(draftPreset);
     if (!ids.length) {
-      notify('warning', '模型目录', '该服务商没有默认模型，请用“获取可用模型”或手动添加。');
+      notify('warning', tr("模型目录"), tr("该服务商没有默认模型，请用“获取可用模型”或手动添加。"));
       return;
     }
     setDraft({ ...draft, models: ids.map((id) => ({ id })) });
@@ -298,7 +300,7 @@ export function SettingsModal() {
       .map((item) => ({ id: item.id.trim(), name: item.name?.trim() || undefined, orig: item.orig }))
       .filter((item) => item.id && !seen.has(item.id) && (seen.add(item.id), true));
     if (!drafted.length) {
-      notify('warning', '模型配置', '至少给这个服务商添加一个模型');
+      notify('warning', tr("模型配置"), tr("至少给这个服务商添加一个模型"));
       return;
     }
     const renames = drafted.filter((item) => item.orig && item.orig !== item.id);
@@ -402,7 +404,7 @@ export function SettingsModal() {
       });
       setModelSource(endpoint);
       if (!models.length) {
-        setModelsError('接口没有返回模型名，可手动添加。');
+        setModelsError(tr("接口没有返回模型名，可手动添加。"));
         return;
       }
       mergeDraftModels(models);
@@ -418,12 +420,12 @@ export function SettingsModal() {
       });
       notify(
         'success',
-        '模型目录',
-        `拉到 ${models.length} 个模型，已合并到目录${detectedInfos.length ? '，能力信息已自动预填' : ''} · ${endpoint}`,
+        tr("模型目录"),
+        tr("拉到 {0} 个模型，已合并到目录{1} · {2}", [models.length, detectedInfos.length ? tr("，能力信息已自动预填") : '', endpoint]),
       );
     } catch (err: any) {
       setModelSource('');
-      setModelsError(`${err?.message ?? '获取模型列表失败'}；也可手动添加模型名。`);
+      setModelsError(tr("{0}；也可手动添加模型名。", [err?.message ?? tr("获取模型列表失败")]));
     } finally {
       setModelsLoading(false);
     }
@@ -451,32 +453,32 @@ export function SettingsModal() {
 
   const navGroups: Array<{ label: string; items: Array<{ key: TabKey; label: string; icon: React.ReactNode; keywords?: string }> }> = [
     {
-      label: '基础',
+      label: tr("基础"),
       items: [
-        { key: 'appearance', label: t('appearance'), icon: <Palette size={14} />, keywords: '主题 颜色 语言 theme' },
-        { key: 'query', label: t('editor'), icon: <SlidersHorizontal size={14} />, keywords: '查询 超时 行数 SQL 编辑器' },
-        { key: 'agent', label: '模型', icon: <Bot size={14} />, keywords: 'Agent provider api key 温度 推理 模型' },
+        { key: 'appearance', label: t('appearance'), icon: <Palette size={14} />, keywords: tr("主题 颜色 语言 theme") },
+        { key: 'query', label: t('editor'), icon: <SlidersHorizontal size={14} />, keywords: tr("查询 超时 行数 SQL 编辑器") },
+        { key: 'agent', label: tr("模型"), icon: <Bot size={14} />, keywords: tr("Agent provider api key 温度 推理 模型") },
       ],
     },
     {
-      label: '集成与连接',
-      items: [{ key: 'notify', label: '通知与机器人', icon: <Bell size={14} />, keywords: '通知 机器人 飞书 企微 微信 钉钉 Slack Discord Telegram QQ' }],
+      label: tr("集成与连接"),
+      items: [{ key: 'notify', label: tr("通知与机器人"), icon: <Bell size={14} />, keywords: tr("通知 机器人 飞书 企微 微信 钉钉 Slack Discord Telegram QQ") }],
     },
     {
-      label: '能力扩展',
+      label: tr("能力扩展"),
       items: [
-        { key: 'skills', label: 'Agent Skills', icon: <BookOpen size={14} />, keywords: '技能 技能包 PPT Master 内置' },
-        { key: 'mcp', label: 'MCP 与工具', icon: <Plug size={14} />, keywords: 'MCP 工具 外部 Server 文件系统 Git' },
-        { key: 'capabilities', label: '功能能力', icon: <Boxes size={14} />, keywords: '能力 契约 工具箱 表单 字段 功能 capability' },
-        { key: 'search', label: '网络搜索', icon: <Search size={14} />, keywords: '搜索 Exa Parallel Bing DuckDuckGo SearXNG Brave Tavily Serper Mojeek DeepSeek Anthropic OpenAI 代理' },
+        { key: 'skills', label: 'Agent Skills', icon: <BookOpen size={14} />, keywords: tr("技能 技能包 PPT Master 内置") },
+        { key: 'mcp', label: tr("MCP 与工具"), icon: <Plug size={14} />, keywords: tr("MCP 工具 外部 Server 文件系统 Git") },
+        { key: 'capabilities', label: tr("功能能力"), icon: <Boxes size={14} />, keywords: tr("能力 契约 工具箱 表单 字段 功能 capability") },
+        { key: 'search', label: tr("网络搜索"), icon: <Search size={14} />, keywords: tr("搜索 Exa Parallel Bing DuckDuckGo SearXNG Brave Tavily Serper Mojeek DeepSeek Anthropic OpenAI 代理") },
       ],
     },
     {
-      label: '系统',
+      label: tr("系统"),
       items: [
-        { key: 'bridge', label: t('bridge'), icon: <Network size={14} />, keywords: '网关 配对 移动端 连接' },
-        { key: 'data', label: '数据与备份', icon: <Database size={14} />, keywords: '数据 备份 导出 导入' },
-        { key: 'about', label: t('about'), icon: <Info size={14} />, keywords: '关于 版本 许可 依赖' },
+        { key: 'bridge', label: t('bridge'), icon: <Network size={14} />, keywords: tr("网关 配对 移动端 连接") },
+        { key: 'data', label: tr("数据与备份"), icon: <Database size={14} />, keywords: tr("数据 备份 导出 导入") },
+        { key: 'about', label: t('about'), icon: <Info size={14} />, keywords: tr("关于 版本 许可 依赖") },
       ],
     },
   ];
@@ -494,13 +496,13 @@ export function SettingsModal() {
     <div className="provider-editor" data-testid="model-config-editor">
       <div className="field">
         <label>
-          API 密钥 {apiKeyStatus[draft.id] ? <span className="badge read">已配置</span> : null}
+          {tr(" API 密钥 ")}{apiKeyStatus[draft.id] ? <span className="badge read">{tr("已配置")}</span> : null}
         </label>
         <input
           className="input mono"
           type="password"
           value={draftKey === '__CLEAR__' ? '' : draftKey}
-          placeholder={apiKeyStatus[draft.id] ? t('apiKeyHint') : draftPreset?.keyRequired ? 'sk-...' : '本地服务可留空'}
+          placeholder={apiKeyStatus[draft.id] ? t('apiKeyHint') : draftPreset?.keyRequired ? 'sk-...' : tr("本地服务可留空")}
           autoComplete="new-password"
           onChange={(e) => {
             setDraftKey(e.target.value);
@@ -508,7 +510,7 @@ export function SettingsModal() {
           }}
           data-testid="settings-api-key"
         />
-        <span className="hint">密钥按服务商加密保存在 Bridge 本地，不会下发到移动端；留空保持不变。</span>
+        <span className="hint">{tr("密钥按服务商加密保存在 Bridge 本地，不会下发到移动端；留空保持不变。")}</span>
         {apiKeyStatus[draft.id] ? (
           <span className="hint">
             <button
@@ -518,7 +520,7 @@ export function SettingsModal() {
                 setDraftKeyDirty(true);
               }}
             >
-              {draftKey === '__CLEAR__' ? '保存后将清除，点击撤销' : '清除已保存的密钥'}
+              {draftKey === '__CLEAR__' ? tr("保存后将清除，点击撤销") : tr("清除已保存的密钥")}
             </button>
           </span>
         ) : null}
@@ -526,22 +528,21 @@ export function SettingsModal() {
 
       <button className="provider-advanced-toggle" type="button" onClick={() => setDraftShowAdvanced((value) => !value)} data-testid="settings-toggle-advanced">
         {draftShowAdvanced ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-        自定义设置
-      </button>
+        {tr(" 自定义设置 ")}</button>
       {draftShowAdvanced ? (
         <div className="form-grid">
           <div className="field">
-            <label>显示名称</label>
+            <label>{tr("显示名称")}</label>
             <input
               className="input"
               value={draft.name ?? ''}
               onChange={(e) => patchDraft({ name: e.target.value })}
-              placeholder={draft.models[0]?.name || draft.models[0]?.id || '例如 DeepSeek'}
+              placeholder={draft.models[0]?.name || draft.models[0]?.id || tr("例如 DeepSeek")}
               data-testid="settings-model-name"
             />
           </div>
           <div className="field">
-            <label>API 协议</label>
+            <label>{tr("API 协议")}</label>
             <Select
               className="select"
               value={draft.provider}
@@ -556,7 +557,7 @@ export function SettingsModal() {
           </div>
           {draft.provider !== 'local' ? (
             <div className="field full">
-              <label>API 地址</label>
+              <label>{tr("API 地址")}</label>
               <input
                 className="input mono"
                 value={draft.baseUrl}
@@ -567,7 +568,7 @@ export function SettingsModal() {
             </div>
           ) : null}
           <div className="field full">
-            <label>服务商预设</label>
+            <label>{tr("服务商预设")}</label>
             <div className="preset-groups">
               {presetsByGroup().map((group) => (
                 <div key={group.group} className="preset-group">
@@ -596,18 +597,15 @@ export function SettingsModal() {
 
       <div className="model-directory">
         <div className="model-directory-head">
-          <strong>模型目录</strong>
-          <span className="muted">{modelSource ? `来自 ${modelSource}` : '已自定义模型目录'}</span>
+          <strong>{tr("模型目录")}</strong>
+          <span className="muted">{modelSource ? tr("来自 {0}", [modelSource]) : tr("已自定义模型目录")}</span>
           <div className="spacer" />
           <button className="link-btn" onClick={restoreDefaultModels} data-testid="settings-restore-models">
-            恢复默认模型
-          </button>
+            {tr(" 恢复默认模型 ")}</button>
           <button className="link-btn" onClick={() => void fetchModels()} disabled={modelsLoading || draft.provider === 'local'} data-testid="settings-fetch-models">
-            {modelsLoading ? <Loader2 size={11} className="spin" /> : null} 获取可用模型
-          </button>
+            {modelsLoading ? <Loader2 size={11} className="spin" /> : null}{tr(" 获取可用模型 ")}</button>
           <button className="link-btn" onClick={addDraftModelRow} data-testid="settings-model-add">
-            + 添加模型
-          </button>
+            {tr(" + 添加模型 ")}</button>
         </div>
         <div className="model-rows" data-testid="settings-model-rows">
           {draft.models.map((entry, index) => {
@@ -621,26 +619,26 @@ export function SettingsModal() {
                     className="input mono"
                     value={entry.id}
                     onChange={(e) => updateDraftModel(index, { id: e.target.value })}
-                    placeholder="模型 ID（如 deepseek-chat）"
+                    placeholder={tr("模型 ID（如 deepseek-chat）")}
                     data-testid="settings-model-id"
                   />
                   <input
                     className="input"
                     value={entry.name ?? ''}
                     onChange={(e) => updateDraftModel(index, { name: e.target.value })}
-                    placeholder="显示名称（可选）"
+                    placeholder={tr("显示名称（可选）")}
                     data-testid="settings-model-display"
                   />
                   <button
                     className="icon-btn"
-                    title="模型能力"
+                    title={tr("模型能力")}
                     disabled={!modelId}
                     onClick={() => setExpandedModel(isExpanded ? '' : modelId)}
                     data-testid="settings-model-expand"
                   >
                     {isExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
                   </button>
-                  <button className="icon-btn" title="删除" onClick={() => removeDraftModelAt(index)} data-testid="settings-model-remove">
+                  <button className="icon-btn" title={tr("删除")} onClick={() => removeDraftModelAt(index)} data-testid="settings-model-remove">
                     <Trash2 size={12} />
                   </button>
                 </div>
@@ -659,23 +657,22 @@ export function SettingsModal() {
               </div>
             );
           })}
-          {!draft.models.length ? <div className="muted" style={{ fontSize: 10.5 }}>还没有模型：点“添加模型”手动填，或“获取可用模型”自动拉取。</div> : null}
+          {!draft.models.length ? <div className="muted" style={{ fontSize: 10.5 }}>{tr("还没有模型：点“添加模型”手动填，或“获取可用模型”自动拉取。")}</div> : null}
         </div>
         {modelsError ? <div className="risk-banner">{modelsError}</div> : null}
         {draftPreset?.docs ? (
           <span className="hint">
-            文档：<span className="mono">{draftPreset.docs}</span>
+            {tr(" 文档：")}<span className="mono">{draftPreset.docs}</span>
           </span>
         ) : null}
       </div>
 
       <div className="provider-actions">
-        <span className="hint" style={{ marginRight: 'auto' }}>保存会立即写入 Bridge</span>
+        <span className="hint" style={{ marginRight: 'auto' }}>{tr("保存会立即写入 Bridge")}</span>
         <button className="btn small" onClick={cancelDraft}>
-          取消
-        </button>
+          {tr(" 取消 ")}</button>
         <button className="btn small primary" onClick={commitDraft} data-testid="model-config-commit">
-          {draftNew ? '添加' : '保存'}
+          {draftNew ? tr("添加") : tr("保存")}
         </button>
       </div>
     </div>
@@ -694,13 +691,13 @@ export function SettingsModal() {
         </div>
         <div className="settings-layout" style={{ flex: 1, minHeight: 0 }}>
           <nav className="settings-nav">
-            <button className="settings-back" onClick={() => setOpen(false)}>← 返回工作区</button>
+            <button className="settings-back" onClick={() => setOpen(false)}>{tr("← 返回工作区")}</button>
             <div className="settings-nav-search">
               <Search size={12} />
               <input
                 value={navQuery}
                 onChange={(e) => setNavQuery(e.target.value)}
-                placeholder="搜索设置…"
+                placeholder={tr("搜索设置…")}
                 autoComplete="off"
                 autoCorrect="off"
                 autoCapitalize="off"
@@ -708,7 +705,7 @@ export function SettingsModal() {
                 data-testid="settings-nav-search"
               />
               {navQuery ? (
-                <button className="nav-search-clear" title="清除搜索" onClick={() => setNavQuery('')} data-testid="settings-nav-clear">
+                <button className="nav-search-clear" title={tr("清除搜索")} onClick={() => setNavQuery('')} data-testid="settings-nav-clear">
                   ×
                 </button>
               ) : null}
@@ -726,10 +723,8 @@ export function SettingsModal() {
             ))}
             {!visibleNavGroups.length ? (
               <div className="dash-empty">
-                没有匹配的设置。
-                <button className="link-btn" onClick={() => setNavQuery('')}>
-                  清除搜索
-                </button>
+                {tr(" 没有匹配的设置。 ")}<button className="link-btn" onClick={() => setNavQuery('')}>
+                  {tr(" 清除搜索 ")}</button>
               </div>
             ) : null}
           </nav>
@@ -743,24 +738,40 @@ export function SettingsModal() {
                     <Select className="select" value={form.theme} onChange={(e) => setForm({ ...form, theme: e.target.value as AppSettings['theme'] })}>
                       <Option value="dark">{t('dark')}</Option>
                       <Option value="light">{t('light')}</Option>
-                      <Option value="system">跟随系统</Option>
+                      <Option value="system">{tr("跟随系统")}</Option>
                     </Select>
                   </div>
                   <div className="field">
                     <label>{t('language')}</label>
-                    <Select className="select" value={form.locale} onChange={(e) => setForm({ ...form, locale: e.target.value as AppSettings['locale'] })}>
-                      <Option value="zh">中文</Option>
-                      <Option value="en">English</Option>
+                    <Select
+                      className="select"
+                      value={form.locale}
+                      onChange={(e) => {
+                        const next = e.target.value as AppSettings['locale'];
+                        if (next === form.locale) return;
+                        setForm({ ...form, locale: next });
+                        // 模块级常量在加载时就已定稿，换语言必须整页重载才能全部刷新。
+                        void saveSettings({ ...form, locale: next }).then(() => {
+                          if (useApp.getState().settings.locale === next) window.location.reload();
+                          else setForm({ ...form, locale: useApp.getState().settings.locale });
+                        });
+                      }}
+                    >
+                      {LOCALES.map((item) => (
+                        <Option key={item.id} value={item.id}>
+                          {item.native === item.english ? item.native : `${item.native} · ${item.english}`}
+                        </Option>
+                      ))}
                     </Select>
                   </div>
                 </div>
-                <p className="desc">主题与语言即时生效；移动端使用同一套设计令牌。</p>
+                <p className="desc">{tr("主题即时生效；切换语言后会重新加载界面。移动端使用同一套设计令牌。")}</p>
               </div>
             ) : null}
 
             {tab === 'query' ? (
               <div className="settings-section">
-                <h3>{t('editor')} & 查询</h3>
+                <h3>{t('editor')}{tr(" & 查询")}</h3>
                 <div className="form-grid">
                   <div className="field">
                     <label>{t('defaultLimit')}</label>
@@ -785,7 +796,7 @@ export function SettingsModal() {
                     />
                   </div>
                   <div className="field">
-                    <label>历史保留条数</label>
+                    <label>{tr("历史保留条数")}</label>
                     <input
                       className="input"
                       type="number"
@@ -796,7 +807,7 @@ export function SettingsModal() {
                     />
                   </div>
                   <div className="field">
-                    <label>历史保留天数</label>
+                    <label>{tr("历史保留天数")}</label>
                     <input
                       className="input"
                       type="number"
@@ -813,7 +824,7 @@ export function SettingsModal() {
                 <label className="checkbox">
                   <input type="checkbox" checked={form.allowMultiStatement} onChange={(e) => setForm({ ...form, allowMultiStatement: e.target.checked })} /> {t('allowMulti')}
                 </label>
-                <p className="desc">多语句默认关闭；关闭时只读脚本（多条 SELECT/SHOW）仍可整段执行，含写或 DDL 的脚本会要求逐条执行，避免误操作。收藏的历史不会被条数或天数裁剪；天数填 0 表示不按时间清理。</p>
+                <p className="desc">{tr("多语句默认关闭；关闭时只读脚本（多条 SELECT/SHOW）仍可整段执行，含写或 DDL 的脚本会要求逐条执行，避免误操作。收藏的历史不会被条数或天数裁剪；天数填 0 表示不按时间清理。")}</p>
               </div>
             ) : null}
 
@@ -821,12 +832,11 @@ export function SettingsModal() {
               <>
                 <div className="settings-section settings-section-wide">
                 <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
-                  <h3 style={{ margin: 0 }}>模型</h3>
+                  <h3 style={{ margin: 0 }}>{tr("模型")}</h3>
                   <button className="btn small primary" onClick={startAddModel} data-testid="settings-add-model">
-                    <Plus size={12} /> 添加服务商
-                  </button>
+                    <Plus size={12} /> {tr(" 添加服务商 ")}</button>
                 </div>
-                <p className="desc">每个服务商配置一次 API 地址与密钥，下面可以挂多个模型；当前用哪个模型，在 AI 助手输入框底部的下拉里切换。</p>
+                <p className="desc">{tr("每个服务商配置一次 API 地址与密钥，下面可以挂多个模型；当前用哪个模型，在 AI 助手输入框底部的下拉里切换。")}</p>
                 <div className="model-config-list" data-testid="settings-model-configs">
                   {modelConfigs.map((config) => {
                     const isActive = config.id === activeModelId;
@@ -834,7 +844,7 @@ export function SettingsModal() {
                     const editing = draft?.id === config.id;
                     const hasKey = config.provider === 'local' || Boolean(apiKeyStatus[config.id]);
                     const modelText = config.models.length > 1
-                      ? `${config.models.length} 个模型 · ${config.models.map((entry) => entry.name || entry.id).join(' / ')}`
+                      ? tr("{0} 个模型 · {1}", [config.models.length, config.models.map((entry) => entry.name || entry.id).join(' / ')])
                       : config.models[0]?.name || config.models[0]?.id || '';
                     return (
                       <div
@@ -843,19 +853,19 @@ export function SettingsModal() {
                         data-testid={`model-config-${config.id}`}
                       >
                         <div className="provider-head">
-                          <span className={`provider-status ${hasKey ? 'on' : 'off'}`} title={hasKey ? '已配置密钥' : '未配置密钥'} />
+                          <span className={`provider-status ${hasKey ? 'on' : 'off'}`} title={hasKey ? tr("已配置密钥") : tr("未配置密钥")} />
                           <div className="provider-main">
-                            <div className="provider-name">{config.name || config.models[0]?.name || config.models[0]?.id || '未命名服务商'}</div>
+                            <div className="provider-name">{config.name || config.models[0]?.name || config.models[0]?.id || tr("未命名服务商")}</div>
                             <div className="provider-meta" title={`${modelText} ${config.baseUrl}`}>
-                              <span className="badge">{preset?.label ?? (config.provider === 'local' ? '本地' : '自定义')}</span>
+                              <span className="badge">{preset?.label ?? (config.provider === 'local' ? tr("本地") : tr("自定义"))}</span>
                               <span>{modelText}</span>
                               {config.provider !== 'local' && config.baseUrl ? <span className="mono">{config.baseUrl}</span> : null}
                             </div>
                           </div>
-                          {isActive ? <span className="badge agent">当前 · {activeLabel}</span> : null}
+                          {isActive ? <span className="badge agent">{tr("当前 · ")}{activeLabel}</span> : null}
                           <div className="spacer" />
                           <button className="btn small" onClick={() => (editing ? cancelDraft() : startEditModel(config))} data-testid={`model-config-edit-${config.id}`}>
-                            {editing ? '收起' : '编辑'}
+                            {editing ? tr("收起") : tr("编辑")}
                           </button>
                           <button
                             className="link-btn danger"
@@ -863,8 +873,7 @@ export function SettingsModal() {
                             onClick={() => removeModelConfig(config)}
                             data-testid={`model-config-delete-${config.id}`}
                           >
-                            删除
-                          </button>
+                            {tr(" 删除 ")}</button>
                         </div>
                         {editing ? modelEditor : null}
                       </div>
@@ -883,27 +892,26 @@ export function SettingsModal() {
                     <input className="input" type="number" min={0} max={2} step={0.1} value={form.agent.temperature} onChange={(e) => setAgent({ temperature: Number(e.target.value) })} />
                   </div>
                   <div className="field">
-                    <label>上下文压缩阈值（tokens）</label>
+                    <label>{tr("上下文压缩阈值（tokens）")}</label>
                     <input className="input" type="number" min={4000} step={1000} value={form.agent.compactionThreshold} onChange={(e) => setAgent({ compactionThreshold: Number(e.target.value) })} />
                   </div>
                   <div className="field">
-                    <label>大 schema 候选表检索</label>
+                    <label>{tr("大 schema 候选表检索")}</label>
                     <Select
                       className="select"
                       value={form.agent.schemaFocus ?? 'auto'}
                       onChange={(e) => setAgent({ schemaFocus: e.target.value as 'auto' | 'on' | 'off' })}
                       data-testid="settings-schema-focus"
                     >
-                      <Option value="auto">自动（超过 150 表或 2500 列）</Option>
-                      <Option value="on">总是开启</Option>
-                      <Option value="off">关闭</Option>
+                      <Option value="auto">{tr("自动（超过 150 表或 2500 列）")}</Option>
+                      <Option value="on">{tr("总是开启")}</Option>
+                      <Option value="off">{tr("关闭")}</Option>
                     </Select>
                   </div>
                 </div>
                 <label className="checkbox">
                   <input type="checkbox" checked={form.agent.autoMemory} onChange={(e) => setAgent({ autoMemory: e.target.checked })} />
-                  {t('autoMemory')}（自动沉淀事实、偏好与会话摘要）
-                </label>
+                  {t('autoMemory')}{tr("（自动沉淀事实、偏好与会话摘要） ")}</label>
                 <label className="checkbox">
                   <input
                     type="checkbox"
@@ -911,23 +919,21 @@ export function SettingsModal() {
                     onChange={(e) => setAgent({ followUpSuggestions: e.target.checked })}
                     data-testid="settings-followups"
                   />
-                  追问建议（每轮结束后按涉及的表推荐下一步问题，本地生成、不消耗 token）
-                </label>
+                  {tr(" 追问建议（每轮结束后按涉及的表推荐下一步问题，本地生成、不消耗 token） ")}</label>
                 <label className="checkbox">
                   <input type="checkbox" checked={form.agent.snapshotBeforeWrite} onChange={(e) => setAgent({ snapshotBeforeWrite: e.target.checked })} />
-                  {t('snapshotBeforeWrite')}（破坏性操作前自动 SQL dump）
-                </label>
-                <p className="desc">权限策略：只读 → 拒绝写；询问 → 写/DDL 需确认；自动 → 仅破坏性需确认；全自动 → 全部放行（生产环境破坏性操作仍需确认）。所有调用写入审计。</p>
+                  {t('snapshotBeforeWrite')}{tr("（破坏性操作前自动 SQL dump） ")}</label>
+                <p className="desc">{tr("权限策略：只读 → 拒绝写；询问 → 写/DDL 需确认；自动 → 仅破坏性需确认；全自动 → 全部放行（生产环境破坏性操作仍需确认）。所有调用写入审计。")}</p>
               </div>
                 <div className="settings-section settings-section-wide">
-                  <h3>向量检索（Embedding）</h3>
-                  <p className="desc">pgvector / Qdrant / Milvus 的文本检索需要 Embedding 服务；也可以直接传入向量。</p>
+                  <h3>{tr("向量检索（Embedding）")}</h3>
+                  <p className="desc">{tr("pgvector / Qdrant / Milvus 的文本检索需要 Embedding 服务；也可以直接传入向量。")}</p>
                   <div className="form-grid">
                     <div className="field">
                       <label>Provider</label>
                       <Select className="select" value={form.embedding.provider} onChange={(e) => setEmbedding({ provider: e.target.value as AppSettings['embedding']['provider'] })} data-testid="settings-embedding-provider">
-                        <Option value="none">未配置</Option>
-                        <Option value="openai">OpenAI 兼容 /embeddings</Option>
+                        <Option value="none">{tr("未配置")}</Option>
+                        <Option value="openai">{tr("OpenAI 兼容 /embeddings")}</Option>
                         <Option value="ollama">Ollama /api/embeddings</Option>
                       </Select>
                     </div>
@@ -946,14 +952,14 @@ export function SettingsModal() {
                       />
                     </div>
                     <div className="field full">
-                      <label>API Key {form.embedding.hasApiKey ? <span className="badge read">已配置</span> : null}</label>
+                      <label>API Key {form.embedding.hasApiKey ? <span className="badge read">{tr("已配置")}</span> : null}</label>
                       <input
                         className="input mono"
                         type="password"
                         value={form.embedding.apiKey ?? ''}
                         autoComplete="new-password"
                         onChange={(e) => setEmbedding({ apiKey: e.target.value })}
-                        placeholder={form.embedding.hasApiKey ? '已保存，留空保持不变' : form.embedding.provider === 'ollama' ? '本地 Ollama 可留空' : 'sk-...'}
+                        placeholder={form.embedding.hasApiKey ? tr("已保存，留空保持不变") : form.embedding.provider === 'ollama' ? tr("本地 Ollama 可留空") : 'sk-...'}
                         disabled={form.embedding.provider === 'none'}
                       />
                     </div>
@@ -972,8 +978,7 @@ export function SettingsModal() {
                       onChange={(e) => void saveSettings({ features: { ...settings.features, skills: e.target.checked } })}
                     />
                     <span>
-                      允许 Agent 自动调用技能
-                      <span className="muted" style={{ display: 'block', fontSize: 10 }}>关闭后仍可在本页手动运行；Agent 看不到技能索引和 skill_* 工具。</span>
+                      {tr(" 允许 Agent 自动调用技能 ")}<span className="muted" style={{ display: 'block', fontSize: 10 }}>{tr("关闭后仍可在本页手动运行；Agent 看不到技能索引和 skill_* 工具。")}</span>
                     </span>
                   </label>
                   <label className="row gap-6" style={{ alignItems: 'center', fontSize: 11 }}>
@@ -982,8 +987,7 @@ export function SettingsModal() {
                       checked={settings.features.reportDeck}
                       onChange={(e) => void saveSettings({ features: { ...settings.features, reportDeck: e.target.checked } })}
                     />
-                    启用 AI PPT（报告 → 原生 PPTX，需 PPT Master）
-                  </label>
+                    {tr(" 启用 AI PPT（报告 → 原生 PPTX，需 PPT Master） ")}</label>
                 </div>
                 <div className="settings-embed"><SkillsTool /></div>
               </div>
@@ -997,8 +1001,7 @@ export function SettingsModal() {
                       checked={settings.features.mcp}
                       onChange={(e) => void saveSettings({ features: { ...settings.features, mcp: e.target.checked } })}
                     />
-                    允许 Agent 调用已配置的 MCP Server
-                  </label>
+                    {tr(" 允许 Agent 调用已配置的 MCP Server ")}</label>
                 </div>
                 <div className="settings-embed"><McpTool /></div>
               </div>
@@ -1015,11 +1018,10 @@ export function SettingsModal() {
                     <Network size={14} style={{ color: 'var(--accent)' }} />
                     <span className="mono" style={{ fontSize: 11.5 }}>{location.origin}</span>
                     <div className="spacer" />
-                    <span className="badge read">本地</span>
+                    <span className="badge read">{tr("本地")}</span>
                   </div>
                   <p className="hint" style={{ marginTop: 8 }}>
-                    Bridge 承载数据库驱动、Agent 运行时与元数据。桌面端内置；移动端通过配对访问，会话与记忆跨端同步。
-                  </p>
+                    {tr(" Bridge 承载数据库驱动、Agent 运行时与元数据。桌面端内置；移动端通过配对访问，会话与记忆跨端同步。 ")}</p>
                 </div>
                 <div className="setting-card">
                   <div className="row">
@@ -1032,17 +1034,17 @@ export function SettingsModal() {
                   </div>
                   {pairing ? (
                     <div className="pair-panel">
-                      {pairingQr ? <img className="pair-qr" data-testid="pairing-qr" src={pairingQr} alt="移动端配对二维码" /> : null}
+                      {pairingQr ? <img className="pair-qr" data-testid="pairing-qr" src={pairingQr} alt={tr("移动端配对二维码")} /> : null}
                       <div className="pair-info">
                         <div className="row">
                           <span className="mono" style={{ fontSize: 26, letterSpacing: 8, color: 'var(--agent)' }}>{pairing.code}</span>
-                          <span className="badge write">5 分钟有效</span>
+                          <span className="badge write">{tr("5 分钟有效")}</span>
                           <div className="spacer" />
-                          <button className="icon-btn" title="复制配对码" onClick={() => void navigator.clipboard.writeText(pairing.code)}>
+                          <button className="icon-btn" title={tr("复制配对码")} onClick={() => void navigator.clipboard.writeText(pairing.code)}>
                             <ShieldCheck size={14} />
                           </button>
                         </div>
-                        <p className="hint">手机打开「扫码配对」扫描左侧二维码；也可填写 Bridge 地址：{pairing.url ?? `${pairing.host}:${pairing.port}`}，再输入上方配对码。远程访问请置于 TLS 反向代理之后（可用 AIDB_PUBLIC_URL 固定二维码地址）。</p>
+                        <p className="hint">{tr("手机打开「扫码配对」扫描左侧二维码；也可填写 Bridge 地址：")}{pairing.url ?? `${pairing.host}:${pairing.port}`}{tr("，再输入上方配对码。远程访问请置于 TLS 反向代理之后（可用 AIDB_PUBLIC_URL 固定二维码地址）。")}</p>
                         <button
                           className="link-btn"
                           onClick={() => {
@@ -1050,10 +1052,9 @@ export function SettingsModal() {
                             void navigator.clipboard.writeText(`aidb://pair?url=${encodeURIComponent(target)}&code=${pairing.code}`);
                           }}
                         >
-                          复制 App 深链（aidb://pair）
-                        </button>
+                          {tr(" 复制 App 深链（aidb://pair） ")}</button>
                         {/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])([:/]|$)/.test(pairing.url ?? '') ? (
-                          <p className="hint" style={{ color: 'var(--warning)' }}>当前是回环地址，手机无法访问；请改用局域网地址，或通过 AIDB_PUBLIC_URL / 反向代理打开桌面端后再生成二维码。</p>
+                          <p className="hint" style={{ color: 'var(--warning)' }}>{tr("当前是回环地址，手机无法访问；请改用局域网地址，或通过 AIDB_PUBLIC_URL / 反向代理打开桌面端后再生成二维码。")}</p>
                         ) : null}
                       </div>
                     </div>
@@ -1069,9 +1070,9 @@ export function SettingsModal() {
                         <span className="badge">{device.platform}</span>
                         <div style={{ flex: 1 }}>
                           <div style={{ fontSize: 12 }}>{device.name}</div>
-                          <div className="muted" style={{ fontSize: 10 }}>配对于 {formatRelative(device.pairedAt)}</div>
+                          <div className="muted" style={{ fontSize: 10 }}>{tr("配对于 ")}{formatRelative(device.pairedAt)}</div>
                         </div>
-                        {device.revoked ? <span className="badge destructive">已吊销</span> : <button className="btn small danger" onClick={() => void revokeDevice(device.id)}>{t('revoke')}</button>}
+                        {device.revoked ? <span className="badge destructive">{tr("已吊销")}</span> : <button className="btn small danger" onClick={() => void revokeDevice(device.id)}>{t('revoke')}</button>}
                       </div>
                     ))
                   ) : (
@@ -1086,23 +1087,21 @@ export function SettingsModal() {
                 <h3>{t('dataSettings')} & {t('audit')}</h3>
                 <div className="row gap-8">
                   <button className="btn small" onClick={() => void downloadAudit()}>
-                    <Download size={12} /> 导出审计 CSV
-                  </button>
+                    <Download size={12} /> {tr(" 导出审计 CSV ")}</button>
                   <button
                     className="btn small danger"
                     onClick={async () => {
-                      if (!(await askConfirm({ message: '清空全部查询历史？', detail: '历史与审计列表会被清空，无法撤销。', danger: true, confirmLabel: '清空' }))) return;
+                      if (!(await askConfirm({ message: tr("清空全部查询历史？"), detail: tr("历史与审计列表会被清空，无法撤销。"), danger: true, confirmLabel: tr("清空") }))) return;
                       await api.clearHistory();
-                      notify('success', '查询历史已清空');
+                      notify('success', tr("查询历史已清空"));
                     }}
                   >
-                    <Trash2 size={12} /> 清空历史
-                  </button>
+                    <Trash2 size={12} /> {tr(" 清空历史 ")}</button>
                 </div>
                 {dataLoading ? <div className="loading-inline"><span className="spinner" /> {t('loading')}</div> : null}
                 {audit.length ? (
                   <div className="panel">
-                    <div className="panel-head">最近审计 <span className="badge">{audit.length}</span></div>
+                    <div className="panel-head">{tr("最近审计 ")}<span className="badge">{audit.length}</span></div>
                     <div style={{ maxHeight: 260, overflow: 'auto' }}>
                       {audit.map((entry) => (
                         <div key={entry.id} style={{ padding: '7px 10px', borderBottom: '1px solid var(--border-subtle)' }}>
@@ -1120,7 +1119,7 @@ export function SettingsModal() {
                     </div>
                   </div>
                 ) : null}
-                <h3 style={{ marginTop: 8 }}>备份</h3>
+                <h3 style={{ marginTop: 8 }}>{tr("备份")}</h3>
                 {backups.length ? (
                   backups.slice(0, 8).map((backup) => (
                     <div key={backup.id} className="setting-card" style={{ marginBottom: 6 }}>
@@ -1131,23 +1130,22 @@ export function SettingsModal() {
                         <button
                           className="btn ghost small"
                           onClick={async () => {
-                            if (!(await askConfirm({ message: '从备份恢复会执行备份里的 SQL。', detail: `现有结构/数据可能被覆盖：\n${backup.path}`, danger: true, confirmLabel: '恢复' }))) return;
+                            if (!(await askConfirm({ message: tr("从备份恢复会执行备份里的 SQL。"), detail: tr("现有结构/数据可能被覆盖：\n{0}", [backup.path]), danger: true, confirmLabel: tr("恢复") }))) return;
                             try {
                               await api.restoreBackup(backup.id);
-                              notify('success', '备份已恢复', backup.path);
+                              notify('success', tr("备份已恢复"), backup.path);
                             } catch (err: any) {
-                              notify('error', '恢复失败', err?.message);
+                              notify('error', tr("恢复失败"), err?.message);
                             }
                           }}
                         >
-                          恢复
-                        </button>
+                          {tr(" 恢复 ")}</button>
                       </div>
                       <div className="muted" style={{ fontSize: 10, marginTop: 3 }}>{formatRelative(backup.createdAt)}{backup.label ? ` · ${backup.label}` : ''}</div>
                     </div>
                   ))
                 ) : (
-                  <p className="hint">还没有备份。可在命令面板执行“备份当前数据库”，或让 Agent 备份。</p>
+                  <p className="hint">{tr("还没有备份。可在命令面板执行“备份当前数据库”，或让 Agent 备份。")}</p>
                 )}
               </div>
             ) : null}
@@ -1165,9 +1163,7 @@ export function SettingsModal() {
                   </div>
                 </div>
                 <p className="desc">
-                  五端覆盖：Windows / macOS / Linux（Electron）与 Android / iOS（Expo React Native）。Agent 运行时、数据库驱动与元数据位于 Bridge；
-                  桌面与移动端共享同一协议、会话与四层记忆。
-                </p>
+                  {tr(" 五端覆盖：Windows / macOS / Linux（Electron）与 Android / iOS（Expo React Native）。Agent 运行时、数据库驱动与元数据位于 Bridge； 桌面与移动端共享同一协议、会话与四层记忆。 ")}</p>
                 <div className="row gap-6" style={{ flexWrap: 'wrap' }}>
                   <span className="badge">Electron</span>
                   <span className="badge">React</span>
@@ -1177,7 +1173,7 @@ export function SettingsModal() {
                   <span className="badge agent">22 tools</span>
                   <span className="badge agent">4-layer memory</span>
                 </div>
-                <p className="hint">设计文档位于仓库 docs/（产品、架构、功能、UI/UX、Agent、数据模型、验证报告）。License: MIT。</p>
+                <p className="hint">{tr("设计文档位于仓库 docs/（产品、架构、功能、UI/UX、Agent、数据模型、验证报告）。License: MIT。")}</p>
               </div>
             ) : null}
           </div>
@@ -1236,19 +1232,18 @@ function ModelProfileEditor({
     <div className="field full model-profile" data-testid="model-profile">
       {hideHead ? null : (
         <div className="model-profile-head">
-          <label>模型能力</label>
+          <label>{tr("模型能力")}</label>
           <span className="mono muted">{model}</span>
           <div className="spacer" />
           {profile ? (
             <button className="link-btn" onClick={onClear} data-testid="model-profile-clear">
-              清除该模型的档案
-            </button>
+              {tr(" 清除该模型的档案 ")}</button>
           ) : null}
         </div>
       )}
       <div className="model-profile-grid">
         <div className="field">
-          <label>上下文窗口</label>
+          <label>{tr("上下文窗口")}</label>
           <input
             className="input"
             key={`ctx-${model}`}
@@ -1259,7 +1254,7 @@ function ModelProfileEditor({
           />
         </div>
         <div className="field">
-          <label>最大输出 token 数</label>
+          <label>{tr("最大输出 token 数")}</label>
           <input
             className="input"
             key={`max-${model}`}
@@ -1271,21 +1266,18 @@ function ModelProfileEditor({
         </div>
       </div>
       <div className="field">
-        <label>输入类型</label>
+        <label>{tr("输入类型")}</label>
         <div className="row gap-6">
           <label className="checkbox">
-            <input type="checkbox" checked={inputs.includes('text')} onChange={() => toggleInput('text')} /> 文本
-          </label>
+            <input type="checkbox" checked={inputs.includes('text')} onChange={() => toggleInput('text')} /> {tr(" 文本 ")}</label>
           <label className="checkbox">
-            <input type="checkbox" checked={inputs.includes('image')} onChange={() => toggleInput('image')} data-testid="model-input-image" /> 图片
-          </label>
+            <input type="checkbox" checked={inputs.includes('image')} onChange={() => toggleInput('image')} data-testid="model-input-image" /> {tr(" 图片 ")}</label>
         </div>
-        <span className="hint">勾选「图片」后聊天面板才能贴图；两项都不选按仅文本处理。</span>
+        <span className="hint">{tr("勾选「图片」后聊天面板才能贴图；两项都不选按仅文本处理。")}</span>
       </div>
       <div className="model-profile-switch">
         <label>
-          推理等级
-          <span className="tip" title="开启后可定义档位与发给服务商的参数值。OpenAI 兼容协议按字符串下发 reasoning_effort；Anthropic 协议把值当作 thinking.budget_tokens 的数字。">?</span>
+          {tr(" 推理等级 ")}<span className="tip" title={tr("开启后可定义档位与发给服务商的参数值。OpenAI 兼容协议按字符串下发 reasoning_effort；Anthropic 协议把值当作 thinking.budget_tokens 的数字。")}>?</span>
         </label>
         <div className="spacer" />
         <button
@@ -1307,8 +1299,8 @@ function ModelProfileEditor({
       {profile?.reasoning ? (
         <div className="tier-table" data-testid="model-tiers">
           <div className="tier-row tier-row-head">
-            <span>档位</span>
-            <span>API 参数值</span>
+            <span>{tr("档位")}</span>
+            <span>{tr("API 参数值")}</span>
             <span />
           </div>
           {tiers.map((tier, index) => (
@@ -1325,31 +1317,29 @@ function ModelProfileEditor({
               <input
                 className="input mono"
                 value={tier.value}
-                placeholder={tier.level === 'off' ? '关闭思考' : '如 low / 2048'}
+                placeholder={tier.level === 'off' ? tr("关闭思考") : tr("如 low / 2048")}
                 onChange={(e) => setTiers(tiers.map((item, i) => (i === index ? { ...item, value: e.target.value } : item)))}
                 data-testid={`model-tier-value-${tier.level}`}
               />
-              <button className="icon-btn" title="删除档位" onClick={() => setTiers(tiers.filter((_, i) => i !== index))}>
+              <button className="icon-btn" title={tr("删除档位")} onClick={() => setTiers(tiers.filter((_, i) => i !== index))}>
                 <Trash2 size={12} />
               </button>
             </div>
           ))}
-          {!tiers.length ? <div className="hint">还没有档位，点下面的按钮添加。</div> : null}
+          {!tiers.length ? <div className="hint">{tr("还没有档位，点下面的按钮添加。")}</div> : null}
           <button
             className="btn small"
             onClick={() => setTiers([...tiers, { level: nextLevel(new Set(tiers.map((tier) => tier.level))), value: '' }])}
             data-testid="model-tier-add"
           >
-            <Plus size={12} /> 添加档位
-          </button>
-          <span className="hint">值留空表示该档不下发任何推理参数。</span>
+            <Plus size={12} /> {tr(" 添加档位 ")}</button>
+          <span className="hint">{tr("值留空表示该档不下发任何推理参数。")}</span>
         </div>
       ) : null}
       {hideHead && profile ? (
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <button className="link-btn" onClick={onClear}>
-            清除该模型的档案
-          </button>
+            {tr(" 清除该模型的档案 ")}</button>
         </div>
       ) : null}
     </div>

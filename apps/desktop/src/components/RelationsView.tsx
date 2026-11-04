@@ -4,6 +4,7 @@ import type { TableInfo } from '@aidb/core';
 import { useApp, type Tab } from '../store';
 import { DatabaseSelect } from './DatabaseSelect';
 import { EmptyState } from './ui';
+import { t as tr } from '../i18n';
 
 type RelationsTab = Extract<Tab, { kind: 'relations' }>;
 
@@ -104,10 +105,8 @@ export function RelationsView({ tab }: { tab: RelationsTab }) {
       <div className="toolbar">
         <span className="title">
           <Network size={14} style={{ color: 'var(--accent)' }} />
-          关系图
-          <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>
-            {conn?.name} · {nodes.length} 张表 · {edges.length} 条关系
-          </span>
+          {tr(" 关系图 ")}<span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>
+            {conn?.name} · {nodes.length}{tr(" 张表 · ")}{edges.length}{tr(" 条关系 ")}</span>
         </span>
         <DatabaseSelect
           connectionId={tab.connectionId}
@@ -115,19 +114,16 @@ export function RelationsView({ tab }: { tab: RelationsTab }) {
           onChange={(database) => updateTab(tab.id, { database })}
           testId="erd-db"
         />
-        <button className="icon-btn" title="刷新" onClick={() => void loadSchema(tab.connectionId, true, tab.database)}>
+        <button className="icon-btn" title={tr("刷新")} onClick={() => void loadSchema(tab.connectionId, true, tab.database)}>
           <RefreshCw size={14} />
         </button>
         <button className="btn small" onClick={() => openQuery(tab.connectionId, undefined, undefined, tab.database)}>
-          <TerminalSquare size={12} /> 新建查询
-        </button>
+          <TerminalSquare size={12} /> {tr(" 新建查询 ")}</button>
         <button className="btn small" onClick={() => exportSvg({ nodes, edges, width, height })}>
-          <Download size={12} /> 导出 SVG
-        </button>
+          <Download size={12} /> {tr(" 导出 SVG ")}</button>
         <div className="spacer" />
         <span className="erd-legend">
-          <span className="legend-dot" /> 外键关系（只读）
-        </span>
+          <span className="legend-dot" /> {tr(" 外键关系（只读） ")}</span>
       </div>
       {nodes.length ? (
         <div className="erd-wrap">
@@ -146,7 +142,7 @@ export function RelationsView({ tab }: { tab: RelationsTab }) {
                 className="erd-node"
                 style={{ left: node.x, top: node.y, width: NODE_W, height: node.h }}
                 onClick={() => openData(tab.connectionId, node.table.name, tab.database)}
-                title="点击打开数据"
+                title={tr("点击打开数据")}
               >
                 <div className="erd-node-head">
                   <Table2 size={12} style={{ color: 'var(--accent)' }} />
@@ -169,9 +165,8 @@ export function RelationsView({ tab }: { tab: RelationsTab }) {
           </div>
         </div>
       ) : (
-        <EmptyState icon={<Network size={20} />} title="没有可展示的表">
-          连接数据库并刷新结构后，这里会显示表与外键关系。
-        </EmptyState>
+        <EmptyState icon={<Network size={20} />} title={tr("没有可展示的表")}>
+          {tr(" 连接数据库并刷新结构后，这里会显示表与外键关系。 ")}</EmptyState>
       )}
     </div>
   );

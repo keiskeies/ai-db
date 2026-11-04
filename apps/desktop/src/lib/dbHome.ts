@@ -1,5 +1,6 @@
 import type { DatabaseSchema, QueryHistoryItem, TableInfo } from '@aidb/core';
 import { engineMeta, suggestionLabel } from '@aidb/core';
+import { getI18nLocale } from '../i18n';
 import type { QuestionSuggestion } from '@aidb/core';
 import { api } from './api';
 import { sqlPreview } from './format';
@@ -155,8 +156,8 @@ export interface HomeSuggestion extends QuestionSuggestion {
  */
 export async function loadSuggestions(connectionId: string, database: string, limit = 4): Promise<HomeSuggestion[]> {
   try {
-    const { suggestions } = await api.suggest({ connectionId, database: database || undefined, limit });
-    return suggestions.map((item) => ({ ...item, label: suggestionLabel(item.kind) }));
+    const { suggestions } = await api.suggest({ connectionId, database: database || undefined, limit, locale: getI18nLocale() });
+    return suggestions.map((item) => ({ ...item, label: suggestionLabel(item.kind, /^zh/i.test(getI18nLocale()) ? 'zh' : 'en') }));
   } catch {
     return [];
   }

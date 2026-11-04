@@ -5,6 +5,7 @@ import { api, streamSkillRun, type SkillWorkerEvent, type SkillWorkerRun } from 
 import { deliverExportedFile } from '../../lib/desktop';
 import { useApp } from '../../store';
 import { askConfirm } from '../AskDialog';
+import { t as tr } from '../../i18n';
 
 interface PendingQuestion {
   id: string;
@@ -13,21 +14,21 @@ interface PendingQuestion {
 }
 
 const EVENT_LABELS: Record<string, string> = {
-  start: '开始',
-  text_delta: '输出',
-  thinking_delta: '思考',
-  tool_call: '调用工具',
-  tool_result: '工具结果',
-  approval_required: '需要审批',
-  approval_resolved: '审批完成',
-  plan: '计划',
-  usage: '用量',
-  done: '完成',
-  aborted: '已中止',
-  error: '错误',
-  skill_question: '提问',
-  skill_answer: '回答',
-  skill_artifact: '产物',
+  start: tr("开始"),
+  text_delta: tr("输出"),
+  thinking_delta: tr("思考"),
+  tool_call: tr("调用工具"),
+  tool_result: tr("工具结果"),
+  approval_required: tr("需要审批"),
+  approval_resolved: tr("审批完成"),
+  plan: tr("计划"),
+  usage: tr("用量"),
+  done: tr("完成"),
+  aborted: tr("已中止"),
+  error: tr("错误"),
+  skill_question: tr("提问"),
+  skill_answer: tr("回答"),
+  skill_artifact: tr("产物"),
 };
 
 function eventSummary(event: SkillWorkerEvent): string {
@@ -37,13 +38,13 @@ function eventSummary(event: SkillWorkerEvent): string {
     case 'tool_call':
       return `${event.tool} · ${event.summary || JSON.stringify(event.args).slice(0, 120)}`;
     case 'tool_result':
-      return `${event.tool} · ${event.result.summary}${event.result.ok ? '' : '（失败）'}`;
+      return `${event.tool} · ${event.result.summary}${event.result.ok ? '' : tr('（失败）')}`;
     case 'skill_question':
       return event.question;
     case 'skill_answer':
       return event.answer;
     case 'skill_artifact':
-      return `${event.files.filter((file) => file.type === 'file').length} 个文件`;
+      return tr("{0} 个文件", [event.files.filter((file) => file.type === 'file').length]);
     case 'done':
       return event.summary ?? '';
     case 'error':
@@ -83,7 +84,7 @@ export function SkillsTool() {
     try {
       setSkills((await api.skills(true)).skills);
     } catch (err: any) {
-      notify('error', '读取 Skills 失败', err?.message);
+      notify('error', tr("读取 Skills 失败"), err?.message);
     } finally {
       setLoading(false);
     }
@@ -101,7 +102,7 @@ export function SkillsTool() {
       setSecrets(await api.skillSecrets(skill.id));
       setSecretDraft({});
     } catch (err: any) {
-      notify('error', '打开 Skill 失败', err?.message);
+      notify('error', tr("打开 Skill 失败"), err?.message);
     }
   };
 
@@ -109,15 +110,15 @@ export function SkillsTool() {
     if (!detail) return;
     const values = Object.fromEntries(Object.entries(secretDraft).filter(([, value]) => value.trim()));
     if (!Object.keys(values).length) {
-      notify('info', '没有新的密钥', '填入值后再保存');
+      notify('info', tr("没有新的密钥"), tr("填入值后再保存"));
       return;
     }
     try {
       setSecrets(await api.saveSkillSecrets(detail.id, values));
       setSecretDraft({});
-      notify('success', '密钥已加密保存', detail.id);
+      notify('success', tr("密钥已加密保存"), detail.id);
     } catch (err: any) {
-      notify('error', '保存密钥失败', err?.message);
+      notify('error', tr("保存密钥失败"), err?.message);
     }
   };
 
@@ -125,25 +126,25 @@ export function SkillsTool() {
     if (!detail) return;
     try {
       setSecrets(await api.deleteSkillSecret(detail.id, name));
-      notify('info', '密钥已清除', name);
+      notify('info', tr("密钥已清除"), name);
     } catch (err: any) {
-      notify('error', '清除密钥失败', err?.message);
+      notify('error', tr("清除密钥失败"), err?.message);
     }
   };
 
   const importPath = async () => {
     if (!path.trim()) {
-      notify('warning', '填入 skill 目录路径');
+      notify('warning', tr("填入 skill 目录路径"));
       return;
     }
     setImporting(true);
     try {
       const { skill } = await api.importSkill({ path: path.trim() });
-      notify('success', 'Skill 已导入', `${skill.name} · ${skill.fileCount} 个文件`);
+      notify('success', tr("Skill 已导入"), tr("{0} · {1} 个文件", [skill.name, skill.fileCount]));
       setPath('');
       await load();
     } catch (err: any) {
-      notify('error', '导入 Skill 失败', err?.message);
+      notify('error', tr("导入 Skill 失败"), err?.message);
     } finally {
       setImporting(false);
     }
@@ -161,10 +162,10 @@ export function SkillsTool() {
       }
       const base64 = btoa(binary);
       const { skill } = await api.importSkill({ zipBase64: base64, id: file.name.replace(/\.zip$/i, '') });
-      notify('success', 'Skill 压缩包已导入', skill.name);
+      notify('success', tr("Skill 压缩包已导入"), skill.name);
       await load();
     } catch (err: any) {
-      notify('error', '导入 Skill 压缩包失败', err?.message);
+      notify('error', tr("导入 Skill 压缩包失败"), err?.message);
     } finally {
       setImporting(false);
     }
@@ -172,18 +173,18 @@ export function SkillsTool() {
 
   const importGit = async () => {
     if (!gitUrl.trim()) {
-      notify('warning', '填入 Git 仓库地址');
+      notify('warning', tr("填入 Git 仓库地址"));
       return;
     }
     setImporting(true);
     try {
       const { skill } = await api.importSkill({ git: gitUrl.trim(), subdir: gitSubdir.trim() || undefined });
-      notify('success', 'Git Skill 已导入', `${skill.name} · ${skill.fileCount} 个文件`);
+      notify('success', tr("Git Skill 已导入"), tr("{0} · {1} 个文件", [skill.name, skill.fileCount]));
       setGitUrl('');
       setGitSubdir('');
       await load();
     } catch (err: any) {
-      notify('error', '从 Git 导入失败', err?.message);
+      notify('error', tr("从 Git 导入失败"), err?.message);
     } finally {
       setImporting(false);
     }
@@ -191,17 +192,17 @@ export function SkillsTool() {
 
   const importNpm = async () => {
     if (!npmSpec.trim()) {
-      notify('warning', '填入 npm 包名');
+      notify('warning', tr("填入 npm 包名"));
       return;
     }
     setImporting(true);
     try {
       const { skill } = await api.importSkill({ npm: npmSpec.trim() });
-      notify('success', 'npm Skill 已导入', `${skill.name} · ${skill.fileCount} 个文件`);
+      notify('success', tr("npm Skill 已导入"), tr("{0} · {1} 个文件", [skill.name, skill.fileCount]));
       setNpmSpec('');
       await load();
     } catch (err: any) {
-      notify('error', '从 npm 导入失败', err?.message);
+      notify('error', tr("从 npm 导入失败"), err?.message);
     } finally {
       setImporting(false);
     }
@@ -211,10 +212,10 @@ export function SkillsTool() {
     setInstallingPpt(true);
     try {
       const { skill } = await api.importSkill({ git: 'https://github.com/hugohe3/ppt-master.git', subdir: 'skills/ppt-master', id: 'ppt-master' });
-      notify('success', 'PPT Master 已安装', `${skill.name} · ${skill.fileCount} 个文件`);
+      notify('success', tr("PPT Master 已安装"), tr("{0} · {1} 个文件", [skill.name, skill.fileCount]));
       await load();
     } catch (err: any) {
-      notify('error', '安装 PPT Master 失败', err?.message);
+      notify('error', tr("安装 PPT Master 失败"), err?.message);
     } finally {
       setInstallingPpt(false);
     }
@@ -225,18 +226,18 @@ export function SkillsTool() {
       await api.enableSkill(skill.id, !skill.enabled);
       await load();
     } catch (err: any) {
-      notify('error', '更新 Skill 失败', err?.message);
+      notify('error', tr("更新 Skill 失败"), err?.message);
     }
   };
 
   const remove = async (skill: SkillSummary) => {
-    if (!(await askConfirm({ message: `卸载 Skill「${skill.name}」？`, detail: '文件会移到备份目录。', danger: true, confirmLabel: '卸载' }))) return;
+    if (!(await askConfirm({ message: tr("卸载 Skill「{0}」？", [skill.name]), detail: tr("文件会移到备份目录。"), danger: true, confirmLabel: tr("卸载") }))) return;
     try {
       await api.deleteSkill(skill.id);
       if (detail?.id === skill.id) setDetail(null);
       await load();
     } catch (err: any) {
-      notify('error', '卸载失败', err?.message);
+      notify('error', tr("卸载失败"), err?.message);
     }
   };
 
@@ -251,7 +252,7 @@ export function SkillsTool() {
 
   const startRun = async (skill: SkillDetail) => {
     if (!skill.enabled) {
-      notify('warning', 'Skill 已禁用', '先启用再运行');
+      notify('warning', tr("Skill 已禁用"), tr("先启用再运行"));
       return;
     }
     streamRef.current?.abort();
@@ -288,10 +289,10 @@ export function SkillsTool() {
         0,
         controller.signal,
       ).catch((err: any) => {
-        if (!controller.signal.aborted) notify('error', 'Skill 进度中断', err?.message);
+        if (!controller.signal.aborted) notify('error', tr("Skill 进度中断"), err?.message);
       });
     } catch (err: any) {
-      notify('error', '启动 Skill Worker 失败', err?.message);
+      notify('error', tr("启动 Skill Worker 失败"), err?.message);
     } finally {
       setStarting(false);
     }
@@ -301,9 +302,9 @@ export function SkillsTool() {
     if (!run) return;
     try {
       await api.cancelSkillRun(run.runId);
-      notify('info', '已请求取消', '正在停止 Skill Worker');
+      notify('info', tr("已请求取消"), tr("正在停止 Skill Worker"));
     } catch (err: any) {
-      notify('error', '取消失败', err?.message);
+      notify('error', tr("取消失败"), err?.message);
     }
   };
 
@@ -315,26 +316,26 @@ export function SkillsTool() {
     setAnswerText('');
     try {
       const result = await api.answerSkillQuestion(run.runId, questionId, answer);
-      if (!result.ok) notify('warning', '问题已失效', 'Worker 可能已经结束');
+      if (!result.ok) notify('warning', tr("问题已失效"), tr("Worker 可能已经结束"));
     } catch (err: any) {
-      notify('error', '提交回答失败', err?.message);
+      notify('error', tr("提交回答失败"), err?.message);
     }
   };
 
   const saveOutput = async (area: string, filePath: string) => {
     if (!run?.workspace) {
-      notify('warning', '产物目录未知', '等待运行结束后再保存');
+      notify('warning', tr("产物目录未知"), tr("等待运行结束后再保存"));
       return;
     }
     const source = `${run.workspace}/${area}/${filePath}`;
     const saved = await deliverExportedFile(source);
     if (!saved) {
-      notify('info', '产物路径', source);
+      notify('info', tr("产物路径"), source);
       return;
     }
-    if (saved.ok) notify('success', '已保存 Skill 产物', saved.path ?? source);
-    else if (saved.canceled) notify('info', '未选择位置', `文件仍在 ${source}`);
-    else notify('error', '保存失败', saved.error ?? source);
+    if (saved.ok) notify('success', tr("已保存 Skill 产物"), saved.path ?? source);
+    else if (saved.canceled) notify('info', tr("未选择位置"), tr("文件仍在 {0}", [source]));
+    else notify('error', tr("保存失败"), saved.error ?? source);
   };
 
   const outputFiles = run?.outputs.filter((file) => file.type === 'file' && file.area !== 'input') ?? [];
@@ -360,40 +361,37 @@ export function SkillsTool() {
     <div className="tool-pane">
       <div className="tool-pane-head">
         <BookOpen size={15} /> Skills
-        <span className="muted">SKILL.md 目录包 · 子 Agent 执行 · 产物带回</span>
+        <span className="muted">{tr("SKILL.md 目录包 · 子 Agent 执行 · 产物带回")}</span>
       </div>
       <div className="tool-scroll">
-        {!features.skills ? <div className="dash-empty" style={{ color: 'var(--warning, #D6B45A)' }}>Agent 自动调用已关闭；仍可在本页手动运行 Skill Worker。</div> : null}
+        {!features.skills ? <div className="dash-empty" style={{ color: 'var(--warning, #D6B45A)' }}>{tr("Agent 自动调用已关闭；仍可在本页手动运行 Skill Worker。")}</div> : null}
         <div className="panel" style={{ padding: 10, marginBottom: 10 }}>
-          <div className="panel-head" style={{ paddingLeft: 0 }}>推荐技能</div>
+          <div className="panel-head" style={{ paddingLeft: 0 }}>{tr("推荐技能")}</div>
           <div className="tool-row" style={{ padding: 0, border: 0 }}>
             <span style={{ flex: 1 }}>
-              <strong>PPT Master</strong> <span className="badge">第三方</span>
-              <div className="muted" style={{ fontSize: 10 }}>原生 PPTX、品牌模板与质量门禁；AI PPT 依赖它。</div>
+              <strong>PPT Master</strong> <span className="badge">{tr("第三方")}</span>
+              <div className="muted" style={{ fontSize: 10 }}>{tr("原生 PPTX、品牌模板与质量门禁；AI PPT 依赖它。")}</div>
             </span>
             {skills.some((skill) => skill.id === 'ppt-master') ? (
-              <span className="badge read">已安装</span>
+              <span className="badge read">{tr("已安装")}</span>
             ) : (
               <button className="btn primary" onClick={() => void installPpt()} disabled={installingPpt}>
-                {installingPpt ? <Loader2 size={12} className="spin" /> : null} 一键安装
-              </button>
+                {installingPpt ? <Loader2 size={12} className="spin" /> : null}{tr(" 一键安装 ")}</button>
             )}
           </div>
-          <div className="muted" style={{ fontSize: 10, marginTop: 6 }}>约 60MB，首次从官方仓库拉取；轻量内置技能已自动安装，无需操作。</div>
+          <div className="muted" style={{ fontSize: 10, marginTop: 6 }}>{tr("约 60MB，首次从官方仓库拉取；轻量内置技能已自动安装，无需操作。")}</div>
         </div>
         <details className="panel" style={{ padding: 10, marginBottom: 10 }}>
-          <summary className="panel-head" style={{ paddingLeft: 0, cursor: 'pointer' }}>手动导入（目录 / zip / Git / npm）</summary>
+          <summary className="panel-head" style={{ paddingLeft: 0, cursor: 'pointer' }}>{tr("手动导入（目录 / zip / Git / npm）")}</summary>
           <div className="tool-row" style={{ padding: 0, border: 0 }}>
             <div className="field" style={{ flex: 1 }}>
-              <label>本地目录（含 SKILL.md）</label>
+              <label>{tr("本地目录（含 SKILL.md）")}</label>
               <input className="input" value={path} onChange={(e) => setPath(e.target.value)} placeholder="D:\path\to\skill" />
             </div>
             <button className="btn primary" onClick={() => void importPath()} disabled={importing}>
-              {importing ? <Loader2 size={12} className="spin" /> : <FolderUp size={12} />} 导入目录
-            </button>
+              {importing ? <Loader2 size={12} className="spin" /> : <FolderUp size={12} />}{tr(" 导入目录 ")}</button>
             <button className="btn" onClick={() => fileRef.current?.click()} disabled={importing}>
-              导入 zip
-            </button>
+              {tr(" 导入 zip ")}</button>
             <input
               ref={fileRef}
               className="file-input"
@@ -408,60 +406,56 @@ export function SkillsTool() {
           </div>
           <div className="tool-row" style={{ padding: '8px 0 0', border: 0 }}>
             <div className="field" style={{ flex: 1 }}>
-              <label>Git 仓库（https / ssh / git@）</label>
+              <label>{tr("Git 仓库（https / ssh / git@）")}</label>
               <input className="input" value={gitUrl} onChange={(e) => setGitUrl(e.target.value)} placeholder="https://github.com/user/skill-repo" />
             </div>
             <div className="field" style={{ width: 170 }}>
-              <label>子目录（可选）</label>
+              <label>{tr("子目录（可选）")}</label>
               <input className="input" value={gitSubdir} onChange={(e) => setGitSubdir(e.target.value)} placeholder="skills/my-skill" />
             </div>
             <button className="btn" onClick={() => void importGit()} disabled={importing}>
-              导入 Git
-            </button>
+              {tr(" 导入 Git ")}</button>
           </div>
           <div className="tool-row" style={{ padding: '8px 0 0', border: 0 }}>
             <div className="field" style={{ flex: 1 }}>
-              <label>npm 包（包内需含 SKILL.md）</label>
-              <input className="input" value={npmSpec} onChange={(e) => setNpmSpec(e.target.value)} placeholder="@scope/skill 或 skill@1.2.0" />
+              <label>{tr("npm 包（包内需含 SKILL.md）")}</label>
+              <input className="input" value={npmSpec} onChange={(e) => setNpmSpec(e.target.value)} placeholder={tr("@scope/skill 或 skill@1.2.0")} />
             </div>
             <button className="btn" onClick={() => void importNpm()} disabled={importing}>
-              导入 npm
-            </button>
+              {tr(" 导入 npm ")}</button>
           </div>
           <div className="muted" style={{ fontSize: 10, marginTop: 6 }}>
-            Skill 在独立上下文中运行，只允许读取技能目录、写 workspace/output、执行声明的 entrypoint。
-          </div>
+            {tr(" Skill 在独立上下文中运行，只允许读取技能目录、写 workspace/output、执行声明的 entrypoint。 ")}</div>
         </details>
         <div className="panel" style={{ marginBottom: 10 }}>
           <div className="panel-head">
-            技能
-            <span className="badge">{skills.length} 个可用 · {skills.filter((skill) => skill.builtin).length} 个内置</span>
+            {tr(" 技能 ")}<span className="badge">{skills.length}{tr(" 个可用 · ")}{skills.filter((skill) => skill.builtin).length}{tr(" 个内置")}</span>
           </div>
           <div style={{ padding: '0 10px 8px' }}>
             <div className="search-box">
               <Search size={12} />
-              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索技能…" />
+              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={tr("搜索技能…")} />
             </div>
           </div>
-          {loading ? <div className="dash-empty"><Loader2 size={14} className="spin" /> 读取中…</div> : null}
-          {!loading && !skills.length ? <div className="dash-empty">还没有 Skill。可以从上方一键安装，或手动导入。</div> : null}
-          {!loading && skills.length && !filteredSkills.length ? <div className="dash-empty">没有匹配的技能。</div> : null}
+          {loading ? <div className="dash-empty"><Loader2 size={14} className="spin" /> {tr(" 读取中…")}</div> : null}
+          {!loading && !skills.length ? <div className="dash-empty">{tr("还没有 Skill。可以从上方一键安装，或手动导入。")}</div> : null}
+          {!loading && skills.length && !filteredSkills.length ? <div className="dash-empty">{tr("没有匹配的技能。")}</div> : null}
           {filteredSkills.map((skill) => (
             <div key={skill.id} className="skill-card">
               <div className="skill-card-main" onClick={() => void open(skill)}>
                 <div className="skill-card-title">
                   <strong>{skill.name}</strong>
-                  {skill.builtin ? <span className="badge">内置</span> : null}
-                  {skill.runnable ? <span className="badge read">子代理</span> : null}
-                  {!skill.enabled ? <span className="badge">已停用</span> : null}
+                  {skill.builtin ? <span className="badge">{tr("内置")}</span> : null}
+                  {skill.runnable ? <span className="badge read">{tr("子代理")}</span> : null}
+                  {!skill.enabled ? <span className="badge">{tr("已停用")}</span> : null}
                 </div>
                 <div className="muted" style={{ fontSize: 10.5, lineHeight: 1.5 }}>{skill.description.slice(0, 160)}</div>
-                <div className="muted" style={{ fontSize: 10 }}>{skill.id}{skill.version ? ` · v${skill.version}` : ''} · {skill.fileCount} 个文件</div>
+                <div className="muted" style={{ fontSize: 10 }}>{skill.id}{skill.version ? ` · v${skill.version}` : ''} · {skill.fileCount}{tr(" 个文件")}</div>
               </div>
               <div className="skill-card-actions">
-                <input type="checkbox" checked={skill.enabled} onChange={() => void toggle(skill)} title="启用 / 禁用" />
-                <button className="btn small" onClick={() => void open(skill)}>查看</button>
-                <button className="icon-btn" onClick={() => void remove(skill)} title="卸载"><Trash2 size={12} /></button>
+                <input type="checkbox" checked={skill.enabled} onChange={() => void toggle(skill)} title={tr("启用 / 禁用")} />
+                <button className="btn small" onClick={() => void open(skill)}>{tr("查看")}</button>
+                <button className="icon-btn" onClick={() => void remove(skill)} title={tr("卸载")}><Trash2 size={12} /></button>
               </div>
             </div>
           ))}
@@ -476,31 +470,29 @@ export function SkillsTool() {
             </div>
             <div style={{ padding: 10 }}>
               <div className="field">
-                <label>任务说明（可留空，按 SKILL.md 默认流程执行）</label>
+                <label>{tr("任务说明（可留空，按 SKILL.md 默认流程执行）")}</label>
                 <textarea
                   className="input"
                   rows={2}
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
-                  placeholder="例如：用当前 AiDB 报告生成 3 页原生 PPTX，保留关键数字"
+                  placeholder={tr("例如：用当前 AiDB 报告生成 3 页原生 PPTX，保留关键数字")}
                 />
               </div>
               <div className="tool-row" style={{ padding: '8px 0 0', border: 0 }}>
                 <button className="btn primary" onClick={() => void startRun(detail)} disabled={starting || run?.status === 'running'}>
                   {starting || run?.status === 'running' ? <Loader2 size={12} className="spin" /> : <Play size={12} />}
-                  运行 Skill Worker
-                </button>
+                  {tr(" 运行 Skill Worker ")}</button>
                 {run?.status === 'running' ? (
                   <button className="btn" onClick={() => void cancelRun()}>
-                    <Square size={11} /> 取消
-                  </button>
+                    <Square size={11} /> {tr(" 取消 ")}</button>
                 ) : null}
-                <span className="muted" style={{ fontSize: 10 }}>使用当前模型与 api key；运行过程不进入主会话上下文。</span>
+                <span className="muted" style={{ fontSize: 10 }}>{tr("使用当前模型与 api key；运行过程不进入主会话上下文。")}</span>
               </div>
             </div>
             {secrets.declared.length ? (
               <div style={{ padding: '0 10px 8px' }}>
-                <div className="muted" style={{ fontSize: 10, marginBottom: 4 }}>密钥（加密保存，仅运行时注入）</div>
+                <div className="muted" style={{ fontSize: 10, marginBottom: 4 }}>{tr("密钥（加密保存，仅运行时注入）")}</div>
                 {secrets.declared.map((name) => (
                   <div key={name} className="tool-row" style={{ padding: '3px 0', border: 0 }}>
                     <span className="mono" style={{ width: 190, fontSize: 10 }}>{name}{secrets.set.includes(name) ? ' ●' : ''}</span>
@@ -509,21 +501,21 @@ export function SkillsTool() {
                       type="password"
                       value={secretDraft[name] ?? ''}
                       onChange={(e) => setSecretDraft((current) => ({ ...current, [name]: e.target.value }))}
-                      placeholder={secrets.set.includes(name) ? '已设置，留空保持不变' : '未设置'}
+                      placeholder={secrets.set.includes(name) ? tr("已设置，留空保持不变") : tr("未设置")}
                     />
                     {secrets.set.includes(name) ? (
-                      <button className="btn small" onClick={() => void clearSecret(name)}>清除</button>
+                      <button className="btn small" onClick={() => void clearSecret(name)}>{tr("清除")}</button>
                     ) : null}
                   </div>
                 ))}
                 <div className="row" style={{ justifyContent: 'flex-end', marginTop: 4 }}>
-                  <button className="btn small" onClick={() => void saveSecrets()}>保存密钥</button>
+                  <button className="btn small" onClick={() => void saveSecrets()}>{tr("保存密钥")}</button>
                 </div>
               </div>
             ) : null}
             {templateGroups.length ? (
               <div style={{ padding: '0 10px 8px' }}>
-                <div className="muted" style={{ fontSize: 10, marginBottom: 4 }}>模板（点击填入任务）</div>
+                <div className="muted" style={{ fontSize: 10, marginBottom: 4 }}>{tr("模板（点击填入任务）")}</div>
                 {templateGroups.map((group) => (
                   <div key={group.kind} className="tool-row" style={{ padding: '3px 0', border: 0, flexWrap: 'wrap', alignItems: 'center' }}>
                     <span className="muted" style={{ width: 52, fontSize: 10 }}>{group.kind}</span>
@@ -531,8 +523,8 @@ export function SkillsTool() {
                       <button
                         key={name}
                         className="badge pickable"
-                        onClick={() => setPrompt((current) => `使用 templates/${group.kind}/${name} 模板。\n${current}`.trim())}
-                        title={`填入：${name}`}
+                        onClick={() => setPrompt((current) => tr("使用 templates/{0}/{1} 模板。\n{2}", [group.kind, name, current]).trim())}
+                        title={tr("填入：{0}", [name])}
                       >
                         {name}
                       </button>
@@ -554,12 +546,11 @@ export function SkillsTool() {
         {run ? (
           <div className="panel">
             <div className="panel-head">
-              Skill 运行
-              <span className={`badge ${run.status === 'failed' ? 'danger' : ''}`}>{run.status}</span>
+              {tr(" Skill 运行 ")}<span className={`badge ${run.status === 'failed' ? 'danger' : ''}`}>{run.status}</span>
               <span className="muted mono" style={{ fontSize: 10 }}>{run.runId}</span>
               <div className="spacer" />
               {run.status === 'running' ? (
-                <button className="btn small" onClick={() => void cancelRun()}><Square size={10} /> 取消</button>
+                <button className="btn small" onClick={() => void cancelRun()}><Square size={10} /> {tr(" 取消")}</button>
               ) : null}
             </div>
             {question ? (
@@ -582,21 +573,20 @@ export function SkillsTool() {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') void replyQuestion();
                     }}
-                    placeholder="回答后 Worker 继续"
+                    placeholder={tr("回答后 Worker 继续")}
                   />
-                  <button className="btn primary" onClick={() => void replyQuestion()} disabled={!answerText.trim()}>回答</button>
+                  <button className="btn primary" onClick={() => void replyQuestion()} disabled={!answerText.trim()}>{tr("回答")}</button>
                 </div>
               </div>
             ) : null}
             {outputFiles.length ? (
               <div className="skill-out">
-                <div className="muted" style={{ fontSize: 10, marginBottom: 4 }}>产物</div>
+                <div className="muted" style={{ fontSize: 10, marginBottom: 4 }}>{tr("产物")}</div>
                 {outputFiles.map((file) => (
                   <div key={`${file.area}/${file.path}`} className="tool-row" style={{ padding: '2px 0', border: 0 }}>
                     <span className="mono" style={{ flex: 1, fontSize: 10 }}>{file.area}/{file.path} <span className="muted">{file.size ?? 0}B</span></span>
-                    <button className="btn small" onClick={() => void saveOutput(file.area, file.path)} title="另存为">
-                      <Save size={10} /> 保存
-                    </button>
+                    <button className="btn small" onClick={() => void saveOutput(file.area, file.path)} title={tr("另存为")}>
+                      <Save size={10} /> {tr(" 保存 ")}</button>
                   </div>
                 ))}
               </div>
@@ -611,10 +601,10 @@ export function SkillsTool() {
                     <span className="muted">[{EVENT_LABELS[event.type] ?? event.type}]</span> {summary}
                   </div>
                 );
-              }) : <span className="muted">等待事件…</span>}
+              }) : <span className="muted">{tr("等待事件…")}</span>}
             </div>
             <pre className="code-block skill-log">
-              {text || run.text || '（最终答复会显示在这里）'}
+              {text || run.text || tr('（最终答复会显示在这里）')}
             </pre>
           </div>
         ) : null}

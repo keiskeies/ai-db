@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { COMMANDS } from '@aidb/core';
 import { useApp } from '../store';
+import { t as tr } from '../i18n';
 
 export function CommandPalette() {
   const open = useApp((s) => s.paletteOpen);
@@ -45,11 +46,11 @@ export function CommandPalette() {
       { id: 'refresh', label: t('command_refresh'), hint: 'F5', icon: <RefreshCw size={14} />, run: () => void refreshAll() },
       { id: 'agent', label: t('command_toggle_agent'), hint: 'Ctrl+Shift+A', icon: <Bot size={14} />, run: () => setAgentOpen(!agentOpen) },
       { id: 'memory', label: t('command_memory'), hint: 'Brain', icon: <Brain size={14} />, run: () => openMemory() },
-      { id: 'tools', label: '工具箱（搜索 / 对比 / 传输 / 监控 / 调度）', hint: 'Tools', icon: <Wrench size={14} />, run: () => openTools() },
+      { id: 'tools', label: tr("工具箱（搜索 / 对比 / 传输 / 监控 / 调度）"), hint: 'Tools', icon: <Wrench size={14} />, run: () => openTools() },
       ...COMMANDS.filter((command) => command.id !== 'ask').map((command) => ({
         id: `command-${command.id}`,
-        label: `${command.title.zh} /${command.id}`,
-        hint: 'Agent 命令',
+        label: `${tr(command.title.zh)} /${command.id}`,
+        hint: tr("Agent 命令"),
         icon: <TerminalSquare size={14} />,
         run: () => prefillAgent(`/${command.id} `),
       })),
@@ -141,7 +142,7 @@ export function CommandPalette() {
               <span className="kbd">{command.hint}</span>
             </button>
           ))}
-          {!filtered.length ? <div className="muted" style={{ padding: 14, fontSize: 12 }}>没有匹配的命令</div> : null}
+          {!filtered.length ? <div className="muted" style={{ padding: 14, fontSize: 12 }}>{tr("没有匹配的命令")}</div> : null}
         </div>
       </div>
     </div>

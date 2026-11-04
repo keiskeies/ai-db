@@ -4,11 +4,12 @@ import { api } from '../lib/api';
 import { useApp } from '../store';
 import { DataGrid } from './DataGrid';
 import { Modal, Spinner } from './ui';
+import { t as tr } from '../i18n';
 
 function ttlText(ttl: number): string {
-  if (ttl === -2) return '键已过期';
-  if (ttl === -1) return '永不过期';
-  return `剩余 ${ttl}s`;
+  if (ttl === -2) return tr("键已过期");
+  if (ttl === -1) return tr("永不过期");
+  return tr("剩余 {0}s", [ttl]);
 }
 
 export function RedisKeyDialog({
@@ -48,9 +49,9 @@ export function RedisKeyDialog({
       await api.setKeyTtl({ connectionId, database, key: keyName, seconds });
       const { detail: found } = await api.redisKey({ connectionId, database, key: keyName });
       setDetail(found);
-      notify('success', seconds === null ? '已移除过期时间' : '已设置过期时间', keyName);
+      notify('success', seconds === null ? tr("已移除过期时间") : tr("已设置过期时间"), keyName);
     } catch (err: any) {
-      setError(err?.message ?? '设置 TTL 失败');
+      setError(err?.message ?? tr("设置 TTL 失败"));
     } finally {
       setMutating(false);
     }
@@ -63,9 +64,9 @@ export function RedisKeyDialog({
       await api.setRedisKeyValue({ connectionId, database, key: keyName, value: valueText });
       const { detail: found } = await api.redisKey({ connectionId, database, key: keyName });
       setDetail(found);
-      notify('success', '键值已保存', keyName);
+      notify('success', tr("键值已保存"), keyName);
     } catch (err: any) {
-      setError(err?.message ?? '保存键值失败');
+      setError(err?.message ?? tr("保存键值失败"));
     } finally {
       setMutating(false);
     }
@@ -77,11 +78,11 @@ export function RedisKeyDialog({
     setError(null);
     try {
       await api.setListItem({ connectionId, database, key: keyName, index: listItem.index, value: listItem.value });
-      notify('success', '列表元素已改写', `#${listItem.index}`);
+      notify('success', tr("列表元素已改写"), `#${listItem.index}`);
       setListItem(null);
       await load();
     } catch (err: any) {
-      setError(err?.message ?? '改写失败');
+      setError(err?.message ?? tr("改写失败"));
     } finally {
       setMutating(false);
     }
@@ -90,7 +91,7 @@ export function RedisKeyDialog({
   const addMember = async () => {
     const member = memberInput.trim();
     if (!member) {
-      setError('成员不能为空');
+      setError(tr("成员不能为空"));
       return;
     }
     setMutating(true);
@@ -98,7 +99,7 @@ export function RedisKeyDialog({
     try {
       const score = detail?.type === 'zset' ? Number(memberScore) : undefined;
       if (detail?.type === 'zset' && !Number.isFinite(score)) {
-        setError('zset 成员需要数字分数');
+        setError(tr("zset 成员需要数字分数"));
         setMutating(false);
         return;
       }
@@ -106,9 +107,9 @@ export function RedisKeyDialog({
       setMemberInput('');
       setMemberScore('');
       await load();
-      notify('success', '成员已写入', member);
+      notify('success', tr("成员已写入"), member);
     } catch (err: any) {
-      setError(err?.message ?? '写入成员失败');
+      setError(err?.message ?? tr("写入成员失败"));
     } finally {
       setMutating(false);
     }
@@ -119,7 +120,7 @@ export function RedisKeyDialog({
     setError(null);
     try {
       const { result } = await api.removeKeyMember({ connectionId, database, key: keyName, member });
-      notify('success', result.deleted ? '成员已删除' : '成员已不存在', result.keyGone ? `${member}（键已空，整键删除）` : member);
+      notify('success', result.deleted ? tr("成员已删除") : tr("成员已不存在"), result.keyGone ? tr("{0}（键已空，整键删除）", [member]) : member);
       if (result.keyGone) {
         void loadSchema(connectionId, true, database).catch(() => undefined);
         onClose();
@@ -127,7 +128,7 @@ export function RedisKeyDialog({
       }
       await load();
     } catch (err: any) {
-      setError(err?.message ?? '删除成员失败');
+      setError(err?.message ?? tr("删除成员失败"));
     } finally {
       setMutating(false);
     }
@@ -137,18 +138,18 @@ export function RedisKeyDialog({
     if (!editField) return;
     const field = editField.field.trim();
     if (!field) {
-      setError('字段名不能为空');
+      setError(tr("字段名不能为空"));
       return;
     }
     setMutating(true);
     setError(null);
     try {
       await api.setHashField({ connectionId, database, key: keyName, field, value: editField.value });
-      notify('success', '字段已保存', field);
+      notify('success', tr("字段已保存"), field);
       setEditField(null);
       await load();
     } catch (err: any) {
-      setError(err?.message ?? '保存字段失败');
+      setError(err?.message ?? tr("保存字段失败"));
     } finally {
       setMutating(false);
     }
@@ -159,7 +160,7 @@ export function RedisKeyDialog({
     setError(null);
     try {
       const { result } = await api.deleteHashField({ connectionId, database, key: keyName, field });
-      notify('success', result.deleted ? '字段已删除' : '字段已不存在', result.keyGone ? `${field}（键已空，整键删除）` : field);
+      notify('success', result.deleted ? tr("字段已删除") : tr("字段已不存在"), result.keyGone ? tr("{0}（键已空，整键删除）", [field]) : field);
       if (result.keyGone) {
         void loadSchema(connectionId, true, database).catch(() => undefined);
         onClose();
@@ -167,7 +168,7 @@ export function RedisKeyDialog({
       }
       await load();
     } catch (err: any) {
-      setError(err?.message ?? '删除字段失败');
+      setError(err?.message ?? tr("删除字段失败"));
     } finally {
       setMutating(false);
     }
@@ -176,18 +177,18 @@ export function RedisKeyDialog({
   const doRename = async () => {
     const target = renameTo.trim();
     if (!target) {
-      setError('需要输入新的键名');
+      setError(tr("需要输入新的键名"));
       return;
     }
     setMutating(true);
     setError(null);
     try {
       await api.renameKey({ connectionId, database, key: keyName, to: target });
-      notify('success', '键已重命名', `${keyName} → ${target}`);
+      notify('success', tr("键已重命名"), `${keyName} → ${target}`);
       void loadSchema(connectionId, true, database).catch(() => undefined);
       onClose();
     } catch (err: any) {
-      setError(err?.message ?? '重命名失败');
+      setError(err?.message ?? tr("重命名失败"));
       setMutating(false);
     }
   };
@@ -197,10 +198,10 @@ export function RedisKeyDialog({
     setError(null);
     try {
       const { result } = await api.deleteRedisKeys({ connectionId, database, keys: [keyName] });
-      notify('success', result.deleted ? '键已删除' : '键已不存在', keyName);
+      notify('success', result.deleted ? tr("键已删除") : tr("键已不存在"), keyName);
       onClose();
     } catch (err: any) {
-      setError(err?.message ?? '删除失败');
+      setError(err?.message ?? tr("删除失败"));
       setConfirming(false);
     } finally {
       setDeleting(false);
@@ -215,7 +216,7 @@ export function RedisKeyDialog({
       setDetail(found);
       if (found.type === 'string') setValueText(String(found.rows[0]?.[0] ?? ''));
     } catch (err: any) {
-      setError(err?.message ?? '读取键失败');
+      setError(err?.message ?? tr("读取键失败"));
     } finally {
       setLoading(false);
     }
@@ -234,8 +235,7 @@ export function RedisKeyDialog({
       footer={
         <>
           <button className="btn" onClick={() => void load()} disabled={loading || deleting} data-testid="redis-key-refresh">
-            刷新
-          </button>
+            {tr(" 刷新 ")}</button>
           {conn && !conn.readonly ? (
             confirming ? (
               <>
@@ -243,7 +243,7 @@ export function RedisKeyDialog({
                   className="input"
                   style={{ width: 170 }}
                   value={typed}
-                  placeholder={`输入 ${keyName} 确认`}
+                  placeholder={tr("输入 {0} 确认", [keyName])}
                   onChange={(event) => setTyped(event.target.value)}
                   data-testid="redis-key-confirm"
                 />
@@ -253,19 +253,16 @@ export function RedisKeyDialog({
                   disabled={deleting || typed.trim() !== keyName}
                   data-testid="redis-key-delete-submit"
                 >
-                  {deleting ? <Spinner /> : null} 确认删除
-                </button>
+                  {deleting ? <Spinner /> : null}{tr(" 确认删除 ")}</button>
                 <button className="btn" onClick={() => { setConfirming(false); setTyped(''); }} disabled={deleting}>
-                  取消
-                </button>
+                  {tr(" 取消 ")}</button>
               </>
             ) : (
               <button className="btn danger" onClick={() => setConfirming(true)} disabled={deleting} data-testid="redis-key-delete">
-                删除键
-              </button>
+                {tr(" 删除键 ")}</button>
             )
           ) : null}
-          <button className="btn primary" onClick={onClose} disabled={deleting}>关闭</button>
+          <button className="btn primary" onClick={onClose} disabled={deleting}>{tr("关闭")}</button>
         </>
       }
     >
@@ -274,10 +271,10 @@ export function RedisKeyDialog({
       {detail ? (
         <>
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 11, color: 'var(--text-secondary)', marginBottom: 10 }}>
-            <span data-testid="redis-key-type">类型 {detail.type}</span>
+            <span data-testid="redis-key-type">{tr("类型 ")}{detail.type}</span>
             <span data-testid="redis-key-ttl">TTL {ttlText(detail.ttl)}</span>
-            {detail.size !== null && detail.size !== undefined ? <span>规模 {detail.size}</span> : null}
-            {detail.encoding ? <span>编码 {detail.encoding}</span> : null}
+            {detail.size !== null && detail.size !== undefined ? <span>{tr("规模 ")}{detail.size}</span> : null}
+            {detail.encoding ? <span>{tr("编码 ")}{detail.encoding}</span> : null}
           </div>
           {conn && !conn.readonly ? (
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }} data-testid="redis-key-actions">
@@ -285,7 +282,7 @@ export function RedisKeyDialog({
                 className="input"
                 style={{ width: 110 }}
                 value={ttlInput}
-                placeholder="秒数"
+                placeholder={tr("秒数")}
                 onChange={(event) => setTtlInput(event.target.value.replace(/\D/g, ''))}
                 data-testid="key-ttl-input"
               />
@@ -295,16 +292,14 @@ export function RedisKeyDialog({
                 disabled={mutating || deleting || !ttlInput}
                 data-testid="key-ttl-set"
               >
-                设置 TTL
-              </button>
+                {tr(" 设置 TTL ")}</button>
               <button className="btn small" onClick={() => void applyTtl(null)} disabled={mutating || deleting} data-testid="key-ttl-clear">
-                移除过期
-              </button>
+                {tr(" 移除过期 ")}</button>
               <input
                 className="input"
                 style={{ width: 200 }}
                 value={renameTo}
-                placeholder={`新键名（原：${keyName}）`}
+                placeholder={tr("新键名（原：{0}）", [keyName])}
                 onChange={(event) => setRenameTo(event.target.value)}
                 data-testid="key-rename-input"
               />
@@ -314,8 +309,7 @@ export function RedisKeyDialog({
                 disabled={mutating || deleting || !renameTo.trim()}
                 data-testid="key-rename-submit"
               >
-                重命名…
-              </button>
+                {tr(" 重命名… ")}</button>
             </div>
           ) : null}
           {detail.note ? <div className="muted" style={{ fontSize: 11, marginBottom: 8 }}>{detail.note}</div> : null}
@@ -336,16 +330,14 @@ export function RedisKeyDialog({
                   disabled={mutating || deleting}
                   data-testid="key-value-save"
                 >
-                  {mutating ? <Spinner /> : null} 保存值
-                </button>
-                <span className="muted" style={{ fontSize: 11 }}>SET KEEPTTL，保留原过期时间</span>
+                  {mutating ? <Spinner /> : null}{tr(" 保存值 ")}</button>
+                <span className="muted" style={{ fontSize: 11 }}>{tr("SET KEEPTTL，保留原过期时间")}</span>
               </div>
             </div>
           ) : detail.type === 'hash' && conn && !conn.readonly ? (
             <>
               <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>
-                双击字段行修改取值；字段行右侧可删除该字段。新增字段会直接写入。
-              </div>
+                {tr(" 双击字段行修改取值；字段行右侧可删除该字段。新增字段会直接写入。 ")}</div>
               <DataGrid
                 columns={detail.columns}
                 rows={detail.rows}
@@ -362,7 +354,7 @@ export function RedisKeyDialog({
                     className="btn small"
                     disabled={mutating || deleting}
                     onClick={() => void removeHashField(String(row[0] ?? ''))}
-                    title={`删除字段 ${String(row[0])}`}
+                    title={tr("删除字段 {0}", [String(row[0])])}
                     data-testid={`hash-field-delete-${String(row[0])}`}
                   >
                     × {String(row[0])}
@@ -372,7 +364,7 @@ export function RedisKeyDialog({
               {editField ? (
                 <div style={{ marginTop: 10 }} data-testid="hash-field-editor">
                   <div className="form-grid">
-                    <label>字段</label>
+                    <label>{tr("字段")}</label>
                     <input
                       className="input"
                       value={editField.field}
@@ -395,11 +387,9 @@ export function RedisKeyDialog({
                       disabled={mutating}
                       data-testid="hash-field-save"
                     >
-                      {mutating ? <Spinner /> : null} 保存字段
-                    </button>
+                      {mutating ? <Spinner /> : null}{tr(" 保存字段 ")}</button>
                     <button className="btn small" onClick={() => setEditField(null)} disabled={mutating}>
-                      取消
-                    </button>
+                      {tr(" 取消 ")}</button>
                   </div>
                 </div>
               ) : null}
@@ -407,8 +397,7 @@ export function RedisKeyDialog({
           ) : (detail.type === 'list' || detail.type === 'set' || detail.type === 'zset') && conn && !conn.readonly ? (
             <>
               <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>
-                {detail.type === 'list' ? '双击行按索引改写；新成员追加到列表尾部' : '按成员名增删'}；下方可逐个删除，删空后整键会消失。
-              </div>
+                {detail.type === 'list' ? tr("双击行按索引改写；新成员追加到列表尾部") : tr("按成员名增删")}{tr("；下方可逐个删除，删空后整键会消失。 ")}</div>
               <DataGrid
                 columns={detail.columns}
                 rows={detail.rows}
@@ -431,7 +420,7 @@ export function RedisKeyDialog({
                       className="btn small"
                       disabled={mutating || deleting}
                       onClick={() => void removeMember(member)}
-                      title={`删除成员 ${member}`}
+                      title={tr("删除成员 {0}", [member])}
                       data-testid={`member-delete-${member}`}
                     >
                       × {member}
@@ -450,11 +439,9 @@ export function RedisKeyDialog({
                     data-testid="list-item-value"
                   />
                   <button className="btn small primary" onClick={() => void saveListItem()} disabled={mutating} data-testid="list-item-save">
-                    {mutating ? <Spinner /> : null} 保存
-                  </button>
+                    {mutating ? <Spinner /> : null}{tr(" 保存 ")}</button>
                   <button className="btn small" onClick={() => setListItem(null)} disabled={mutating}>
-                    取消
-                  </button>
+                    {tr(" 取消 ")}</button>
                 </div>
               ) : null}
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }} data-testid="member-add-form">
@@ -462,7 +449,7 @@ export function RedisKeyDialog({
                   className="input"
                   style={{ width: 200 }}
                   value={memberInput}
-                  placeholder="新成员"
+                  placeholder={tr("新成员")}
                   onChange={(event) => setMemberInput(event.target.value)}
                   data-testid="member-input"
                 />
@@ -471,20 +458,19 @@ export function RedisKeyDialog({
                     className="input"
                     style={{ width: 100 }}
                     value={memberScore}
-                    placeholder="分数"
+                    placeholder={tr("分数")}
                     onChange={(event) => setMemberScore(event.target.value)}
                     data-testid="member-score"
                   />
                 ) : null}
                 <button className="btn small primary" onClick={() => void addMember()} disabled={mutating || !memberInput.trim()} data-testid="member-add">
-                  {mutating ? <Spinner /> : null} 添加成员
-                </button>
+                  {mutating ? <Spinner /> : null}{tr(" 添加成员 ")}</button>
               </div>
             </>
           ) : detail.rows.length ? (
             <DataGrid columns={detail.columns} rows={detail.rows} testId="redis-key-grid" />
           ) : (
-            <div className="muted" style={{ fontSize: 11 }}>没有可展示的取值</div>
+            <div className="muted" style={{ fontSize: 11 }}>{tr("没有可展示的取值")}</div>
           )}
         </>
       ) : null}

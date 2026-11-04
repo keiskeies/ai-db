@@ -35,6 +35,7 @@ import { ToolsHub } from './components/tools/ToolsHub';
 import { Sidebar } from './components/Sidebar';
 import { Toasts } from './components/ui';
 import { Workspace } from './components/Workspace';
+import { t as tr } from './i18n';
 
 /** 图标描边渐变：lucide 图标是单色 stroke，用 userSpaceOnUse 保证整枚图标共用一条 0→24 的渐变。 */
 const RIBBON_TONES: Record<string, [string, string]> = {
@@ -117,14 +118,14 @@ function buildDefaultMenu(target: HTMLElement): ContextMenuItem[] {
   const selection = window.getSelection()?.toString().trim() ?? '';
   const editable = target.closest('input, textarea, [contenteditable="true"]') as HTMLElement | null;
 
-  if (selection) items.push({ label: '复制所选', icon: <Copy size={12} />, onClick: () => void navigator.clipboard.writeText(selection).catch(() => undefined) });
+  if (selection) items.push({ label: tr("复制所选"), icon: <Copy size={12} />, onClick: () => void navigator.clipboard.writeText(selection).catch(() => undefined) });
   if (editable) {
     if (items.length) items.push({ sep: true });
-    items.push({ label: '剪切', icon: <Scissors size={12} />, onClick: () => document.execCommand('cut') });
-    items.push({ label: '复制', icon: <Copy size={12} />, onClick: () => document.execCommand('copy') });
-    items.push({ label: '粘贴', icon: <Clipboard size={12} />, onClick: () => void pasteInto(editable) });
+    items.push({ label: tr("剪切"), icon: <Scissors size={12} />, onClick: () => document.execCommand('cut') });
+    items.push({ label: tr("复制"), icon: <Copy size={12} />, onClick: () => document.execCommand('copy') });
+    items.push({ label: tr("粘贴"), icon: <Clipboard size={12} />, onClick: () => void pasteInto(editable) });
     items.push({
-      label: '全选',
+      label: tr("全选"),
       onClick: () => {
         if (editable instanceof HTMLInputElement || editable instanceof HTMLTextAreaElement) {
           editable.select();
@@ -139,9 +140,9 @@ function buildDefaultMenu(target: HTMLElement): ContextMenuItem[] {
     });
   }
   items.push({ sep: true });
-  items.push({ label: '刷新结构', onClick: () => { const id = state.activeConnectionId; if (id) void state.loadSchema(id, true); } });
-  items.push({ label: '新建查询', onClick: () => state.openQuery() });
-  items.push({ label: state.agentOpen ? '隐藏 AI 助手' : '显示 AI 助手', onClick: () => state.setAgentOpen(!state.agentOpen) });
+  items.push({ label: tr("刷新结构"), onClick: () => { const id = state.activeConnectionId; if (id) void state.loadSchema(id, true); } });
+  items.push({ label: tr("新建查询"), onClick: () => state.openQuery() });
+  items.push({ label: state.agentOpen ? tr("隐藏 AI 助手") : tr("显示 AI 助手"), onClick: () => state.setAgentOpen(!state.agentOpen) });
   return items;
 }
 
@@ -279,7 +280,7 @@ export default function App() {
             </>
           ) : (
             <>
-              <p>正在连接 Bridge 并装载元数据…</p>
+              <p>{tr("正在连接 Bridge 并装载元数据…")}</p>
               <div className="spinner" style={{ marginTop: 16 }} />
             </>
           )}
@@ -334,13 +335,13 @@ export default function App() {
         ) : null}
         <div className="spacer" />
         <button className="cmd-hint" onClick={() => setPaletteOpen(true)}>
-          <span>搜索或执行命令…</span>
+          <span>{tr("搜索或执行命令…")}</span>
           <span className="kbd">⌘K</span>
         </button>
         <button
           data-testid="toggle-sidebar"
           className="icon-btn"
-          title={sidebarOpen ? '隐藏连接栏 (⌘B)' : '显示连接栏 (⌘B)'}
+          title={sidebarOpen ? tr("隐藏连接栏 (⌘B)") : tr("显示连接栏 (⌘B)")}
           onClick={toggleSidebar}
           style={sidebarOpen ? undefined : { color: 'var(--text-muted)' }}
         >
@@ -349,7 +350,7 @@ export default function App() {
         <button data-testid="agent-toggle" className="icon-btn" title={t('agent')} onClick={() => setAgentOpen(!agentOpen)} style={agentOpen ? { color: 'var(--agent)', background: 'var(--agent-soft)' } : undefined}>
           <Bot size={15} />
         </button>
-        <button data-testid="theme-toggle" className="icon-btn" title="切换主题" onClick={() => void saveSettings({ theme: dark ? 'light' : 'dark' })}>
+        <button data-testid="theme-toggle" className="icon-btn" title={tr("切换主题")} onClick={() => void saveSettings({ theme: dark ? 'light' : 'dark' })}>
           {dark ? <Sun size={15} /> : <Moon size={15} />}
         </button>
         <button data-testid="open-settings" className="icon-btn" title={t('settings')} onClick={() => setSettingsOpen(true)}>
@@ -359,12 +360,12 @@ export default function App() {
 
       <div className="ribbon" data-testid="ribbon">
         <RibbonGradients />
-        <RibbonButton icon={<Cable size={20} />} label="连接" tone="teal" onClick={() => openConnectionEditor('new')} />
+        <RibbonButton icon={<Cable size={20} />} label={tr("连接")} tone="teal" onClick={() => openConnectionEditor('new')} />
         <div className="ribbon-sep" />
-        <RibbonButton icon={<TerminalSquare size={20} />} label="新建查询" tone="sky" onClick={() => openQuery()} testId="ribbon-new-query" />
+        <RibbonButton icon={<TerminalSquare size={20} />} label={tr("新建查询")} tone="sky" onClick={() => openQuery()} testId="ribbon-new-query" />
         <RibbonButton
           icon={<Table2 size={20} />}
-          label="表"
+          label={tr("表")}
           tone="emerald"
           active={activeTab?.kind === 'data'}
           onClick={() => {
@@ -377,20 +378,20 @@ export default function App() {
             if (!useApp.getState().expandedConnections[id]) toggleConnection(id);
           }}
         />
-        <RibbonButton icon={<Eye size={20} />} label="视图" tone="violet" onClick={() => openTools('objects')} />
-        <RibbonButton icon={<Braces size={20} />} label="函数" tone="amber" onClick={() => openTools('objects')} />
+        <RibbonButton icon={<Eye size={20} />} label={tr("视图")} tone="violet" onClick={() => openTools('objects')} />
+        <RibbonButton icon={<Braces size={20} />} label={tr("函数")} tone="amber" onClick={() => openTools('objects')} />
         <div className="ribbon-sep" />
-        <RibbonButton icon={<Users size={20} />} label="用户" tone="rose" onClick={() => openTools('users')} />
-        <RibbonButton icon={<Boxes size={20} />} label="其它" tone="orange" onClick={() => openTools('objects')} />
+        <RibbonButton icon={<Users size={20} />} label={tr("用户")} tone="rose" onClick={() => openTools('users')} />
+        <RibbonButton icon={<Boxes size={20} />} label={tr("其它")} tone="orange" onClick={() => openTools('objects')} />
         <div className="ribbon-sep" />
-        <RibbonButton icon={<History size={20} />} label="查询" tone="indigo" onClick={() => openQuery()} />
-        <RibbonButton icon={<Archive size={20} />} label="备份" tone="lime" onClick={() => setSettingsOpen(true)} />
+        <RibbonButton icon={<History size={20} />} label={tr("查询")} tone="indigo" onClick={() => openQuery()} />
+        <RibbonButton icon={<Archive size={20} />} label={tr("备份")} tone="lime" onClick={() => setSettingsOpen(true)} />
         <div className="ribbon-sep" />
-        <RibbonButton icon={<Clock size={20} />} label="自动运行" tone="cyan" onClick={() => openTools('jobs')} />
-        <RibbonButton icon={<Network size={20} />} label="模型" tone="fuchsia" onClick={() => openRelations()} />
+        <RibbonButton icon={<Clock size={20} />} label={tr("自动运行")} tone="cyan" onClick={() => openTools('jobs')} />
+        <RibbonButton icon={<Network size={20} />} label={tr("模型")} tone="fuchsia" onClick={() => openRelations()} />
         <RibbonButton
           icon={<LayoutDashboard size={20} />}
-          label="仪表板"
+          label={tr("仪表板")}
           tone="rose"
           active={activeTab?.kind === 'dashboard'}
           onClick={() => openDashboard()}
@@ -418,18 +419,17 @@ export default function App() {
 
       <div className="statusbar">
         <span className="item">
-          <span className="dot" /> Bridge 已连接
-        </span>
+          <span className="dot" /> {tr(" Bridge 已连接 ")}</span>
         <span className="sep" />
         <span className="item">
-          <Network size={10} /> {crumbConn?.name ?? '未选择连接'}
+          <Network size={10} /> {crumbConn?.name ?? tr("未选择连接")}
         </span>
         {crumbConn && crumbDatabase ? <span className="item path">{crumbDatabase}</span> : null}
         <span className="sep" />
         <span className="item">{activeTab?.title ?? ''}</span>
         <div className="spacer" />
         <span className="item model">{settings.agent.provider === 'local' ? 'AI: Local' : `AI: ${settings.agent.model}`}</span>
-        <span className="item count">{useApp.getState().connections.length} 连接</span>
+        <span className="item count">{useApp.getState().connections.length}{tr(" 连接")}</span>
         <span className="item version">v0.1.0</span>
       </div>
 

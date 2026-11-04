@@ -4,6 +4,7 @@ import { applyCapabilityDefaults, CAPABILITIES, getCapability, type Capability }
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
 import { CapabilityForm } from './CapabilityForm';
+import { t as tr } from '../../i18n';
 
 /**
  * 数据字典 —— 表单向能力契约（`capabilities/dictionary.json`）迁移后的实现。
@@ -34,7 +35,7 @@ export function DictionaryTool() {
       const { dictionary } = await api.dictionary(activeConnectionId, database || undefined);
       setData(dictionary);
     } catch (err: any) {
-      notify('error', '生成失败', err?.message);
+      notify('error', tr("生成失败"), err?.message);
     } finally {
       setLoading(false);
     }
@@ -53,8 +54,7 @@ export function DictionaryTool() {
   return (
     <div className="tool-pane">
       <div className="tool-pane-head">
-        <BookOpen size={15} /> 数据字典
-        <span className="muted">Markdown / DDL / JSON</span>
+        <BookOpen size={15} /> {tr(" 数据字典 ")}<span className="muted">Markdown / DDL / JSON</span>
       </div>
       <div className="tool-row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
         <CapabilityForm
@@ -69,15 +69,14 @@ export function DictionaryTool() {
           testIdPrefix="dictionary"
         />
         <button className="btn primary" onClick={() => void load()} disabled={loading || !activeConnectionId}>
-          {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <BookOpen size={12} />} 生成字典
-        </button>
+          {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <BookOpen size={12} />}{tr(" 生成字典 ")}</button>
         {data ? (
           <>
             <button className="btn small" onClick={() => download(data.markdown, 'aidb-dictionary.md', 'text/markdown')}><Download size={11} /> Markdown</button>
             <button className="btn small" onClick={() => download(data.sql, 'aidb-schema.sql', 'text/sql')}><Download size={11} /> DDL</button>
             <button className="btn small" onClick={() => download(JSON.stringify(data.json, null, 2), 'aidb-dictionary.json', 'application/json')}><Download size={11} /> JSON</button>
             <span className="spacer" />
-            <span className="badge">{data.tableCount} 表 / {data.columnCount} 列</span>
+            <span className="badge">{data.tableCount}{tr(" 表 / ")}{data.columnCount}{tr(" 列")}</span>
           </>
         ) : null}
       </div>
@@ -92,7 +91,7 @@ export function DictionaryTool() {
           </div>
         </>
       ) : (
-        <div className="dash-empty">生成当前连接的表/列/索引/外键字典，可导出 Markdown、DDL 或 JSON。</div>
+        <div className="dash-empty">{tr("生成当前连接的表/列/索引/外键字典，可导出 Markdown、DDL 或 JSON。")}</div>
       )}
     </div>
   );

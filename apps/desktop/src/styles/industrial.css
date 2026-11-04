@@ -411,3 +411,18 @@ body {
 .stats-table { width: 100%; margin-top: 7px; }
 .stats-table th, .stats-table td { font-size: 9px; padding: 3px 5px; }
 .stats-table td:not(:first-child) { text-align: right; font-family: var(--font-mono); }
+
+
+/* ── RTL：标识符、SQL 与拉丁文案按自身方向排版，避免省略号跑到句首 ── */
+html[dir='rtl'] .mono,
+html[dir='rtl'] code,
+html[dir='rtl'] pre,
+html[dir='rtl'] .cm-content,
+html[dir='rtl'] .sql-block,
+html[dir='rtl'] .home-suggest-prompt,
+html[dir='rtl'] .home-suggest-label,
+html[dir='rtl'] .node-label,
+html[dir='rtl'] .conn-name,
+html[dir='rtl'] .truncate {
+  unicode-bidi: plaintext;
+}

@@ -41,6 +41,7 @@ import type {
   SkillSummary,
   TableInfo,
 } from '@aidb/core';
+import { t as tr } from '../i18n';
 
 function resolveToken(): string {
   const params = new URLSearchParams(location.hash.replace(/^#/, ''));
@@ -103,7 +104,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   if (!res.ok) {
     const err = payload?.error;
-    throw new ApiError(typeof err?.message === 'string' ? err.message : `请求失败（${res.status}）`, {
+    throw new ApiError(typeof err?.message === 'string' ? err.message : tr("请求失败（{0}）", [res.status]), {
       code: err?.code,
       status: res.status,
       hint: err?.hint,
@@ -158,7 +159,7 @@ export async function streamTurn(sessionId: string, payload: TurnPayload, onEven
   });
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => '');
-    let message = `Agent 请求失败（${res.status}）`;
+    let message = tr("Agent 请求失败（{0}）", [res.status]);
     let code = 'AGENT_REQUEST';
     try {
       const parsed = JSON.parse(text);
@@ -242,7 +243,7 @@ export type TransferEvent =
   | { type: 'done'; result: { results: TransferTableResult[]; totalRows: number; createdTables: number }; durationMs: number };
 
 async function readSse(res: Response, onEvent: (event: unknown) => void): Promise<void> {
-  if (!res.body) throw new ApiError('响应不支持流式读取', { code: 'SSE_BODY', status: res.status });
+  if (!res.body) throw new ApiError(tr("响应不支持流式读取"), { code: 'SSE_BODY', status: res.status });
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -286,7 +287,7 @@ export async function streamTransfer(
   });
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => '');
-    let message = `数据传输请求失败（${res.status}）`;
+    let message = tr("数据传输请求失败（{0}）", [res.status]);
     let code = 'TRANSFER_REQUEST';
     try {
       const parsed = JSON.parse(text);
@@ -316,7 +317,7 @@ export async function streamCommandRun(
     headers: { authorization: `Bearer ${TOKEN}` },
     signal,
   });
-  if (!res.ok || !res.body) throw new ApiError(`命令进度读取失败（${res.status}）`, { code: 'COMMAND_STREAM', status: res.status });
+  if (!res.ok || !res.body) throw new ApiError(tr("命令进度读取失败（{0}）", [res.status]), { code: 'COMMAND_STREAM', status: res.status });
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -357,7 +358,7 @@ export async function streamSkillRun(
     headers: { authorization: `Bearer ${TOKEN}` },
     signal,
   });
-  if (!res.ok || !res.body) throw new ApiError(`Skill 进度读取失败（${res.status}）`, { code: 'SKILL_STREAM', status: res.status });
+  if (!res.ok || !res.body) throw new ApiError(tr("Skill 进度读取失败（{0}）", [res.status]), { code: 'SKILL_STREAM', status: res.status });
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -395,7 +396,7 @@ export async function attachmentObjectUrl(id: string): Promise<string> {
   const cached = attachmentUrls.get(id);
   if (cached) return cached;
   const res = await fetch(`/api/agent/attachments/${encodeURIComponent(id)}`, { headers: { authorization: `Bearer ${TOKEN}` } });
-  if (!res.ok) throw new ApiError(`图片读取失败（${res.status}）`, { code: 'ATTACHMENT_ERROR', status: res.status });
+  if (!res.ok) throw new ApiError(tr("图片读取失败（{0}）", [res.status]), { code: 'ATTACHMENT_ERROR', status: res.status });
   const url = URL.createObjectURL(await res.blob());
   attachmentUrls.set(id, url);
   return url;
@@ -745,10 +746,11 @@ export const api = {
   bulkContextTables: (body: { connectionId: string; database?: string; tables: string[]; enabled: boolean }) =>
     request<{ touched: number }>('/agent/context/bulk', { method: 'POST', body: JSON.stringify(body) }),
   deleteContextEntry: (id: string) => request<void>(`/agent/context/entry/${id}`, { method: 'DELETE' }),
-  suggest: (params: { connectionId: string; database?: string; limit?: number }) => {
+  suggest: (params: { connectionId: string; database?: string; limit?: number; locale?: string }) => {
     const q = new URLSearchParams({ connectionId: params.connectionId });
     if (params.database) q.set('database', params.database);
     if (params.limit) q.set('limit', String(params.limit));
+    q.set('locale', params.locale ?? 'en');
     return request<{ suggestions: QuestionSuggestion[] }>(`/agent/suggest?${q.toString()}`);
   },
   clearAgentContext: (connectionId: string, database?: string) =>

@@ -570,6 +570,15 @@ const ribbonModules = await page.locator('[data-testid="ribbon"] .ribbon-btn').c
 check('ribbon exposes Navicat modules', ribbonModules >= 12, `${ribbonModules} modules`);
 await page.screenshot({ path: join(shots, 'desktop-welcome.png') });
 
+// 默认语言是英文；用例断言基于中文文案，先验证默认态再切回 zh-CN。
+const englishSidebar = await page.locator('.sidebar').innerText();
+check('fresh settings default to English UI', /connections/i.test(englishSidebar), englishSidebar.slice(0, 60));
+await api('/settings', { method: 'PUT', body: JSON.stringify({ locale: 'zh-CN' }) });
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
+await page.waitForTimeout(900);
+check('switching to Chinese repaints the UI', (await page.locator('.sidebar').innerText()).includes('连接'));
+
 // ---------------- 布局：折叠 / 拖宽 / 右键接管 ----------------
 const sidebarBox = await page.locator('.sidebar').boundingBox();
 await page.click('[data-testid="toggle-sidebar"]');
@@ -2226,7 +2235,7 @@ check('grid cell context menu copies values', /复制整行/.test(cellMenu) && /
 await page.keyboard.press('Escape');
 await page.waitForTimeout(150);
 
-await page.locator('.result-tab').filter({ hasText: '图表' }).click();
+await page.locator('[data-testid="query-chart"]').click();
 await page.waitForSelector('.query-chart-panel .chart-card', { timeout: 10000 });
 check('query result renders a chart tab', true);
 await page.click('[data-testid="chart-extra-total"]');
@@ -3092,6 +3101,7 @@ await page.screenshot({ path: join(shots, 'desktop-dashboard.png') }).catch(() =
 // ---------------- Mobile (Expo web build) ----------------
 mobileContext = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
 const mobile = await mobileContext.newPage();
+await mobileContext.addInitScript(() => { localStorage.setItem('aidb.mobile.locale', 'zh-CN'); });
 {
   const rawShot = mobile.screenshot.bind(mobile);
   mobile.screenshot = async (options) => {
@@ -3221,7 +3231,7 @@ async function electronPngExport(app, window) {
     await window.keyboard.type('SELECT status, COUNT(*) AS cnt FROM orders GROUP BY status');
     await window.click('[data-testid="query-run"]');
     await window.waitForSelector('.grid-row, tbody tr', { timeout: 25000 });
-    await window.locator('.result-tabs .result-tab').filter({ hasText: '图表' }).first().click();
+    await window.locator('[data-testid="query-chart"]').first().click();
     await window.waitForSelector('[data-testid="chart-svg"]', { timeout: 15000 });
     await window.locator('[data-testid="chart-export-png"]').click();
 

@@ -21,6 +21,8 @@ export interface SuggestOptions {
   bundle?: AgentContextBundle;
   /** 每类最多保留几条，保证推荐结果的多样性 */
   maxPerKind?: number;
+  /** 推荐语语言；未指定时保持中文，避免改变已有调用与测试。 */
+  locale?: 'zh' | 'en';
 }
 
 const TIME_TYPE = /(date|time|timestamp|year)/i;
@@ -92,6 +94,8 @@ export function suggestQuestions(schemas: DatabaseSchema[] | undefined, opts: Su
   const limit = Math.max(1, Math.min(12, opts.limit ?? 6));
   const maxPerKind = Math.max(1, opts.maxPerKind ?? 2);
   const bundle = opts.bundle;
+  const en = opts.locale === 'en';
+  const L = (zh: string, english: string) => (en ? english : zh);
   const history = new Set((opts.history ?? []).map(lower));
   const candidates: Candidate[] = [];
 
@@ -116,9 +120,12 @@ export function suggestQuestions(schemas: DatabaseSchema[] | undefined, opts: Su
         push(
           'trend',
           measure
-            ? `近 12 个月 ${tLabel} 的 ${columnLabel(bundle, table, measure)} 趋势`
-            : `近 12 个月 ${tLabel} 的记录数趋势`,
-          `${table.name} 有时间列 ${time.name}${measure ? `、数值列 ${measure.name}` : ''}`,
+            ? L(`近 12 个月 ${tLabel} 的 ${columnLabel(bundle, table, measure)} 趋势`, `Trend of ${columnLabel(bundle, table, measure)} in ${tLabel} over the last 12 months`)
+            : L(`近 12 个月 ${tLabel} 的记录数趋势`, `Record count trend for ${tLabel} over the last 12 months`),
+          L(
+            `${table.name} 有时间列 ${time.name}${measure ? `、数值列 ${measure.name}` : ''}`,
+            `${table.name} has a time column (${time.name})${measure ? ` and a numeric column (${measure.name})` : ''}`,
+          ),
           measure ? 0.9 : 0.75,
         );
       }
@@ -126,18 +133,18 @@ export function suggestQuestions(schemas: DatabaseSchema[] | undefined, opts: Su
         push(
           'group',
           measure
-            ? `按 ${columnLabel(bundle, table, dimension)} 统计 ${tLabel} 的 ${columnLabel(bundle, table, measure)} 合计`
-            : `按 ${columnLabel(bundle, table, dimension)} 统计 ${tLabel} 的记录数分布`,
-          `${table.name}.${dimension.name} 适合做分组维度`,
+            ? L(`按 ${columnLabel(bundle, table, dimension)} 统计 ${tLabel} 的 ${columnLabel(bundle, table, measure)} 合计`, `Total ${columnLabel(bundle, table, measure)} in ${tLabel} by ${columnLabel(bundle, table, dimension)}`)
+            : L(`按 ${columnLabel(bundle, table, dimension)} 统计 ${tLabel} 的记录数分布`, `Record count in ${tLabel} by ${columnLabel(bundle, table, dimension)}`),
+          L(`${table.name}.${dimension.name} 适合做分组维度`, `${table.name}.${dimension.name} works well as a grouping dimension`),
           measure ? 0.85 : 0.7,
         );
-        push('quality', `检查 ${tLabel} 的 ${columnLabel(bundle, table, dimension)} 空值、空串与重复情况`, `${table.name}.${dimension.name} 的取值质量`, 0.55);
+        push('quality', L(`检查 ${tLabel} 的 ${columnLabel(bundle, table, dimension)} 空值、空串与重复情况`, `Check nulls, empty strings and duplicates in ${tLabel}.${columnLabel(bundle, table, dimension)}`), L(`${table.name}.${dimension.name} 的取值质量`, `Value quality of ${table.name}.${dimension.name}`), 0.55);
       }
       for (const fk of (table.foreignKeys ?? []).slice(0, 3)) {
         if (bundle && (isColumnDisabled(bundle, table.name, fk.columns[0] ?? '') || fk.columns.some((c) => isColumnDisabled(bundle, table.name, c)))) continue;
         const refLabel = bundle?.tableMeta[lower(fk.refTable)]?.alias?.trim() || fk.refTable;
-        push('topn', `${refLabel} 中关联 ${tLabel} 数量最多的前 10 个`, `${table.name}.${fk.columns.join(',')} → ${fk.refTable} 的外键`, 0.8, fk.refTable);
-        push('relation', `检查 ${tLabel} 与 ${refLabel} 的关联完整性（是否存在孤儿记录）`, `外键 ${fk.name ?? fk.columns.join(',')}`, 0.6, fk.refTable);
+        push('topn', L(`${refLabel} 中关联 ${tLabel} 数量最多的前 10 个`, `Top 10 ${refLabel} by number of related ${tLabel}`), L(`${table.name}.${fk.columns.join(',')} → ${fk.refTable} 的外键`, `Foreign key: ${table.name}.${fk.columns.join(',')} → ${fk.refTable}`), 0.8, fk.refTable);
+        push('relation', L(`检查 ${tLabel} 与 ${refLabel} 的关联完整性（是否存在孤儿记录）`, `Check referential integrity between ${tLabel} and ${refLabel} for orphan records`), L(`外键 ${fk.name ?? fk.columns.join(',')}`, `Foreign key ${fk.name ?? fk.columns.join(',')}`), 0.6, fk.refTable);
       }
     }
   }
@@ -204,7 +211,17 @@ const KIND_LABEL: Record<SuggestionKind, string> = {
   relation: '关联完整性',
 };
 
-export function suggestionLabel(kind: SuggestionKind): string {
+export function suggestionLabel(kind: SuggestionKind, locale: 'zh' | 'en' = 'zh'): string {
+  if (locale === 'en') {
+    const english: Record<SuggestionKind, string> = {
+      trend: 'Trend',
+      group: 'Group',
+      topn: 'Top N',
+      quality: 'Data quality',
+      relation: 'Relations',
+    };
+    return english[kind];
+  }
   return KIND_LABEL[kind];
 }
 
@@ -218,11 +235,12 @@ export function suggestFollowUps(input: {
   usedTools: string[];
   bundle?: AgentContextBundle;
   limit?: number;
+  locale?: 'zh' | 'en';
 }): QuestionSuggestion[] {
   const wanted = new Set(input.tables.map(lower));
   if (!wanted.size || !input.schemas?.length) return [];
   const scoped: DatabaseSchema[] = input.schemas.map((s) => ({ ...s, tables: (s.tables ?? []).filter((t) => wanted.has(lower(t.name))) }));
-  const base = suggestQuestions(scoped, { bundle: input.bundle, limit: Math.max(3, input.limit ?? 3), maxPerKind: 1 });
+  const base = suggestQuestions(scoped, { bundle: input.bundle, limit: Math.max(3, input.limit ?? 3), maxPerKind: 1, locale: input.locale });
   // 已经查过质量/审计的，就别再推荐同类问题
   const used = new Set(input.usedTools);
   const filtered = base.filter((s) => {

@@ -2,6 +2,7 @@ import { useEffect, useMemo, type CSSProperties } from 'react';
 import type { TableInfo } from '@aidb/core';
 import { useApp } from '../store';
 import { Select, Option } from './ui';
+import { t as tr } from '../i18n';
 
 interface DatabaseSelectProps {
   connectionId?: string;
@@ -21,7 +22,7 @@ interface DatabaseSelectProps {
  * 选项来自 store 里的 schemas（无库参数时 loadSchema 只拉库名，不内省表）；
  * 只有一个库时（文件型连接）直接不渲染。
  */
-export function DatabaseSelect({ connectionId, value, onChange, allowAll, allLabel = '全部库', testId = 'database-select', disabled, className = 'select', style }: DatabaseSelectProps) {
+export function DatabaseSelect({ connectionId, value, onChange, allowAll, allLabel = tr("全部库"), testId = 'database-select', disabled, className = 'select', style }: DatabaseSelectProps) {
   const connections = useApp((s) => s.connections);
   const schemas = useApp((s) => (connectionId ? s.schemas[connectionId] : undefined));
   const loadSchema = useApp((s) => s.loadSchema);
@@ -47,7 +48,7 @@ export function DatabaseSelect({ connectionId, value, onChange, allowAll, allLab
       value={value}
       disabled={disabled}
       style={style}
-      title={conn?.database ? `数据库（连接默认：${conn.database}）` : '数据库'}
+      title={conn?.database ? tr("数据库（连接默认：{0}）", [conn.database]) : tr("数据库")}
       onChange={(e) => onChange(e.target.value)}
     >
       {allowAll ? <Option value="">{allLabel}</Option> : null}

@@ -69,3 +69,6 @@ desktop.ini
 *.swp
 *.tmp
 docs/screenshots/*.png.tmp
+
+# i18n 机翻缓存与审计产物（可重新生成，不入库）
+scripts/i18n/data/

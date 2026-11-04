@@ -6,6 +6,7 @@ import { useApp } from '../../store';
 import { askConfirm } from '../AskDialog';
 import { useDatabaseTables } from '../DatabaseSelect';
 import { CapabilityForm } from './CapabilityForm';
+import { t as tr } from '../../i18n';
 
 /**
  * 数据生成 —— 表单向能力契约（`capabilities/generate.json`）迁移后的实现。
@@ -64,23 +65,22 @@ export function GeneratorTool() {
       });
       setResult(generated);
       if (!dryRun) {
-        notify('success', '示例数据已生成', `${generated.inserted} 行 → ${table}`);
+        notify('success', tr("示例数据已生成"), tr("{0} 行 → {1}", [generated.inserted, table]));
         await loadSchema(activeConnectionId, true, (values.database as string) || undefined);
       }
     } catch (err: any) {
-      notify('error', '生成失败', err?.message);
+      notify('error', tr("生成失败"), err?.message);
     } finally {
       setLoading(false);
     }
   };
 
-  if (!conn) return <div className="dash-empty">请选择连接。</div>;
+  if (!conn) return <div className="dash-empty">{tr("请选择连接。")}</div>;
 
   return (
     <div className="tool-pane">
       <div className="tool-pane-head">
-        <Sparkles size={15} /> 数据生成
-        <span className="muted">按列名/类型生成贴近业务的测试数据，自动处理外键</span>
+        <Sparkles size={15} /> {tr(" 数据生成 ")}<span className="muted">{tr("按列名/类型生成贴近业务的测试数据，自动处理外键")}</span>
       </div>
       <div className="tool-row" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
         <CapabilityForm
@@ -92,29 +92,26 @@ export function GeneratorTool() {
           testIdPrefix="generate"
         />
         <button className="btn" onClick={() => void generate(true)} disabled={loading || !table}>
-          {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <Wand2 size={12} />} 预览
-        </button>
+          {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <Wand2 size={12} />}{tr(" 预览 ")}</button>
         <button
           className="btn primary"
           onClick={async () => {
-            if (!(await askConfirm({ message: `向 ${table} 插入 ${rows} 行生成数据？`, detail: '数据会直接写入表，不经过预览。', confirmLabel: '生成' }))) return;
+            if (!(await askConfirm({ message: tr("向 {0} 插入 {1} 行生成数据？", [table, rows]), detail: tr("数据会直接写入表，不经过预览。"), confirmLabel: tr("生成") }))) return;
             void generate(false);
           }}
           disabled={loading || !table}
         >
-          <Sparkles size={12} /> 生成并插入
-        </button>
+          <Sparkles size={12} /> {tr(" 生成并插入 ")}</button>
       </div>
 
       <div className="tool-scroll">
         {!result ? (
           <div className="dash-empty">
-            生成器会跳过自增主键，按 name/email/status/amount/date 等语义与类型填充；外键会从被引用表中取现有值。
-          </div>
+            {tr(" 生成器会跳过自增主键，按 name/email/status/amount/date 等语义与类型填充；外键会从被引用表中取现有值。 ")}</div>
         ) : (
           <>
             <div className="tool-summary">
-              {result.table} · {result.columns.length} 列 · {result.dryRun ? '预览' : `已插入 ${result.inserted} 行`}
+              {result.table} · {result.columns.length}{tr(" 列 · ")}{result.dryRun ? tr("预览") : tr("已插入 {0} 行", [result.inserted])}
             </div>
             <div className="mini-table-wrap">
               <table className="tool-table">
@@ -126,7 +123,7 @@ export function GeneratorTool() {
                 </tbody>
               </table>
             </div>
-            <div className="tool-section-title" style={{ marginTop: 10 }}>INSERT 预览</div>
+            <div className="tool-section-title" style={{ marginTop: 10 }}>{tr("INSERT 预览")}</div>
             <pre className="sql-block" style={{ maxHeight: 180, overflow: 'auto' }}>{result.sqlPreview}</pre>
           </>
         )}

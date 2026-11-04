@@ -4,6 +4,7 @@ import type { SearchBackendId, SearchSettings } from '@aidb/core';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
 import { Select, Option } from '../ui';
+import { t as tr } from '../../i18n';
 
 interface BackendInfo {
   id: SearchBackendId;
@@ -47,11 +48,11 @@ const KEYED = Object.keys(KEY_LABEL).filter((id) => id !== 'searxng');
 
 /** Rendered before the backend directory arrives (or if it fails); mirrors the gateway list. */
 const FALLBACK_BACKENDS: BackendInfo[] = [
-  { id: 'exa', label: 'Exa (MCP, 免费)', needsKey: false, group: 'free' },
-  { id: 'parallel', label: 'Parallel (MCP, 免费)', needsKey: false, group: 'free' },
-  { id: 'bing', label: 'Bing (RSS, 免密钥)', needsKey: false, group: 'free' },
-  { id: 'duckduckgo', label: 'DuckDuckGo (HTML, 需代理)', needsKey: false, group: 'free' },
-  { id: 'searxng', label: 'SearXNG (需自建)', needsKey: false, group: 'free' },
+  { id: 'exa', label: tr("Exa (MCP, 免费)"), needsKey: false, group: 'free' },
+  { id: 'parallel', label: tr("Parallel (MCP, 免费)"), needsKey: false, group: 'free' },
+  { id: 'bing', label: tr("Bing (RSS, 免密钥)"), needsKey: false, group: 'free' },
+  { id: 'duckduckgo', label: tr("DuckDuckGo (HTML, 需代理)"), needsKey: false, group: 'free' },
+  { id: 'searxng', label: tr("SearXNG (需自建)"), needsKey: false, group: 'free' },
   { id: 'brave', label: 'Brave Search', needsKey: true, group: 'key' },
   { id: 'tavily', label: 'Tavily (AI)', needsKey: true, group: 'key' },
   { id: 'serper', label: 'Serper.dev', needsKey: true, group: 'key' },
@@ -62,11 +63,11 @@ const FALLBACK_BACKENDS: BackendInfo[] = [
 ];
 
 const TIME_RANGE: Array<{ value: SearchSettings['timeRange']; label: string }> = [
-  { value: 'any', label: '不限' },
-  { value: 'day', label: '一天' },
-  { value: 'week', label: '一周' },
-  { value: 'month', label: '一月' },
-  { value: 'year', label: '一年' },
+  { value: 'any', label: tr("不限") },
+  { value: 'day', label: tr("一天") },
+  { value: 'week', label: tr("一周") },
+  { value: 'month', label: tr("一月") },
+  { value: 'year', label: tr("一年") },
 ];
 
 export function WebSearchTool() {
@@ -97,7 +98,7 @@ export function WebSearchTool() {
       setHealth(data.health);
       setKeyStatus(data.keyStatus);
     } catch (err: any) {
-      notify('error', '读取搜索后端失败', err?.message);
+      notify('error', tr("读取搜索后端失败"), err?.message);
     }
   };
 
@@ -129,9 +130,9 @@ export function WebSearchTool() {
       });
       setKeys({});
       await loadBackends();
-      notify('success', '搜索设置已保存');
+      notify('success', tr("搜索设置已保存"));
     } catch (err: any) {
-      notify('error', '保存搜索设置失败', err?.message);
+      notify('error', tr("保存搜索设置失败"), err?.message);
     } finally {
       setSaving(false);
     }
@@ -141,9 +142,9 @@ export function WebSearchTool() {
     try {
       const data = await api.resetSearchHealth();
       setHealth(data.health);
-      notify('success', '已重置后端健康状态');
+      notify('success', tr("已重置后端健康状态"));
     } catch (err: any) {
-      notify('error', '重置状态失败', err?.message);
+      notify('error', tr("重置状态失败"), err?.message);
     }
   };
 
@@ -153,7 +154,7 @@ export function WebSearchTool() {
       const data = await api.probeSearchBackend(id);
       setHealth((current) => current.map((item) => (item.id === id ? { ...item, ...data.health } : item)));
     } catch (err: any) {
-      notify('error', '探测失败', err?.message);
+      notify('error', tr("探测失败"), err?.message);
     } finally {
       setProbing(null);
     }
@@ -168,7 +169,7 @@ export function WebSearchTool() {
       setReports(data.backends);
       await loadBackends();
     } catch (err: any) {
-      notify('error', '搜索失败', err?.message);
+      notify('error', tr("搜索失败"), err?.message);
     } finally {
       setRunning(false);
     }
@@ -178,7 +179,7 @@ export function WebSearchTool() {
     const item = health.find((entry) => entry.id === id);
     if (!item || item.status === 'idle') return null;
     if (item.status === 'ok') return <span style={{ color: 'var(--success)', fontSize: 10, display: 'inline-flex', alignItems: 'center', gap: 3 }}><CheckCircle2 size={10} />{item.lastMs ?? 0}ms</span>;
-    return <span style={{ color: 'var(--danger)', fontSize: 10, display: 'inline-flex', alignItems: 'center', gap: 3 }} title={item.lastError}><XCircle size={10} />失败</span>;
+    return <span style={{ color: 'var(--danger)', fontSize: 10, display: 'inline-flex', alignItems: 'center', gap: 3 }} title={item.lastError}><XCircle size={10} />{tr("失败")}</span>;
   };
 
   const backendRow = (backend: BackendInfo) => {
@@ -193,7 +194,7 @@ export function WebSearchTool() {
         <button
           type="button"
           className="btn ghost small"
-          title="用固定查询探测该后端"
+          title={tr("用固定查询探测该后端")}
           onClick={(event) => {
             event.preventDefault();
             void probe(backend.id);
@@ -212,10 +213,10 @@ export function WebSearchTool() {
         <span>{KEY_LABEL[id]}</span>
         {KEY_URL[id] ? (
           <a href={KEY_URL[id]} target="_blank" rel="noreferrer">
-            获取 Key <ExternalLink size={9} />
+            {tr(" 获取 Key ")}<ExternalLink size={9} />
           </a>
         ) : null}
-        <span className={`badge ${keyStatus[id] ? 'read' : ''}`}>{keyStatus[id] ? '已配置' : '未配置'}</span>
+        <span className={`badge ${keyStatus[id] ? 'read' : ''}`}>{keyStatus[id] ? tr("已配置") : tr("未配置")}</span>
       </div>
       <input
         className="input"
@@ -225,43 +226,40 @@ export function WebSearchTool() {
         value={keys[id] ?? ''}
         onChange={(event) => setKeys({ ...keys, [id]: event.target.value })}
       />
-      <div className="search-key-hint">填入后保存到凭证库（对应环境变量引用）；留空表示不修改</div>
+      <div className="search-key-hint">{tr("填入后保存到凭证库（对应环境变量引用）；留空表示不修改")}</div>
     </div>
   );
 
   return (
     <div className="tool-pane">
       <div className="tool-pane-head">
-        <Globe2 size={15} /> 网络搜索
-        <span className="muted">免密钥后端开箱即用；API Key 加密保存；失败自动降级</span>
+        <Globe2 size={15} /> {tr(" 网络搜索 ")}<span className="muted">{tr("免密钥后端开箱即用；API Key 加密保存；失败自动降级")}</span>
       </div>
       <div className="tool-scroll">
         <div className="search-settings">
           <div className="search-summary">
-            <strong>已启用后端：{enabledCount}/{directory.length}</strong>
-            <strong>已配置密钥：{keyCount}/{KEYED.length}</strong>
+            <strong>{tr("已启用后端：")}{enabledCount}/{directory.length}</strong>
+            <strong>{tr("已配置密钥：")}{keyCount}/{KEYED.length}</strong>
             <div className="spacer" />
-            <button className="btn ghost small" onClick={() => void loadBackends()} title="刷新后端与健康状态">
-              <RefreshCw size={11} /> 刷新状态
-            </button>
+            <button className="btn ghost small" onClick={() => void loadBackends()} title={tr("刷新后端与健康状态")}>
+              <RefreshCw size={11} /> {tr(" 刷新状态 ")}</button>
           </div>
           <div className="search-desc">
-            聚合网络搜索：{directory.length} 个后端并发 fan-out、URL 去重合并。开关后端、填 API Key、调参数，保存即生效。
-          </div>
+            {tr(" 聚合网络搜索：")}{directory.length}{tr(" 个后端并发 fan-out、URL 去重合并。开关后端、填 API Key、调参数，保存即生效。 ")}</div>
 
           <div className="search-section">
-            <div className="search-section-title">免密钥（开箱即用）</div>
-            <div className="search-key-hint">Exa / Parallel 走 MCP 接口，Bing 走 RSS 输出，三者国内直连可用；DuckDuckGo 即使配了出站代理也常被人机校验拦回 0 条，SearXNG 必须自建。</div>
+            <div className="search-section-title">{tr("免密钥（开箱即用）")}</div>
+            <div className="search-key-hint">{tr("Exa / Parallel 走 MCP 接口，Bing 走 RSS 输出，三者国内直连可用；DuckDuckGo 即使配了出站代理也常被人机校验拦回 0 条，SearXNG 必须自建。")}</div>
             <div className="search-backend-grid">{free.map(backendRow)}</div>
           </div>
 
           <div className="search-section">
-            <div className="search-section-title">需要 API Key</div>
+            <div className="search-section-title">{tr("需要 API Key")}</div>
             <div className="search-backend-grid">{keyed.map(backendRow)}</div>
           </div>
 
           <div className="search-section">
-            <div className="search-section-title">全局参数</div>
+            <div className="search-section-title">{tr("全局参数")}</div>
             <div className="search-grid">
               <div className="field">
                 <label>numResults</label>
@@ -276,81 +274,81 @@ export function WebSearchTool() {
                 <input className="input" type="number" min={1000} max={120000} value={form.timeoutMs} onChange={(e) => setForm({ ...form, timeoutMs: Number(e.target.value) })} />
               </div>
               <div className="field" style={{ gridColumn: '1 / -1' }}>
-                <label>出站代理</label>
-                <input className="input" type="text" placeholder="如 http://127.0.0.1:7890，留空表示直连" value={form.proxyUrl ?? ''} onChange={(e) => setForm({ ...form, proxyUrl: e.target.value })} />
-                <div className="search-key-hint">保存后搜索请求即经该 HTTP/HTTPS 代理发出，本机地址仍走直连；填 Clash 的 HTTP 混合端口，SOCKS 端口不支持。</div>
+                <label>{tr("出站代理")}</label>
+                <input className="input" type="text" placeholder={tr("如 http://127.0.0.1:7890，留空表示直连")} value={form.proxyUrl ?? ''} onChange={(e) => setForm({ ...form, proxyUrl: e.target.value })} />
+                <div className="search-key-hint">{tr("保存后搜索请求即经该 HTTP/HTTPS 代理发出，本机地址仍走直连；填 Clash 的 HTTP 混合端口，SOCKS 端口不支持。")}</div>
               </div>
             </div>
           </div>
 
           <div className="search-section">
-            <div className="search-section-title">结果策略</div>
+            <div className="search-section-title">{tr("结果策略")}</div>
             <div className="search-grid">
               <div className="field">
-                <label>时间范围</label>
+                <label>{tr("时间范围")}</label>
                 <Select className="input" value={form.timeRange} onChange={(e) => setForm({ ...form, timeRange: e.target.value as SearchSettings['timeRange'] })}>
                   {TIME_RANGE.map((item) => <Option key={item.value} value={item.value}>{item.label}</Option>)}
                 </Select>
               </div>
               <div className="field">
-                <label>搜索语言</label>
-                <input className="input" placeholder="如 en、zh-CN，留空为默认" value={form.language ?? ''} onChange={(e) => setForm({ ...form, language: e.target.value })} />
+                <label>{tr("搜索语言")}</label>
+                <input className="input" placeholder={tr("如 en、zh-CN，留空为默认")} value={form.language ?? ''} onChange={(e) => setForm({ ...form, language: e.target.value })} />
               </div>
               <div className="field">
-                <label>去重策略</label>
+                <label>{tr("去重策略")}</label>
                 <Select className="input" value={form.dedupe} onChange={(e) => setForm({ ...form, dedupe: e.target.value as SearchSettings['dedupe'] })}>
-                  <Option value="url">按链接</Option>
-                  <Option value="none">不去重</Option>
+                  <Option value="url">{tr("按链接")}</Option>
+                  <Option value="none">{tr("不去重")}</Option>
                 </Select>
               </div>
               <div className="field">
-                <label>相关性重排</label>
+                <label>{tr("相关性重排")}</label>
                 <Select className="input" value={form.rerank ? 'on' : 'off'} onChange={(e) => setForm({ ...form, rerank: e.target.value === 'on' })}>
-                  <Option value="off">关</Option>
-                  <Option value="on">开</Option>
+                  <Option value="off">{tr("关")}</Option>
+                  <Option value="on">{tr("开")}</Option>
                 </Select>
               </div>
               <div className="field">
-                <label>安全搜索</label>
+                <label>{tr("安全搜索")}</label>
                 <Select className="input" value={form.safeSearch ? 'on' : 'off'} onChange={(e) => setForm({ ...form, safeSearch: e.target.value === 'on' })}>
-                  <Option value="on">开</Option>
-                  <Option value="off">关</Option>
+                  <Option value="on">{tr("开")}</Option>
+                  <Option value="off">{tr("关")}</Option>
                 </Select>
               </div>
               <div className="field">
-                <label>结果健康遥测</label>
+                <label>{tr("结果健康遥测")}</label>
                 <Select className="input" value={form.healthTelemetry ? 'on' : 'off'} onChange={(e) => setForm({ ...form, healthTelemetry: e.target.value === 'on' })}>
-                  <Option value="on">开</Option>
-                  <Option value="off">关</Option>
+                  <Option value="on">{tr("开")}</Option>
+                  <Option value="off">{tr("关")}</Option>
                 </Select>
               </div>
             </div>
           </div>
 
           <div className="search-section">
-            <div className="search-section-title">API 密钥（保存后写入凭证库，立即生效）</div>
+            <div className="search-section-title">{tr("API 密钥（保存后写入凭证库，立即生效）")}</div>
             <div className="search-key-grid">{KEYED.map(keyField)}</div>
           </div>
 
           <div className="search-section">
-            <div className="search-section-title">私有实例可选 Key</div>
+            <div className="search-section-title">{tr("私有实例可选 Key")}</div>
             <div className="field" style={{ maxWidth: 420 }}>
-              <label>SearXNG 实例地址</label>
+              <label>{tr("SearXNG 实例地址")}</label>
               <input className="input" value={form.searxngBaseUrl} onChange={(e) => setForm({ ...form, searxngBaseUrl: e.target.value })} placeholder="http://127.0.0.1:8080" />
-              <div className="search-key-hint">公共实例（含 searx.be）一律禁用 format=json，只回 HTML，必须自建：docker run -d -p 8080:8080 searxng/searxng，并在 settings.yml 里启用 search.formats: [json]。本机实例直接填 http://127.0.0.1:8888 这类地址即可。</div>
+              <div className="search-key-hint">{tr("公共实例（含 searx.be）一律禁用 format=json，只回 HTML，必须自建：docker run -d -p 8080:8080 searxng/searxng，并在 settings.yml 里启用 search.formats: [json]。本机实例直接填 http://127.0.0.1:8888 这类地址即可。")}</div>
             </div>
             <div className="search-key-grid">{keyField('searxng')}</div>
           </div>
 
           <div className="search-section">
-            <div className="search-section-title"><Search size={12} /> 立即测试</div>
+            <div className="search-section-title"><Search size={12} /> {tr(" 立即测试")}</div>
             <div className="row" style={{ gap: 6 }}>
-              <input className="input grow" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="输入查询，例如 OpenAI latest news" onKeyDown={(e) => { if (e.key === 'Enter') void run(); }} />
-              <button className="btn primary" onClick={() => void run()} disabled={running}>{running ? <Loader2 size={12} className="spin" /> : <Search size={12} />} 搜索</button>
+              <input className="input grow" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={tr("输入查询，例如 OpenAI latest news")} onKeyDown={(e) => { if (e.key === 'Enter') void run(); }} />
+              <button className="btn primary" onClick={() => void run()} disabled={running}>{running ? <Loader2 size={12} className="spin" /> : <Search size={12} />}{tr(" 搜索")}</button>
             </div>
             {reports.length ? (
               <div className="search-report">
-                {reports.map((item) => `${item.id}: ${item.ok ? `${item.count} 条 / ${item.ms}ms` : `失败 ${item.error ?? ''}`}`).join(' · ')}
+                {reports.map((item) => `${item.id}: ${item.ok ? tr("{0} 条 / {1}ms", [item.count, item.ms]) : tr("失败 {0}", [item.error ?? ''])}`).join(' · ')}
               </div>
             ) : null}
             {results.length ? (
@@ -367,8 +365,8 @@ export function WebSearchTool() {
           </div>
 
           <div className="search-actions">
-            <button className="btn" onClick={() => void resetHealth()}><Clock size={12} /> 重置状态</button>
-            <button className="btn primary" onClick={() => void save()} disabled={saving}>{saving ? <Loader2 size={12} className="spin" /> : null} 保存</button>
+            <button className="btn" onClick={() => void resetHealth()}><Clock size={12} /> {tr(" 重置状态")}</button>
+            <button className="btn primary" onClick={() => void save()} disabled={saving}>{saving ? <Loader2 size={12} className="spin" /> : null}{tr(" 保存")}</button>
           </div>
         </div>
       </div>

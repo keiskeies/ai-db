@@ -13,14 +13,15 @@ import { api } from '../../lib/api';
 import { useApp } from '../../store';
 import { askConfirm } from '../AskDialog';
 import { Select, Option } from '../ui';
+import { t as tr } from '../../i18n';
 
 type Tab = 'tables' | 'columns' | 'relations' | 'terms';
 
 const TABS: Array<{ id: Tab; label: string; icon: ReactNode }> = [
-  { id: 'tables', label: '表管理', icon: <Table2 size={12} /> },
-  { id: 'columns', label: '字段语义', icon: <Columns3 size={12} /> },
-  { id: 'relations', label: '关联关系', icon: <Link2 size={12} /> },
-  { id: 'terms', label: '术语与示例', icon: <BookMarked size={12} /> },
+  { id: 'tables', label: tr("表管理"), icon: <Table2 size={12} /> },
+  { id: 'columns', label: tr("字段语义"), icon: <Columns3 size={12} /> },
+  { id: 'relations', label: tr("关联关系"), icon: <Link2 size={12} /> },
+  { id: 'terms', label: tr("术语与示例"), icon: <BookMarked size={12} /> },
 ];
 
 const lower = (value: string) => value.trim().toLowerCase();
@@ -73,7 +74,7 @@ export function AgentContextTool() {
       const { entries: list } = await api.agentContext(connId, database);
       setEntries(list);
     } catch (err: any) {
-      notify('error', '加载业务上下文失败', err?.message);
+      notify('error', tr("加载业务上下文失败"), err?.message);
     } finally {
       setBusy(false);
     }
@@ -125,9 +126,9 @@ export function AgentContextTool() {
     try {
       await fn();
       await reload();
-      if (okMessage) notify('success', '已保存', okMessage);
+      if (okMessage) notify('success', tr("已保存"), okMessage);
     } catch (err: any) {
-      notify('error', '保存失败', err?.message);
+      notify('error', tr("保存失败"), err?.message);
     } finally {
       setBusy(false);
     }
@@ -159,7 +160,7 @@ export function AgentContextTool() {
   const bulk = (enabled: boolean, names?: string[]) =>
     void save(
       () => api.bulkContextTables({ connectionId: connId, database, tables: names ?? visibleTables.map((t) => t.name), enabled }),
-      enabled ? '已启用' : '已禁用',
+      enabled ? tr("已启用") : tr("已禁用"),
     );
 
   const setColumnEnabled = (table: string, column: string, enabledFlag: boolean) => {
@@ -173,7 +174,7 @@ export function AgentContextTool() {
   const addRelation = () => {
     const { table, column, refTable, refColumn, description } = draftRelation;
     if (!table || !column || !refTable || !refColumn) {
-      notify('error', '关系不完整', '左表、左列、右表、右列都必填');
+      notify('error', tr("关系不完整"), tr("左表、左列、右表、右列都必填"));
       return;
     }
     void save(
@@ -186,19 +187,19 @@ export function AgentContextTool() {
   const clearAll = () => {
     void (async () => {
       const ok = await askConfirm({
-        message: `清空「${conn?.name ?? connId}${database ? ` / ${database}` : ''}」的全部业务上下文配置？`,
-        detail: 'Agent 将回到默认行为。',
+        message: tr("清空「{0}{1}」的全部业务上下文配置？", [conn?.name ?? connId, database ? ` / ${database}` : '']),
+        detail: tr("Agent 将回到默认行为。"),
         danger: true,
-        confirmLabel: '清空',
+        confirmLabel: tr("清空"),
       });
       if (!ok) return;
-      void save(() => api.clearAgentContext(connId, database), '已清空');
+      void save(() => api.clearAgentContext(connId, database), tr("已清空"));
     })();
   };
 
   const addMemory = (kind: 'glossary' | 'sql_example', draft: { title: string; content: string }, reset: () => void) => {
     if (!draft.title.trim() || !draft.content.trim()) {
-      notify('error', '内容不完整', kind === 'glossary' ? '术语与释义都必填' : '问题与 SQL 都必填');
+      notify('error', tr("内容不完整"), kind === 'glossary' ? tr("术语与释义都必填") : tr("问题与 SQL 都必填"));
       return;
     }
     void (async () => {
@@ -207,9 +208,9 @@ export function AgentContextTool() {
         await api.createMemory({ kind, title: draft.title.trim(), content: draft.content.trim(), connectionId: connId, database });
         reset();
         await reloadMemories();
-        notify('success', '已保存', kind === 'glossary' ? '术语已加入词典' : '示例 SQL 已加入校准库');
+        notify('success', tr("已保存"), kind === 'glossary' ? tr("术语已加入词典") : tr("示例 SQL 已加入校准库"));
       } catch (err: any) {
-        notify('error', '保存失败', err?.message);
+        notify('error', tr("保存失败"), err?.message);
       } finally {
         setBusy(false);
       }
@@ -222,17 +223,16 @@ export function AgentContextTool() {
         await api.deleteMemory(id);
         await reloadMemories();
       } catch (err: any) {
-        notify('error', '删除失败', err?.message);
+        notify('error', tr("删除失败"), err?.message);
       }
     })();
 
-  if (!connections.length) return <div className="dash-empty">请先创建一个数据库连接。</div>;
+  if (!connections.length) return <div className="dash-empty">{tr("请先创建一个数据库连接。")}</div>;
 
   return (
     <div className="tool-pane">
       <div className="tool-pane-head">
-        <BookMarked size={15} /> Agent 业务上下文
-        <span className="muted">给模型划定知识边界、注入业务语义，是问数准确率的直接来源</span>
+        <BookMarked size={15} /> {tr(" Agent 业务上下文 ")}<span className="muted">{tr("给模型划定知识边界、注入业务语义，是问数准确率的直接来源")}</span>
       </div>
 
       <div className="tool-row">
@@ -243,15 +243,14 @@ export function AgentContextTool() {
         </Select>
         <Select className="select" value={database} onChange={(e) => setDatabase(e.target.value)} data-testid="ctx-database">
           {databases.map((d) => (
-            <Option key={d.name} value={d.name}>{d.name}{d.tables.length ? '' : '（未加载）'}</Option>
+            <Option key={d.name} value={d.name}>{d.name}{d.tables.length ? '' : tr("（未加载）")}</Option>
           ))}
         </Select>
         <span className="spacer" />
-        <span className="badge">{tables.length ? `启用 ${enabledCount}/${tables.length} 表` : '表未加载'}</span>
-        <span className="badge agent" data-testid="ctx-tokens">上下文 ≈ {tokens.toLocaleString()} tokens</span>
+        <span className="badge">{tables.length ? tr("启用 {0}/{1} 表", [enabledCount, tables.length]) : tr("表未加载")}</span>
+        <span className="badge agent" data-testid="ctx-tokens">{tr("上下文 ≈ ")}{tokens.toLocaleString()} tokens</span>
         <button className="btn small danger" onClick={clearAll} disabled={busy || !entries.length} data-testid="ctx-clear">
-          <Trash2 size={11} /> 清空配置
-        </button>
+          <Trash2 size={11} /> {tr(" 清空配置 ")}</button>
       </div>
 
       <div className="result-tabs" style={{ flex: '0 0 31px' }}>
@@ -266,20 +265,19 @@ export function AgentContextTool() {
         <>
           <div className="tool-row">
             <div className="search-box" style={{ width: 220 }}>
-              <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="筛选表名…" data-testid="ctx-filter" />
+              <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={tr("筛选表名…")} data-testid="ctx-filter" />
             </div>
-            <button className="btn small" onClick={() => bulk(true)} disabled={busy || !visibleTables.length}>全部启用</button>
-            <button className="btn small" onClick={() => bulk(false)} disabled={busy || !visibleTables.length}>全部禁用</button>
+            <button className="btn small" onClick={() => bulk(true)} disabled={busy || !visibleTables.length}>{tr("全部启用")}</button>
+            <button className="btn small" onClick={() => bulk(false)} disabled={busy || !visibleTables.length}>{tr("全部禁用")}</button>
             <span className="spacer" />
             <span className="muted" style={{ fontSize: 10.5 }}>
-              未配置的表默认启用；禁用的表不会出现在模型的 schema 里
-            </span>
+              {tr(" 未配置的表默认启用；禁用的表不会出现在模型的 schema 里 ")}</span>
           </div>
           <div className="tool-scroll">
-            {!tables.length ? <div className="dash-empty">该库的表尚未加载，点击左侧库名或稍候重试。</div> : null}
+            {!tables.length ? <div className="dash-empty">{tr("该库的表尚未加载，点击左侧库名或稍候重试。")}</div> : null}
             <table className="ctx-grid" data-testid="ctx-table-grid">
               <thead>
-                <tr><th style={{ width: 46 }}>启用</th><th style={{ width: 200 }}>表</th><th style={{ width: 160 }}>业务别名</th><th>业务描述（模型看到的语义）</th></tr>
+                <tr><th style={{ width: 46 }}>{tr("启用")}</th><th style={{ width: 200 }}>{tr("表")}</th><th style={{ width: 160 }}>{tr("业务别名")}</th><th>{tr("业务描述（模型看到的语义）")}</th></tr>
               </thead>
               <tbody>
                 {visibleTables.map((t) => {
@@ -303,7 +301,7 @@ export function AgentContextTool() {
                         <input
                           className="input"
                           defaultValue={entry?.alias ?? ''}
-                          placeholder={t.comment ? t.comment.slice(0, 20) : '如：线索表'}
+                          placeholder={t.comment ? t.comment.slice(0, 20) : tr("如：线索表")}
                           onBlur={(e) => {
                             const next = e.target.value.trim();
                             if (next !== (entry?.alias ?? '')) commitTableMeta(t.name, { alias: next || null });
@@ -314,7 +312,7 @@ export function AgentContextTool() {
                         <input
                           className="input"
                           defaultValue={entry?.description ?? ''}
-                          placeholder="这张表存什么、有哪些状态、口径是什么"
+                          placeholder={tr("这张表存什么、有哪些状态、口径是什么")}
                           onBlur={(e) => {
                             const next = e.target.value.trim();
                             if (next !== (entry?.description ?? '')) commitTableMeta(t.name, { description: next || null });
@@ -334,19 +332,19 @@ export function AgentContextTool() {
         <>
           <div className="tool-row">
             <Select className="select" value={selectedTable} onChange={(e) => setSelectedTable(e.target.value)} data-testid="ctx-column-table">
-              <Option value="">选择表…</Option>
+              <Option value="">{tr("选择表…")}</Option>
               {tables.map((t) => (
                 <Option key={t.name} value={t.name}>{t.name}</Option>
               ))}
             </Select>
-            {currentTable ? <span className="muted" style={{ fontSize: 10.5 }}>{currentTable.columns?.length ?? 0} 列</span> : null}
+            {currentTable ? <span className="muted" style={{ fontSize: 10.5 }}>{currentTable.columns?.length ?? 0}{tr(" 列")}</span> : null}
           </div>
           <div className="tool-scroll">
-            {!currentTable ? <div className="dash-empty">选择一张表以编辑字段的启用状态、业务别名与取值释义。</div> : null}
+            {!currentTable ? <div className="dash-empty">{tr("选择一张表以编辑字段的启用状态、业务别名与取值释义。")}</div> : null}
             {currentTable ? (
               <table className="ctx-grid">
                 <thead>
-                  <tr><th style={{ width: 46 }}>启用</th><th style={{ width: 180 }}>字段</th><th style={{ width: 130 }}>类型</th><th style={{ width: 150 }}>业务别名</th><th>描述 / 枚举释义</th></tr>
+                  <tr><th style={{ width: 46 }}>{tr("启用")}</th><th style={{ width: 180 }}>{tr("字段")}</th><th style={{ width: 130 }}>{tr("类型")}</th><th style={{ width: 150 }}>{tr("业务别名")}</th><th>{tr("描述 / 枚举释义")}</th></tr>
                 </thead>
                 <tbody>
                   {(currentTable.columns ?? []).map((c) => {
@@ -363,7 +361,7 @@ export function AgentContextTool() {
                           <input
                             className="input"
                             defaultValue={entry?.alias ?? ''}
-                            placeholder={c.comment ? c.comment.slice(0, 16) : '如：客户名称'}
+                            placeholder={c.comment ? c.comment.slice(0, 16) : tr("如：客户名称")}
                             onBlur={(e) => {
                               const next = e.target.value.trim();
                               if (next !== (entry?.alias ?? '')) commitColumnMeta(currentTable.name, c.name, { alias: next || null });
@@ -374,7 +372,7 @@ export function AgentContextTool() {
                           <input
                             className="input"
                             defaultValue={entry?.description ?? ''}
-                            placeholder="枚举值：FOLLOWING=跟进中，NEW=新建"
+                            placeholder={tr("枚举值：FOLLOWING=跟进中，NEW=新建")}
                             onBlur={(e) => {
                               const next = e.target.value.trim();
                               if (next !== (entry?.description ?? '')) commitColumnMeta(currentTable.name, c.name, { description: next || null });
@@ -394,7 +392,7 @@ export function AgentContextTool() {
       {tab === 'relations' ? (
         <div className="tool-scroll">
           <div className="ctx-section">
-            <div className="ctx-section-head">来自外键的关系（只读）</div>
+            <div className="ctx-section-head">{tr("来自外键的关系（只读）")}</div>
             {tables.some((t) => t.foreignKeys?.length) ? (
               <table className="ctx-grid">
                 <tbody>
@@ -404,33 +402,33 @@ export function AgentContextTool() {
                         <td style={{ width: 220 }}>{t.name}.{fk.columns.join(',')}</td>
                         <td style={{ width: 24 }} className="muted">→</td>
                         <td>{fk.refTable}.{fk.refColumns.join(',')}</td>
-                        <td className="muted" style={{ width: 90 }}>外键</td>
+                        <td className="muted" style={{ width: 90 }}>{tr("外键")}</td>
                       </tr>
                     )),
                   )}
                 </tbody>
               </table>
             ) : (
-              <div className="dash-empty">该库没有物理外键。下面的手工关系可以让模型在没有外键的库上也能正确 JOIN。</div>
+              <div className="dash-empty">{tr("该库没有物理外键。下面的手工关系可以让模型在没有外键的库上也能正确 JOIN。")}</div>
             )}
           </div>
 
           <div className="ctx-section">
-            <div className="ctx-section-head">手工维护的关系（注入 prompt，指导 JOIN）</div>
+            <div className="ctx-section-head">{tr("手工维护的关系（注入 prompt，指导 JOIN）")}</div>
             <div className="tool-row">
               <Select className="select" value={draftRelation.table} onChange={(e) => setDraftRelation({ ...draftRelation, table: e.target.value })}>
-                <Option value="">左表…</Option>
+                <Option value="">{tr("左表…")}</Option>
                 {tables.map((t) => <Option key={t.name} value={t.name}>{t.name}</Option>)}
               </Select>
-              <input className="input" style={{ width: 120 }} placeholder="左列" value={draftRelation.column} onChange={(e) => setDraftRelation({ ...draftRelation, column: e.target.value })} />
+              <input className="input" style={{ width: 120 }} placeholder={tr("左列")} value={draftRelation.column} onChange={(e) => setDraftRelation({ ...draftRelation, column: e.target.value })} />
               <span className="muted">→</span>
               <Select className="select" value={draftRelation.refTable} onChange={(e) => setDraftRelation({ ...draftRelation, refTable: e.target.value })}>
-                <Option value="">右表…</Option>
+                <Option value="">{tr("右表…")}</Option>
                 {tables.map((t) => <Option key={t.name} value={t.name}>{t.name}</Option>)}
               </Select>
-              <input className="input" style={{ width: 120 }} placeholder="右列" value={draftRelation.refColumn} onChange={(e) => setDraftRelation({ ...draftRelation, refColumn: e.target.value })} />
-              <input className="input" style={{ width: 180 }} placeholder="备注（可选）" value={draftRelation.description} onChange={(e) => setDraftRelation({ ...draftRelation, description: e.target.value })} />
-              <button className="btn small primary" onClick={addRelation} disabled={busy} data-testid="ctx-add-relation"><Plus size={11} /> 添加</button>
+              <input className="input" style={{ width: 120 }} placeholder={tr("右列")} value={draftRelation.refColumn} onChange={(e) => setDraftRelation({ ...draftRelation, refColumn: e.target.value })} />
+              <input className="input" style={{ width: 180 }} placeholder={tr("备注（可选）")} value={draftRelation.description} onChange={(e) => setDraftRelation({ ...draftRelation, description: e.target.value })} />
+              <button className="btn small primary" onClick={addRelation} disabled={busy} data-testid="ctx-add-relation"><Plus size={11} /> {tr(" 添加")}</button>
             </div>
             {relations.length ? (
               <table className="ctx-grid">
@@ -442,7 +440,7 @@ export function AgentContextTool() {
                       <td>{r.refTable}.{r.refColumn}</td>
                       <td className="muted">{r.description ?? ''}</td>
                       <td style={{ width: 40 }}>
-                        <button className="icon-btn" onClick={() => void save(() => api.deleteContextEntry(r.id))} title="删除"><Trash2 size={11} /></button>
+                        <button className="icon-btn" onClick={() => void save(() => api.deleteContextEntry(r.id))} title={tr("删除")}><Trash2 size={11} /></button>
                       </td>
                     </tr>
                   ))}
@@ -456,13 +454,12 @@ export function AgentContextTool() {
       {tab === 'terms' ? (
         <div className="tool-scroll">
           <div className="ctx-section">
-            <div className="ctx-section-head">术语词典（消除简称 / 黑话歧义）</div>
+            <div className="ctx-section-head">{tr("术语词典（消除简称 / 黑话歧义）")}</div>
             <div className="tool-row">
-              <input className="input" style={{ width: 160 }} placeholder="术语，如 JS" value={draftTerm.title} onChange={(e) => setDraftTerm({ ...draftTerm, title: e.target.value })} />
-              <input className="input grow" placeholder="释义，如 JumpServer 堡垒机" value={draftTerm.content} onChange={(e) => setDraftTerm({ ...draftTerm, content: e.target.value })} />
+              <input className="input" style={{ width: 160 }} placeholder={tr("术语，如 JS")} value={draftTerm.title} onChange={(e) => setDraftTerm({ ...draftTerm, title: e.target.value })} />
+              <input className="input grow" placeholder={tr("释义，如 JumpServer 堡垒机")} value={draftTerm.content} onChange={(e) => setDraftTerm({ ...draftTerm, content: e.target.value })} />
               <button className="btn small primary" onClick={() => addMemory('glossary', draftTerm, () => setDraftTerm({ title: '', content: '' }))} disabled={busy}>
-                <Plus size={11} /> 添加术语
-              </button>
+                <Plus size={11} /> {tr(" 添加术语 ")}</button>
             </div>
             {terms.length ? (
               <table className="ctx-grid">
@@ -471,26 +468,26 @@ export function AgentContextTool() {
                     <tr key={m.id}>
                       <td style={{ width: 160 }}><strong>{m.title}</strong></td>
                       <td>{m.content}</td>
-                      <td style={{ width: 110 }} className="muted">{MEMORY_KIND_LABELS[m.kind].zh} · {m.scopeType}</td>
+                      <td style={{ width: 110 }} className="muted">{tr(MEMORY_KIND_LABELS[m.kind].zh)} · {m.scopeType}</td>
                       <td style={{ width: 40 }}>
-                        <button className="icon-btn" onClick={() => removeMemory(m.id)} title="删除"><Trash2 size={11} /></button>
+                        <button className="icon-btn" onClick={() => removeMemory(m.id)} title={tr("删除")}><Trash2 size={11} /></button>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             ) : (
-              <div className="dash-empty">还没有术语。对话里说「记住 JS 就是 JumpServer」也会自动收录到这里。</div>
+              <div className="dash-empty">{tr("还没有术语。对话里说「记住 JS 就是 JumpServer」也会自动收录到这里。")}</div>
             )}
           </div>
 
           <div className="ctx-section">
-            <div className="ctx-section-head">示例 SQL（标准问答对，作为 few-shot 校准统计口径）</div>
+            <div className="ctx-section-head">{tr("示例 SQL（标准问答对，作为 few-shot 校准统计口径）")}</div>
             <div className="ctx-section-form">
-              <input className="input" placeholder="标准问题，如：今年第三季度东区制造业赢单总数" value={draftExample.title} onChange={(e) => setDraftExample({ ...draftExample, title: e.target.value })} />
+              <input className="input" placeholder={tr("标准问题，如：今年第三季度东区制造业赢单总数")} value={draftExample.title} onChange={(e) => setDraftExample({ ...draftExample, title: e.target.value })} />
               <textarea
                 className="input ctx-sql"
-                placeholder="标准答案 SQL（会被截断到 600 字符注入 prompt）"
+                placeholder={tr("标准答案 SQL（会被截断到 600 字符注入 prompt）")}
                 value={draftExample.content}
                 onChange={(e) => setDraftExample({ ...draftExample, content: e.target.value })}
                 rows={4}
@@ -498,8 +495,7 @@ export function AgentContextTool() {
               <div className="tool-row">
                 <span className="spacer" />
                 <button className="btn small primary" onClick={() => addMemory('sql_example', draftExample, () => setDraftExample({ title: '', content: '' }))} disabled={busy}>
-                  <Plus size={11} /> 添加示例
-                </button>
+                  <Plus size={11} /> {tr(" 添加示例 ")}</button>
               </div>
             </div>
             {examples.length ? (
@@ -510,7 +506,7 @@ export function AgentContextTool() {
                       <td style={{ width: 220 }}><strong>{m.title}</strong></td>
                       <td><pre className="ctx-pre">{m.content}</pre></td>
                       <td style={{ width: 40 }}>
-                        <button className="icon-btn" onClick={() => removeMemory(m.id)} title="删除"><Trash2 size={11} /></button>
+                        <button className="icon-btn" onClick={() => removeMemory(m.id)} title={tr("删除")}><Trash2 size={11} /></button>
                       </td>
                     </tr>
                   ))}
@@ -524,7 +520,7 @@ export function AgentContextTool() {
       <div className="designer-status">
         {busy ? <Loader2 size={11} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : null}
         <span className="muted">
-          {entries.length ? `${entries.length} 条配置生效中 · 改动即时写入，下一轮问数生效` : '尚未配置：Agent 当前使用完整 schema，行为与默认一致'}
+          {entries.length ? tr("{0} 条配置生效中 · 改动即时写入，下一轮问数生效", [entries.length]) : tr("尚未配置：Agent 当前使用完整 schema，行为与默认一致")}
         </span>
       </div>
     </div>

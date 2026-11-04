@@ -4,6 +4,7 @@ import { AGENT_TOOL_GROUPS, agentToolCatalog, builtinMcpServer, type McpServerIn
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
 import { askConfirm } from '../AskDialog';
+import { t as tr } from '../../i18n';
 
 const BUILTIN_ORDER = { filesystem: 0, git: 1, web: 2 } as const;
 
@@ -46,7 +47,7 @@ export function McpTool() {
     try {
       setServers((await api.mcpServers()).servers);
     } catch (err: any) {
-      notify('error', '读取 MCP Server 失败', err?.message);
+      notify('error', tr("读取 MCP Server 失败"), err?.message);
     } finally {
       setLoading(false);
     }
@@ -77,7 +78,7 @@ export function McpTool() {
 
   const create = async () => {
     if (!name.trim() || !command.trim()) {
-      notify('warning', '名称和命令必填');
+      notify('warning', tr("名称和命令必填"));
       return;
     }
     let parsedEnv: Record<string, string> | undefined;
@@ -86,7 +87,7 @@ export function McpTool() {
         const raw = JSON.parse(env);
         parsedEnv = Object.fromEntries(Object.entries(raw).map(([key, value]) => [key, String(value)]));
       } catch {
-        notify('warning', '环境变量必须是 JSON 对象');
+        notify('warning', tr("环境变量必须是 JSON 对象"));
         return;
       }
     }
@@ -102,7 +103,7 @@ export function McpTool() {
       setEnv('');
       await load();
     } catch (err: any) {
-      notify('error', '保存 MCP Server 失败', err?.message);
+      notify('error', tr("保存 MCP Server 失败"), err?.message);
     }
   };
 
@@ -111,9 +112,9 @@ export function McpTool() {
     try {
       const result = await api.mcpTools(server.id);
       setTools((current) => ({ ...current, [server.id]: result.tools }));
-      notify('success', 'MCP 工具已发现', `${server.name} · ${result.tools.length} 个`);
+      notify('success', tr("MCP 工具已发现"), tr("{0} · {1} 个", [server.name, result.tools.length]));
     } catch (err: any) {
-      notify('error', '启动 MCP Server 失败', err?.message);
+      notify('error', tr("启动 MCP Server 失败"), err?.message);
     } finally {
       setChecking(null);
     }
@@ -124,17 +125,17 @@ export function McpTool() {
       await api.updateMcpServer(server.id, { enabled: !server.enabled });
       await load();
     } catch (err: any) {
-      notify('error', '更新 MCP Server 失败', err?.message);
+      notify('error', tr("更新 MCP Server 失败"), err?.message);
     }
   };
 
   const remove = async (server: McpServerInfo) => {
-    if (!(await askConfirm({ message: `删除 MCP Server「${server.name}」？`, detail: '该服务器的授权与工具批准记录会一并移除。', danger: true, confirmLabel: '删除' }))) return;
+    if (!(await askConfirm({ message: tr("删除 MCP Server「{0}」？", [server.name]), detail: tr("该服务器的授权与工具批准记录会一并移除。"), danger: true, confirmLabel: tr("删除") }))) return;
     try {
       await api.deleteMcpServer(server.id);
       await load();
     } catch (err: any) {
-      notify('error', '删除失败', err?.message);
+      notify('error', tr("删除失败"), err?.message);
     }
   };
 
@@ -150,7 +151,7 @@ export function McpTool() {
       setDrafts((current) => ({ ...current, [server.id]: '' }));
       await load();
     } catch (err: any) {
-      notify('error', '保存配置失败', err?.message);
+      notify('error', tr("保存配置失败"), err?.message);
     }
   };
 
@@ -159,56 +160,53 @@ export function McpTool() {
       await api.updateMcpServer(server.id, { args: server.args.filter((item) => item !== value) });
       await load();
     } catch (err: any) {
-      notify('error', '保存配置失败', err?.message);
+      notify('error', tr("保存配置失败"), err?.message);
     }
   };
 
   return (
     <div className="tool-pane">
       <div className="tool-pane-head">
-        <Plug size={15} /> MCP 插件
-        <span className="muted">内置工具 + stdio 外部 MCP Server · 工具进入 Agent</span>
+        <Plug size={15} /> {tr(" MCP 插件 ")}<span className="muted">{tr("内置工具 + stdio 外部 MCP Server · 工具进入 Agent")}</span>
       </div>
       <div className="tool-scroll">
-        {!features.mcp ? <div className="dash-empty" style={{ color: 'var(--warning, #D6B45A)' }}>MCP 工具已在 设置 → MCP 页顶部关闭；配置仍可管理，但 Agent 不会调用。</div> : null}
+        {!features.mcp ? <div className="dash-empty" style={{ color: 'var(--warning, #D6B45A)' }}>{tr("MCP 工具已在 设置 → MCP 页顶部关闭；配置仍可管理，但 Agent 不会调用。")}</div> : null}
         {fsNoRoots ? (
           <div className="risk-banner" style={{ marginBottom: 10 }}>
-            <strong>文件系统未配置允许目录</strong> — Agent 目前无法读取任何文件。请在下方「文件系统」卡片添加目录（例如 C:\server\kbook\backend），再让 Agent 重试。
-          </div>
+            <strong>{tr("文件系统未配置允许目录")}</strong> {tr(" — Agent 目前无法读取任何文件。请在下方「文件系统」卡片添加目录（例如 C:\\server\\kbook\\backend），再让 Agent 重试。 ")}</div>
         ) : null}
         <details className="panel" style={{ padding: 10 }} open data-testid="mcp-add-server">
           <summary className="panel-head" style={{ paddingLeft: 0, cursor: 'pointer' }}>
-            新增 MCP Server <span className="muted" style={{ fontWeight: 400 }}>（外部 stdio）</span>
+            {tr(" 新增 MCP Server ")}<span className="muted" style={{ fontWeight: 400 }}>{tr("（外部 stdio）")}</span>
           </summary>
           <div className="tool-row" style={{ padding: 0, border: 0 }}>
             <div className="field" style={{ width: 150 }}>
-              <label>名称</label>
+              <label>{tr("名称")}</label>
               <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="feishu" />
             </div>
             <div className="field" style={{ width: 130 }}>
-              <label>命令</label>
+              <label>{tr("命令")}</label>
               <input className="input" value={command} onChange={(e) => setCommand(e.target.value)} placeholder="npx" />
             </div>
             <div className="field" style={{ flex: 1, minWidth: 260 }}>
-              <label>参数（空格分隔）</label>
+              <label>{tr("参数（空格分隔）")}</label>
               <input className="input" value={args} onChange={(e) => setArgs(e.target.value)} placeholder="-y @larksuiteoapi/lark-mcp ..." />
             </div>
           </div>
           <div className="field" style={{ marginTop: 8 }}>
-            <label>环境变量 JSON（可选，加密存储）</label>
+            <label>{tr("环境变量 JSON（可选，加密存储）")}</label>
             <textarea className="textarea" rows={2} value={env} onChange={(e) => setEnv(e.target.value)} placeholder='{"APP_ID":"…","APP_SECRET":"…"}' />
           </div>
           <div className="muted" style={{ fontSize: 10, marginTop: 6 }}>
-            飞书 / 企微 / QQ 群机器人请用「设置 → 通知」，不需要 MCP；这里只用于接入外部 MCP 工具。命令会在本机执行，只添加可信的 MCP Server。
-          </div>
+            {tr(" 飞书 / 企微 / QQ 群机器人请用「设置 → 通知」，不需要 MCP；这里只用于接入外部 MCP 工具。命令会在本机执行，只添加可信的 MCP Server。 ")}</div>
           <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
-            <button className="btn primary" onClick={() => void create()}><Plus size={12} /> 保存</button>
+            <button className="btn primary" onClick={() => void create()}><Plus size={12} /> {tr(" 保存")}</button>
           </div>
         </details>
         <div className="panel" style={{ marginTop: 10 }}>
-          <div className="panel-head">已配置 <span className="badge">{servers.length}</span></div>
-          {loading ? <div className="dash-empty"><Loader2 size={14} className="spin" /> 读取中…</div> : null}
-          {!loading && !servers.length ? <div className="dash-empty">还没有 MCP Server。可以配置飞书 lark-openapi-mcp、文件系统等 stdio server。</div> : null}
+          <div className="panel-head">{tr("已配置 ")}<span className="badge">{servers.length}</span></div>
+          {loading ? <div className="dash-empty"><Loader2 size={14} className="spin" /> {tr(" 读取中…")}</div> : null}
+          {!loading && !servers.length ? <div className="dash-empty">{tr("还没有 MCP Server。可以配置飞书 lark-openapi-mcp、文件系统等 stdio server。")}</div> : null}
           {ordered.map((server) => {
             const definition = server.builtin ? builtinMcpServer(server.builtin) : undefined;
             const toolList = tools[server.id] ?? [];
@@ -230,10 +228,10 @@ export function McpTool() {
                       }}
                     >
                       <span className="mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 420 }}>{value}</span>
-                      <button className="icon-btn" title="移除" onClick={() => void removeArg(server, value)}><X size={10} /></button>
+                      <button className="icon-btn" title={tr("移除")} onClick={() => void removeArg(server, value)}><X size={10} /></button>
                     </span>
                   ))}
-                  {!server.args.length ? <span className="muted" style={{ fontSize: 10 }}>（未配置）</span> : null}
+                  {!server.args.length ? <span className="muted" style={{ fontSize: 10 }}>{tr("（未配置）")}</span> : null}
                 </div>
                 <div className="row" style={{ gap: 6 }}>
                   <input
@@ -245,7 +243,7 @@ export function McpTool() {
                       if (e.key === 'Enter') void addArg(server);
                     }}
                   />
-                  <button className="btn small" onClick={() => void addArg(server)}><Plus size={11} /> 添加</button>
+                  <button className="btn small" onClick={() => void addArg(server)}><Plus size={11} /> {tr(" 添加")}</button>
                 </div>
               </>
             );
@@ -255,17 +253,16 @@ export function McpTool() {
                   <span className="badge">{server.enabled ? 'ON' : 'OFF'}</span>
                   <span style={{ flex: 1 }}>
                     <strong>{definition?.title ?? server.name}</strong>
-                    {definition ? <span className="badge" style={{ marginLeft: 6 }}>内置</span> : null}
+                    {definition ? <span className="badge" style={{ marginLeft: 6 }}>{tr("内置")}</span> : null}
                     <div className="muted" style={{ fontSize: 10 }}>
                       {definition ? `${server.name} · ${definition.description}` : `${server.command} ${server.args.join(' ')}`}
                     </div>
                   </span>
-                  <button className="btn small" onClick={() => void toggleServer(server)}>{server.enabled ? '停用' : '启用'}</button>
+                  <button className="btn small" onClick={() => void toggleServer(server)}>{server.enabled ? tr("停用") : tr("启用")}</button>
                   <button className="btn small" onClick={() => void discover(server)} disabled={checking === server.id}>
-                    {checking === server.id ? <Loader2 size={11} className="spin" /> : <RefreshCw size={11} />} 发现工具
-                  </button>
+                    {checking === server.id ? <Loader2 size={11} className="spin" /> : <RefreshCw size={11} />}{tr(" 发现工具 ")}</button>
                   {definition ? null : (
-                    <button className="icon-btn" onClick={() => void remove(server)} title="删除"><Trash2 size={12} /></button>
+                    <button className="icon-btn" onClick={() => void remove(server)} title={tr("删除")}><Trash2 size={12} /></button>
                   )}
                 </div>
                 {definition ? (
@@ -273,16 +270,15 @@ export function McpTool() {
                     {definition.kind === 'web' ? (
                       <details>
                         <summary className="muted" style={{ fontSize: 10, cursor: 'pointer' }}>
-                          高级：限制可访问域名（可选；不填=允许所有公网地址）
-                        </summary>
-                        <div className="muted" style={{ fontSize: 10, margin: '4px 0' }}>内网与回环地址始终拦截。</div>
+                          {tr(" 高级：限制可访问域名（可选；不填=允许所有公网地址） ")}</summary>
+                        <div className="muted" style={{ fontSize: 10, margin: '4px 0' }}>{tr("内网与回环地址始终拦截。")}</div>
                         {configBody}
                       </details>
                     ) : (
                       <>
                         <div className="muted" style={{ fontSize: 10, marginBottom: 4 }}>
                           {definition.argsLabel}
-                          {definition.kind === 'git' ? '（绝对路径；未配置时 Agent 无法读取仓库）' : '（绝对路径；未配置时 Agent 无法访问文件）'}
+                          {definition.kind === 'git' ? tr("（绝对路径；未配置时 Agent 无法读取仓库）") : tr("（绝对路径；未配置时 Agent 无法访问文件）")}
                         </div>
                         {configBody}
                       </>
@@ -306,7 +302,7 @@ export function McpTool() {
         </div>
         <details className="panel agent-catalog" data-testid="agent-tool-catalog" open>
           <summary className="panel-head">
-            Agent 工具目录 <span className="muted">（只读 · {catalog.length} 个）</span>
+            {tr(" Agent 工具目录 ")}<span className="muted">{tr("（只读 · ")}{catalog.length}{tr(" 个）")}</span>
           </summary>
           <div className="agent-catalog-body">
             <div className="agent-catalog-bar">
@@ -315,15 +311,15 @@ export function McpTool() {
                 <input
                   value={toolQuery}
                   onChange={(e) => setToolQuery(e.target.value)}
-                  placeholder="按工具名、说明或分组过滤，例如 run_sql"
-                  aria-label="过滤 Agent 工具"
+                  placeholder={tr("按工具名、说明或分组过滤，例如 run_sql")}
+                  aria-label={tr("过滤 Agent 工具")}
                 />
               </div>
               <span className="muted" style={{ fontSize: 11 }}>
                 {catalogGroups.reduce((sum, group) => sum + group.entries.length, 0)} / {catalog.length}
               </span>
             </div>
-            {!catalogGroups.length ? <div className="dash-empty">没有匹配的工具。</div> : null}
+            {!catalogGroups.length ? <div className="dash-empty">{tr("没有匹配的工具。")}</div> : null}
             {catalogGroups.map((group) => (
               <div key={group.id} className="agent-catalog-group">
                 <div className="agent-catalog-group-head">
@@ -342,8 +338,7 @@ export function McpTool() {
               </div>
             ))}
             <div className="muted" style={{ fontSize: 10 }}>
-              这里只展示，不能逐个启停。可用性由权限模式（只读 / 询问 / 自动 / 全自动）、连接只读标记与上面的功能总开关决定；这些是第一方 Agent 工具，与上方的 MCP Server 无关。
-            </div>
+              {tr(" 这里只展示，不能逐个启停。可用性由权限模式（只读 / 询问 / 自动 / 全自动）、连接只读标记与上面的功能总开关决定；这些是第一方 Agent 工具，与上方的 MCP Server 无关。 ")}</div>
           </div>
         </details>
 

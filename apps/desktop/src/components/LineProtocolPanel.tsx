@@ -4,6 +4,7 @@ import type { ConnectionConfig } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp } from '../store';
 import { Modal, Spinner } from './ui';
+import { t as tr } from '../i18n';
 
 const SAMPLE = 'cpu,host=a value=1.0 1700000000000000000\ncpu,host=b value=2.0 1700000060000000000';
 
@@ -27,18 +28,18 @@ export function LineProtocolPanel({
   const submit = async () => {
     const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     if (!lines.length) {
-      setError('至少需要一行行协议');
+      setError(tr("至少需要一行行协议"));
       return;
     }
     setRunning(true);
     setError(null);
     try {
       const { result } = await api.writeLineProtocol({ connectionId: connection.id, database, lines });
-      notify('success', '已写入时序数据', `${result.written} 行`);
+      notify('success', tr("已写入时序数据"), tr("{0} 行", [result.written]));
       onDone?.();
       onClose();
     } catch (err: any) {
-      setError(err?.message ?? '写入失败');
+      setError(err?.message ?? tr("写入失败"));
     } finally {
       setRunning(false);
     }
@@ -46,22 +47,20 @@ export function LineProtocolPanel({
 
   return (
     <Modal
-      title="写入行协议"
+      title={tr("写入行协议")}
       icon={<FilePlus size={15} />}
       onClose={onClose}
       wide
       footer={
         <>
-          <button className="btn" onClick={onClose} disabled={running}>取消</button>
+          <button className="btn" onClick={onClose} disabled={running}>{tr("取消")}</button>
           <button className="btn primary" onClick={() => void submit()} disabled={running} data-testid="line-protocol-submit">
-            {running ? <Spinner /> : null} 写入
-          </button>
+            {running ? <Spinner /> : null}{tr(" 写入 ")}</button>
         </>
       }
     >
       <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>
-        InfluxDB 的 SQL 接口只读；这里按行协议写入，格式 <code>measurement,tag=v field=v 时间戳</code>，时间戳用纳秒。
-      </div>
+        {tr(" InfluxDB 的 SQL 接口只读；这里按行协议写入，格式 ")}<code>measurement,tag=v field=v timestamp</code>{tr("，时间戳用纳秒。 ")}</div>
       <textarea
         className="textarea grow"
         value={text}

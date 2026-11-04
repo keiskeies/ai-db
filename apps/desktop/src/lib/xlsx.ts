@@ -1,4 +1,5 @@
 import { rowsToCsv } from './importConvert';
+import { t as tr } from '../i18n';
 
 async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
   const bytes = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
@@ -16,7 +17,7 @@ async function unzip(buffer: ArrayBuffer): Promise<Map<string, Uint8Array>> {
       break;
     }
   }
-  if (eocd < 0) throw new Error('不是有效的 xlsx（缺少 ZIP 目录）');
+  if (eocd < 0) throw new Error(tr("不是有效的 xlsx（缺少 ZIP 目录）"));
   const count = view.getUint16(eocd + 10, true);
   let offset = view.getUint32(eocd + 16, true);
   const files = new Map<string, Uint8Array>();
@@ -71,10 +72,10 @@ export async function xlsxToCsv(buffer: ArrayBuffer): Promise<string> {
     return data ? new TextDecoder().decode(data) : '';
   };
   const sheetName = firstSheetPath(files, textOf);
-  if (!sheetName) throw new Error('xlsx 里没有工作表');
+  if (!sheetName) throw new Error(tr("xlsx 里没有工作表"));
   const parser = new DOMParser();
   const sheet = parser.parseFromString(textOf(sheetName), 'application/xml');
-  if (sheet.querySelector('parsererror')) throw new Error('xlsx 工作表解析失败');
+  if (sheet.querySelector('parsererror')) throw new Error(tr("xlsx 工作表解析失败"));
   const shared = parser.parseFromString(textOf('xl/sharedStrings.xml') || '<sst/>', 'application/xml');
   const sharedStrings = [...shared.getElementsByTagName('si')].map((si) => [...si.getElementsByTagName('t')].map((node) => node.textContent ?? '').join(''));
   const rows: string[][] = [];
@@ -98,7 +99,7 @@ export async function xlsxToCsv(buffer: ArrayBuffer): Promise<string> {
     }
     if (cells.some((cell) => cell !== '')) rows.push(cells);
   }
-  if (!rows.length) throw new Error('xlsx 工作表没有数据');
+  if (!rows.length) throw new Error(tr("xlsx 工作表没有数据"));
   const width = Math.max(...rows.map((row) => row.length));
   return rowsToCsv(rows.map((row) => [...row, ...Array.from({ length: width - row.length }, () => '')]));
 }

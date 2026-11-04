@@ -1,438 +1,192 @@
-export type Locale = 'zh' | 'en';
+import { APP_LOCALES, isRtlLocale, normalizeLocale, type AppLocale } from '@aidb/core';
+import { en as legacyEn, zh as legacyZh } from './i18n/legacy';
+import ar from './i18n/locales/ar.json';
+import de from './i18n/locales/de.json';
+import en from './i18n/locales/en.json';
+import es from './i18n/locales/es.json';
+import fr from './i18n/locales/fr.json';
+import hi from './i18n/locales/hi.json';
+import id from './i18n/locales/id.json';
+import it from './i18n/locales/it.json';
+import ja from './i18n/locales/ja.json';
+import ko from './i18n/locales/ko.json';
+import nl from './i18n/locales/nl.json';
+import pl from './i18n/locales/pl.json';
+import ptBR from './i18n/locales/pt-BR.json';
+import ru from './i18n/locales/ru.json';
+import th from './i18n/locales/th.json';
+import tr from './i18n/locales/tr.json';
+import uk from './i18n/locales/uk.json';
+import vi from './i18n/locales/vi.json';
+import zhTW from './i18n/locales/zh-TW.json';
 
-const zh = {
-  appName: 'AiDB Studio',
-  connections: '连接',
-  newConnection: '新建连接',
-  searchConnections: '搜索连接或表…',
-  noConnections: '还没有连接',
-  newQuery: '新建查询',
-  query: '查询',
-  data: '数据',
-  design: '设计',
-  welcome: '欢迎',
-  settings: '设置',
-  agent: 'AI 助手',
-  memory: '记忆',
-  audit: '审计',
-  refresh: '刷新',
-  close: '关闭',
-  cancel: '取消',
-  save: '保存',
-  delete: '删除',
-  edit: '编辑',
-  apply: '执行',
-  preview: '预览',
-  run: '运行',
-  format: '格式化',
-  explain: '执行计划',
-  export: '导出',
-  import: '导入',
-  history: '历史',
-  filter: 'WHERE 过滤',
-  rows: '行',
-  page: '页',
-  total: '共',
-  addRow: '新增行',
-  columns: '列',
-  indexes: '索引',
-  nullable: '可空',
-  primaryKey: '主键',
-  autoIncrement: '自增',
-  defaultValue: '默认值',
-  type: '类型',
-  name: '名称',
-  status: '状态',
-  connected: '已连接',
-  offline: '未连接',
-  readonly: '只读',
-  test: '测试连接',
-  testing: '测试中…',
-  saved: '已保存',
-  failed: '失败',
-  copy: '复制',
-  copied: '已复制',
-  emptyAgentTitle: 'AI 数据库搭档',
-  emptyAgentHint: '用自然语言查询、修改结构、排查问题。所有工具调用都可见、可审批、可审计。',
-  newSession: '新会话',
-  sessions: '会话',
-  executionDetail: '执行详情',
-  hideExecutionDetail: '收起执行详情',
-  searchSessions: '搜索会话…',
-  rename: '重命名',
-  renameHint: '回车保存，Esc 取消',
-  renameEmpty: '标题不能为空',
-  send: '发送',
-  stop: '停止',
-  approval: '需要授权',
-  allowOnce: '仅此一次',
-  allowSession: '本会话允许',
-  allowAlways: '始终允许',
-  deny: '拒绝',
-  permission: '权限',
-  readonlyMode: '只读',
-  askMode: '询问',
-  autoMode: '自动',
-  fullMode: '全自动',
-  thinking: '思考过程',
-  toolsUsed: '工具调用',
-  plan: '计划',
-  completed: '已完成',
-  aborted: '已中止',
-  timedOut: '已超时（可继续）',
-  noResults: '没有结果',
-  messages: '消息',
-  results: '结果',
-  executionPlan: '执行计划',
-  queryPlaceholder: '输入 SQL，Ctrl/Cmd + Enter 执行',
-  welcomeTitle: '更聪明的数据库工作台',
-  welcomeSubtitle: '连接、浏览、编辑数据库，或让 AI 助手直接完成工作。',
-  openDemo: '打开示例库',
-  askAI: '问问 AI',
-  recent: '最近',
-  commandPalette: '命令面板',
-  typeCommand: '输入命令或搜索…',
-  appearance: '外观',
-  editor: '编辑器',
-  agentSettings: 'Agent',
-  bridge: 'Bridge',
-  dataSettings: '数据',
-  about: '关于',
-  theme: '主题',
-  dark: '深色',
-  light: '浅色',
-  language: '语言',
-  defaultLimit: '默认返回行数',
-  queryTimeout: '查询超时（毫秒）',
-  allowMulti: '允许多语句',
-  autoLimit: '自动追加 LIMIT',
-  provider: '模型提供方',
-  model: '模型',
-  baseUrl: 'Base URL',
-  apiKey: 'API Key',
-  apiKeyHint: '留空则保持不变',
-  maxSteps: '最大工具步数',
-  autoMemory: '自动记忆',
-  snapshotBeforeWrite: '写操作前自动备份',
-  pairing: '移动端配对',
-  generateCode: '生成配对码',
-  devices: '已配对设备',
-  revoke: '吊销',
-  noDevices: '暂无设备',
-  addMemory: '添加记忆',
-  searchMemory: '搜索记忆',
-  pinned: '置顶',
-  importance: '重要度',
-  kind: '类型',
-  scope: '作用域',
-  content: '内容',
-  emptyMemory: '还没有记忆。Agent 会在对话中自动沉淀事实与偏好。',
-  runSql: '运行 SQL',
-  selectTable: '选择一张表开始浏览数据',
-  newTable: '新建表',
-  addColumn: '添加列',
-  ddlPreview: 'DDL 预览',
-  importCsv: '导入 CSV',
-  chooseFile: '选择文件',
-  exporting: '导出中…',
-  loading: '加载中…',
-  error: '出错了',
-  retry: '重试',
-  tokenInvalid: 'Bridge 访问令牌无效',
-  tokenHint: '请从桌面应用或 Bridge 启动日志中获取令牌。',
-  connectionName: '连接名称',
-  engine: '数据库类型',
-  filePath: 'SQLite 文件路径',
-  host: '主机',
-  port: '端口',
-  database: '数据库 / 文件',
-  username: '用户名',
-  password: '密码',
-  environment: '环境',
-  prod: '生产',
-  staging: '预发',
-  dev: '开发',
-  color: '颜色',
-  note: '备注',
-  ssh: 'SSH 隧道',
-  enable: '启用',
-  keyFile: '私钥路径',
-  authByPassword: '密码',
-  authByKey: '私钥',
-  sqliteHint: '示例：D:/data/app.sqlite',
-  confirmDelete: '确认删除',
-  confirmDeleteTable: '确认删除数据行',
-  dangerZone: '危险操作',
-  rowsAffected: '影响行数',
-  duration: '耗时',
-  toolArgs: '参数',
-  toolResult: '结果',
-  denied: '已拒绝',
-  waitingApproval: '等待授权…',
-  memoriesUsed: '本轮使用记忆',
-  modelLocal: '本地离线',
-  composerHint: '描述你的目标，或输入 SQL…',
-  attachTable: '引用表',
-  slashCommands: '快捷指令',
-  memoryScopeGlobal: '全局',
-  memoryScopeConnection: '连接',
-  memoryScopeDatabase: '数据库',
-  memoryScopeTable: '表',
-  bridgeUrl: 'Bridge 地址',
-  startPairing: '为移动端配对',
-  pairCode: '配对码',
-  pairHint: '在移动端输入 Bridge 地址与配对码，5 分钟内有效。',
-  savedSettings: '设置已保存',
-  sqlite: 'SQLite',
-  mysql: 'MySQL',
-  postgresql: 'PostgreSQL',
-  editConnection: '编辑连接',
-  connectionTestPassed: '连接成功',
-  connectionTestFailed: '连接失败',
-  noSchema: '未读取到结构',
-  command_new_connection: '新建连接',
-  command_new_query: '新建查询',
-  command_refresh: '刷新结构',
-  command_toggle_agent: '切换 AI 面板',
-  command_memory: '打开记忆',
-  command_settings: '打开设置',
-  command_backup: '备份当前数据库',
-  command_theme: '切换主题',
-  welcome_tip: '提示：按 ⌘K / Ctrl+K 打开命令面板',
-  offlineNotice: 'Bridge 未连接，正在重试…',
-  loginLocal: '本地离线模式',
-  providerLocal: 'Local（离线）',
-  providerAnthropic: 'Anthropic',
-  providerOpenAI: 'OpenAI 兼容',
-  /** 输入卡下方的常驻风险提示：只提醒「可能出错、请核对」，不做任何保证类承诺。 */
-  aiDisclaimer: 'AI 可能出错，重要结论请自行核对',
-  /** 审批弹窗里的说明：陈述权限与留痕这件事本身，不承诺「一定安全/均可审计」。 */
-  transactionNote: '本次调用将按当前权限档位执行，并记入审计日志。',
-  agentError: 'Agent 出错',
-  memoryAdded: '记忆已保存',
-  schemaSummary: '结构',
-  rowEstimate: '约 {n} 行',
-  table: '表',
-  view: '视图',
+export type Locale = AppLocale;
+export type I18nKey = keyof typeof legacyZh;
+export type I18nVars = Record<string, string | number | null | undefined> | Array<string | number | null | undefined>;
+
+export const LOCALES = APP_LOCALES;
+
+const catalogs: Record<Exclude<AppLocale, 'zh-CN'>, Record<string, string>> = {
+  en: en as Record<string, string>,
+  'zh-TW': zhTW as Record<string, string>,
+  ja: ja as Record<string, string>,
+  ko: ko as Record<string, string>,
+  de: de as Record<string, string>,
+  fr: fr as Record<string, string>,
+  es: es as Record<string, string>,
+  'pt-BR': ptBR as Record<string, string>,
+  it: it as Record<string, string>,
+  ru: ru as Record<string, string>,
+  ar: ar as Record<string, string>,
+  hi: hi as Record<string, string>,
+  id: id as Record<string, string>,
+  vi: vi as Record<string, string>,
+  th: th as Record<string, string>,
+  tr: tr as Record<string, string>,
+  nl: nl as Record<string, string>,
+  pl: pl as Record<string, string>,
+  uk: uk as Record<string, string>,
 };
 
-const en: Record<keyof typeof zh, string> = {
-  appName: 'AiDB Studio',
-  connections: 'Connections',
-  newConnection: 'New connection',
-  searchConnections: 'Search connections or tables…',
-  noConnections: 'No connections yet',
-  newQuery: 'New query',
-  query: 'Query',
-  data: 'Data',
-  design: 'Design',
-  welcome: 'Welcome',
-  settings: 'Settings',
-  agent: 'AI Assistant',
-  memory: 'Memory',
-  audit: 'Audit',
-  refresh: 'Refresh',
-  close: 'Close',
-  cancel: 'Cancel',
-  save: 'Save',
-  delete: 'Delete',
-  edit: 'Edit',
-  apply: 'Apply',
-  preview: 'Preview',
-  run: 'Run',
-  format: 'Format',
-  explain: 'Explain',
-  export: 'Export',
-  import: 'Import',
-  history: 'History',
-  filter: 'WHERE filter',
-  rows: 'rows',
-  page: 'Page',
-  total: 'Total',
-  addRow: 'Add row',
-  columns: 'Columns',
-  indexes: 'Indexes',
-  nullable: 'Nullable',
-  primaryKey: 'PK',
-  autoIncrement: 'Auto',
-  defaultValue: 'Default',
-  type: 'Type',
-  name: 'Name',
-  status: 'Status',
-  connected: 'Connected',
-  offline: 'Offline',
-  readonly: 'Readonly',
-  test: 'Test connection',
-  testing: 'Testing…',
-  saved: 'Saved',
-  failed: 'Failed',
-  copy: 'Copy',
-  copied: 'Copied',
-  emptyAgentTitle: 'Your AI database partner',
-  emptyAgentHint: 'Query, change schemas and debug in natural language. Every tool call is visible, approvable and auditable.',
-  newSession: 'New session',
-  sessions: 'Sessions',
-  executionDetail: 'Execution detail',
-  hideExecutionDetail: 'Hide execution detail',
-  searchSessions: 'Search sessions…',
-  rename: 'Rename',
-  renameHint: 'Enter to save, Esc to cancel',
-  renameEmpty: 'Title cannot be empty',
-  send: 'Send',
-  stop: 'Stop',
-  approval: 'Approval required',
-  allowOnce: 'Allow once',
-  allowSession: 'Allow this session',
-  allowAlways: 'Always allow',
-  deny: 'Deny',
-  permission: 'Permission',
-  readonlyMode: 'Read-only',
-  askMode: 'Ask',
-  autoMode: 'Auto',
-  fullMode: 'Full auto',
-  thinking: 'Thinking',
-  toolsUsed: 'Tool calls',
-  plan: 'Plan',
-  completed: 'Completed',
-  aborted: 'Aborted',
-  timedOut: 'Timed out (can continue)',
-  noResults: 'No results',
-  messages: 'Messages',
-  results: 'Results',
-  executionPlan: 'Execution plan',
-  queryPlaceholder: 'Type SQL. Ctrl/Cmd + Enter to run',
-  welcomeTitle: 'A smarter database workbench',
-  welcomeSubtitle: 'Connect, browse and edit databases — or let the AI agent do the work.',
-  openDemo: 'Open demo database',
-  askAI: 'Ask the AI',
-  recent: 'Recent',
-  commandPalette: 'Command palette',
-  typeCommand: 'Type a command or search…',
-  appearance: 'Appearance',
-  editor: 'Editor',
-  agentSettings: 'Agent',
-  bridge: 'Bridge',
-  dataSettings: 'Data',
-  about: 'About',
-  theme: 'Theme',
-  dark: 'Dark',
-  light: 'Light',
-  language: 'Language',
-  defaultLimit: 'Default row limit',
-  queryTimeout: 'Query timeout (ms)',
-  allowMulti: 'Allow multiple statements',
-  autoLimit: 'Auto append LIMIT',
-  provider: 'Provider',
-  model: 'Model',
-  baseUrl: 'Base URL',
-  apiKey: 'API Key',
-  apiKeyHint: 'Leave blank to keep current key',
-  maxSteps: 'Max tool steps',
-  autoMemory: 'Automatic memory',
-  snapshotBeforeWrite: 'Snapshot before writes',
-  pairing: 'Mobile pairing',
-  generateCode: 'Generate pairing code',
-  devices: 'Paired devices',
-  revoke: 'Revoke',
-  noDevices: 'No devices',
-  addMemory: 'Add memory',
-  searchMemory: 'Search memory',
-  pinned: 'Pinned',
-  importance: 'Importance',
-  kind: 'Kind',
-  scope: 'Scope',
-  content: 'Content',
-  emptyMemory: 'No memories yet. The agent will capture facts and preferences as you chat.',
-  runSql: 'Run SQL',
-  selectTable: 'Select a table to browse its data',
-  newTable: 'New table',
-  addColumn: 'Add column',
-  ddlPreview: 'DDL preview',
-  importCsv: 'Import CSV',
-  chooseFile: 'Choose file',
-  exporting: 'Exporting…',
-  loading: 'Loading…',
-  error: 'Something went wrong',
-  retry: 'Retry',
-  tokenInvalid: 'Invalid Bridge token',
-  tokenHint: 'Get the token from the desktop app or the Bridge startup log.',
-  connectionName: 'Connection name',
-  engine: 'Engine',
-  filePath: 'SQLite file path',
-  host: 'Host',
-  port: 'Port',
-  database: 'Database / file',
-  username: 'Username',
-  password: 'Password',
-  environment: 'Environment',
-  prod: 'Production',
-  staging: 'Staging',
-  dev: 'Development',
-  color: 'Color',
-  note: 'Note',
-  ssh: 'SSH tunnel',
-  enable: 'Enable',
-  keyFile: 'Private key path',
-  authByPassword: 'Password',
-  authByKey: 'Private key',
-  sqliteHint: 'e.g. D:/data/app.sqlite',
-  confirmDelete: 'Confirm deletion',
-  confirmDeleteTable: 'Delete row',
-  dangerZone: 'Danger zone',
-  rowsAffected: 'Rows affected',
-  duration: 'Duration',
-  toolArgs: 'Arguments',
-  toolResult: 'Result',
-  denied: 'Denied',
-  waitingApproval: 'Waiting for approval…',
-  memoriesUsed: 'Memories used',
-  modelLocal: 'Local offline',
-  composerHint: 'Describe your goal, or paste SQL…',
-  attachTable: 'Attach table',
-  slashCommands: 'Slash commands',
-  memoryScopeGlobal: 'Global',
-  memoryScopeConnection: 'Connection',
-  memoryScopeDatabase: 'Database',
-  memoryScopeTable: 'Table',
-  bridgeUrl: 'Bridge URL',
-  startPairing: 'Pair a mobile device',
-  pairCode: 'Pairing code',
-  pairHint: 'Enter the Bridge address and code on mobile. Valid for 5 minutes.',
-  savedSettings: 'Settings saved',
-  sqlite: 'SQLite',
-  mysql: 'MySQL',
-  postgresql: 'PostgreSQL',
-  editConnection: 'Edit connection',
-  connectionTestPassed: 'Connection OK',
-  connectionTestFailed: 'Connection failed',
-  noSchema: 'No schema loaded',
-  command_new_connection: 'New connection',
-  command_new_query: 'New query',
-  command_refresh: 'Refresh schema',
-  command_toggle_agent: 'Toggle AI panel',
-  command_memory: 'Open memory',
-  command_settings: 'Open settings',
-  command_backup: 'Backup current database',
-  command_theme: 'Toggle theme',
-  welcome_tip: 'Tip: press ⌘K / Ctrl+K for the command palette',
-  offlineNotice: 'Bridge disconnected, retrying…',
-  loginLocal: 'Local offline mode',
-  providerLocal: 'Local (offline)',
-  providerAnthropic: 'Anthropic',
-  providerOpenAI: 'OpenAI compatible',
-  aiDisclaimer: 'AI can make mistakes — verify important results',
-  transactionNote: 'This call runs under the current permission mode and is written to the audit log.',
-  agentError: 'Agent error',
-  memoryAdded: 'Memory saved',
-  schemaSummary: 'Schema',
-  rowEstimate: '~{n} rows',
-  table: 'Table',
-  view: 'View',
-};
+const legacyZhMap = legacyZh as Record<string, string>;
+const legacyEnMap = legacyEn as Record<string, string>;
+const CJK = /[\u4e00-\u9fff]/;
 
-export const dictionaries = { zh, en };
-export type I18nKey = keyof typeof zh;
+const LOCALE_CACHE_KEY = 'aidb.locale';
 
-export function translate(locale: Locale, key: I18nKey): string {
-  return (dictionaries[locale] ?? zh)[key] ?? zh[key] ?? key;
+function readCachedLocale(): AppLocale {
+  try {
+    return normalizeLocale(localStorage.getItem(LOCALE_CACHE_KEY) ?? 'en');
+  } catch {
+    return 'en';
+  }
+}
+
+/**
+ * 模块级常量（图表类型、引擎分组、工具卡片）在 import 时就会翻译一次，
+ * 所以语言要先于设置到达：用 localStorage 缓存上次的选择。
+ */
+let currentLocale: AppLocale = readCachedLocale();
+
+export function getI18nLocale(): AppLocale {
+  return currentLocale;
+}
+
+export function setI18nLocale(next: unknown): AppLocale {
+  currentLocale = normalizeLocale(next);
+  try {
+    localStorage.setItem(LOCALE_CACHE_KEY, currentLocale);
+  } catch {
+    /* 隐私模式写不进去也不影响使用 */
+  }
+  if (typeof document !== 'undefined') {
+    document.documentElement.lang = currentLocale;
+    document.documentElement.dir = isRtlLocale(currentLocale) ? 'rtl' : 'ltr';
+  }
+  return currentLocale;
+}
+
+setI18nLocale(currentLocale);
+
+function lookupRaw(locale: AppLocale, message: string): string | undefined {
+  if (locale !== 'zh-CN') {
+    const catalog = catalogs[locale];
+    const hit = catalog?.[message];
+    if (hit !== undefined) return hit;
+  }
+  if (message in legacyZhMap) {
+    if (locale === 'zh-CN' || locale === 'zh-TW') return legacyZhMap[message];
+    if (locale === 'en') return legacyEnMap[message];
+  }
+  return undefined;
+}
+
+function lookupWhitespace(locale: AppLocale, message: string): string | undefined {
+  const direct = lookupRaw(locale, message);
+  if (direct !== undefined) return direct;
+  const core = message.trim();
+  if (!core || core === message) return undefined;
+  const hit = lookupRaw(locale, core);
+  if (hit === undefined) return undefined;
+  const lead = message.slice(0, message.indexOf(core));
+  const trail = message.slice(message.indexOf(core) + core.length);
+  return lead + hit + trail;
+}
+
+function interpolate(text: string, vars?: I18nVars): string {
+  if (!vars) return text;
+  return text.replace(/\{(\w+)\}/g, (whole, key: string) => {
+    const value = Array.isArray(vars) ? vars[Number(key)] : vars[key];
+    return value === undefined || value === null ? '' : String(value);
+  });
+}
+
+const COUNT_UNITS = [
+  '个对象',
+  '个数据库',
+  '个库',
+  '个会话',
+  '个账户',
+  '张有行数估算',
+  '张无主键',
+  '张卡片',
+  '张视图',
+  '张表',
+  '条记忆',
+  '次工具',
+  '个文件',
+  '个模型',
+  '条语句',
+  '条配置',
+  '行已写入',
+  '分钟前',
+  '小时前',
+  '天前',
+  '行',
+  '列',
+  '条',
+  '个',
+  '次',
+  '张',
+  '项',
+];
+const escapeRe = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function phraseFallback(locale: AppLocale, message: string): string | undefined {
+  if (!CJK.test(message)) return undefined;
+  let out = message;
+  for (const unit of COUNT_UNITS) {
+    const re = new RegExp(`(\\d[\\d,.]*)\\s*${escapeRe(unit)}`, 'g');
+    if (!re.test(out)) continue;
+    re.lastIndex = 0;
+    const unitText =
+      lookupWhitespace(locale, unit) ??
+      (locale !== 'zh-CN' ? lookupWhitespace('en', unit) : undefined) ??
+      unit;
+    out = out.replace(re, (_whole, count: string) => `${count} ${unitText.trim()}`);
+  }
+  return out === message ? undefined : out;
+}
+
+export function translate(locale: AppLocale | string, message: string, vars?: I18nVars): string {
+  const active = normalizeLocale(locale);
+  if (!message) return message;
+  if (active === 'zh-CN') return interpolate(lookupWhitespace(active, message) ?? message, vars);
+
+  let out = lookupWhitespace(active, message);
+  if (out === undefined && active !== 'zh-TW') {
+    out = lookupWhitespace('en', message);
+  }
+  if (out === undefined && active === 'zh-TW') {
+    out = message;
+  }
+  if (out === undefined) {
+    out = phraseFallback(active, message);
+  }
+  return interpolate(out ?? message, vars);
+}
+
+/** 当前界面语言的翻译入口。语言切换后需重新渲染或重新加载以刷新模块级文案。 */
+export function t(message: string, vars?: I18nVars): string {
+  return translate(currentLocale, message, vars);
 }

@@ -39,22 +39,24 @@ import {
 } from 'lucide-react';
 import type { AgentMessageBlock, PermissionMode, QuestionSuggestion, Risk, TableInfo, ToolResult } from '@aidb/core';
 import { COMMANDS, engineMeta, suggestionLabel } from '@aidb/core';
+import { getI18nLocale } from '../i18n';
 import { getModelProfile, supportsInput } from '@aidb/core';
 import { api, attachmentObjectUrl, type StoredAttachment } from '../lib/api';
 import { deliverExport } from '../lib/exportDelivery';
-import { desktopBridge } from '../lib/desktop';
+import { desktopBridge, desktopDialogUi } from '../lib/desktop';
 import { formatBytes, formatCell, formatDuration, formatRelative } from '../lib/format';
 import { useApp, type LiveTool, type LiveTurn } from '../store';
 import { askConfirm } from './AskDialog';
 import { ChartView, type ChartSpec } from './ChartView';
 import { DatabaseSelect } from './DatabaseSelect';
 import { CopyButton, Markdown, Option, RiskBadge, Select } from './ui';
+import { t as tr } from '../i18n';
 
 const MODE_OPTIONS: Array<{ value: PermissionMode; zh: string; en: string }> = [
-  { value: 'readonly', zh: '只读', en: 'Read-only' },
-  { value: 'ask', zh: '询问', en: 'Ask' },
-  { value: 'auto', zh: '自动', en: 'Auto' },
-  { value: 'full', zh: '全自动', en: 'Full auto' },
+  { value: 'readonly', zh: tr("只读"), en: 'Read-only' },
+  { value: 'ask', zh: tr("询问"), en: 'Ask' },
+  { value: 'auto', zh: tr("自动"), en: 'Auto' },
+  { value: 'full', zh: tr("全自动"), en: 'Full auto' },
 ];
 
 /** 与 Bridge 每轮最多 4 张的限制保持一致。 */
@@ -75,23 +77,23 @@ function readAsBase64(file: File): Promise<string> {
 type SlashOption = { key: string; label: string; kind: 'command' | 'preset'; commandId?: string };
 
 const SLASH: Array<{ key: string; label: string; prompt: string | ((tables: TableInfo[]) => string) }> = [
-  { key: '/init', label: '初始化库文档（生成 AI_DB.md）', prompt: '' },
-  { key: '/schema', label: '梳理库结构', prompt: '生成当前库的结构摘要：主要表、关系、字段含义与可疑点。' },
-  { key: '/audit', label: '数据库体检', prompt: '对当前数据库做一次体检：缺少主键、外键缺索引、重复索引与空表，并给出修复 SQL。' },
-  { key: '/quality', label: '数据质量', prompt: (tables) => (tables[0] ? `检查 ${tables[0].name} 的空值、空串和重复主键，并给出排查 SQL。` : '检查当前表的空值、空串和重复主键，并给出排查 SQL。') },
-  { key: '/chart', label: '画图分析', prompt: (tables) => {
+  { key: '/init', label: tr("初始化库文档（生成 AI_DB.md）"), prompt: '' },
+  { key: '/schema', label: tr("梳理库结构"), prompt: tr("生成当前库的结构摘要：主要表、关系、字段含义与可疑点。") },
+  { key: '/audit', label: tr("数据库体检"), prompt: tr("对当前数据库做一次体检：缺少主键、外键缺索引、重复索引与空表，并给出修复 SQL。") },
+  { key: '/quality', label: tr("数据质量"), prompt: (tables) => (tables[0] ? tr("检查 {0} 的空值、空串和重复主键，并给出排查 SQL。", [tables[0].name]) : tr("检查当前表的空值、空串和重复主键，并给出排查 SQL。")) },
+  { key: '/chart', label: tr("画图分析"), prompt: (tables) => {
       const target = tables.find((t) => (t.columns ?? []).some((c) => /(status|state|type|category|level)/i.test(c.name))) ?? tables[0];
-      if (!target) return '按第一个分组列统计并画柱状图。';
+      if (!target) return tr("按第一个分组列统计并画柱状图。");
       const dimension = (target.columns ?? []).find((c) => /(status|state|type|category|level)/i.test(c.name));
       return dimension
-        ? `按 ${dimension.name} 统计 ${target.name} 的记录数并画柱状图。`
-        : `统计 ${target.name} 近 12 个月的记录数趋势并画折线图。`;
+        ? tr("按 {0} 统计 {1} 的记录数并画柱状图。", [dimension.name, target.name])
+        : tr("统计 {0} 近 12 个月的记录数趋势并画折线图。", [target.name]);
     } },
-  { key: '/explain', label: '解释执行计划', prompt: '解释最近一次查询的执行计划，指出瓶颈并给出优化建议。' },
-  { key: '/optimize', label: '优化 SQL', prompt: '优化当前 SQL，并给出索引建议和改写后的语句。' },
-  { key: '/backup', label: '备份数据库', prompt: '备份当前数据库。' },
-  { key: '/memory', label: '打开记忆', prompt: '' },
-  { key: '/clear', label: '清空上下文（新会话）', prompt: '' },
+  { key: '/explain', label: tr("解释执行计划"), prompt: tr("解释最近一次查询的执行计划，指出瓶颈并给出优化建议。") },
+  { key: '/optimize', label: tr("优化 SQL"), prompt: tr("优化当前 SQL，并给出索引建议和改写后的语句。") },
+  { key: '/backup', label: tr("备份数据库"), prompt: tr("备份当前数据库。") },
+  { key: '/memory', label: tr("打开记忆"), prompt: '' },
+  { key: '/clear', label: tr("清空上下文（新会话）"), prompt: '' },
 ];
 
 function statusIcon(status: LiveTool['status']) {
@@ -103,43 +105,43 @@ function statusIcon(status: LiveTool['status']) {
 
 /** 工具名的中文短标签，只在状态条和授权提示里用。 */
 const TOOL_LABELS: Record<string, string> = {
-  run_sql: 'SQL 执行',
-  run_mql: 'MongoDB 查询',
-  run_redis: 'Redis 命令',
-  run_cypher: 'Cypher 查询',
-  run_cql: 'CQL 查询',
-  run_aql: 'AQL 查询',
-  inspect_schema: '查看表结构',
-  search_objects: '搜索对象',
-  sample_rows: '抽样数据',
-  profile_column: '字段画像',
-  create_table: '新建表',
-  alter_table: '修改表结构',
-  drop_object: '删除对象',
-  manage_index: '索引调整',
-  export_result: '导出结果',
-  import_csv: '导入 CSV',
-  backup_database: '数据库备份',
-  audit_database: '数据库巡检',
-  check_data_quality: '数据质量检查',
-  generate_data: '生成测试数据',
-  transfer_data: '数据迁移',
-  render_chart: '绘制图表',
-  analyze_chart: '统计分析',
-  forecast_chart: '趋势预测',
-  schema_diff: '结构对比',
-  recon_data: '数据核对',
-  memory_search: '检索记忆',
-  memory_write: '写入记忆',
-  skill_run: '运行技能',
-  skill_worker_run: '技能进程',
-  mcp_call: 'MCP 调用',
-  mcp_list_tools: 'MCP 工具列表',
-  update_plan: '更新计划',
+  run_sql: tr("SQL 执行"),
+  run_mql: tr("MongoDB 查询"),
+  run_redis: tr("Redis 命令"),
+  run_cypher: tr("Cypher 查询"),
+  run_cql: tr("CQL 查询"),
+  run_aql: tr("AQL 查询"),
+  inspect_schema: tr("查看表结构"),
+  search_objects: tr("搜索对象"),
+  sample_rows: tr("抽样数据"),
+  profile_column: tr("字段画像"),
+  create_table: tr("新建表"),
+  alter_table: tr("修改表结构"),
+  drop_object: tr("删除对象"),
+  manage_index: tr("索引调整"),
+  export_result: tr("导出结果"),
+  import_csv: tr("导入 CSV"),
+  backup_database: tr("数据库备份"),
+  audit_database: tr("数据库巡检"),
+  check_data_quality: tr("数据质量检查"),
+  generate_data: tr("生成测试数据"),
+  transfer_data: tr("数据迁移"),
+  render_chart: tr("绘制图表"),
+  analyze_chart: tr("统计分析"),
+  forecast_chart: tr("趋势预测"),
+  schema_diff: tr("结构对比"),
+  recon_data: tr("数据核对"),
+  memory_search: tr("检索记忆"),
+  memory_write: tr("写入记忆"),
+  skill_run: tr("运行技能"),
+  skill_worker_run: tr("技能进程"),
+  mcp_call: tr("MCP 调用"),
+  mcp_list_tools: tr("MCP 工具列表"),
+  update_plan: tr("更新计划"),
 };
 
 function toolLabel(name?: string) {
-  if (!name) return '操作';
+  if (!name) return tr("操作");
   return TOOL_LABELS[name] ?? name;
 }
 
@@ -168,129 +170,129 @@ function describeTool(tool: LiveTool): ActivityState {
   switch (tool.tool) {
     case 'run_sql': {
       const verb = sql?.trim().split(/\s+/)[0]?.toLowerCase();
-      if (!verb) return mention('正在准备 SQL');
+      if (!verb) return mention(tr("正在准备 SQL"));
       if (['select', 'with', 'show', 'describe', 'desc', 'explain'].includes(verb)) {
-        return mention(table ? `正在查询 ${table} 的数据` : '正在执行查询', <Search size={11} />);
+        return mention(table ? tr("正在查询 {0} 的数据", [table]) : tr("正在执行查询"), <Search size={11} />);
       }
       if (['insert', 'update', 'delete', 'merge', 'replace'].includes(verb)) {
-        return mention(table ? `正在更新 ${table} 的数据` : '正在写入数据');
+        return mention(table ? tr("正在更新 {0} 的数据", [table]) : tr("正在写入数据"));
       }
       if (['create', 'alter', 'drop', 'truncate', 'rename'].includes(verb)) {
-        return mention(table ? `正在调整 ${table} 的结构` : '正在调整数据库结构');
+        return mention(table ? tr("正在调整 {0} 的结构", [table]) : tr("正在调整数据库结构"));
       }
-      return mention('正在执行 SQL', <Search size={11} />);
+      return mention(tr("正在执行 SQL"), <Search size={11} />);
     }
     case 'run_mql':
-      return mention(collection ? `正在查询集合 ${collection}` : '正在执行 MongoDB 查询', <Search size={11} />);
+      return mention(collection ? tr("正在查询集合 {0}", [collection]) : tr("正在执行 MongoDB 查询"), <Search size={11} />);
     case 'run_redis':
-      return mention('正在执行 Redis 命令', <Search size={11} />);
+      return mention(tr("正在执行 Redis 命令"), <Search size={11} />);
     case 'inspect_schema':
-      return mention(table ? `正在查看 ${table} 的表结构` : '正在查看数据库结构', <Database size={11} />);
+      return mention(table ? tr("正在查看 {0} 的表结构", [table]) : tr("正在查看数据库结构"), <Database size={11} />);
     case 'search_objects':
-      return mention(text(args.query) ? `正在搜索「${text(args.query)}」` : '正在搜索数据库对象', <Search size={11} />);
+      return mention(text(args.query) ? tr("正在搜索「{0}」", [text(args.query)]) : tr("正在搜索数据库对象"), <Search size={11} />);
     case 'sample_rows':
-      return mention(table ? `正在抽取 ${table} 的样例数据` : '正在抽样查看数据', <Database size={11} />);
+      return mention(table ? tr("正在抽取 {0} 的样例数据", [table]) : tr("正在抽样查看数据"), <Database size={11} />);
     case 'profile_column':
-      return mention(table && text(args.column) ? `正在分析 ${table}.${text(args.column)} 的分布` : '正在分析字段分布', <Search size={11} />);
+      return mention(table && text(args.column) ? tr("正在分析 {0}.{1} 的分布", [table, text(args.column)]) : tr("正在分析字段分布"), <Search size={11} />);
     case 'explain_sql':
-      return mention('正在解读执行计划', <Search size={11} />);
+      return mention(tr("正在解读执行计划"), <Search size={11} />);
     case 'render_chart':
       return {
         icon: <BarChart3 size={11} />,
-        label: text(args.title) ? `正在绘制「${text(args.title)}」图表` : '正在绘制图表',
+        label: text(args.title) ? tr("正在绘制「{0}」图表", [text(args.title)]) : tr("正在绘制图表"),
         tone: 'tool',
       };
     case 'analyze_chart':
-      return mention('正在计算统计指标', <BarChart3 size={11} />);
+      return mention(tr("正在计算统计指标"), <BarChart3 size={11} />);
     case 'forecast_chart':
-      return mention('正在预测趋势走向', <BarChart3 size={11} />);
+      return mention(tr("正在预测趋势走向"), <BarChart3 size={11} />);
     case 'audit_database':
-      return mention('正在巡检数据库健康度', <ShieldAlert size={11} />);
+      return mention(tr("正在巡检数据库健康度"), <ShieldAlert size={11} />);
     case 'check_data_quality':
-      return mention(table ? `正在检查 ${table} 的数据质量` : '正在检查数据质量', <ShieldAlert size={11} />);
+      return mention(table ? tr("正在检查 {0} 的数据质量", [table]) : tr("正在检查数据质量"), <ShieldAlert size={11} />);
     case 'backup_database':
-      return mention('正在备份数据库');
+      return mention(tr("正在备份数据库"));
     case 'export_result':
-      return mention('正在导出查询结果', <Download size={11} />);
+      return mention(tr("正在导出查询结果"), <Download size={11} />);
     case 'import_csv':
-      return mention(table ? `正在导入 ${table} 的数据` : '正在导入数据');
+      return mention(table ? tr("正在导入 {0} 的数据", [table]) : tr("正在导入数据"));
     case 'transfer_data':
-      return mention('正在迁移数据');
+      return mention(tr("正在迁移数据"));
     case 'memory_search':
-      return mention('正在检索相关记忆', <Brain size={11} />);
+      return mention(tr("正在检索相关记忆"), <Brain size={11} />);
     case 'memory_write':
-      return mention('正在记录长期记忆', <Brain size={11} />);
+      return mention(tr("正在记录长期记忆"), <Brain size={11} />);
     case 'skill_run':
     case 'skill_worker_run':
-      return mention(text(args.skill) ? `正在运行技能 ${text(args.skill)}` : '正在运行技能', <Zap size={11} />);
+      return mention(text(args.skill) ? tr("正在运行技能 {0}", [text(args.skill)]) : tr("正在运行技能"), <Zap size={11} />);
     case 'mcp_list_tools':
     case 'mcp_call':
-      return mention(text(args.server) ? `正在调用 MCP · ${text(args.server)}` : '正在调用 MCP 工具', <Zap size={11} />);
+      return mention(text(args.server) ? tr("正在调用 MCP · {0}", [text(args.server)]) : tr("正在调用 MCP 工具"), <Zap size={11} />);
     case 'update_plan':
-      return mention('正在调整执行计划');
+      return mention(tr("正在调整执行计划"));
     case 'begin_transaction':
     case 'commit_transaction':
     case 'rollback_transaction':
-      return mention('正在处理事务');
+      return mention(tr("正在处理事务"));
     case 'generate_data':
-      return mention('正在生成测试数据');
+      return mention(tr("正在生成测试数据"));
     case 'schema_diff':
-      return mention('正在对比数据库结构');
+      return mention(tr("正在对比数据库结构"));
     case 'recon_data':
-      return mention('正在核对数据一致性');
+      return mention(tr("正在核对数据一致性"));
     case 'list_connections':
-      return mention('正在读取连接信息');
+      return mention(tr("正在读取连接信息"));
     case 'get_query_history':
-      return mention('正在查看查询历史');
+      return mention(tr("正在查看查询历史"));
     case 'create_table':
-      return mention('正在创建数据表');
+      return mention(tr("正在创建数据表"));
     case 'alter_table':
-      return mention(table ? `正在修改 ${table} 的表结构` : '正在修改表结构');
+      return mention(table ? tr("正在修改 {0} 的表结构", [table]) : tr("正在修改表结构"));
     case 'drop_object':
-      return mention('正在删除数据库对象');
+      return mention(tr("正在删除数据库对象"));
     case 'manage_index':
-      return mention(table ? `正在调整 ${table} 的索引` : '正在调整索引');
+      return mention(table ? tr("正在调整 {0} 的索引", [table]) : tr("正在调整索引"));
     case 'vector_search':
-      return mention('正在执行向量检索');
+      return mention(tr("正在执行向量检索"));
     case 'search_index':
-      return mention('正在检索索引');
+      return mention(tr("正在检索索引"));
     case 'upsert_document':
     case 'delete_documents':
     case 'import_documents':
-      return mention('正在写入文档数据');
+      return mention(tr("正在写入文档数据"));
     default:
-      return mention(`正在执行 ${toolLabel(tool.tool)}`);
+      return mention(tr("正在执行 {0}", [toolLabel(tool.tool)]));
   }
 }
 
 /** 当前这一秒 AI 正在做什么：运行中工具优先，其次思考/写作阶段。 */
 function agentActivity(live: LiveTurn): ActivityState {
   if (live.status === 'done') {
-    return { icon: <Check size={11} />, label: '已完成，正在整理结果', tone: 'answer' };
+    return { icon: <Check size={11} />, label: tr("已完成，正在整理结果"), tone: 'answer' };
   }
   if (live.status === 'awaiting') {
     const waiting = live.tools.find((tool) => tool.status === 'awaiting');
-    return { icon: <ShieldAlert size={11} />, label: `等待你确认「${toolLabel(waiting?.tool)}」操作`, tone: 'wait' };
+    return { icon: <ShieldAlert size={11} />, label: tr("等待你确认「{0}」操作", [toolLabel(waiting?.tool)]), tone: 'wait' };
   }
   const running = [...live.tools].reverse().find((tool) => tool.status === 'running');
   if (running) return describeTool(running);
   if (live.text) {
     return {
       icon: <Sparkles size={11} />,
-      label: live.tools.length ? '正在梳理查询结果，撰写回答' : '正在组织语言，撰写回答',
+      label: live.tools.length ? tr("正在梳理查询结果，撰写回答") : tr("正在组织语言，撰写回答"),
       tone: 'answer',
     };
   }
   if (live.thinking) {
     return {
       icon: <Brain size={11} />,
-      label: live.tools.length ? '正在阅读执行结果，思考下一步' : '正在理解你的问题，梳理思路',
+      label: live.tools.length ? tr("正在阅读执行结果，思考下一步") : tr("正在理解你的问题，梳理思路"),
       tone: 'think',
     };
   }
-  if (live.plan.length) return { icon: <ListChecks size={11} />, label: '正在拆解任务，规划步骤', tone: 'think' };
-  if (live.tools.length) return { icon: <Sparkles size={11} />, label: '正在核对执行结果，准备下一步', tone: 'think' };
-  return { icon: <Brain size={11} />, label: '正在理解你的问题', tone: 'think' };
+  if (live.plan.length) return { icon: <ListChecks size={11} />, label: tr("正在拆解任务，规划步骤"), tone: 'think' };
+  if (live.tools.length) return { icon: <Sparkles size={11} />, label: tr("正在核对执行结果，准备下一步"), tone: 'think' };
+  return { icon: <Brain size={11} />, label: tr("正在理解你的问题"), tone: 'think' };
 }
 
 /**
@@ -309,7 +311,7 @@ function LiveActivity({ live }: { live: LiveTurn }) {
   const plan = live.plan;
   const done = plan.filter((item) => item.status === 'done').length;
   const current = plan.find((item) => item.status === 'doing');
-  const planLabel = current?.text ?? (plan.length && done === plan.length ? '计划已完成' : '正在准备下一步');
+  const planLabel = current?.text ?? (plan.length && done === plan.length ? tr("计划已完成") : tr("正在准备下一步"));
   const label = plan.length ? planLabel : activity.label;
   return (
     <div
@@ -333,8 +335,8 @@ function LiveActivity({ live }: { live: LiveTurn }) {
           type="button"
           className="activity-plan-toggle"
           aria-expanded={planOpen}
-          aria-label={planOpen ? '收起计划步骤' : '展开计划步骤'}
-          title={planOpen ? '收起计划步骤' : '展开计划步骤'}
+          aria-label={planOpen ? tr("收起计划步骤") : tr("展开计划步骤")}
+          title={planOpen ? tr("收起计划步骤") : tr("展开计划步骤")}
           onClick={() => setPlanOpen((open) => !open)}
           data-testid="agent-plan-toggle"
         >
@@ -409,21 +411,21 @@ function ComposerStats({ live, session, contextWindow, disclaimer }: ComposerSta
     <div className="composer-stats" data-testid="composer-stats">
       {hasStats ? (
         <span className="stat-groups">
-          <span className="stat-group" title="会话累计对话轮次 · 累计模型步数">
+          <span className="stat-group" title={tr("会话累计对话轮次 · 累计模型步数")}>
             <Clock size={10} />
-            <span className="stat">{turns} 轮</span>
-            {steps > 0 ? <span className="stat">{steps} 步</span> : null}
+            <span className="stat">{turns}{tr(" 轮")}</span>
+            {steps > 0 ? <span className="stat">{steps}{tr(" 步")}</span> : null}
             {rate > 0 ? <span className="stat">{rate >= 100 ? Math.round(rate) : rate.toFixed(1)} tok/s</span> : null}
           </span>
           {hasUsage ? (
             <>
               <span className="stat-sep" aria-hidden="true" />
-              <span className="stat-group" title={`会话累计用量：输入 ${tokensIn.toLocaleString()} · 输出 ${tokensOut.toLocaleString()}`}>
+              <span className="stat-group" title={tr("会话累计用量：输入 {0} · 输出 {1}", [tokensIn.toLocaleString(), tokensOut.toLocaleString()])}>
                 <Database size={10} />
                 <span className="stat">{compactTokens(total)} tok</span>
                 {cacheTotal > 0 ? (
-                  <span className="stat" title={`命中 ${cacheHit.toLocaleString()} · 未命中 ${cacheMiss.toLocaleString()}（${cacheTotal.toLocaleString()} 输入）`}>
-                    缓存命中 {((cacheHit / cacheTotal) * 100).toFixed(1)}%
+                  <span className="stat" title={tr("命中 {0} · 未命中 {1}（{2} 输入）", [cacheHit.toLocaleString(), cacheMiss.toLocaleString(), cacheTotal.toLocaleString()])}>
+                    {tr(" 缓存命中 ")}{((cacheHit / cacheTotal) * 100).toFixed(1)}%
                   </span>
                 ) : null}
               </span>
@@ -432,7 +434,7 @@ function ComposerStats({ live, session, contextWindow, disclaimer }: ComposerSta
           {showContext && contextWindow ? (
             <>
               <span className="stat-sep" aria-hidden="true" />
-              <span className="stat-group" title={`上下文占用 ${contextTokens.toLocaleString()} / ${contextWindow.toLocaleString()} tokens`}>
+              <span className="stat-group" title={tr("上下文占用 {0} / {1} tokens", [contextTokens.toLocaleString(), contextWindow.toLocaleString()])}>
                 <span className="stat-ring" aria-hidden="true">
                   <svg viewBox="0 0 16 16" width="11" height="11">
                     <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity="0.22" strokeWidth="2" />
@@ -483,7 +485,7 @@ function MiniTable({ data, max = 8 }: { data: { columns?: Array<{ name: string }
           ))}
         </tbody>
       </table>
-      {data.rows.length > max ? <div className="muted" style={{ fontSize: 10, marginTop: 3 }}>… 共 {data.rows.length} 行</div> : null}
+      {data.rows.length > max ? <div className="muted" style={{ fontSize: 10, marginTop: 3 }}>{tr("… 共 ")}{data.rows.length}{tr(" 行")}</div> : null}
     </div>
   );
 }
@@ -511,9 +513,9 @@ function ResultView({ result, onOpenEditor, showChart = true, chartHeight }: { r
     if (!connectionId || !chartSql) return;
     try {
       const res = await api.exportData({ connectionId, sql: chartSql, format: 'csv' });
-      await deliverExport(res.file, '已导出 CSV');
+      await deliverExport(res.file, tr("已导出 CSV"));
     } catch (err) {
-      notify('error', '导出失败', (err as Error)?.message ?? String(err));
+      notify('error', tr("导出失败"), (err as Error)?.message ?? String(err));
     }
   };
   return (
@@ -542,8 +544,7 @@ function ResultView({ result, onOpenEditor, showChart = true, chartHeight }: { r
       ) : null}
       {sql && onOpenEditor ? (
         <button className="btn ghost small" style={{ marginTop: 4, paddingLeft: 0 }} onClick={() => onOpenEditor(sql)}>
-          <ArrowUpRight size={11} /> 打开到编辑器
-        </button>
+          <ArrowUpRight size={11} /> {tr(" 打开到编辑器 ")}</button>
       ) : null}
       {chart ? (
         <div style={{ marginTop: 8 }}>
@@ -557,7 +558,7 @@ function ResultView({ result, onOpenEditor, showChart = true, chartHeight }: { r
                   data-testid={`chart-tab-${id}`}
                   onClick={() => setTab(id)}
                 >
-                  {id === 'chart' ? '图表' : id === 'rows' ? `明细 ${detail?.rows.length ?? 0}` : 'SQL'}
+                  {id === 'chart' ? tr("图表") : id === 'rows' ? tr("明细 {0}", [detail?.rows.length ?? 0]) : 'SQL'}
                 </button>
               ))}
             </div>
@@ -627,8 +628,7 @@ function ResultView({ result, onOpenEditor, showChart = true, chartHeight }: { r
               ) : null}
               {finding.suggestedSql && onOpenEditor ? (
                 <button className="btn ghost small" onClick={() => onOpenEditor(finding.suggestedSql)}>
-                  <ArrowUpRight size={11} /> 打开到编辑器
-                </button>
+                  <ArrowUpRight size={11} /> {tr(" 打开到编辑器 ")}</button>
               ) : null}
             </div>
           ))}
@@ -637,7 +637,7 @@ function ResultView({ result, onOpenEditor, showChart = true, chartHeight }: { r
       {!chart && Array.isArray(data?.columnStats) ? (
         <table className="tool-table stats-table">
           <thead>
-            <tr><th>列</th><th>NULL</th><th>空串</th><th>不同值</th></tr>
+            <tr><th>{tr("列")}</th><th>NULL</th><th>{tr("空串")}</th><th>{tr("不同值")}</th></tr>
           </thead>
           <tbody>
             {data.columnStats.slice(0, 12).map((stat: any) => (
@@ -700,16 +700,16 @@ function ToolCard({
         <span className="tool-summary">{summary ?? (typeof sqlArg === 'string' ? sqlArg.replace(/\s+/g, ' ').slice(0, 70) : '')}</span>
         <RiskBadge risk={risk} />
         {result ? <span className="muted" style={{ fontSize: 10 }}>{formatDuration(result.meta.durationMs)}</span> : null}
-        {status === 'awaiting' ? <span className="badge write">等待授权</span> : null}
+        {status === 'awaiting' ? <span className="badge write">{tr("等待授权")}</span> : null}
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
       </div>
       {open ? (
         <div className="tool-body">
-          <div className="tool-section-label">参数</div>
+          <div className="tool-section-label">{tr("参数")}</div>
           {typeof sqlArg === 'string' ? <pre>{String(sqlArg)}</pre> : <pre>{JSON.stringify(args, null, 2).slice(0, 4000)}</pre>}
           {result ? (
             <>
-              <div className="tool-section-label">结果</div>
+              <div className="tool-section-label">{tr("结果")}</div>
               <ResultView result={result} onOpenEditor={onOpenEditor} showChart={!chartMoved} />
               {needsMcpRoot ? (
                 <button
@@ -720,12 +720,11 @@ function ToolCard({
                     setSettingsOpen(true, 'mcp');
                   }}
                 >
-                  <Plug size={11} /> 配置允许目录
-                </button>
+                  <Plug size={11} /> {tr(" 配置允许目录 ")}</button>
               ) : null}
             </>
           ) : (
-            <div className="tool-section-label">{live ? '执行中…' : '无结果'}</div>
+            <div className="tool-section-label">{live ? tr("执行中…") : tr("无结果")}</div>
           )}
         </div>
       ) : null}
@@ -739,7 +738,7 @@ function PlanCard({ items }: { items: Array<{ id: string; text: string; status: 
   return (
     <div className="plan-card" data-testid="plan-card">
       <div className="plan-title" data-testid="plan-progress">
-        <Check size={11} /> 计划 · {done}/{items.length}
+        <Check size={11} /> {tr(" 计划 · ")}{done}/{items.length}
       </div>
       {items.map((item) => (
         <div key={item.id} className={`plan-item ${item.status}`}>
@@ -762,7 +761,7 @@ function AssistantBlocks({ blocks, messageId }: { blocks: AgentMessageBlock[]; m
     <>
       {thinking ? (
         <details className="thinking">
-          <summary><Brain size={11} /> 思考过程</summary>
+          <summary><Brain size={11} /> {tr(" 思考过程")}</summary>
           <div className="thinking-body">{thinking}</div>
         </details>
       ) : null}
@@ -812,9 +811,8 @@ function ExecutionSection({ count, running, testId, children }: { count: number;
     <details className={`execution${running ? ' running' : ''}`} data-testid={testId} open={running ? true : undefined}>
       <summary>
         <ChevronRight size={11} className="execution-chevron" />
-        执行过程
-        {count ? <span className="muted">· {count} 步</span> : null}
-        {running ? <span className="muted">· 执行中…</span> : null}
+        {tr(" 执行过程 ")}{count ? <span className="muted">· {count}{tr(" 步")}</span> : null}
+        {running ? <span className="muted">{tr("· 执行中…")}</span> : null}
       </summary>
       <div className="execution-body">{children}</div>
     </details>
@@ -878,9 +876,9 @@ function AnswerActions({ text }: { text: string }) {
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(text);
-      notify('success', '已复制', '回答内容已复制到剪贴板');
+      notify('success', tr("已复制"), tr("回答内容已复制到剪贴板"));
     } catch (err: any) {
-      notify('error', '复制失败', err?.message ?? '剪贴板不可用');
+      notify('error', tr("复制失败"), err?.message ?? tr("剪贴板不可用"));
     }
   };
   const stampName = (extension: string) => {
@@ -891,7 +889,7 @@ function AnswerActions({ text }: { text: string }) {
     const root = rootRef.current?.closest('.msg-assistant') as HTMLElement | null;
     const content = root?.querySelector('.content');
     const question = findQuestion();
-    const docTitle = question ? (question.length > 120 ? `${question.slice(0, 120)}…` : question) : 'AiDB 回答';
+    const docTitle = question ? (question.length > 120 ? `${question.slice(0, 120)}…` : question) : tr("AiDB 回答");
     let body = '';
     const charts: string[] = [];
     if (content) {
@@ -927,9 +925,9 @@ article{max-width:960px;margin:0 auto}.agent-chart{margin:20px 0}.answer-actions
   const exportPdf = async () => {
     const html = buildHtml();
     if (desktopBridge?.exportPdf) {
-      const result = await desktopBridge.exportPdf({ html, name: stampName('pdf') });
-      if (result.ok) notify('success', '已导出 PDF', result.path);
-      else if (!result.canceled) notify('error', '导出 PDF 失败', result.error);
+      const result = await desktopBridge.exportPdf({ html, name: stampName('pdf'), ui: desktopDialogUi() });
+      if (result.ok) notify('success', tr("已导出 PDF"), result.path);
+      else if (!result.canceled) notify('error', tr("导出 PDF 失败"), result.error);
       return;
     }
     const frame = document.createElement('iframe');
@@ -941,12 +939,12 @@ article{max-width:960px;margin:0 auto}.agent-chart{margin:20px 0}.answer-actions
       frame.contentWindow?.print();
       setTimeout(() => frame.remove(), 1000);
     };
-    notify('info', '打开打印对话框', '选择“另存为 PDF”即可导出');
+    notify('info', tr("打开打印对话框"), tr("选择“另存为 PDF”即可导出"));
   };
   return (
     <div className="answer-actions" ref={rootRef}>
-      <button className="btn small" onClick={() => void copy()}><Copy size={11} /> 复制</button>
-      <button className="btn small" onClick={() => void exportPdf()}><Download size={11} /> 导出 PDF</button>
+      <button className="btn small" onClick={() => void copy()}><Copy size={11} /> {tr(" 复制")}</button>
+      <button className="btn small" onClick={() => void exportPdf()}><Download size={11} /> {tr(" 导出 PDF")}</button>
     </div>
   );
 }
@@ -972,6 +970,7 @@ export function AgentPanel() {
   const sessionsOpen = useApp((s) => s.sessionsOpen);
   const agentSessionId = useApp((s) => s.agentSessionId);
   const sessionMeta = useApp((s) => s.agentSessionMeta);
+  const sessionTitle = (title?: string) => (title === '新会话' ? tr(title) : title);
   const settings = useApp((s) => s.settings);
   const connections = useApp((s) => s.connections);
   const activeConnectionId = useApp((s) => s.activeConnectionId);
@@ -1068,7 +1067,7 @@ export function AgentPanel() {
     const query = input.trim().replace(/^\//, '').toLowerCase();
     const commands = COMMANDS.filter((command) => command.id !== 'ask')
       .filter((command) => !query || command.id.toLowerCase().startsWith(query) || command.aliases.some((alias) => alias.replace(/^\//, '').toLowerCase().startsWith(query)) || command.title.zh.includes(query))
-      .map((command) => ({ key: `/${command.id}`, label: command.title.zh, kind: 'command' as const, commandId: command.id }));
+      .map((command) => ({ key: `/${command.id}`, label: tr(command.title.zh), kind: 'command' as const, commandId: command.id }));
     const presets = SLASH
       .filter((item) => !query || item.key.replace(/^\//, '').toLowerCase().startsWith(query) || item.label.includes(query))
       .map((item) => ({ key: item.key, label: item.label, kind: 'preset' as const }));
@@ -1122,7 +1121,7 @@ export function AgentPanel() {
     const images = files.filter((file) => file.type.startsWith('image/')).slice(0, MAX_IMAGES - pending.length);
     if (!images.length) return;
     if (!canAttachImage) {
-      notify('warning', '当前模型不支持图片', '在 设置 → 模型能力 里勾选「图片」后再试。');
+      notify('warning', tr("当前模型不支持图片"), tr("在 设置 → 模型能力 里勾选「图片」后再试。"));
       return;
     }
     setUploading(true);
@@ -1134,7 +1133,7 @@ export function AgentPanel() {
         setPending((prev) => (prev.some((item) => item.id === attachment.id) ? prev : [...prev, attachment]));
       }
     } catch (err: any) {
-      notify('error', '图片上传失败', err?.message ?? String(err));
+      notify('error', tr("图片上传失败"), err?.message ?? String(err));
     } finally {
       setUploading(false);
     }
@@ -1149,7 +1148,7 @@ export function AgentPanel() {
     }
     let cancelled = false;
     api
-      .suggest({ connectionId: activeConnectionId, database: agentDatabase || activeConnection?.database, limit: 6 })
+      .suggest({ connectionId: activeConnectionId, database: agentDatabase || activeConnection?.database, limit: 6, locale: getI18nLocale() })
       .then((res) => {
         if (!cancelled) setSuggestions(res.suggestions);
       })
@@ -1281,7 +1280,7 @@ export function AgentPanel() {
       if (command.id === 'report' && !token?.[2]?.trim()) {
         setInput('/report ');
         setPopover('none');
-        notify('info', '/report 需要报告主题', '例如：/report 总结一下三年来的订单增长情况');
+        notify('info', tr("/report 需要报告主题"), tr("例如：/report 总结一下三年来的订单增长情况"));
         textareaRef.current?.focus();
         return;
       }
@@ -1301,7 +1300,7 @@ export function AgentPanel() {
     if (preset) {
       const base = typeof preset.prompt === 'function' ? preset.prompt(tables) : preset.prompt;
       const extra = token?.[2]?.trim();
-      text = extra ? `${base}\n\n补充要求：${extra}` : base;
+      text = extra ? tr("{0}\n\n补充要求：{1}", [base, extra]) : base;
     }
     const images = pending.map((item) => item.id);
     setInput('');
@@ -1391,8 +1390,7 @@ export function AgentPanel() {
         {message.content ? <AnswerActions text={message.content} /> : null}
         {toolCount ? (
           <div className="turn-end">
-            {toolCount} 次工具调用
-            {message.tokens ? ` · ↓${message.tokens.toLocaleString()} tokens` : ''}
+            {toolCount}{tr(" 次工具调用 ")}{message.tokens ? ` · ↓${message.tokens.toLocaleString()} tokens` : ''}
           </div>
         ) : null}
       </AssistantShell>
@@ -1404,7 +1402,7 @@ export function AgentPanel() {
       <div className="agent-head">
         <div className="agent-title">
           <span className="agent-dot">AI</span>
-          <span>AI 助手</span>
+          <span>{tr("AI 助手")}</span>
         </div>
         <div className="spacer" />
         <button className="icon-btn" title={t('sessions')} onClick={() => setSessionsOpen(!sessionsOpen)} data-testid="agent-sessions">
@@ -1432,7 +1430,7 @@ export function AgentPanel() {
           onChange={(e) => setActiveConnection(e.target.value || undefined)}
           title={t('connections')}
         >
-          <Option value="">未选择连接</Option>
+          <Option value="">{tr("未选择连接")}</Option>
           {connections.map((c) => (
             <Option key={c.id} value={c.id}>{c.name}</Option>
           ))}
@@ -1445,16 +1443,16 @@ export function AgentPanel() {
           className="mode-select"
         />
         <span>·</span>
-        <span>{sessionMeta?.title ?? t('emptyAgentTitle')}</span>
+        <span>{sessionTitle(sessionMeta?.title) ?? t('emptyAgentTitle')}</span>
       </div>
 
       {/* 首页与 Agent 已经解耦：两边库不一致时必须说清楚，否则用户会以为
           刚在首页点的「AI 体检」问的是首页那个库。 */}
       {homeDatabase && agentDatabase && homeDatabase !== agentDatabase ? (
         <div className="agent-scope-mismatch" data-testid="agent-scope-mismatch">
-          首页在看 <b>{homeDatabase}</b>，Agent 瞄准 <b>{agentDatabase}</b>
+          {tr(" 首页在看 ")}<b>{homeDatabase}</b>{tr("，Agent 瞄准 ")}<b>{agentDatabase}</b>
           <button className="btn ghost small" onClick={() => void setAgentDatabase(homeDatabase)}>
-            对齐到 {homeDatabase}
+            {tr(" 对齐到 ")}{homeDatabase}
           </button>
         </div>
       ) : null}
@@ -1469,10 +1467,10 @@ export function AgentPanel() {
                 <p>{t('emptyAgentHint')}</p>
                 {suggestions.length ? (
                   <div className="suggest-block" data-testid="agent-suggestions">
-                    <div className="plan-title" style={{ padding: '0 2px' }}>猜你想问</div>
+                    <div className="plan-title" style={{ padding: '0 2px' }}>{tr("猜你想问")}</div>
                     <div className="suggest-list">
                       {suggestions.map((s) => {
-                        const label = suggestionLabel(s.kind);
+                        const label = suggestionLabel(s.kind, /^zh/i.test(getI18nLocale()) ? 'zh' : 'en');
                         return (
                           <button key={s.id} className="suggest-chip" title={s.reason} onClick={() => setInput(s.prompt)} data-testid={`suggest-${s.kind}`}>
                             <Sparkles size={10} />
@@ -1487,8 +1485,8 @@ export function AgentPanel() {
                 ) : null}
                 <div className="cap-grid">
                   {[
-                    { icon: <ShieldAlert size={13} />, label: '数据库体检', prompt: '对当前数据库做一次体检：缺少主键、外键缺索引、重复索引与空表，并给出修复 SQL。' },
-                    { icon: <Database size={13} />, label: '备份数据库', prompt: '备份当前数据库。' },
+                    { icon: <ShieldAlert size={13} />, label: tr("数据库体检"), prompt: tr("对当前数据库做一次体检：缺少主键、外键缺索引、重复索引与空表，并给出修复 SQL。") },
+                    { icon: <Database size={13} />, label: tr("备份数据库"), prompt: tr("备份当前数据库。") },
                   ].map((cap) => (
                     <button key={cap.label} className="cap-card" onClick={() => setInput(cap.prompt)}>
                       {cap.icon}
@@ -1502,7 +1500,7 @@ export function AgentPanel() {
                     {scopedSessions.slice(0, 3).map((session) => (
                       <button key={session.id} className="recent-item" onClick={() => void loadAgentSession(session.id)}>
                         <TerminalSquare size={12} style={{ color: 'var(--agent)' }} />
-                        <span className="truncate" style={{ flex: 1 }}>{session.title}</span>
+                        <span className="truncate" style={{ flex: 1 }}>{sessionTitle(session.title)}</span>
                         <span className="muted" style={{ fontSize: 9.5 }}>{formatRelative(session.updatedAt)}</span>
                       </button>
                     ))}
@@ -1559,8 +1557,7 @@ export function AgentPanel() {
                   {live.memories.length ? (
                     <details className="memory-refs" data-testid="live-memories">
                       <summary>
-                        <Brain size={10} /> 参考 {live.memories.length} 条记忆
-                      </summary>
+                        <Brain size={10} /> {tr(" 参考 ")}{live.memories.length}{tr(" 条记忆 ")}</summary>
                       <div className="memory-refs-list">
                         {live.memories.map((m) => (
                           <span key={m.id} className="memory-pill"><Brain size={9} /> {m.title}</span>
@@ -1577,7 +1574,7 @@ export function AgentPanel() {
                         : live.status === 'error'
                           ? t('failed')
                           : t('completed')}{' '}
-                      · {live.tools.length} 次工具 · {formatDuration(Date.now() - live.startedAt)}
+                      · {live.tools.length}{tr(" 次工具 · ")}{formatDuration(Date.now() - live.startedAt)}
                       {live.tokensIn || live.tokensOut ? ` · ↑${live.tokensIn} ↓${live.tokensOut}` : ''}
                     </div>
                   ) : null}
@@ -1587,7 +1584,7 @@ export function AgentPanel() {
 
             {!busy && followUps.length ? (
               <div className="followups" data-testid="agent-followups">
-                <span className="muted">继续问：</span>
+                <span className="muted">{tr("继续问：")}</span>
                 {followUps.map((s) => (
                   <button key={s.id} className="suggest-chip small" title={s.reason} onClick={() => setInput(s.prompt)}>
                     <span className="truncate">{s.prompt}</span>
@@ -1598,10 +1595,9 @@ export function AgentPanel() {
           </div>
         </div>
         {showJump ? (
-          <button type="button" className="scroll-bottom-btn" onClick={jumpToLatest} data-testid="agent-scroll-bottom" aria-label="回到最新输出">
+          <button type="button" className="scroll-bottom-btn" onClick={jumpToLatest} data-testid="agent-scroll-bottom" aria-label={tr("回到最新输出")}>
             <ArrowDown size={12} />
-            回到底部
-          </button>
+            {tr(" 回到底部 ")}</button>
         ) : null}
       </div>
 
@@ -1619,7 +1615,7 @@ export function AgentPanel() {
                 <span className="k">{tbl.columns?.length ?? 0} cols</span>
               </button>
             ))}
-          {!tables.length ? <div className="popover-item muted">当前连接没有可引用表</div> : null}
+          {!tables.length ? <div className="popover-item muted">{tr("当前连接没有可引用表")}</div> : null}
         </div>
       ) : null}
       {popover === 'slash' ? (
@@ -1636,8 +1632,8 @@ export function AgentPanel() {
               <span className="k">{option.label}</span>
             </button>
           ))}
-          {!slashOptions.length ? <div className="popover-item muted">没有匹配的命令</div> : null}
-          <div className="popover-hint">↑↓ 选择 · Tab 补全 · Enter 执行 · Esc 关闭</div>
+          {!slashOptions.length ? <div className="popover-item muted">{tr("没有匹配的命令")}</div> : null}
+          <div className="popover-hint">{tr("↑↓ 选择 · Tab 补全 · Enter 执行 · Esc 关闭")}</div>
         </div>
       ) : null}
 
@@ -1711,7 +1707,7 @@ export function AgentPanel() {
                   <ChatImage attachmentId={item.id} size={54} />
                   <button
                     className="icon-btn image-remove"
-                    title="移除这张图"
+                    title={tr("移除这张图")}
                     onClick={() => setPending((prev) => prev.filter((x) => x.id !== item.id))}
                   >
                     <X size={10} />
@@ -1740,7 +1736,7 @@ export function AgentPanel() {
             />
             <button
               className={`composer-pill composer-pill-add ${pillMenu === 'more' ? 'open' : ''}`}
-              title="更多输入方式：引用表 / 图片 / 指令 / 记忆"
+              title={tr("更多输入方式：引用表 / 图片 / 指令 / 记忆")}
               data-testid="agent-add"
               onClick={() => setPillMenu(pillMenu === 'more' ? 'none' : 'more')}
             >
@@ -1753,20 +1749,20 @@ export function AgentPanel() {
               onClick={() => setPillMenu(pillMenu === 'permission' ? 'none' : 'permission')}
             >
               <ShieldAlert size={12} />
-              <span>{modeLabel ? (settings.locale === 'en' ? modeLabel.en : modeLabel.zh) : agentMode}</span>
+              <span>{modeLabel ? tr(modeLabel.zh) : agentMode}</span>
               <ChevronDown size={10} className="pill-caret" />
             </button>
             <div className="spacer" />
             <button
               className={`composer-pill composer-model ${pillMenu === 'model' ? 'open' : ''}`}
-              title="模型与思考档位：点开后分别选择（在 设置 → 模型 里管理模型源和模型）"
+              title={tr("模型与思考档位：点开后分别选择（在 设置 → 模型 里管理模型源和模型）")}
               data-testid="agent-model-select"
               onClick={() => {
                 setModelSub('none');
                 setPillMenu(pillMenu === 'model' ? 'none' : 'model');
               }}
             >
-              <span className="truncate">{modelOptions.length ? activeModelLabel : '配置模型'}</span>
+              <span className="truncate">{modelOptions.length ? activeModelLabel : tr("配置模型")}</span>
               {tierLevels.length ? (
                 <>
                   <span className="composer-model-sep" aria-hidden="true">·</span>
@@ -1799,7 +1795,7 @@ export function AgentPanel() {
                       textareaRef.current?.focus();
                     }}
                   >
-                    <span>{settings.locale === 'en' ? m.en : m.zh}</span>
+                    <span>{tr(m.zh)}</span>
                     {agentMode === m.value ? <Check size={11} /> : null}
                   </button>
                 ))}
@@ -1816,8 +1812,8 @@ export function AgentPanel() {
                       onClick={() => setModelSub('model')}
                       data-testid="agent-model-sub"
                     >
-                      <span className="pill-menu-label">模型</span>
-                      <span className="pill-menu-value truncate">{modelOptions.length ? activeModelLabel : '未配置'}</span>
+                      <span className="pill-menu-label">{tr("模型")}</span>
+                      <span className="pill-menu-value truncate">{modelOptions.length ? activeModelLabel : tr("未配置")}</span>
                       <ChevronRight size={11} />
                     </button>
                     {tierLevels.length ? (
@@ -1827,21 +1823,21 @@ export function AgentPanel() {
                         onClick={() => setModelSub('tier')}
                         data-testid="agent-reasoning-tier"
                       >
-                        <span className="pill-menu-label">推理等级</span>
+                        <span className="pill-menu-label">{tr("推理等级")}</span>
                         <span className="pill-menu-value">{tierLabel}</span>
                         <ChevronRight size={11} />
                       </button>
                     ) : null}
                     <div className="pill-menu-sep" aria-hidden="true" />
                     <button className="pill-menu-item" onClick={() => { setSettingsOpen(true, 'agent'); setPillMenu('none'); }}>
-                      <span>管理模型…</span>
+                      <span>{tr("管理模型…")}</span>
                     </button>
                   </>
                 ) : (
                   <>
                     <button className="pill-menu-item pill-menu-back" onClick={() => setModelSub('none')}>
                       <ArrowLeft size={11} />
-                      <span>{modelSub === 'model' ? '模型' : '推理等级'}</span>
+                      <span>{modelSub === 'model' ? tr("模型") : tr("推理等级")}</span>
                     </button>
                     <div className="pill-menu-sep" aria-hidden="true" />
                     {modelSub === 'model' ? (
@@ -1867,7 +1863,7 @@ export function AgentPanel() {
                         ))
                       ) : (
                         <button className="pill-menu-item" onClick={() => { setSettingsOpen(true, 'agent'); setPillMenu('none'); }} data-testid="agent-model-manage">
-                          <span>去设置里添加模型</span>
+                          <span>{tr("去设置里添加模型")}</span>
                         </button>
                       )
                     ) : (
@@ -1876,7 +1872,7 @@ export function AgentPanel() {
                           role="menuitemradio"
                           aria-checked={!settings.agent.reasoningTier}
                           className={`pill-menu-item ${!settings.agent.reasoningTier ? 'active' : ''}`}
-                          title="Default：不下发推理参数，用服务商自己的默认档位"
+                          title={tr("Default：不下发推理参数，用服务商自己的默认档位")}
                           onClick={() => {
                             // 传 null 而不是 undefined：undefined 会在 JSON 里整个消失，
                             // 服务端是浅合并，会把旧档位原样留下来，Default 就切不回去。
@@ -1930,7 +1926,7 @@ export function AgentPanel() {
                 <button
                   className="pill-menu-item"
                   disabled={!canAttachImage || uploading || pending.length >= MAX_IMAGES}
-                  title={canAttachImage ? `添加图片（最多 ${MAX_IMAGES} 张，也可直接粘贴或拖入）` : '当前模型未开启图片输入，请到 设置 → 模型能力 勾选'}
+                  title={canAttachImage ? tr("添加图片（最多 {0} 张，也可直接粘贴或拖入）", [MAX_IMAGES]) : tr("当前模型未开启图片输入，请到 设置 → 模型能力 勾选")}
                   onClick={() => {
                     setPillMenu('none');
                     fileInputRef.current?.click();
@@ -1938,7 +1934,7 @@ export function AgentPanel() {
                   data-testid="agent-attach-image"
                 >
                   <ImagePlus size={12} />
-                  <span>添加图片</span>
+                  <span>{tr("添加图片")}</span>
                 </button>
                 <button
                   className="pill-menu-item"
@@ -1957,7 +1953,7 @@ export function AgentPanel() {
                   <span>{t('memory')}</span>
                 </button>
                 <div className="pill-menu-sep" aria-hidden="true" />
-                <div className="pill-menu-hint">Enter 发送 · Shift+Enter 换行</div>
+                <div className="pill-menu-hint">{tr("Enter 发送 · Shift+Enter 换行")}</div>
               </div>
             ) : null}
           </div>
@@ -2018,7 +2014,7 @@ export function AgentPanel() {
                         }}
                       />
                     ) : (
-                      <div className="s-title">{session.title}</div>
+                      <div className="s-title">{sessionTitle(session.title)}</div>
                     )}
                     <div className="s-meta">
                       {formatRelative(session.updatedAt)} · {session.permissionMode} · {session.tokensIn + session.tokensOut} tokens
@@ -2040,7 +2036,7 @@ export function AgentPanel() {
                     data-testid="session-delete"
                     onClick={async (e) => {
                       e.stopPropagation();
-                      if (await askConfirm({ message: '删除该会话？', detail: '会话里的消息与执行过程会一并删除。', danger: true, confirmLabel: '删除' })) void deleteAgentSession(session.id);
+                      if (await askConfirm({ message: tr("删除该会话？"), detail: tr("会话里的消息与执行过程会一并删除。"), danger: true, confirmLabel: tr("删除") })) void deleteAgentSession(session.id);
                     }}
                   >
                     <Trash2 size={12} />
@@ -2050,10 +2046,10 @@ export function AgentPanel() {
             ) : (
               <div className="muted" style={{ padding: 16, fontSize: 11.5 }} data-testid="session-empty">
                 {sessionQuery.trim()
-                  ? '没有匹配的会话'
+                  ? tr("没有匹配的会话")
                   : agentDatabase
-                    ? `这个库（${agentDatabase}）还没有会话`
-                    : '还没有会话'}
+                    ? tr("这个库（{0}）还没有会话", [agentDatabase])
+                    : tr("还没有会话")}
               </div>
             )}
           </div>
@@ -2087,14 +2083,12 @@ export function AgentPanel() {
               )}
               {approval.risk === 'destructive' ? (
                 <div className="risk-banner" style={{ marginTop: 10 }}>
-                  这是破坏性操作，可能永久删除数据。确认前 Agent 已按设置尝试创建备份。
-                </div>
+                  {tr(" 这是破坏性操作，可能永久删除数据。确认前 Agent 已按设置尝试创建备份。 ")}</div>
               ) : null}
               <p className="hint" style={{ marginTop: 10 }}>{t('transactionNote')}</p>
               {approval.tool === 'mcp_call' ? (
                 <p className="hint" style={{ marginTop: 6 }}>
-                  「始终允许」只影响工具调用审批，本次运行内有效；文件系统还需要在 设置 → MCP 与工具 单独配置允许目录。
-                </p>
+                  {tr(" 「始终允许」只影响工具调用审批，本次运行内有效；文件系统还需要在 设置 → MCP 与工具 单独配置允许目录。 ")}</p>
               ) : null}
             </div>
             <div className="modal-foot" style={{ flexWrap: 'wrap' }}>

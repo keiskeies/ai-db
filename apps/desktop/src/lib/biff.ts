@@ -1,4 +1,5 @@
 import { rowsToCsv } from './importConvert';
+import { t as tr } from '../i18n';
 
 const END_OF_CHAIN = 0xfffffffe;
 const FREE_SECTOR = 0xffffffff;
@@ -119,7 +120,7 @@ function parseWorkbook(workbook: Uint8Array): string {
       }
     }
   }
-  if (!cells.size) throw new Error('.xls 工作表没有数据');
+  if (!cells.size) throw new Error(tr(".xls 工作表没有数据"));
   const rows: string[][] = [];
   for (const row of [...cells.keys()].sort((a, b) => a - b)) {
     const values = cells.get(row) as Map<number, string>;
@@ -133,7 +134,7 @@ function parseWorkbook(workbook: Uint8Array): string {
 export function xlsToCsv(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
   const view = new DataView(buffer);
-  if (bytes.length < 512 || view.getUint32(0, true) !== 0xe011cfd0) throw new Error('不是有效的 .xls（CFB 头不匹配）');
+  if (bytes.length < 512 || view.getUint32(0, true) !== 0xe011cfd0) throw new Error(tr("不是有效的 .xls（CFB 头不匹配）"));
   const sectorSize = 1 << view.getUint16(30, true);
   const miniSize = 1 << view.getUint16(32, true);
   const numFat = view.getUint32(44, true);
@@ -193,7 +194,7 @@ export function xlsToCsv(buffer: ArrayBuffer): string {
   }
   const root = entries.find((entry) => entry.type === 5);
   const workbookEntry = entries.find((entry) => entry.type === 2 && (entry.name === 'Workbook' || entry.name === 'Book'));
-  if (!workbookEntry) throw new Error('.xls 里没有 Workbook 流（旧版 BIFF5 暂不支持）');
+  if (!workbookEntry) throw new Error(tr(".xls 里没有 Workbook 流（旧版 BIFF5 暂不支持）"));
   let workbook: Uint8Array;
   if (workbookEntry.size >= miniCutoff) {
     workbook = readChain(workbookEntry.start, fat, bytes, sectorOffset, sectorSize).subarray(0, workbookEntry.size);

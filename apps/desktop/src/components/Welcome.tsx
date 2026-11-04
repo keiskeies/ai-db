@@ -29,6 +29,7 @@ import {
 } from '../lib/dbHome';
 import { formatDuration, formatRelative, sqlPreview } from '../lib/format';
 import { useApp } from '../store';
+import { t as tr } from '../i18n';
 
 /** 侧栏用的连接色，头部图标复用同一套，避免又引入一种颜色语义。 */
 const CONNECTION_COLORS: Record<string, string> = {
@@ -153,7 +154,7 @@ export function Welcome() {
     void requestAgentTask(prompt);
   };
 
-  const healthPrompt = `对当前数据库做一次体检：缺少主键、外键缺索引、重复索引与空表，并给出修复 SQL。`;
+  const healthPrompt = tr("对当前数据库做一次体检：缺少主键、外键缺索引、重复索引与空表，并给出修复 SQL。");
 
   // ---------------------------------------------------------------- 没有连接
   if (!connection) {
@@ -164,20 +165,16 @@ export function Welcome() {
             <div className="home-empty-mark">
               <Database size={22} />
             </div>
-            <h1>还没有连接数据库</h1>
+            <h1>{tr("还没有连接数据库")}</h1>
             <p>
-              建一个连接，或者先用内置示例库跑一遍 —— 示例库有订单、商品、用户四张表，
-              可以直接试 SQL、图表和 AI 提问。
-            </p>
+              {tr(" 建一个连接，或者先用内置示例库跑一遍 —— 示例库有订单、商品、用户四张表， 可以直接试 SQL、图表和 AI 提问。 ")}</p>
             <div className="home-empty-actions">
               <button className="btn primary" onClick={() => openConnectionEditor('new')} data-testid="welcome-new-connection">
-                <Plus size={13} /> 新建连接
-              </button>
-              <button className="btn" onClick={() => askAi('帮我建一个示例数据库并演示几个查询。')}>
-                <Sparkles size={13} /> 让 AI 帮我建
-              </button>
+                <Plus size={13} /> {tr(" 新建连接 ")}</button>
+              <button className="btn" onClick={() => askAi(tr("帮我建一个示例数据库并演示几个查询。"))}>
+                <Sparkles size={13} /> {tr(" 让 AI 帮我建 ")}</button>
             </div>
-            <p className="home-empty-hint">支持 41 种引擎：SQLite / MySQL / PostgreSQL / MongoDB / Redis / 图 / 向量 / 搜索…</p>
+            <p className="home-empty-hint">{tr("支持 41 种引擎：SQLite / MySQL / PostgreSQL / MongoDB / Redis / 图 / 向量 / 搜索…")}</p>
           </div>
         </div>
       </div>
@@ -207,10 +204,10 @@ export function Welcome() {
                   <button
                     className="home-db-switch"
                     onClick={() => setPickingDb((open) => !open)}
-                    title="切换要看的库"
+                    title={tr("切换要看的库")}
                     data-testid="welcome-db-switch"
                   >
-                    {database || '选择库'}
+                    {database || tr("选择库")}
                     <ChevronDown size={11} className={pickingDb ? 'flip' : ''} />
                   </button>
                 ) : database && !isFileLike(database, connection.name) ? (
@@ -227,19 +224,16 @@ export function Welcome() {
                 </span>
                 {connection.readonly ? (
                   <span className="home-ro">
-                    <ShieldCheck size={10} /> 只读
-                  </span>
+                    <ShieldCheck size={10} /> {tr(" 只读 ")}</span>
                 ) : null}
                 <span className="home-dot" />
                 {loadingFacts ? (
                   <span className="home-loading">
-                    <Loader2 size={10} className="spin" /> 正在读取库结构…
-                  </span>
+                    <Loader2 size={10} className="spin" /> {tr(" 正在读取库结构… ")}</span>
                 ) : (
                   <span data-testid="welcome-scope-summary">
-                    {facts.tableCount} 表
-                    {facts.viewCount ? ` · ${facts.viewCount} 视图` : ''}
-                    {facts.rowKnown ? ` · ${formatCount(facts.rowTotal)} 行` : ''}
+                    {facts.tableCount}{tr(" 表 ")}{facts.viewCount ? tr(" · {0} 视图", [facts.viewCount]) : ''}
+                    {facts.rowKnown ? tr(" · {0} 行", [formatCount(facts.rowTotal)]) : ''}
                   </span>
                 )}
               </div>
@@ -248,17 +242,14 @@ export function Welcome() {
 
           <div className="home-actions">
             <button className="btn primary" onClick={() => openQuery(connection.id, undefined, undefined, database || undefined)} data-testid="welcome-new-query">
-              <TerminalSquare size={13} /> 新建查询
-            </button>
+              <TerminalSquare size={13} /> {tr(" 新建查询 ")}</button>
             <button className="btn" onClick={() => openDashboard(connection.id, database || undefined)} data-testid="welcome-dashboard-link">
-              <TrendingUp size={13} /> 仪表板
-            </button>
+              <TrendingUp size={13} /> {tr(" 仪表板 ")}</button>
             <button className="btn agent" onClick={() => askAi(healthPrompt)} data-testid="welcome-ask-ai">
-              <Sparkles size={13} /> 让 AI 体检这个库
-            </button>
+              <Sparkles size={13} /> {tr(" 让 AI 体检这个库 ")}</button>
             <button
               className="icon-btn"
-              title="重新读取库结构"
+              title={tr("重新读取库结构")}
               onClick={() => void loadSchema(connection.id, true, database || undefined)}
               data-testid="welcome-refresh"
             >
@@ -291,18 +282,15 @@ export function Welcome() {
           <section className="home-col home-col-main">
             <div className="home-col-head">
               <span className="home-col-title">
-                <Table2 size={12} /> 这个库里有什么
-              </span>
+                <Table2 size={12} /> {tr(" 这个库里有什么 ")}</span>
               <span className="home-col-count">{facts.tables.length}</span>
               <div className="spacer" />
               {facts.keylessCount ? (
-                <span className="home-warn" title="这些表既没有主键也没有唯一索引，无法安全定位单行">
-                  <AlertTriangle size={10} /> {facts.keylessCount} 张无主键
-                </span>
+                <span className="home-warn" title={tr("这些表既没有主键也没有唯一索引，无法安全定位单行")}>
+                  <AlertTriangle size={10} /> {facts.keylessCount}{tr(" 张无主键 ")}</span>
               ) : facts.tableCount ? (
                 <span className="home-ok">
-                  <ShieldCheck size={10} /> 主键齐全
-                </span>
+                  <ShieldCheck size={10} /> {tr(" 主键齐全 ")}</span>
               ) : null}
             </div>
 
@@ -319,7 +307,7 @@ export function Welcome() {
                     key={`${fact.database}.${fact.table.name}`}
                     className="home-table-row"
                     onClick={() => openTable(fact.table.name, fact.database)}
-                    title={`打开 ${fact.table.name}`}
+                    title={tr("打开 {0}", [fact.table.name])}
                     data-testid={`welcome-table-${fact.table.name}`}
                   >
                     <span className="home-table-kind">
@@ -336,9 +324,9 @@ export function Welcome() {
                       ) : null}
                     </span>
                     <span className="home-table-rows mono">{typeof fact.rows === 'number' ? formatCount(fact.rows) : '—'}</span>
-                    <span className="home-table-cols">{fact.columns} 列</span>
+                    <span className="home-table-cols">{fact.columns}{tr(" 列")}</span>
                     {fact.keyless ? (
-                      <span className="home-table-flag" title="无主键/唯一索引">
+                      <span className="home-table-flag" title={tr("无主键/唯一索引")}>
                         <KeyRound size={9} />
                       </span>
                     ) : null}
@@ -346,19 +334,17 @@ export function Welcome() {
                   </button>
                 ))}
                 {facts.tables.length > 10 ? (
-                  <button className="home-more" onClick={() => askAi(`列出 ${scopeLabel} 里全部 ${facts.tables.length} 张表，并说明每张表大概存什么。`)}>
-                    还有 {facts.tables.length - 10} 张表 · 让 AI 介绍全部
-                    <ArrowRight size={10} />
+                  <button className="home-more" onClick={() => askAi(tr("列出 {0} 里全部 {1} 张表，并说明每张表大概存什么。", [scopeLabel, facts.tables.length]))}>
+                    {tr(" 还有 ")}{facts.tables.length - 10}{tr(" 张表 · 让 AI 介绍全部 ")}<ArrowRight size={10} />
                   </button>
                 ) : null}
               </div>
             ) : (
               <div className="home-empty-block">
-                <p>这个库里还没有表。</p>
+                <p>{tr("这个库里还没有表。")}</p>
                 <div className="home-empty-actions">
-                  <button className="btn small" onClick={() => askAi(`帮我在 ${scopeLabel} 里设计并创建需要的表结构。`)}>
-                    <Sparkles size={11} /> 让 AI 建表
-                  </button>
+                  <button className="btn small" onClick={() => askAi(tr("帮我在 {0} 里设计并创建需要的表结构。", [scopeLabel]))}>
+                    <Sparkles size={11} /> {tr(" 让 AI 建表 ")}</button>
                 </div>
               </div>
             )}
@@ -367,19 +353,17 @@ export function Welcome() {
             {!loadingFacts && facts.tables.length ? (
               <div className="home-health">
                 <span className="home-health-title">
-                  <ShieldCheck size={11} /> 体检
-                </span>
+                  <ShieldCheck size={11} /> {tr(" 体检 ")}</span>
                 <span className="home-health-item">
-                  {facts.rowKnown === facts.tables.length ? '行数已全部估算' : `${facts.rowKnown}/${facts.tables.length} 张有行数估算`}
+                  {facts.rowKnown === facts.tables.length ? tr("行数已全部估算") : tr("{0}/{1} 张有行数估算", [facts.rowKnown, facts.tables.length])}
                 </span>
                 <span className={`home-health-item ${facts.keylessCount ? 'warn' : ''}`}>
-                  {facts.keylessCount ? `${facts.keylessCount} 张无主键` : '主键齐全'}
+                  {facts.keylessCount ? tr("{0} 张无主键", [facts.keylessCount]) : tr("主键齐全")}
                 </span>
-                {facts.emptyCount ? <span className="home-health-item warn">{facts.emptyCount} 张空表</span> : null}
+                {facts.emptyCount ? <span className="home-health-item warn">{facts.emptyCount}{tr(" 张空表")}</span> : null}
                 <div className="spacer" />
                 <button className="btn ghost small" onClick={() => askAi(healthPrompt)} data-testid="welcome-health">
-                  让 AI 深入体检
-                </button>
+                  {tr(" 让 AI 深入体检 ")}</button>
               </div>
             ) : null}
           </section>
@@ -388,12 +372,10 @@ export function Welcome() {
           <section className="home-col home-col-side">
             <div className="home-col-head">
               <span className="home-col-title">
-                <Sparkles size={12} /> 接下来能做什么
-              </span>
+                <Sparkles size={12} /> {tr(" 接下来能做什么 ")}</span>
               <div className="spacer" />
               <button className="btn ghost small" onClick={() => setAgentOpen(true)}>
-                打开助手
-              </button>
+                {tr(" 打开助手 ")}</button>
             </div>
 
             <div className="home-suggest-list">
@@ -413,7 +395,7 @@ export function Welcome() {
                 ))
               ) : (
                 <div className="home-empty-block">
-                  <p>{loadingFacts ? '正在按这个库的表生成建议…' : '这个库还没法生成建议，直接问 AI 也行。'}</p>
+                  <p>{loadingFacts ? tr("正在按这个库的表生成建议…") : tr("这个库还没法生成建议，直接问 AI 也行。")}</p>
                 </div>
               )}
             </div>
@@ -422,15 +404,15 @@ export function Welcome() {
               <button className="home-quick-item" onClick={() => askAi(healthPrompt)}>
                 <ShieldCheck size={12} />
                 <span>
-                  <strong>数据库体检</strong>
-                  <em>主键 / 外键索引 / 重复索引 / 空表</em>
+                  <strong>{tr("数据库体检")}</strong>
+                  <em>{tr("主键 / 外键索引 / 重复索引 / 空表")}</em>
                 </span>
               </button>
-              <button className="home-quick-item" onClick={() => askAi(`总结 ${scopeLabel} 的关键业务口径，并写入长期记忆。`)}>
+              <button className="home-quick-item" onClick={() => askAi(tr("总结 {0} 的关键业务口径，并写入长期记忆。", [scopeLabel]))}>
                 <Database size={12} />
                 <span>
-                  <strong>沉淀业务口径</strong>
-                  <em>跨会话记住这个库的口径</em>
+                  <strong>{tr("沉淀业务口径")}</strong>
+                  <em>{tr("跨会话记住这个库的口径")}</em>
                 </span>
               </button>
             </div>
@@ -439,7 +421,7 @@ export function Welcome() {
 
         {/* ── 最近跑过 ──────────────────────────────────────────── */}
         <footer className="home-recent">
-          <span className="home-recent-label">最近跑过</span>
+          <span className="home-recent-label">{tr("最近跑过")}</span>
           {recent.length ? (
             <div className="home-recent-list">
               {recent.map((item) => (
@@ -456,7 +438,7 @@ export function Welcome() {
               ))}
             </div>
           ) : (
-            <span className="home-recent-empty">还没有查询记录 —— 跑第一条 SQL 会出现在这里</span>
+            <span className="home-recent-empty">{tr("还没有查询记录 —— 跑第一条 SQL 会出现在这里")}</span>
           )}
         </footer>
       </div>

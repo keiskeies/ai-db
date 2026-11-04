@@ -3,6 +3,7 @@ import { FileCode2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useApp } from '../store';
 import { Modal, Spinner } from './ui';
+import { t as tr } from '../i18n';
 
 /** 单条记录编辑：读回驱动原文（MongoDB 为 EJSON，向量/搜索为 JSON），保存时整体写回。 */
 export function DocumentEditDialog({
@@ -37,7 +38,7 @@ export function DocumentEditDialog({
         setError(null);
       })
       .catch((err: any) => {
-        if (alive) setError(err?.message ?? '读取文档失败');
+        if (alive) setError(err?.message ?? tr("读取文档失败"));
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -52,38 +53,37 @@ export function DocumentEditDialog({
     try {
       parsed = JSON.parse(text);
     } catch {
-      setError('JSON 语法错误，无法保存');
+      setError(tr("JSON 语法错误，无法保存"));
       return;
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      setError('需要一个 JSON 对象');
+      setError(tr("需要一个 JSON 对象"));
       return;
     }
     setSaving(true);
     setError(null);
     try {
       await api.upsertDocuments({ connectionId, database, collection, documents: [parsed as Record<string, unknown>] });
-      notify('success', '文档已保存', docId);
+      notify('success', tr("文档已保存"), docId);
       onSaved();
       onClose();
     } catch (err: any) {
-      setError(err?.message ?? '保存失败');
+      setError(err?.message ?? tr("保存失败"));
       setSaving(false);
     }
   };
 
   return (
     <Modal
-      title={`编辑记录 · ${collection}`}
+      title={tr("编辑记录 · {0}", [collection])}
       icon={<FileCode2 size={15} />}
       onClose={onClose}
       wide
       footer={
         <>
-          <button className="btn" onClick={onClose} disabled={saving}>取消</button>
+          <button className="btn" onClick={onClose} disabled={saving}>{tr("取消")}</button>
           <button className="btn primary" onClick={() => void save()} disabled={saving || loading} data-testid="doc-edit-save">
-            {saving ? <Spinner /> : null} 保存
-          </button>
+            {saving ? <Spinner /> : null}{tr(" 保存 ")}</button>
         </>
       }
     >
@@ -100,8 +100,7 @@ export function DocumentEditDialog({
         />
       ) : null}
       <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
-        保存会整体替换 <code>{docId}</code> 这条文档；删除字段即从文档里移除它。
-      </div>
+        {tr(" 保存会整体替换 ")}<code>{docId}</code> {tr(" 这条文档；删除字段即从文档里移除它。 ")}</div>
     </Modal>
   );
 }

@@ -72,7 +72,7 @@ import {
   Wrench,
   X,
 } from 'lucide-react-native';
-import { COMMANDS, chartSuitability, parsePairingPayload } from '@aidb/core';
+import { COMMANDS, chartSuitability, localeInfo, normalizeLocale, parsePairingPayload } from '@aidb/core';
 import type {
   AgentEvent,
   AgentSettings,
@@ -104,7 +104,7 @@ import {
 } from './src/bridge';
 import { colors, chartPalette, getThemeMode, heatTone, modeLabels, radius, riskColor, riskLabels, setPalette, type ThemeResolved } from './src/theme';
 import { ENGINE_LOGO_PNG, ENGINE_LOGO_SVG, LETTER_BADGES, MONO_ENGINE_LOGOS, BRIGHT_ENGINE_LOGOS } from './src/engineLogos';
-import { setLocale, translate, type Locale } from './src/i18n';
+import { LOCALES, setLocale, translate, type Locale } from './src/i18n';
 
 type TabKey = 'chat' | 'data' | 'tools' | 'me';
 
@@ -257,9 +257,9 @@ ${message}`) : false);
 function timeAgo(iso?: string): string {
   if (!iso) return '';
   const diff = Date.now() - new Date(iso).getTime();
-  if (diff < 60_000) return '刚刚';
-  if (diff < 3_600_000) return `${Math.round(diff / 60_000)} 分钟前`;
-  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)} 小时前`;
+  if (diff < 60_000) return translate('刚刚');
+  if (diff < 3_600_000) return translate('{0} 分钟前', [Math.round(diff / 60_000)]);
+  if (diff < 86_400_000) return translate('{0} 小时前', [Math.round(diff / 3_600_000)]);
   return `${Math.round(diff / 86_400_000)} 天前`;
 }
 
@@ -277,9 +277,10 @@ export default function App() {
   applyTheme(resolvedTheme);
   const [locale, setLocaleState] = useState<Locale>(() => {
     try {
-      return typeof localStorage !== 'undefined' && localStorage.getItem('aidb.mobile.locale') === 'en' ? 'en' : 'zh';
+      const stored = typeof localStorage !== 'undefined' ? localStorage.getItem('aidb.mobile.locale') : null;
+      return normalizeLocale(stored ?? 'en');
     } catch {
-      return 'zh';
+      return 'en';
     }
   });
   setLocale(locale);
@@ -1492,7 +1493,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
               </Pressable>
               <View style={{ flex: 1 }}>
                 <Text style={styles.listTitle}>记忆</Text>
-                <Text style={styles.listMeta}>{memories.length} 条 · 跨会话召回</Text>
+                <Text style={styles.listMeta}>{translate('{0} 条 · 跨会话召回', [memories.length])}</Text>
               </View>
               <Pressable testID="m-memory-new" style={styles.iconButton} onPress={() => setMemoryDraft({ kind: 'fact', title: '', content: '' })}>
                 <Plus size={16} color={colors.text} />
@@ -2831,23 +2832,20 @@ function SettingsScreen({
               </Pressable>
             ))}
           </View>
-          <Text style={[styles.hint, { marginTop: 8 }]}>当前：{resolvedTheme === 'light' ? '浅色' : '深色'}；主题只保存在本机。</Text>
+          <Text style={[styles.hint, { marginTop: 8 }]}>{translate('当前：{0}；主题只保存在本机。', [resolvedTheme === 'light' ? translate('浅色') : translate('深色')])}</Text>
         </View>
 
         <View style={styles.card}>
           <Text style={styles.sectionLabel}>语言 / Language</Text>
-          <View style={{ flexDirection: 'row', gap: 6, marginTop: 6 }}>
-            {([
-              { value: 'zh', label: '中文' },
-              { value: 'en', label: 'English' },
-            ] as const).map((option) => (
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+            {LOCALES.map((option) => (
               <Pressable
-                key={option.value}
-                testID={`m-locale-${option.value}`}
-                style={[styles.modeChip, locale === option.value && styles.modeChipActive]}
-                onPress={() => onLocale(option.value)}
+                key={option.id}
+                testID={`m-locale-${option.id}`}
+                style={[styles.modeChip, locale === option.id && styles.modeChipActive]}
+                onPress={() => onLocale(option.id)}
               >
-                <Text style={[styles.modeChipText, locale === option.value && { color: colors.accent }]}>{option.label}</Text>
+                <Text style={[styles.modeChipText, locale === option.id && { color: colors.accent }]}>{option.native}</Text>
               </Pressable>
             ))}
           </View>
@@ -4155,7 +4153,7 @@ function CommandScreen({ client, connections, activeConnection, onBack }: { clie
     }
     setBusy(true);
     try {
-      const started = await client.startCommand(command.id, input as any, { title: `${command.title.zh} · 移动端` });
+      const started = await client.startCommand(command.id, input as any, { title: `${translate(command.title.zh)} · ${translate('移动端')}` });
       setRun({ id: started.run.id, status: started.run.status });
       for (let attempt = 0; attempt < 90; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -4341,8 +4339,8 @@ function MeScreen({
   onOpen: (page: 'memory' | 'connections' | 'settings') => void;
 }) {
   const entries = [
-    { page: 'memory' as const, icon: <Brain size={17} color={colors.agent} />, title: '记忆', desc: `${memories.length} 条 · 跨会话召回` },
-    { page: 'connections' as const, icon: <Database size={17} color={colors.accent} />, title: '连接', desc: `${connections.length} 个 · 当前 ${activeConnection?.name ?? '未选择'}` },
+    { page: 'memory' as const, icon: <Brain size={17} color={colors.agent} />, title: '记忆', desc: translate('{0} 条 · 跨会话召回', [memories.length]) },
+    { page: 'connections' as const, icon: <Database size={17} color={colors.accent} />, title: '连接', desc: translate('{0} 个 · 当前 {1}', [connections.length, activeConnection?.name ?? translate('未选择')]) },
     { page: 'settings' as const, icon: <SettingsIcon size={17} color={colors.accent} />, title: '设置', desc: 'Bridge、设备、扩展、主题与语言' },
   ];
   return (
@@ -4369,7 +4367,7 @@ function MeScreen({
         ))}
         <View style={styles.noteCard}>
           <ShieldAlert size={14} color={colors.muted} />
-          <Text style={styles.hint}>主题：{themeMode === 'system' ? '跟随系统' : themeMode === 'light' ? '浅色' : '深色'} · 语言：{locale === 'en' ? 'English' : '中文'}</Text>
+          <Text style={styles.hint}>{translate('主题：{0} · 语言：{1}', [themeMode === 'system' ? translate('跟随系统') : themeMode === 'light' ? translate('浅色') : translate('深色'), localeInfo(locale).native])}</Text>
         </View>
       </ScrollView>
     </View>

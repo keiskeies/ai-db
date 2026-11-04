@@ -1,4 +1,5 @@
 import { useRef, type PointerEvent as ReactPointerEvent } from 'react';
+import { t as tr } from '../i18n';
 
 interface PaneSplitterProps {
   /** left：拖的是左栏右边框，向右变宽；right：拖的是右栏左边框，向左变宽 */
@@ -54,7 +55,7 @@ export function PaneSplitter({ side, width, min, max, onChange, onCommit, testId
         onChange(fallback);
         onCommit(fallback);
       }}
-      title="拖动调整宽度，双击恢复默认"
+      title={tr("拖动调整宽度，双击恢复默认")}
     />
   );
 }

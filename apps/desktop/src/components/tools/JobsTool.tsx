@@ -5,6 +5,7 @@ import { useApp } from '../../store';
 import { DatabaseSelect } from '../DatabaseSelect';
 import { askConfirm } from '../AskDialog';
 import { Select, Option } from '../ui';
+import { t as tr } from '../../i18n';
 
 interface Job {
   id: string;
@@ -27,7 +28,7 @@ export function JobsTool() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
-  const [name, setName] = useState('每小时统计订单');
+  const [name, setName] = useState(tr("每小时统计订单"));
   const [connectionId, setConnectionId] = useState(activeConnectionId ?? connections[0]?.id ?? '');
   const [database, setDatabase] = useState('');
   const [type, setType] = useState<'query' | 'backup'>('query');
@@ -41,7 +42,7 @@ export function JobsTool() {
       const { jobs: list } = await api.jobs();
       setJobs(list as Job[]);
     } catch (err: any) {
-      notify('error', '加载任务失败', err?.message);
+      notify('error', tr("加载任务失败"), err?.message);
     } finally {
       setLoading(false);
     }
@@ -56,9 +57,9 @@ export function JobsTool() {
       await api.createJob({ name, connectionId, database: database || undefined, type, sql: type === 'query' ? sql : undefined, intervalSeconds: Math.max(30, minutes * 60), enabled: true });
       setShowForm(false);
       await load();
-      notify('success', '任务已创建');
+      notify('success', tr("任务已创建"));
     } catch (err: any) {
-      notify('error', '创建失败', err?.message);
+      notify('error', tr("创建失败"), err?.message);
     }
   };
 
@@ -66,10 +67,10 @@ export function JobsTool() {
     setBusyId(job.id);
     try {
       const result = await api.runJob(job.id);
-      notify(result.ok ? 'success' : 'error', result.ok ? '任务执行成功' : '任务执行失败', result.message);
+      notify(result.ok ? 'success' : 'error', result.ok ? tr("任务执行成功") : tr("任务执行失败"), result.message);
       await load();
     } catch (err: any) {
-      notify('error', '执行失败', err?.message);
+      notify('error', tr("执行失败"), err?.message);
     } finally {
       setBusyId(null);
     }
@@ -78,45 +79,42 @@ export function JobsTool() {
   return (
     <div className="tool-pane">
       <div className="tool-pane-head">
-        <ListTodo size={15} /> 自动化任务
-        <span className="muted">定时查询与备份，Gateway 每 15 秒检查调度</span>
+        <ListTodo size={15} /> {tr(" 自动化任务 ")}<span className="muted">{tr("定时查询与备份，Gateway 每 15 秒检查调度")}</span>
       </div>
       <div className="tool-row">
         <button className="btn primary" onClick={() => setShowForm((value) => !value)}>
-          <Plus size={12} /> 新建任务
-        </button>
+          <Plus size={12} /> {tr(" 新建任务 ")}</button>
         <button className="btn" onClick={() => void load()} disabled={loading}>
-          {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <RefreshCw size={12} />} 刷新
-        </button>
+          {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <RefreshCw size={12} />}{tr(" 刷新 ")}</button>
         <span className="spacer" />
-        <span className="badge">{jobs.filter((job) => job.enabled).length} 启用 / {jobs.length} 总数</span>
+        <span className="badge">{jobs.filter((job) => job.enabled).length}{tr(" 启用 / ")}{jobs.length}{tr(" 总数")}</span>
       </div>
       {showForm ? (
         <div className="setting-card" style={{ marginBottom: 8 }}>
           <div className="form-grid" style={{ gap: 8 }}>
             <div className="field">
-              <label>名称</label>
+              <label>{tr("名称")}</label>
               <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
             </div>
             <div className="field">
-              <label>连接</label>
+              <label>{tr("连接")}</label>
               <Select className="select" value={connectionId} onChange={(e) => setConnectionId(e.target.value)}>
                 {connections.map((conn) => <Option key={conn.id} value={conn.id}>{conn.name}</Option>)}
               </Select>
             </div>
             <div className="field">
-              <label>数据库</label>
+              <label>{tr("数据库")}</label>
               <DatabaseSelect connectionId={connectionId} value={database} onChange={setDatabase} testId="job-db" />
             </div>
             <div className="field">
-              <label>类型</label>
+              <label>{tr("类型")}</label>
               <Select className="select" value={type} onChange={(e) => setType(e.target.value as 'query' | 'backup')}>
-                <Option value="query">SQL 查询</Option>
-                <Option value="backup">数据库备份</Option>
+                <Option value="query">{tr("SQL 查询")}</Option>
+                <Option value="backup">{tr("数据库备份")}</Option>
               </Select>
             </div>
             <div className="field">
-              <label>间隔（分钟）</label>
+              <label>{tr("间隔（分钟）")}</label>
               <input className="input" type="number" min={1} value={minutes} onChange={(e) => setMinutes(Number(e.target.value))} />
             </div>
             {type === 'query' ? (
@@ -127,8 +125,8 @@ export function JobsTool() {
             ) : null}
           </div>
           <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
-            <button className="btn" onClick={() => setShowForm(false)}>取消</button>
-            <button className="btn primary" onClick={() => void create()} disabled={!name || !connectionId}>保存</button>
+            <button className="btn" onClick={() => setShowForm(false)}>{tr("取消")}</button>
+            <button className="btn primary" onClick={() => void create()} disabled={!name || !connectionId}>{tr("保存")}</button>
           </div>
         </div>
       ) : null}
@@ -142,18 +140,16 @@ export function JobsTool() {
                   <span className={`status-led ${job.lastStatus === 'ok' ? 'ok' : job.lastStatus === 'error' ? 'error' : ''}`} />
                   <strong>{job.name}</strong>
                   <span className="badge">{job.type === 'backup' ? 'BACKUP' : 'SQL'}</span>
-                  {!job.enabled ? <span className="badge write">已暂停</span> : null}
+                  {!job.enabled ? <span className="badge write">{tr("已暂停")}</span> : null}
                 </div>
                 <div className="listMeta">
-                  {conn?.name}{job.database ? ` / ${job.database}` : ''} · 每 {Math.round(job.intervalSeconds / 60)} 分钟
-                  {job.lastRunAt ? ` · 上次 ${new Date(job.lastRunAt).toLocaleString()}` : ' · 尚未运行'}
+                  {conn?.name}{job.database ? ` / ${job.database}` : ''}{tr(" · 每 ")}{Math.round(job.intervalSeconds / 60)}{tr(" 分钟 ")}{job.lastRunAt ? tr(" · 上次 {0}", [new Date(job.lastRunAt).toLocaleString()]) : tr(" · 尚未运行")}
                 </div>
                 {job.lastError ? <div className="hint" style={{ color: 'var(--danger)' }}>{job.lastError}</div> : null}
               </div>
               <Clock size={12} className="muted" />
               <button className="btn small" onClick={() => void runNow(job)} disabled={busyId === job.id}>
-                {busyId === job.id ? <Loader2 size={11} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <Play size={11} />} 运行
-              </button>
+                {busyId === job.id ? <Loader2 size={11} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <Play size={11} />}{tr(" 运行 ")}</button>
               <button
                 className="btn small"
                 onClick={async () => {
@@ -161,12 +157,12 @@ export function JobsTool() {
                   await load();
                 }}
               >
-                {job.enabled ? '暂停' : '启用'}
+                {job.enabled ? tr("暂停") : tr("启用")}
               </button>
               <button
                 className="icon-btn danger"
                 onClick={async () => {
-                  if (!(await askConfirm({ message: `删除任务「${job.name}」？`, danger: true, confirmLabel: '删除' }))) return;
+                  if (!(await askConfirm({ message: tr("删除任务「{0}」？", [job.name]), danger: true, confirmLabel: tr("删除") }))) return;
                   await api.deleteJob(job.id);
                   await load();
                 }}
@@ -176,7 +172,7 @@ export function JobsTool() {
             </div>
           );
         })}
-        {!jobs.length ? <div className="dash-empty">还没有任务。创建定时查询或自动备份。</div> : null}
+        {!jobs.length ? <div className="dash-empty">{tr("还没有任务。创建定时查询或自动备份。")}</div> : null}
       </div>
     </div>
   );

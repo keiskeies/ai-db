@@ -4,6 +4,7 @@ import type { TableInfo } from '@aidb/core';
 import { useApp } from '../../store';
 import { DatabaseSelect, useDatabaseTables } from '../DatabaseSelect';
 import { Select, Option } from '../ui';
+import { t as tr } from '../../i18n';
 
 function quote(name: string, engine: string): string {
   if (engine === 'mysql' || engine === 'mariadb' || engine === 'clickhouse') return '`' + name.replace(/`/g, '``') + '`';
@@ -87,13 +88,12 @@ export function QueryBuilderTool() {
     return query;
   }, [table1, table2, joinType, joinLeft, joinRight, selected, where, orderBy, direction, limit, engine, columnOptions]);
 
-  if (!conn) return <div className="dash-empty">请选择一个连接。</div>;
+  if (!conn) return <div className="dash-empty">{tr("请选择一个连接。")}</div>;
 
   return (
     <div className="tool-pane">
       <div className="tool-pane-head">
-        <Braces size={15} /> 查询构建器
-        <span className="muted">{conn.name} · {tables.length} 张表</span>
+        <Braces size={15} /> {tr(" 查询构建器 ")}<span className="muted">{conn.name} · {tables.length}{tr(" 张表")}</span>
       </div>
       <div className="tool-row">
         <DatabaseSelect
@@ -107,29 +107,29 @@ export function QueryBuilderTool() {
         <div className="builder-form">
           <div className="form-grid" style={{ gap: 8 }}>
             <div className="field">
-              <label>主表</label>
+              <label>{tr("主表")}</label>
               <Select className="select" value={t1} onChange={(e) => { setT1(e.target.value); setSelected(new Set()); }}>
                 {tables.map((table) => <Option key={table.name} value={table.name}>{table.name}</Option>)}
               </Select>
             </div>
             <div className="field">
-              <label>连接表（可选）</label>
+              <label>{tr("连接表（可选）")}</label>
               <Select className="select" value={t2} onChange={(e) => setT2(e.target.value)}>
-                <Option value="">— 不连接 —</Option>
+                <Option value="">{tr("— 不连接 —")}</Option>
                 {tables.filter((table) => table.name !== t1).map((table) => <Option key={table.name} value={table.name}>{table.name}</Option>)}
               </Select>
             </div>
             {table2 ? (
               <>
                 <div className="field">
-                  <label>连接类型</label>
+                  <label>{tr("连接类型")}</label>
                   <Select className="select" value={joinType} onChange={(e) => setJoinType(e.target.value as 'INNER' | 'LEFT')}>
                     <Option value="LEFT">LEFT JOIN</Option>
                     <Option value="INNER">INNER JOIN</Option>
                   </Select>
                 </div>
                 <div className="field">
-                  <label>连接条件</label>
+                  <label>{tr("连接条件")}</label>
                   <div className="row gap-4">
                     <Select className="select" value={joinLeft} onChange={(e) => setJoinLeft(e.target.value)} style={{ flex: 1 }}>
                       {columnOptions.filter((option) => option.table === t1).map((option) => <Option key={option.key} value={option.key}>{option.key}</Option>)}
@@ -143,18 +143,18 @@ export function QueryBuilderTool() {
               </>
             ) : null}
             <div className="field full">
-              <label>WHERE（可选）</label>
+              <label>{tr("WHERE（可选）")}</label>
               <input className="input mono" value={where} onChange={(e) => setWhere(e.target.value)} placeholder="status = 'completed' AND total_cents > 1000" />
             </div>
             <div className="field">
-              <label>排序</label>
+              <label>{tr("排序")}</label>
               <Select className="select" value={orderBy} onChange={(e) => setOrderBy(e.target.value)}>
-                <Option value="">— 不排序 —</Option>
+                <Option value="">{tr("— 不排序 —")}</Option>
                 {columnOptions.map((option) => <Option key={option.key} value={option.key}>{option.table}.{option.column}</Option>)}
               </Select>
             </div>
             <div className="field">
-              <label>方向 / 行数</label>
+              <label>{tr("方向 / 行数")}</label>
               <div className="row gap-4">
                 <Select className="select" value={direction} onChange={(e) => setDirection(e.target.value as 'ASC' | 'DESC')} style={{ width: 80 }}>
                   <Option value="DESC">DESC</Option>
@@ -166,7 +166,7 @@ export function QueryBuilderTool() {
           </div>
 
           <div className="field" style={{ marginTop: 8 }}>
-            <label>选择列（{selected.size} / {columnOptions.length}）</label>
+            <label>{tr("选择列（")}{selected.size} / {columnOptions.length}）</label>
             <div className="column-picker">
               {columnOptions.map((option) => (
                 <label key={option.key} className="column-chip">
@@ -189,24 +189,23 @@ export function QueryBuilderTool() {
         </div>
 
         <div className="builder-preview">
-          <div className="tool-section-title">生成 SQL</div>
-          <pre className="sql-block" style={{ minHeight: 180, whiteSpace: 'pre-wrap' }}>{sql || '-- 选择表和列'}</pre>
+          <div className="tool-section-title">{tr("生成 SQL")}</div>
+          <pre className="sql-block" style={{ minHeight: 180, whiteSpace: 'pre-wrap' }}>{sql || `-- ${tr('选择表和列')}`}</pre>
           <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
             <button
               className="btn primary"
               onClick={() => {
                 if (!sql) {
-                  notify('warning', '请先选择表');
+                  notify('warning', tr("请先选择表"));
                   return;
                 }
                 openQuery(activeConnectionId ?? undefined, sql, undefined, database || undefined);
                 closeTools();
               }}
             >
-              <Play size={12} /> 在编辑器打开
-            </button>
+              <Play size={12} /> {tr(" 在编辑器打开 ")}</button>
           </div>
-          <p className="hint">支持两表连接、列选择、WHERE、排序与行数。更复杂的查询可直接在 SQL 编辑器或让 Agent 完成。</p>
+          <p className="hint">{tr("支持两表连接、列选择、WHERE、排序与行数。更复杂的查询可直接在 SQL 编辑器或让 Agent 完成。")}</p>
         </div>
       </div>
     </div>

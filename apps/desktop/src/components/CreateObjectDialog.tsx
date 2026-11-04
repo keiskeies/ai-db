@@ -5,6 +5,7 @@ import { engineMeta, fieldTypeOptions } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp } from '../store';
 import { Modal, Option, Select, Spinner } from './ui';
+import { t as tr } from '../i18n';
 
 export function CreateObjectDialog({
   connection,
@@ -36,11 +37,11 @@ export function CreateObjectDialog({
   const submit = async () => {
     setError(null);
     if (!name.trim()) {
-      setError('名称不能为空');
+      setError(tr("名称不能为空"));
       return;
     }
     if (isVector && (!Number(dimension) || Number(dimension) < 1)) {
-      setError('向量维度需要大于 0');
+      setError(tr("向量维度需要大于 0"));
       return;
     }
     setRunning(true);
@@ -54,11 +55,11 @@ export function CreateObjectDialog({
         edge: isAql ? edge : undefined,
         fields: plainFields ? fields.filter((field) => field.name.trim()) : [],
       });
-      notify('success', result.kind === 'index' ? '索引已创建' : '集合已创建', result.name);
+      notify('success', result.kind === 'index' ? tr("索引已创建") : tr("集合已创建"), result.name);
       onClose();
       void loadSchema(connection.id, true, database).catch(() => undefined);
     } catch (err: any) {
-      setError(err?.message ?? '创建失败');
+      setError(err?.message ?? tr("创建失败"));
     } finally {
       setRunning(false);
     }
@@ -69,20 +70,19 @@ export function CreateObjectDialog({
 
   return (
     <Modal
-      title={`新建${isSearch ? '索引' : '集合'}`}
+      title={tr("新建{0}", [isSearch ? tr("索引") : tr("集合")])}
       icon={<Plus size={15} />}
       onClose={onClose}
       footer={
         <>
-          <button className="btn" onClick={onClose} disabled={running}>取消</button>
+          <button className="btn" onClick={onClose} disabled={running}>{tr("取消")}</button>
           <button className="btn primary" onClick={() => void submit()} disabled={running} data-testid="create-object-submit">
-            {running ? <Spinner /> : null} 创建
-          </button>
+            {running ? <Spinner /> : null}{tr(" 创建 ")}</button>
         </>
       }
     >
       <div className="form-grid">
-        <label>{isSearch ? '索引名' : connection.engine === 'weaviate' ? 'class 名' : '集合名'}</label>
+        <label>{isSearch ? tr("索引名") : connection.engine === 'weaviate' ? tr("class 名") : tr("集合名")}</label>
         <input
           className="input"
           value={name}
@@ -93,7 +93,7 @@ export function CreateObjectDialog({
         />
         {isVector ? (
           <>
-            <label>向量维度</label>
+            <label>{tr("向量维度")}</label>
             <input
               className="input"
               value={dimension}
@@ -103,7 +103,7 @@ export function CreateObjectDialog({
             />
             {connection.engine === 'qdrant' ? (
               <>
-                <label>距离函数</label>
+                <label>{tr("距离函数")}</label>
                 <Select className="select" value={distance} onChange={(event) => setDistance(event.target.value)} data-testid="create-object-distance">
                   <Option value="Cosine">Cosine</Option>
                   <Option value="Euclid">Euclid</Option>
@@ -116,15 +116,15 @@ export function CreateObjectDialog({
         ) : null}
         {isAql ? (
           <>
-            <label>集合类型</label>
+            <label>{tr("集合类型")}</label>
             <Select
               className="select"
               value={edge ? 'edge' : 'document'}
               onChange={(event) => setEdge(event.target.value === 'edge')}
               data-testid="create-object-kind"
             >
-              <Option value="document">文档集合</Option>
-              <Option value="edge">边集合</Option>
+              <Option value="document">{tr("文档集合")}</Option>
+              <Option value="edge">{tr("边集合")}</Option>
             </Select>
           </>
         ) : null}
@@ -132,14 +132,14 @@ export function CreateObjectDialog({
       {plainFields ? (
         <>
           <div className="muted" style={{ fontSize: 11, margin: '12px 0 6px' }}>
-            字段（{connection.engine === 'weaviate' ? 'Weaviate 属性' : 'ES mapping'}）
+            {tr(" 字段（")}{connection.engine === 'weaviate' ? tr("Weaviate 属性") : 'ES mapping'}）
           </div>
           {fields.map((field, index) => (
             <div key={index} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
               <input
                 className="input grow"
                 value={field.name}
-                placeholder="字段名"
+                placeholder={tr("字段名")}
                 onChange={(event) => {
                   const next = [...fields];
                   next[index] = { ...next[index], name: event.target.value };
@@ -163,7 +163,7 @@ export function CreateObjectDialog({
                   </Option>
                 ))}
               </Select>
-              <button className="icon-btn" title="删除字段" onClick={() => setFields(fields.filter((_, i) => i !== index))}>
+              <button className="icon-btn" title={tr("删除字段")} onClick={() => setFields(fields.filter((_, i) => i !== index))}>
                 ×
               </button>
             </div>
@@ -173,8 +173,7 @@ export function CreateObjectDialog({
             onClick={() => setFields([...fields, { name: '', type: typeOptions[0] }])}
             data-testid="create-object-add-field"
           >
-            <Plus size={12} /> 添加字段
-          </button>
+            <Plus size={12} /> {tr(" 添加字段 ")}</button>
         </>
       ) : null}
       {error ? <div style={{ color: 'var(--danger)', fontSize: 12, marginTop: 10 }} data-testid="create-object-error">{error}</div> : null}

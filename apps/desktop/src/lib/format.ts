@@ -1,3 +1,6 @@
+
+import { t as tr, getI18nLocale } from '../i18n';
+
 export function formatCell(value: unknown): { text: string; kind: 'null' | 'number' | 'json' | 'bool' | 'text' } {
   if (value === null || value === undefined) return { text: 'NULL', kind: 'null' };
   if (typeof value === 'boolean') return { text: value ? 'true' : 'false', kind: 'bool' };
@@ -23,11 +26,11 @@ export function formatBytes(n?: number): string {
 export function formatRelative(iso?: string): string {
   if (!iso) return '';
   const diff = Date.now() - new Date(iso).getTime();
-  if (diff < 60_000) return '刚刚';
-  if (diff < 3_600_000) return `${Math.round(diff / 60_000)} 分钟前`;
-  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)} 小时前`;
-  if (diff < 7 * 86_400_000) return `${Math.round(diff / 86_400_000)} 天前`;
-  return new Date(iso).toLocaleDateString();
+  if (diff < 60_000) return tr("刚刚");
+  if (diff < 3_600_000) return tr("{0} 分钟前", [Math.round(diff / 60_000)]);
+  if (diff < 86_400_000) return tr("{0} 小时前", [Math.round(diff / 3_600_000)]);
+  if (diff < 7 * 86_400_000) return tr("{0} 天前", [Math.round(diff / 86_400_000)]);
+  return new Date(iso).toLocaleDateString(getI18nLocale());
 }
 
 export function truncate(text: string, n: number): string {

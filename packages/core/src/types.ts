@@ -650,9 +650,32 @@ export interface SearchBackendHealth {
   failures: number;
 }
 
+/** 界面语言。默认英语；'zh' 为旧版取值，读取时归一为 zh-CN。 */
+export type AppLocale =
+  | 'en'
+  | 'zh-CN'
+  | 'zh-TW'
+  | 'ja'
+  | 'ko'
+  | 'de'
+  | 'fr'
+  | 'es'
+  | 'pt-BR'
+  | 'it'
+  | 'ru'
+  | 'ar'
+  | 'hi'
+  | 'id'
+  | 'vi'
+  | 'th'
+  | 'tr'
+  | 'nl'
+  | 'pl'
+  | 'uk';
+
 export interface AppSettings {
   theme: 'dark' | 'light' | 'system';
-  locale: 'zh' | 'en';
+  locale: AppLocale;
   defaultLimit: number;
   queryTimeoutMs: number;
   historyLimit: number;
@@ -667,7 +690,7 @@ export interface AppSettings {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
-  locale: 'zh',
+  locale: 'en',
   defaultLimit: 100,
   queryTimeoutMs: 30000,
   historyLimit: 1000,

@@ -823,7 +823,7 @@ export class AgentHost {
       if (typeof args.table === 'string' && args.table.trim()) touched.add(args.table.trim());
       if (typeof args.sql === 'string') for (const name of tablesFromSql(args.sql)) touched.add(name);
     }
-    const items = suggestFollowUps({ schemas, tables: [...touched], usedTools, bundle, limit: 3 });
+    const items = suggestFollowUps({ schemas, tables: [...touched], usedTools, bundle, limit: 3, locale: /^zh/i.test(this.opts.store.getSettings().locale) ? 'zh' : 'en' });
     return items.length ? [items] : [];
   }
 

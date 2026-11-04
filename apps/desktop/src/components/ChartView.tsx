@@ -4,6 +4,7 @@ import { ArrowUpRight, X } from 'lucide-react';
 import { useApp, type ContextMenuItem } from '../store';
 import { ChartToolbar, type ChartType } from './ChartToolbar';
 import { CHART_TYPE_NAMES, chartSuitability, recommendChartType } from './chartSuitability';
+import { getI18nLocale, t as tr } from '../i18n';
 
 export interface ChartSpec {
   type: ChartType;
@@ -30,7 +31,7 @@ export interface ChartSpec {
 
 function seriesColors(chart: ChartSpec) {
   return [
-    { name: chart.yLabel || '值', values: chart.series.map((point) => point.value), color: '#45c8c3' },
+    { name: chart.yLabel || tr("值"), values: chart.series.map((point) => point.value), color: '#45c8c3' },
     ...(chart.extraSeries ?? [])
       .filter((extra) => extra.values.length === chart.series.length)
       .map((extra, index) => ({ name: extra.name, values: extra.values, color: COLORS[(index + 1) % COLORS.length] })),
@@ -164,9 +165,9 @@ export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, z
       onMouseLeave={() => setHover(null)}
       onContextMenu={(event) => {
         event.preventDefault();
-        const items: ContextMenuItem[] = [{ label: '导出 PNG', onClick: () => void exportPng(svgRef, chart.title, setExporting) }];
-        if (onExportCsv) items.push({ label: '导出 CSV', onClick: onExportCsv });
-        if (chart.sql && onOpenEditor) items.push({ label: '打开 SQL', onClick: () => onOpenEditor(chart.sql!) });
+        const items: ContextMenuItem[] = [{ label: tr("导出 PNG"), onClick: () => void exportPng(svgRef, chart.title, setExporting) }];
+        if (onExportCsv) items.push({ label: tr("导出 CSV"), onClick: onExportCsv });
+        if (chart.sql && onOpenEditor) items.push({ label: tr("打开 SQL"), onClick: () => onOpenEditor(chart.sql!) });
         useApp.getState().openContextMenu(event.clientX, event.clientY, items);
       }}
     >
@@ -176,7 +177,7 @@ export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, z
       </div>
       {correctedFrom && correctedType ? (
         <div className="chart-adapt-note" data-testid="chart-adapt-note">
-          已按数据结构改用{CHART_TYPE_NAMES[correctedType]}：{adjustmentReason ?? '当前类型不适合这组数据'}。
+          {tr(" 已按数据结构改用")}{CHART_TYPE_NAMES[correctedType]}：{adjustmentReason ?? tr("当前类型不适合这组数据")}。
         </div>
       ) : null}
       {toolbar}
@@ -191,15 +192,14 @@ export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, z
         <span className="truncate">{chart.xLabel} → {chart.yLabel}</span>
         {chart.sql && onOpenEditor ? (
           <button className="chart-open" onClick={() => onOpenEditor(chart.sql!)}>
-            <ArrowUpRight size={11} /> 打开 SQL
-          </button>
+            <ArrowUpRight size={11} /> {tr(" 打开 SQL ")}</button>
         ) : null}
       </div>
       {zoomOpen ? (
         createPortal(
           <div className="chart-modal" role="dialog" aria-label={chart.title} onClick={() => setZoomOpen(false)}>
             <div className="chart-modal-body" onClick={(e) => e.stopPropagation()}>
-              <button className="icon-btn chart-modal-close" title="关闭" data-testid="chart-zoom-close" onClick={() => setZoomOpen(false)}><X size={14} /></button>
+              <button className="icon-btn chart-modal-close" title={tr("关闭")} data-testid="chart-zoom-close" onClick={() => setZoomOpen(false)}><X size={14} /></button>
               <ChartView chart={chart} onOpenEditor={onOpenEditor} typeOverride={type} maxPoints={60} zoomed onExportCsv={onExportCsv} columns={columns} x={x} y={y} onX={onX} onY={onY} />
             </div>
           </div>,
@@ -257,7 +257,7 @@ function rosePoints(chart: ChartSpec, maxPoints: number): RosePoint[] {
   const rest = positives.slice(cap - 1);
   return [
     ...positives.slice(0, cap - 1),
-    { label: `其他 ${rest.length} 项`, value: rest.reduce((sum, point) => sum + point.value, 0), other: true },
+    { label: tr("其他 {0} 项", [rest.length]), value: rest.reduce((sum, point) => sum + point.value, 0), other: true },
   ];
 }
 
@@ -265,7 +265,7 @@ function PieBody({ chart, maxPoints, height: fixedHeight, maxHeight, zoomed, svg
   const measured = useElementWidth(svgRef, zoomed ? 720 : 380);
   const points = rosePoints(chart, maxPoints);
   if (!points.length) {
-    return <div className="dash-empty" data-testid="chart-empty">没有可绘制的正向数据（饼图忽略 0 与负值）。</div>;
+    return <div className="dash-empty" data-testid="chart-empty">{tr("没有可绘制的正向数据（饼图忽略 0 与负值）。")}</div>;
   }
   const width = zoomed ? 720 : Math.max(280, Math.round(measured));
   const height = zoomed ? 320 : fixedHeight ?? maxHeight ?? 300;
@@ -330,11 +330,11 @@ function PieBody({ chart, maxPoints, height: fixedHeight, maxHeight, zoomed, svg
         {petals.map((petal, index) => (
           <path key={`petal-${index}`} className="rose-petal" d={petal.path} color={petal.color} fill={petal.color} fillOpacity={0.92} data-testid="chart-rose-petal" data-tip={petal.tip} />
         ))}
-        <text x={cx} y={16} textAnchor="middle" className="chart-axis rose-title" data-tip={`总计: ${formatExact(total)}`}>
-          总计 {formatCompactValue(total)}
+        <text x={cx} y={16} textAnchor="middle" className="chart-axis rose-title" data-tip={tr("总计: {0}", [formatExact(total)])}>
+          {tr(" 总计 ")}{formatCompactValue(total)}
         </text>
         <text x={cx} y={28} textAnchor="middle" className="chart-axis rose-label-value">
-          {chart.yLabel}{chart.extraSeries?.length ? ' · 占比仅按此列' : ''}
+          {chart.yLabel}{chart.extraSeries?.length ? tr(" · 占比仅按此列") : ''}
         </text>
         {labels.map((petal, index) => {
           const [tipX, tipY] = at(petal.mid, petal.outer);
@@ -387,7 +387,7 @@ function ScatterBody({ chart, maxPoints, zoomed, svgRef, maxHeight, height: targ
   const measured = useElementWidth(svgRef, zoomed ? 720 : 380);
   const points = scatterOf(chart, maxPoints);
   if (!points.length) {
-    return <div className="dash-empty" data-testid="chart-empty">没有可绘制的散点（x/y 需要同时为数值）。</div>;
+    return <div className="dash-empty" data-testid="chart-empty">{tr("没有可绘制的散点（x/y 需要同时为数值）。")}</div>;
   }
   const width = zoomed ? 720 : Math.max(260, Math.round(measured));
   const naturalHeight = Math.round(width * (zoomed ? 320 / 720 : 176 / 380));
@@ -472,7 +472,7 @@ function HeatmapBody({ chart, zoomed, svgRef, maxHeight, height: targetHeight, d
   const measured = useElementWidth(svgRef, zoomed ? 720 : 380);
   const matrix = heatmapOf(chart);
   if (!matrix || !matrix.xLabels.length || !matrix.yLabels.length) {
-    return <div className="dash-empty" data-testid="chart-empty">热力图需要一组行/列分类和一个数值度量。</div>;
+    return <div className="dash-empty" data-testid="chart-empty">{tr("热力图需要一组行/列分类和一个数值度量。")}</div>;
   }
   const width = zoomed ? 720 : Math.max(300, Math.round(measured));
   const labelW = Math.min(112, Math.max(46, Math.max(...matrix.yLabels.map((label) => Math.min(12, label.length))) * 7.4 + 10));
@@ -511,8 +511,8 @@ function HeatmapBody({ chart, zoomed, svgRef, maxHeight, height: targetHeight, d
         </linearGradient>
       </defs>
       <rect x={width - 86} y={7} width={54} height={6} rx={3} fill={`url(#heat-${id})`} />
-      <text x={width - 91} y={13} textAnchor="end" className="chart-axis" style={{ fontSize: 7.5 }}>低</text>
-      <text x={width - 27} y={13} textAnchor="start" className="chart-axis" style={{ fontSize: 7.5 }}>高</text>
+      <text x={width - 91} y={13} textAnchor="end" className="chart-axis" style={{ fontSize: 7.5 }}>{tr("低")}</text>
+      <text x={width - 27} y={13} textAnchor="start" className="chart-axis" style={{ fontSize: 7.5 }}>{tr("高")}</text>
       {matrix.yLabels.map((label, row) => (
         <text key={`y-${label}`} x={pad.left - 6} y={offsetY + cellH * row + cellH / 2 + 3} textAnchor="end" className="chart-axis">
           {label.length > 12 ? `${label.slice(0, 12)}…` : label}
@@ -579,7 +579,7 @@ function RadarBody({ chart, maxPoints, zoomed, svgRef, maxHeight, height: target
   const measured = useElementWidth(svgRef, zoomed ? 720 : 380);
   const history = chart.series.slice(0, maxPoints);
   if (history.length < 3) {
-    return <div className="dash-empty" data-testid="chart-empty">雷达图至少需要 3 个类别轴。</div>;
+    return <div className="dash-empty" data-testid="chart-empty">{tr("雷达图至少需要 3 个类别轴。")}</div>;
   }
   const denseAxes = history.length > 12;
   const axisLabelChars = denseAxes ? 5 : 9;
@@ -590,7 +590,7 @@ function RadarBody({ chart, maxPoints, zoomed, svgRef, maxHeight, height: target
   };
   const extras = (chart.extraSeries ?? []).filter((extra) => extra.values.length >= history.length);
   const seriesList = [
-    { name: chart.yLabel || '值', values: history.map((point) => point.value), color: COLORS[0] },
+    { name: chart.yLabel || tr("值"), values: history.map((point) => point.value), color: COLORS[0] },
     ...extras.map((extra, index) => ({ name: extra.name, values: extra.values.slice(0, history.length), color: COLORS[(index + 1) % COLORS.length] })),
   ];
   const width = zoomed ? 720 : Math.max(280, Math.round(measured));
@@ -716,7 +716,7 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight, height: t
   // 空序列必须早退：linePath 为空串时 areaPath 会退化成 " L …"，浏览器报
   // "<path> attribute d: Expected moveto path command"，画出一堆垃圾路径。
   if (!all.length) {
-    return <div className="dash-empty" data-testid="chart-empty">没有可绘制的数据点（结果集为空或全为 NULL）。</div>;
+    return <div className="dash-empty" data-testid="chart-empty">{tr("没有可绘制的数据点（结果集为空或全为 NULL）。")}</div>;
   }
 
   // viewBox 用容器实际像素宽：1:1 渲染，文字更清晰。
@@ -964,7 +964,7 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight, height: t
               r="2.6"
               color="#F5C451"
               fill="#F5C451"
-              data-tip={`${point.label}: ${formatExact(point.value)}\n区间 ${formatExact(point.lower)} ~ ${formatExact(point.upper)}`}
+              data-tip={tr("{0}: {1}\n区间 {2} ~ {3}", [point.label, formatExact(point.value), formatExact(point.lower), formatExact(point.upper)])}
             />
           ))}
         </>
@@ -1110,8 +1110,14 @@ function formatPercent(percent: number): string {
 /** 花瓣外侧标签用紧凑值，避免在窄卡片里压到相邻标签。 */
 function formatCompactValue(value: number): string {
   const abs = Math.abs(value);
-  if (abs >= 100_000_000) return `${(value / 100_000_000).toFixed(2)}亿`;
-  if (abs >= 10_000) return `${(value / 10_000).toFixed(1)}万`;
+  if (getI18nLocale() === 'zh-CN' || getI18nLocale() === 'zh-TW') {
+    if (abs >= 100_000_000) return tr("{0}亿", [(value / 100_000_000).toFixed(2)]);
+    if (abs >= 10_000) return tr("{0}万", [(value / 10_000).toFixed(1)]);
+  } else {
+    if (abs >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
+    if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+    if (abs >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  }
   if (abs >= 100 || Number.isInteger(value)) return Math.round(value).toLocaleString();
   return value.toFixed(1);
 }
@@ -1159,19 +1165,19 @@ async function exportPng(svgRef: RefObject<SVGSVGElement>, title: string, setExp
     const image = new Image();
     await new Promise<void>((resolve, reject) => {
       image.onload = () => resolve();
-      image.onerror = () => reject(new Error('SVG 渲染失败'));
+      image.onerror = () => reject(new Error(tr("SVG 渲染失败")));
       image.src = url;
     });
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext('2d');
-    if (!context) throw new Error('无法创建 canvas 上下文');
+    if (!context) throw new Error(tr("无法创建 canvas 上下文"));
     context.fillStyle = background;
     context.fillRect(0, 0, width, height);
     context.drawImage(image, 0, 0, width, height);
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
-    if (!blob) throw new Error('PNG 编码失败');
+    if (!blob) throw new Error(tr("PNG 编码失败"));
     const anchor = document.createElement('a');
     anchor.href = URL.createObjectURL(blob);
     anchor.download = `${(title || 'chart').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60)}.png`;

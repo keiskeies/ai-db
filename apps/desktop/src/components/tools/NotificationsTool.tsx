@@ -5,36 +5,37 @@ import { api } from '../../lib/api';
 import { useApp } from '../../store';
 import { askConfirm } from '../AskDialog';
 import { Select, Option } from '../ui';
+import { t as tr } from '../../i18n';
 
 const TYPE_LABEL: Record<NotificationChannelType, string> = {
-  feishu: '飞书群机器人',
-  wecom: '企业微信群机器人',
+  feishu: tr("飞书群机器人"),
+  wecom: tr("企业微信群机器人"),
   'qq-onebot': 'QQ（OneBot HTTP）',
-  dingtalk: '钉钉群机器人',
+  dingtalk: tr("钉钉群机器人"),
   slack: 'Slack',
   discord: 'Discord',
   telegram: 'Telegram',
 };
 
 const TYPE_HINT: Record<NotificationChannelType, string> = {
-  feishu: '飞书群 → 设置 → 群机器人 → 添加自定义机器人，复制 Webhook。',
-  wecom: '企业微信群 → 群设置 → 群机器人 → 添加，复制 Webhook。',
-  'qq-onebot': '填写 OneBot 实现（NapCat / Lagrange 等）的 HTTP 地址与目标群号。',
-  dingtalk: '钉钉群 → 群设置 → 智能群助手 → 添加机器人 → 自定义，复制 Webhook。',
-  slack: 'Slack App → Incoming Webhooks → 选择频道，复制 Webhook URL。',
-  discord: '频道设置 → 整合 → Webhook → 新建 Webhook，复制 URL。',
-  telegram: '在 @BotFather 创建 Bot 拿 token；chatId 可用 @channelusername 或数字 ID。',
+  feishu: tr("飞书群 → 设置 → 群机器人 → 添加自定义机器人，复制 Webhook。"),
+  wecom: tr("企业微信群 → 群设置 → 群机器人 → 添加，复制 Webhook。"),
+  'qq-onebot': tr("填写 OneBot 实现（NapCat / Lagrange 等）的 HTTP 地址与目标群号。"),
+  dingtalk: tr("钉钉群 → 群设置 → 智能群助手 → 添加机器人 → 自定义，复制 Webhook。"),
+  slack: tr("Slack App → Incoming Webhooks → 选择频道，复制 Webhook URL。"),
+  discord: tr("频道设置 → 整合 → Webhook → 新建 Webhook，复制 URL。"),
+  telegram: tr("在 @BotFather 创建 Bot 拿 token；chatId 可用 @channelusername 或数字 ID。"),
 };
 
 function defaultChannelName(type: NotificationChannelType): string {
   const names: Record<NotificationChannelType, string> = {
-    feishu: '飞书数据群',
-    wecom: '企微数据群',
-    'qq-onebot': 'QQ 数据群',
-    dingtalk: '钉钉数据群',
-    slack: 'Slack 数据频道',
-    discord: 'Discord 数据频道',
-    telegram: 'Telegram 数据频道',
+    feishu: tr("飞书数据群"),
+    wecom: tr("企微数据群"),
+    'qq-onebot': tr("QQ 数据群"),
+    dingtalk: tr("钉钉数据群"),
+    slack: tr("Slack 数据频道"),
+    discord: tr("Discord 数据频道"),
+    telegram: tr("Telegram 数据频道"),
   };
   return names[type];
 }
@@ -68,7 +69,7 @@ export function NotificationsTool() {
     try {
       setChannels((await api.notificationChannels()).channels);
     } catch (err: any) {
-      notify('error', '读取通知渠道失败', err?.message);
+      notify('error', tr("读取通知渠道失败"), err?.message);
     } finally {
       setLoading(false);
     }
@@ -109,9 +110,9 @@ export function NotificationsTool() {
       const { channel } = await api.createNotificationChannel({ name: channelName, type, config });
       if (testAfter) {
         const { result } = await api.testNotificationChannel(channel.id);
-        notify(result.ok ? 'success' : 'error', result.ok ? '已保存并发送测试消息' : '已保存，但测试发送失败', `${channelName} · ${result.message}`);
+        notify(result.ok ? 'success' : 'error', result.ok ? tr("已保存并发送测试消息") : tr("已保存，但测试发送失败"), `${channelName} · ${result.message}`);
       } else {
-        notify('success', '通知渠道已保存', `${channelName} · ${TYPE_LABEL[type]}`);
+        notify('success', tr("通知渠道已保存"), `${channelName} · ${TYPE_LABEL[type]}`);
       }
       setName('');
       setWebhookUrl('');
@@ -130,7 +131,7 @@ export function NotificationsTool() {
       setDatabase('');
       await load();
     } catch (err: any) {
-      notify('error', '保存通知渠道失败', err?.message);
+      notify('error', tr("保存通知渠道失败"), err?.message);
     }
   };
 
@@ -138,9 +139,9 @@ export function NotificationsTool() {
     setTesting(channel.id);
     try {
       const { result } = await api.testNotificationChannel(channel.id);
-      notify(result.ok ? 'success' : 'error', result.ok ? '测试消息已发送' : '测试发送失败', result.message);
+      notify(result.ok ? 'success' : 'error', result.ok ? tr("测试消息已发送") : tr("测试发送失败"), result.message);
     } catch (err: any) {
-      notify('error', '测试发送失败', err?.message);
+      notify('error', tr("测试发送失败"), err?.message);
     } finally {
       setTesting(null);
     }
@@ -151,29 +152,28 @@ export function NotificationsTool() {
       await api.updateNotificationChannel(channel.id, { enabled: !channel.enabled });
       await load();
     } catch (err: any) {
-      notify('error', '更新渠道失败', err?.message);
+      notify('error', tr("更新渠道失败"), err?.message);
     }
   };
 
   const remove = async (channel: NotificationChannelInfo) => {
-    if (!(await askConfirm({ message: `删除通知渠道「${channel.name}」？`, danger: true, confirmLabel: '删除' }))) return;
+    if (!(await askConfirm({ message: tr("删除通知渠道「{0}」？", [channel.name]), danger: true, confirmLabel: tr("删除") }))) return;
     try {
       await api.deleteNotificationChannel(channel.id);
       await load();
     } catch (err: any) {
-      notify('error', '删除失败', err?.message);
+      notify('error', tr("删除失败"), err?.message);
     }
   };
 
   return (
     <div className="tool-pane">
       <div className="tool-pane-head">
-        <Bell size={15} /> 通知渠道
-        <span className="muted">飞书 / 企微 / 钉钉 / Slack / Discord / Telegram / QQ · 报告推送</span>
+        <Bell size={15} /> {tr(" 通知渠道 ")}<span className="muted">{tr("飞书 / 企微 / 钉钉 / Slack / Discord / Telegram / QQ · 报告推送")}</span>
       </div>
       <div className="tool-scroll">
         <div className="panel" style={{ padding: 10, marginBottom: 10 }}>
-          <div className="panel-head" style={{ paddingLeft: 0 }}>添加机器人</div>
+          <div className="panel-head" style={{ paddingLeft: 0 }}>{tr("添加机器人")}</div>
           <div className="row gap-6" style={{ flexWrap: 'wrap', marginBottom: 6 }}>
             {(Object.keys(TYPE_LABEL) as NotificationChannelType[]).map((value) => (
               <button key={value} className={`btn ${type === value ? 'primary' : ''}`} onClick={() => setType(value)}>
@@ -181,9 +181,9 @@ export function NotificationsTool() {
               </button>
             ))}
           </div>
-          <div className="muted" style={{ fontSize: 10, marginBottom: 6 }}>{TYPE_HINT[type]} Webhook 只需配置一次，之后在下方列表用开关启停；不需要安装 MCP。</div>
+          <div className="muted" style={{ fontSize: 10, marginBottom: 6 }}>{TYPE_HINT[type]}{tr(" Webhook 只需配置一次，之后在下方列表用开关启停；不需要安装 MCP。")}</div>
           <div className="field">
-            <label>名称（可选）</label>
+            <label>{tr("名称（可选）")}</label>
             <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={defaultChannelName(type)} />
           </div>
           {type === 'telegram' ? (
@@ -205,13 +205,13 @@ export function NotificationsTool() {
               </div>
               {type === 'feishu' || type === 'dingtalk' ? (
                 <div className="field" style={{ marginTop: 8 }}>
-                  <label>签名密钥（可选）</label>
+                  <label>{tr("签名密钥（可选）")}</label>
                   <input className="input" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} />
                 </div>
               ) : null}
               {type === 'feishu' ? (
                 <details style={{ marginTop: 8 }}>
-                  <summary className="muted" style={{ fontSize: 10, cursor: 'pointer' }}>高级：应用凭证（仅群内 @机器人问答需要）</summary>
+                  <summary className="muted" style={{ fontSize: 10, cursor: 'pointer' }}>{tr("高级：应用凭证（仅群内 @机器人问答需要）")}</summary>
                   <div className="tool-row" style={{ padding: 0, border: 0, marginTop: 8 }}>
                     <div className="field" style={{ flex: 1 }}>
                       <label>App ID</label>
@@ -237,18 +237,18 @@ export function NotificationsTool() {
               </div>
               <div className="row gap-6" style={{ marginTop: 8 }}>
                 <div className="field" style={{ flex: 1 }}>
-                  <label>Access Token（可选）</label>
+                  <label>{tr("Access Token（可选）")}</label>
                   <input className="input" type="password" value={token} onChange={(e) => setToken(e.target.value)} />
                 </div>
                 <div className="field" style={{ width: 110 }}>
-                  <label>目标</label>
+                  <label>{tr("目标")}</label>
                   <Select className="select" value={targetType} onChange={(e) => setTargetType(e.target.value as 'group' | 'private')}>
-                    <Option value="group">群</Option>
-                    <Option value="private">私聊</Option>
+                    <Option value="group">{tr("群")}</Option>
+                    <Option value="private">{tr("私聊")}</Option>
                   </Select>
                 </div>
                 <div className="field" style={{ width: 140 }}>
-                  <label>群号 / QQ</label>
+                  <label>{tr("群号 / QQ")}</label>
                   <input className="input" value={targetId} onChange={(e) => setTargetId(e.target.value)} />
                 </div>
               </div>
@@ -257,27 +257,25 @@ export function NotificationsTool() {
           {(type === 'feishu' || type === 'qq-onebot') ? (
             <details className="panel" style={{ padding: 8, marginTop: 8 }}>
               <summary className="row gap-6" style={{ alignItems: 'center', fontSize: 11, cursor: 'pointer' }}>
-                高级：群内 @机器人问答（inbound）
-              </summary>
+                {tr(" 高级：群内 @机器人问答（inbound） ")}</summary>
               <label className="row gap-6" style={{ alignItems: 'center', fontSize: 11, marginTop: 6 }}>
                 <input type="checkbox" checked={inbound} onChange={(e) => setInbound(e.target.checked)} />
-                启用 inbound 问答（只读 Agent，按群白名单）
-              </label>
+                {tr(" 启用 inbound 问答（只读 Agent，按群白名单） ")}</label>
               {inbound ? (
                 <div className="tool-row" style={{ padding: 0, border: 0, marginTop: 6 }}>
                   <div className="field" style={{ flex: 1 }}>
-                    <label>允许的会话 ID（逗号分隔；留空=全部）</label>
-                    <input className="input" value={allowedChats} onChange={(e) => setAllowedChats(e.target.value)} placeholder="群 chat_id / group:123" />
+                    <label>{tr("允许的会话 ID（逗号分隔；留空=全部）")}</label>
+                    <input className="input" value={allowedChats} onChange={(e) => setAllowedChats(e.target.value)} placeholder={tr("群 chat_id / group:123")} />
                   </div>
                   <div className="field" style={{ width: 170 }}>
-                    <label>绑定连接</label>
+                    <label>{tr("绑定连接")}</label>
                     <Select className="select" value={connectionId} onChange={(e) => setConnectionId(e.target.value)}>
-                      <Option value="">请选择</Option>
+                      <Option value="">{tr("请选择")}</Option>
                       {connections.map((connection) => <Option key={connection.id} value={connection.id}>{connection.name}</Option>)}
                     </Select>
                   </div>
                   <div className="field" style={{ width: 130 }}>
-                    <label>默认库（可选）</label>
+                    <label>{tr("默认库（可选）")}</label>
                     <input className="input" value={database} onChange={(e) => setDatabase(e.target.value)} />
                   </div>
                 </div>
@@ -285,14 +283,14 @@ export function NotificationsTool() {
             </details>
           ) : null}
           <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
-            <button className="btn" onClick={() => void create(false)}>保存</button>
-            <button className="btn primary" onClick={() => void create(true)}><Plus size={12} /> 保存并发送测试</button>
+            <button className="btn" onClick={() => void create(false)}>{tr("保存")}</button>
+            <button className="btn primary" onClick={() => void create(true)}><Plus size={12} /> {tr(" 保存并发送测试")}</button>
           </div>
         </div>
         <div className="panel">
-          <div className="panel-head">已配置 <span className="badge">{channels.length}</span></div>
-          {loading ? <div className="dash-empty"><Loader2 size={14} className="spin" /> 读取中…</div> : null}
-          {!loading && !channels.length ? <div className="dash-empty">还没有通知渠道。先配置一个飞书/企微群机器人。</div> : null}
+          <div className="panel-head">{tr("已配置 ")}<span className="badge">{channels.length}</span></div>
+          {loading ? <div className="dash-empty"><Loader2 size={14} className="spin" /> {tr(" 读取中…")}</div> : null}
+          {!loading && !channels.length ? <div className="dash-empty">{tr("还没有通知渠道。先配置一个飞书/企微群机器人。")}</div> : null}
           {channels.map((channel) => (
             <div key={channel.id} className="transfer-row">
               <span className="badge">{channel.enabled ? 'ON' : 'OFF'}</span>
@@ -301,11 +299,10 @@ export function NotificationsTool() {
                 <strong>{channel.name}</strong>
                 <div className="muted" style={{ fontSize: 10 }}>{channel.summary ?? ''}</div>
               </span>
-              <button className="btn small" onClick={() => void toggle(channel)}>{channel.enabled ? '停用' : '启用'}</button>
+              <button className="btn small" onClick={() => void toggle(channel)}>{channel.enabled ? tr("停用") : tr("启用")}</button>
               <button className="btn small" onClick={() => void test(channel)} disabled={testing === channel.id}>
-                {testing === channel.id ? <Loader2 size={11} className="spin" /> : <Send size={11} />} 测试
-              </button>
-              <button className="icon-btn" onClick={() => void remove(channel)} title="删除"><Trash2 size={12} /></button>
+                {testing === channel.id ? <Loader2 size={11} className="spin" /> : <Send size={11} />}{tr(" 测试 ")}</button>
+              <button className="icon-btn" onClick={() => void remove(channel)} title={tr("删除")}><Trash2 size={12} /></button>
             </div>
           ))}
         </div>

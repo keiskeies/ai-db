@@ -3,6 +3,7 @@ import { applyCapabilityDefaults, type Capability, type CapabilityField } from '
 import { useApp } from '../../store';
 import { DatabaseSelect, useDatabaseTables } from '../DatabaseSelect';
 import { Select, Option } from '../ui';
+import { t as tr } from '../../i18n';
 
 /**
  * 由能力契约驱动的表单渲染器。
@@ -109,7 +110,7 @@ function TableField({
             </label>
           ))
         ) : (
-          <span className="muted" style={{ fontSize: 11 }}>先选择数据库</span>
+          <span className="muted" style={{ fontSize: 11 }}>{tr("先选择数据库")}</span>
         )}
       </div>
     );
@@ -122,11 +123,10 @@ function TableField({
       onChange={(event) => onChange(field.key, event.target.value)}
       data-testid={testId}
     >
-      <Option value="">（未选择）</Option>
+      <Option value="">{tr("（未选择）")}</Option>
       {tables.map((table) => (
         <Option key={table.name} value={table.name}>
-          {table.name} · {table.columns?.length ?? 0} 列
-        </Option>
+          {table.name} · {table.columns?.length ?? 0}{tr(" 列 ")}</Option>
       ))}
     </Select>
   );
@@ -168,7 +168,7 @@ export function CapabilityForm({
     <div className="capability-form" data-testid={`${testIdPrefix}-form`} data-capability={capability.id}>
       {fields.map((field) => {
         const testId = `${testIdPrefix}-${field.key}`;
-        const label = `${field.label.zh}${field.required ? ' *' : ''}`;
+        const label = `${tr(field.label.zh)}${field.required ? ' *' : ''}`;
         const common = { disabled, 'data-testid': testId };
 
         if (field.type === 'connection' || field.type === 'database') {
@@ -225,12 +225,12 @@ export function CapabilityForm({
               >
                 {(field.options ?? []).map((option) => (
                   <Option key={option.value} value={option.value}>
-                    {option.label.zh}
+                    {tr(option.label.zh)}
                     {option.risk && option.risk !== 'read' ? `（${option.risk}）` : ''}
                   </Option>
                 ))}
               </Select>
-              {field.hint ? <span className="muted" style={{ fontSize: 10 }}>{field.hint}</span> : null}
+              {field.hint ? <span className="muted" style={{ fontSize: 10 }}>{tr(field.hint)}</span> : null}
             </div>
           );
         }
@@ -244,7 +244,7 @@ export function CapabilityForm({
                 onChange={(event) => onChange(field.key, event.target.checked)}
                 {...common}
               />
-              {field.label.zh}
+              {tr(field.label.zh)}
             </label>
           );
         }
@@ -262,7 +262,7 @@ export function CapabilityForm({
                 onChange={(event) => onChange(field.key, Number(event.target.value))}
                 {...common}
               />
-              {field.hint ? <span className="muted" style={{ fontSize: 10 }}>{field.hint}</span> : null}
+              {field.hint ? <span className="muted" style={{ fontSize: 10 }}>{tr(field.hint)}</span> : null}
             </div>
           );
         }
@@ -279,10 +279,10 @@ export function CapabilityForm({
                 rows={4}
                 value={String(values[field.key] ?? '')}
                 onChange={(event) => onChange(field.key, event.target.value)}
-                placeholder={field.signature ? `入参 ${field.signature.input ?? '-'} → 出参 ${field.signature.output ?? '-'}` : undefined}
+                placeholder={field.signature ? tr("入参 {0} → 出参 {1}", [field.signature.input ?? '-', field.signature.output ?? '-']) : undefined}
                 {...common}
               />
-              {field.hint ? <span className="muted" style={{ fontSize: 10 }}>{field.hint}</span> : null}
+              {field.hint ? <span className="muted" style={{ fontSize: 10 }}>{tr(field.hint)}</span> : null}
             </div>
           );
         }
@@ -296,7 +296,7 @@ export function CapabilityForm({
               onChange={(event) => onChange(field.key, event.target.value)}
               {...common}
             />
-            {field.hint ? <span className="muted" style={{ fontSize: 10 }}>{field.hint}</span> : null}
+            {field.hint ? <span className="muted" style={{ fontSize: 10 }}>{tr(field.hint)}</span> : null}
           </div>
         );
       })}
@@ -326,11 +326,11 @@ function ConnectionField({
       onChange={(event) => onChange(field.key, event.target.value)}
       data-testid={testId}
     >
-      <Option value="">（未选择）</Option>
+      <Option value="">{tr("（未选择）")}</Option>
       {connections.map((connection) => (
         <Option key={connection.id} value={connection.id}>
           {connection.name}
-          {connection.readonly ? '（只读）' : ''}
+          {connection.readonly ? tr("（只读）") : ''}
         </Option>
       ))}
     </Select>

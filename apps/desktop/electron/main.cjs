@@ -21,10 +21,11 @@ function readOpenTableArg(argv = process.argv) {
 }
 
 ipcMain.handle('create-table-shortcut', async (_event, payload) => {
-  if (process.platform !== 'win32') return { ok: false, error: '仅 Windows 支持 .lnk 快捷方式' };
+  const errors = payload?.ui?.errors ?? {};
+  if (process.platform !== 'win32') return { ok: false, error: errors.shortcutWindows ?? '仅 Windows 支持 .lnk 快捷方式' };
   const connectionId = String(payload?.connectionId ?? '');
   const table = String(payload?.table ?? '');
-  if (!connectionId || !table) return { ok: false, error: '缺少连接或表名' };
+  if (!connectionId || !table) return { ok: false, error: errors.shortcutArgs ?? '缺少连接或表名' };
   const safeName = String(payload?.name || table).replace(/[\/:*?"<>|]+/g, '_').slice(0, 60) || 'AiDB';
   const file = path.join(app.getPath('desktop'), `${safeName}.lnk`);
   const args = `--open-table=${Buffer.from(JSON.stringify({ connectionId, table, database: payload?.database })).toString('base64')}`;
@@ -36,7 +37,7 @@ ipcMain.handle('create-table-shortcut', async (_event, payload) => {
       icon: process.execPath,
       iconIndex: 0,
     });
-    return ok ? { ok: true, path: file } : { ok: false, error: '写入快捷方式失败' };
+    return ok ? { ok: true, path: file } : { ok: false, error: errors.shortcutWrite ?? '写入快捷方式失败' };
   } catch (err) {
     return { ok: false, error: String(err?.message ?? err) };
   }
@@ -57,6 +58,10 @@ const EXPORT_FILTERS = {
 // 数据导出由网关直接写进 userData/exports，Skill Worker 产物在 userData/skill-runs；
 // 桌面端在这里补系统「另存为」：只允许搬运这两个目录内的文件，用户取消时原文件保留。
 ipcMain.handle('save-export-file', async (_event, payload) => {
+  const ui = payload?.ui ?? {};
+  const errors = ui.errors ?? {};
+  const labels = ui.filters ?? {};
+  const allFiles = ui.allFiles ?? '所有文件';
   const source = path.resolve(String(payload?.sourcePath ?? ''));
   const userData = app.getPath('userData');
   const inside = (root) => {
@@ -64,20 +69,22 @@ ipcMain.handle('save-export-file', async (_event, payload) => {
     return Boolean(rel) && !rel.startsWith('..') && !path.isAbsolute(rel);
   };
   if (!inside(path.join(userData, 'exports')) && !inside(path.join(userData, 'skill-runs'))) {
-    return { ok: false, error: '只允许保存导出目录或 Skill 产物目录中的文件' };
+    return { ok: false, error: errors.outside ?? '只允许保存导出目录或 Skill 产物目录中的文件' };
   }
   try {
     await fs.promises.access(source, fs.constants.R_OK);
   } catch {
-    return { ok: false, error: '导出文件不存在，请重试' };
+    return { ok: false, error: errors.missing ?? '导出文件不存在，请重试' };
   }
   const name = path.basename(source);
-  const filter = EXPORT_FILTERS[path.extname(name).slice(1).toLowerCase()];
+  const kind = path.extname(name).slice(1).toLowerCase();
+  const base = EXPORT_FILTERS[kind];
+  const filter = base ? { ...base, name: labels[kind] ?? base.name } : undefined;
   const options = {
-    title: '保存导出文件',
-    buttonLabel: '保存',
+    title: ui.saveTitle ?? '保存导出文件',
+    buttonLabel: ui.save ?? '保存',
     defaultPath: path.join(app.getPath('downloads'), name),
-    filters: filter ? [filter, { name: '所有文件', extensions: ['*'] }] : [{ name: '所有文件', extensions: ['*'] }],
+    filters: filter ? [filter, { name: allFiles, extensions: ['*'] }] : [{ name: allFiles, extensions: ['*'] }],
   };
   const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
   if (result.canceled || !result.filePath) return { ok: false, canceled: true };
@@ -92,14 +99,17 @@ ipcMain.handle('save-export-file', async (_event, payload) => {
 
 // 回答导出 PDF：主进程渲染 HTML 后打印为 PDF，避免新窗口被 windowOpenHandler 拦截。
 ipcMain.handle('export-pdf', async (_event, payload) => {
+  const ui = payload?.ui ?? {};
+  const errors = ui.errors ?? {};
+  const labels = ui.filters ?? {};
   const html = String(payload?.html ?? '');
-  if (!html) return { ok: false, error: '导出内容为空' };
+  if (!html) return { ok: false, error: errors.emptyPdf ?? '导出内容为空' };
   const safeName = String(payload?.name ?? 'aidb-answer.pdf').replace(/[^\w.\-一-鿿]+/g, '_');
   const options = {
-    title: '导出 PDF',
-    buttonLabel: '保存',
+    title: ui.pdfTitle ?? '导出 PDF',
+    buttonLabel: ui.save ?? '保存',
     defaultPath: path.join(app.getPath('downloads'), safeName),
-    filters: [{ name: 'PDF 文档', extensions: ['pdf'] }],
+    filters: [{ name: labels.pdf ?? 'PDF 文档', extensions: ['pdf'] }],
   };
   const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
   if (result.canceled || !result.filePath) return { ok: false, canceled: true };

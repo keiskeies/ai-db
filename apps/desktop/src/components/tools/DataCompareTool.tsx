@@ -5,6 +5,7 @@ import { useApp } from '../../store';
 import { DatabaseSelect } from '../DatabaseSelect';
 import { askConfirm } from '../AskDialog';
 import { Select, Option } from '../ui';
+import { t as tr } from '../../i18n';
 
 export function DataCompareTool() {
   const connections = useApp((s) => s.connections);
@@ -27,7 +28,7 @@ export function DataCompareTool() {
       setResult(compared);
       setSelected(new Set(compared.rows.filter((row: any) => row.status === 'different').map((row: any) => row.table)));
     } catch (err: any) {
-      notify('error', '数据对比失败', err?.message);
+      notify('error', tr("数据对比失败"), err?.message);
     } finally {
       setLoading(false);
     }
@@ -35,14 +36,14 @@ export function DataCompareTool() {
 
   const sync = async () => {
     if (!selected.size) return;
-    if (!(await askConfirm({ title: '替换目标数据', message: `将用源数据替换目标中 ${selected.size} 张表。`, detail: '目标表会先清空再写入，原数据不可恢复。', danger: true, confirmLabel: '替换' }))) return;
+    if (!(await askConfirm({ title: tr("替换目标数据"), message: tr("将用源数据替换目标中 {0} 张表。", [selected.size]), detail: tr("目标表会先清空再写入，原数据不可恢复。"), danger: true, confirmLabel: tr("替换") }))) return;
     setLoading(true);
     try {
       const { result: transferred } = await api.transfer({ sourceId, sourceDatabase: sourceDb || undefined, targetId, targetDatabase: targetDb || undefined, tables: [...selected], mode: 'replace', createMissing: true });
-      notify('success', '数据同步完成', `${transferred.totalRows} 行`);
+      notify('success', tr("数据同步完成"), tr("{0} 行", [transferred.totalRows]));
       await compare();
     } catch (err: any) {
-      notify('error', '同步失败', err?.message);
+      notify('error', tr("同步失败"), err?.message);
     } finally {
       setLoading(false);
     }
@@ -51,12 +52,11 @@ export function DataCompareTool() {
   return (
     <div className="tool-pane">
       <div className="tool-pane-head">
-        <ArrowLeftRight size={15} /> 数据对比
-        <span className="muted">行数与表存在性对比；可直接替换同步</span>
+        <ArrowLeftRight size={15} /> {tr(" 数据对比 ")}<span className="muted">{tr("行数与表存在性对比；可直接替换同步")}</span>
       </div>
       <div className="tool-row">
         <div className="field" style={{ flex: 1, minWidth: 220 }}>
-          <label>源连接 / 数据库</label>
+          <label>{tr("源连接 / 数据库")}</label>
           <div className="row gap-6">
             <Select className="select" style={{ flex: 1 }} value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
               {connections.map((conn) => <Option key={conn.id} value={conn.id}>{conn.name}</Option>)}
@@ -65,7 +65,7 @@ export function DataCompareTool() {
           </div>
         </div>
         <div className="field" style={{ flex: 1, minWidth: 220 }}>
-          <label>目标连接 / 数据库</label>
+          <label>{tr("目标连接 / 数据库")}</label>
           <div className="row gap-6">
             <Select className="select" style={{ flex: 1 }} value={targetId} onChange={(e) => setTargetId(e.target.value)}>
               {connections.map((conn) => <Option key={conn.id} value={conn.id}>{conn.name}</Option>)}
@@ -74,19 +74,18 @@ export function DataCompareTool() {
           </div>
         </div>
         <button className="btn primary" style={{ alignSelf: 'flex-end' }} onClick={() => void compare()} disabled={loading}>
-          {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <RefreshCw size={12} />} 对比
-        </button>
+          {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <RefreshCw size={12} />}{tr(" 对比 ")}</button>
       </div>
       <div className="tool-scroll">
         {!result ? (
-          <div className="dash-empty">选择源/目标连接后对比各表行数与存在性。差异表可勾选后使用“替换同步”（清空目标表并复制源数据）。</div>
+          <div className="dash-empty">{tr("选择源/目标连接后对比各表行数与存在性。差异表可勾选后使用“替换同步”（清空目标表并复制源数据）。")}</div>
         ) : (
           <>
             <div className="tool-summary">
-              {result.source} → {result.target} · 相同 {result.same} · 不同 {result.different} · 缺失 {result.missing}
+              {result.source} → {result.target}{tr(" · 相同 ")}{result.same}{tr(" · 不同 ")}{result.different}{tr(" · 缺失 ")}{result.missing}
             </div>
             <div className="panel">
-              <div className="panel-head">表 <span className="badge">{result.rows.length}</span><div className="spacer" /><span className="muted">已选 {selected.size}</span></div>
+              <div className="panel-head">{tr("表 ")}<span className="badge">{result.rows.length}</span><div className="spacer" /><span className="muted">{tr("已选 ")}{selected.size}</span></div>
               <div className="transfer-list">
                 {result.rows.map((row: any) => (
                   <label key={row.table} className="transfer-row">
@@ -105,7 +104,7 @@ export function DataCompareTool() {
                     <span className="mono">{row.table}</span>
                     <span className="spacer" />
                     <span className="muted" style={{ fontSize: 10 }}>
-                      {row.status === 'missing' ? '目标缺少表' : `${row.sourceRows.toLocaleString()} → ${row.targetRows?.toLocaleString?.() ?? '?'}`}
+                      {row.status === 'missing' ? tr("目标缺少表") : `${row.sourceRows.toLocaleString()} → ${row.targetRows?.toLocaleString?.() ?? '?'}`}
                       {row.error ? ` · ${row.error}` : ''}
                     </span>
                   </label>
@@ -114,7 +113,7 @@ export function DataCompareTool() {
             </div>
             <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
               <button className="btn primary" onClick={() => void sync()} disabled={!selected.size || loading}>
-                <ArrowLeftRight size={12} /> 替换同步所选（{selected.size}）
+                <ArrowLeftRight size={12} /> {tr(" 替换同步所选（")}{selected.size}）
               </button>
             </div>
           </>

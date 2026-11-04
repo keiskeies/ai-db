@@ -5,6 +5,7 @@ import { engineMeta } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp } from '../store';
 import { Combo, Modal, Spinner } from './ui';
+import { t as tr } from '../i18n';
 
 const TEMPLATES: Record<string, Record<string, unknown>> = {
   mongodb: { name: 'hello', kind: 'demo' },
@@ -61,14 +62,14 @@ export function DocumentWritePanel({
   const submit = async () => {
     setError(null);
     if (!collection.trim()) {
-      setError('请选择或填写集合名');
+      setError(tr("请选择或填写集合名"));
       return;
     }
     const databaseArg = isSearch ? undefined : database;
     setRunning(true);
     try {
       if (mode === 'csv') {
-        if (!csvText.trim()) throw new Error('请粘贴 CSV 内容');
+        if (!csvText.trim()) throw new Error(tr("请粘贴 CSV 内容"));
         const { result } = await api.importDocuments({
           connectionId: connection.id,
           database: databaseArg,
@@ -79,19 +80,19 @@ export function DocumentWritePanel({
           idColumn: idColumn.trim() || undefined,
           vectorColumn: isSearch ? undefined : vectorColumn.trim() || undefined,
         });
-        notify('success', '导入完成', `${collection} · ${result.imported} 条${result.skipped ? ` · 跳过 ${result.skipped}` : ''}`);
+        notify('success', tr("导入完成"), tr("{0} · {1} 条{2}", [collection, result.imported, result.skipped ? tr(" · 跳过 {0}", [result.skipped]) : '']));
         if (result.errors.length) setError(result.errors.slice(0, 3).join('；'));
       } else if (mode === 'write') {
         let parsed: unknown;
         try {
           parsed = JSON.parse(text);
         } catch (err: any) {
-          throw new Error(`JSON 解析失败：${err?.message ?? '格式错误'}`);
+          throw new Error(tr("JSON 解析失败：{0}", [err?.message ?? tr("格式错误")]));
         }
         const list = Array.isArray(parsed) ? parsed : [parsed];
         const documents = list.filter((item) => item && typeof item === 'object' && !Array.isArray(item)) as Record<string, unknown>[];
         if (!documents.length || documents.length !== list.length) {
-          throw new Error('需要至少一个 JSON 对象，数组元素也必须都是对象');
+          throw new Error(tr("需要至少一个 JSON 对象，数组元素也必须都是对象"));
         }
         const { result } = await api.upsertDocuments({
           connectionId: connection.id,
@@ -99,25 +100,25 @@ export function DocumentWritePanel({
           collection: collection.trim(),
           documents,
         });
-        notify('success', '写入成功', `${collection} · ${result.upserted} 条`);
+        notify('success', tr("写入成功"), tr("{0} · {1} 条", [collection, result.upserted]));
       } else {
         const ids = idsText
           .split(/[,\s]+/)
           .map((id) => id.trim())
           .filter(Boolean);
-        if (!ids.length) throw new Error('请填写要删除的 id');
+        if (!ids.length) throw new Error(tr("请填写要删除的 id"));
         const { result } = await api.deleteDocuments({
           connectionId: connection.id,
           database: databaseArg,
           collection: collection.trim(),
           ids,
         });
-        notify('success', '删除完成', `${collection} · ${result.deleted} 条`);
+        notify('success', tr("删除完成"), tr("{0} · {1} 条", [collection, result.deleted]));
       }
       onDone?.();
       onClose();
     } catch (err: any) {
-      setError(err?.message ?? '操作失败');
+      setError(err?.message ?? tr("操作失败"));
     } finally {
       setRunning(false);
     }
@@ -125,36 +126,33 @@ export function DocumentWritePanel({
 
   return (
     <Modal
-      title={meta.model === 'vector' ? '向量点写入' : '文档写入'}
+      title={meta.model === 'vector' ? tr("向量点写入") : tr("文档写入")}
       icon={mode === 'write' ? <FilePlus size={15} /> : <Trash2 size={15} />}
       onClose={onClose}
       footer={
         <>
           <div style={{ display: 'flex', gap: 6, marginRight: 'auto' }}>
             <button className={`btn small ${mode === 'write' ? 'primary' : ''}`} onClick={() => setMode('write')} disabled={running} data-testid="document-mode-write">
-              写入
-            </button>
+              {tr(" 写入 ")}</button>
             <button className={`btn small ${mode === 'delete' ? 'danger' : ''}`} onClick={() => setMode('delete')} disabled={running} data-testid="document-mode-delete">
-              删除
-            </button>
+              {tr(" 删除 ")}</button>
             <button className={`btn small ${mode === 'csv' ? 'primary' : ''}`} onClick={() => setMode('csv')} disabled={running} data-testid="document-mode-csv">
-              CSV 导入
-            </button>
+              {tr(" CSV 导入 ")}</button>
           </div>
-          <button className="btn" onClick={onClose} disabled={running}>取消</button>
+          <button className="btn" onClick={onClose} disabled={running}>{tr("取消")}</button>
           <button className="btn primary" onClick={() => void submit()} disabled={running} data-testid="document-write-submit">
-            {running ? <Spinner /> : null} {mode === 'write' ? '写入' : mode === 'delete' ? '删除' : '导入'}
+            {running ? <Spinner /> : null} {mode === 'write' ? tr("写入") : mode === 'delete' ? tr("删除") : tr("导入")}
           </button>
         </>
       }
     >
       <div className="form-grid">
-        <label>集合 / 索引</label>
+        <label>{tr("集合 / 索引")}</label>
         <Combo
           value={collection}
           onChange={(event) => setCollection(event.target.value)}
           options={tables.map((table) => table.name)}
-          placeholder={isSearch ? '例如 logs' : '例如 docs'}
+          placeholder={isSearch ? tr("例如 logs") : tr("例如 docs")}
           data-testid="document-write-collection"
         />
       </div>
@@ -162,14 +160,14 @@ export function DocumentWritePanel({
         <>
           <div className="muted" style={{ fontSize: 11, margin: '10px 0 6px' }}>
             {isSearch || connection.engine === 'mongodb'
-              ? '粘贴一个 JSON 对象或对象数组（批量）；用 _id 指定文档 ID。'
+              ? tr("粘贴一个 JSON 对象或对象数组（批量）；用 _id 指定文档 ID。")
               : connection.engine === 'arangodb'
-                ? '粘贴 JSON 对象或对象数组（批量）；用 _key 指定文档主键，同 _key 的文档会被整体替换。'
+                ? tr("粘贴 JSON 对象或对象数组（批量）；用 _key 指定文档主键，同 _key 的文档会被整体替换。")
                 : connection.engine === 'qdrant'
-                ? '数组元素需含 vector 与可选 payload；Qdrant 的 id 必须是整数或 UUID。'
+                ? tr("数组元素需含 vector 与可选 payload；Qdrant 的 id 必须是整数或 UUID。")
                 : connection.engine === 'weaviate'
-                  ? 'properties 为对象属性，vector 可选；带 id 时覆盖同 ID 对象。'
-                  : '按集合 schema 提供字段；向量库需要 vector 字段。'}
+                  ? tr("properties 为对象属性，vector 可选；带 id 时覆盖同 ID 对象。")
+                  : tr("按集合 schema 提供字段；向量库需要 vector 字段。")}
           </div>
           <textarea
             className="textarea grow"
@@ -183,8 +181,7 @@ export function DocumentWritePanel({
       ) : mode === 'delete' ? (
         <>
           <div className="muted" style={{ fontSize: 11, margin: '10px 0 6px' }}>
-            输入要删除的 {isSearch || connection.engine === 'mongodb' ? '_id' : connection.engine === 'arangodb' ? '_key' : 'id'}，用逗号或空格分隔。删除不可撤销，请先用查询确认范围。
-          </div>
+            {tr(" 输入要删除的 ")}{isSearch || connection.engine === 'mongodb' ? '_id' : connection.engine === 'arangodb' ? '_key' : 'id'}{tr("，用逗号或空格分隔。删除不可撤销，请先用查询确认范围。 ")}</div>
           <textarea
             className="textarea grow"
             value={idsText}
@@ -198,8 +195,7 @@ export function DocumentWritePanel({
       ) : (
         <>
           <div className="muted" style={{ fontSize: 11, margin: '10px 0 6px' }}>
-            粘贴 CSV（含表头）。列名即字段名；id 列写入文档主键，向量列支持 <code>[0.1, 0.2]</code> 或 <code>0.1 0.2</code> 写法。
-          </div>
+            {tr(" 粘贴 CSV（含表头）。列名即字段名；id 列写入文档主键，向量列支持 ")}<code>[0.1, 0.2]</code> {tr(" 或 ")}<code>0.1 0.2</code> {tr(" 写法。 ")}</div>
           <textarea
             className="textarea grow"
             value={csvText}
@@ -210,25 +206,24 @@ export function DocumentWritePanel({
             data-testid="document-csv"
           />
           <div className="form-grid" style={{ marginTop: 10 }}>
-            <label>分隔符 / 表头</label>
+            <label>{tr("分隔符 / 表头")}</label>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <input
                 className="input"
                 value={delimiter}
                 onChange={(event) => setDelimiter(event.target.value.slice(0, 1) || ',')}
                 style={{ width: 60 }}
-                aria-label="CSV 分隔符"
+                aria-label={tr("CSV 分隔符")}
               />
               <label className="checkbox">
                 <input type="checkbox" checked={hasHeader} onChange={(event) => setHasHeader(event.target.checked)} />
-                首行为表头
-              </label>
+                {tr(" 首行为表头 ")}</label>
             </div>
-            <label>id 列</label>
-            <input className="input" value={idColumn} onChange={(event) => setIdColumn(event.target.value)} placeholder="留空则自动生成" data-testid="document-csv-id" />
+            <label>{tr("id 列")}</label>
+            <input className="input" value={idColumn} onChange={(event) => setIdColumn(event.target.value)} placeholder={tr("留空则自动生成")} data-testid="document-csv-id" />
             {!isSearch ? (
               <>
-                <label>向量列</label>
+                <label>{tr("向量列")}</label>
                 <input className="input" value={vectorColumn} onChange={(event) => setVectorColumn(event.target.value)} placeholder="vector" data-testid="document-csv-vector" />
               </>
             ) : null}

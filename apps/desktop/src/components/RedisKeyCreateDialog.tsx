@@ -3,12 +3,13 @@ import { Plus } from 'lucide-react';
 import { api } from '../lib/api';
 import { useApp } from '../store';
 import { Modal, Option, Select, Spinner } from './ui';
+import { t as tr } from '../i18n';
 
 const TYPES = ['string', 'hash', 'list', 'set', 'zset'] as const;
 type KeyType = (typeof TYPES)[number];
 
 const PLACEHOLDER: Record<KeyType, string> = {
-  string: '键值（原样存储的文本）',
+  string: tr("键值（原样存储的文本）"),
   hash: '{"name":"Ada","age":"36"}',
   list: '["first","second"]',
   set: '["a","b","c"]',
@@ -16,11 +17,11 @@ const PLACEHOLDER: Record<KeyType, string> = {
 };
 
 const HINT: Record<KeyType, string> = {
-  string: '直接输入文本，保存为 SET。',
-  hash: '输入 JSON 对象（字段 → 值），保存为 HSET。',
-  list: '输入 JSON 数组，按顺序 RPUSH。',
-  set: '输入 JSON 数组，SADD 去重。',
-  zset: '输入 JSON 对象（成员 → 分数），保存为 ZADD。',
+  string: tr("直接输入文本，保存为 SET。"),
+  hash: tr("输入 JSON 对象（字段 → 值），保存为 HSET。"),
+  list: tr("输入 JSON 数组，按顺序 RPUSH。"),
+  set: tr("输入 JSON 数组，SADD 去重。"),
+  zset: tr("输入 JSON 对象（成员 → 分数），保存为 ZADD。"),
 };
 
 export function RedisKeyCreateDialog({
@@ -45,13 +46,13 @@ export function RedisKeyCreateDialog({
   const submit = async () => {
     setError(null);
     if (!key.trim()) {
-      setError('键名不能为空');
+      setError(tr("键名不能为空"));
       return;
     }
     let value: unknown;
     if (type === 'string') {
       if (!valueText.length) {
-        setError('string 键需要一个值');
+        setError(tr("string 键需要一个值"));
         return;
       }
       value = valueText;
@@ -59,32 +60,32 @@ export function RedisKeyCreateDialog({
       try {
         value = JSON.parse(valueText);
       } catch {
-        setError('取值需要是合法 JSON');
+        setError(tr("取值需要是合法 JSON"));
         return;
       }
       const isObject = value !== null && typeof value === 'object' && !Array.isArray(value);
       if ((type === 'hash' || type === 'zset') && !isObject) {
-        setError(`${type} 键需要一个 JSON 对象`);
+        setError(tr("{0} 键需要一个 JSON 对象", [type]));
         return;
       }
       if ((type === 'list' || type === 'set') && !Array.isArray(value)) {
-        setError(`${type} 键需要一个 JSON 数组`);
+        setError(tr("{0} 键需要一个 JSON 数组", [type]));
         return;
       }
     }
     const ttlSeconds = ttl.trim() === '' ? null : Number(ttl);
     if (ttlSeconds !== null && (!Number.isFinite(ttlSeconds) || ttlSeconds < 1)) {
-      setError('TTL 需要是正整数秒');
+      setError(tr("TTL 需要是正整数秒"));
       return;
     }
     setRunning(true);
     try {
       const { result } = await api.createRedisKey({ connectionId, database, key: key.trim(), type, value, ttl: ttlSeconds });
-      notify('success', '键已创建', result.key);
+      notify('success', tr("键已创建"), result.key);
       onCreated();
       onClose();
     } catch (err: any) {
-      setError(err?.message ?? '创建失败');
+      setError(err?.message ?? tr("创建失败"));
     } finally {
       setRunning(false);
     }
@@ -92,20 +93,19 @@ export function RedisKeyCreateDialog({
 
   return (
     <Modal
-      title="新建键"
+      title={tr("新建键")}
       icon={<Plus size={15} />}
       onClose={onClose}
       footer={
         <>
-          <button className="btn" onClick={onClose} disabled={running}>取消</button>
+          <button className="btn" onClick={onClose} disabled={running}>{tr("取消")}</button>
           <button className="btn primary" onClick={() => void submit()} disabled={running} data-testid="key-create-submit">
-            {running ? <Spinner /> : null} 创建
-          </button>
+            {running ? <Spinner /> : null}{tr(" 创建 ")}</button>
         </>
       }
     >
       <div className="form-grid">
-        <label>键名</label>
+        <label>{tr("键名")}</label>
         <input
           className="input"
           value={key}
@@ -114,18 +114,18 @@ export function RedisKeyCreateDialog({
           autoFocus
           data-testid="key-create-name"
         />
-        <label>类型</label>
+        <label>{tr("类型")}</label>
         <Select className="select" value={type} onChange={(event) => setType(event.target.value as KeyType)} data-testid="key-create-type">
           {TYPES.map((item) => (
             <Option key={item} value={item}>{item}</Option>
           ))}
         </Select>
-        <label>TTL（秒）</label>
+        <label>{tr("TTL（秒）")}</label>
         <input
           className="input"
           value={ttl}
           onChange={(event) => setTtl(event.target.value.replace(/\D/g, ''))}
-          placeholder="留空表示永不过期"
+          placeholder={tr("留空表示永不过期")}
           inputMode="numeric"
           data-testid="key-create-ttl"
         />

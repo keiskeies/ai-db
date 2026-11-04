@@ -5,6 +5,7 @@ import { useApp } from '../../store';
 import { DatabaseSelect } from '../DatabaseSelect';
 import { askConfirm } from '../AskDialog';
 import { Select, Option } from '../ui';
+import { t as tr } from '../../i18n';
 
 interface DiffChange {
   kind: string;
@@ -47,7 +48,7 @@ export function SchemaCompareTool() {
       });
       setDiff(result.diff);
     } catch (err: any) {
-      notify('error', '结构对比失败', err?.message);
+      notify('error', tr("结构对比失败"), err?.message);
     } finally {
       setLoading(false);
     }
@@ -57,23 +58,23 @@ export function SchemaCompareTool() {
     if (!diff?.sql?.length) return;
     const destructive = diff.tables.some((table: DiffTable) => table.changes.some((change) => change.destructive));
     const ok = await askConfirm({
-      title: '同步结构到目标库',
+      title: tr("同步结构到目标库"),
       message: destructive
-        ? `共 ${diff.summary.statements} 条语句，其中存在删除表/列/索引的破坏性变更。`
-        : `将执行 ${diff.summary.statements} 条变更语句到目标库。`,
-      detail: destructive ? '建议先备份目标库。' : undefined,
+        ? tr("共 {0} 条语句，其中存在删除表/列/索引的破坏性变更。", [diff.summary.statements])
+        : tr("将执行 {0} 条变更语句到目标库。", [diff.summary.statements]),
+      detail: destructive ? tr("建议先备份目标库。") : undefined,
       danger: destructive,
-      confirmLabel: '同步',
+      confirmLabel: tr("同步"),
     });
     if (!ok) return;
     setSyncing(true);
     try {
       await api.syncSchema({ connectionId: targetId, database: targetDatabase || undefined, statements: diff.sql });
-      notify('success', '结构同步完成', `${diff.summary.statements} 条语句`);
+      notify('success', tr("结构同步完成"), tr("{0} 条语句", [diff.summary.statements]));
       await loadSchema(targetId, true);
       await compare();
     } catch (err: any) {
-      notify('error', '同步失败', err?.message);
+      notify('error', tr("同步失败"), err?.message);
     } finally {
       setSyncing(false);
     }
@@ -82,43 +83,40 @@ export function SchemaCompareTool() {
   return (
     <div className="tool-pane">
       <div className="tool-pane-head">
-        <ArrowLeftRight size={15} /> 结构对比与同步
-        <span className="muted">生成目标方言 DDL，执行前确认</span>
+        <ArrowLeftRight size={15} /> {tr(" 结构对比与同步 ")}<span className="muted">{tr("生成目标方言 DDL，执行前确认")}</span>
       </div>
       <div className="tool-row" style={{ flexWrap: 'wrap' }}>
         <div className="field" style={{ flex: 1, minWidth: 150 }}>
-          <label>源连接</label>
+          <label>{tr("源连接")}</label>
           <Select className="select" value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
             {connections.map((conn) => <Option key={conn.id} value={conn.id}>{conn.name} · {conn.engine}</Option>)}
           </Select>
         </div>
         <div className="field" style={{ flex: 1, minWidth: 150 }}>
-          <label>源数据库</label>
+          <label>{tr("源数据库")}</label>
           <DatabaseSelect connectionId={sourceId} value={sourceDatabase} onChange={setSourceDatabase} testId="schema-compare-source-db" />
         </div>
         <div className="field" style={{ flex: 1, minWidth: 150 }}>
-          <label>目标连接</label>
+          <label>{tr("目标连接")}</label>
           <Select className="select" value={targetId} onChange={(e) => setTargetId(e.target.value)}>
             {connections.map((conn) => <Option key={conn.id} value={conn.id}>{conn.name} · {conn.engine}</Option>)}
           </Select>
         </div>
         <div className="field" style={{ flex: 1, minWidth: 150 }}>
-          <label>目标数据库</label>
+          <label>{tr("目标数据库")}</label>
           <DatabaseSelect connectionId={targetId} value={targetDatabase} onChange={setTargetDatabase} testId="schema-compare-target-db" />
         </div>
         <button className="btn primary" style={{ alignSelf: 'flex-end' }} onClick={() => void compare()} disabled={loading || !sourceId || !targetId}>
-          {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <ArrowLeftRight size={12} />} 对比
-        </button>
+          {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <ArrowLeftRight size={12} />}{tr(" 对比 ")}</button>
       </div>
 
       <div className="tool-scroll">
         {!diff ? (
-          <div className="dash-empty">选择源与目标连接后开始对比。将识别新增/删除表、列变更与索引差异，并按目标引擎生成 DDL。</div>
+          <div className="dash-empty">{tr("选择源与目标连接后开始对比。将识别新增/删除表、列变更与索引差异，并按目标引擎生成 DDL。")}</div>
         ) : (
           <>
             <div className="tool-summary">
-              源 {diff.sourceTables} 表 → 目标 {diff.targetTables} 表 · 新增 {diff.summary.added} / 删除 {diff.summary.removed} / 变更 {diff.summary.changed} · {diff.summary.statements} 条语句
-              {diff.source.engine !== diff.target.engine ? <span className="badge write" style={{ marginLeft: 8 }}>跨引擎：请检查类型映射</span> : null}
+              {tr(" 源 ")}{diff.sourceTables}{tr(" 表 → 目标 ")}{diff.targetTables}{tr(" 表 · 新增 ")}{diff.summary.added}{tr(" / 删除 ")}{diff.summary.removed}{tr(" / 变更 ")}{diff.summary.changed} · {diff.summary.statements}{tr(" 条语句 ")}{diff.source.engine !== diff.target.engine ? <span className="badge write" style={{ marginLeft: 8 }}>{tr("跨引擎：请检查类型映射")}</span> : null}
             </div>
             <div className="diff-list">
               {diff.tables.filter((table: DiffTable) => table.status !== 'unchanged').map((table: DiffTable) => (
@@ -126,7 +124,7 @@ export function SchemaCompareTool() {
                   <div className="diff-head">
                     <span className={`badge ${table.status === 'added' ? 'read' : table.status === 'removed' ? 'destructive' : 'write'}`}>{table.status.toUpperCase()}</span>
                     <strong className="mono">{table.name}</strong>
-                    <span className="muted" style={{ fontSize: 10 }}>{table.changes.length} 项变更</span>
+                    <span className="muted" style={{ fontSize: 10 }}>{table.changes.length}{tr(" 项变更")}</span>
                     {table.changes.some((change) => change.destructive) ? <AlertTriangle size={11} style={{ color: 'var(--warning)' }} /> : null}
                   </div>
                   {table.changes.map((change, index) => (
@@ -137,16 +135,15 @@ export function SchemaCompareTool() {
                   ))}
                 </div>
               ))}
-              {!diff.tables.some((table: DiffTable) => table.status !== 'unchanged') ? <div className="dash-empty">两个结构完全一致。</div> : null}
+              {!diff.tables.some((table: DiffTable) => table.status !== 'unchanged') ? <div className="dash-empty">{tr("两个结构完全一致。")}</div> : null}
             </div>
             {diff.sql.length ? (
               <div className="tool-section">
-                <div className="tool-section-title">同步 SQL</div>
+                <div className="tool-section-title">{tr("同步 SQL")}</div>
                 <pre className="sql-block" style={{ maxHeight: 240, overflow: 'auto' }}>{diff.sql.join('\n\n')}</pre>
                 <div className="row" style={{ justifyContent: 'flex-end', marginTop: 6 }}>
                   <button className="btn primary" onClick={() => void sync()} disabled={syncing}>
-                    {syncing ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <Play size={12} />} 同步到目标
-                  </button>
+                    {syncing ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <Play size={12} />}{tr(" 同步到目标 ")}</button>
                 </div>
               </div>
             ) : null}

@@ -1,6 +1,7 @@
 import type { ReportBlock, ReportMetric, ReportSpec } from '@aidb/core';
 import { deltaIsGood, formatReportNumber } from '@aidb/core';
 import { ChartView } from './ChartView';
+import { t as tr } from '../i18n';
 
 function metricValue(metric: ReportMetric): { text: string; exact?: string } {
   if (typeof metric.value === 'number') {
@@ -16,7 +17,7 @@ function DeltaChip({ metric }: { metric: ReportMetric }) {
   const color = tone === 'good' ? 'var(--success)' : tone === 'bad' ? 'var(--danger)' : 'var(--text-muted)';
   const percent = metric.delta.percent;
   return (
-    <span className="mono" style={{ fontSize: 10, color, marginLeft: 6 }} title={metric.baselineLabel ?? '对比基线'}>
+    <span className="mono" style={{ fontSize: 10, color, marginLeft: 6 }} title={metric.baselineLabel ?? tr("对比基线")}>
       {metric.delta.absolute > 0 ? '+' : ''}
       {metric.delta.absolute.toLocaleString(undefined, { maximumFractionDigits: 2 })}
       {percent === null || percent === undefined ? '' : `（${percent > 0 ? '+' : ''}${percent.toFixed(1)}%）`}
@@ -40,7 +41,7 @@ function MetricBlock({ block }: { block: ReportBlock }) {
             </div>
             {metric.delta ? (
               <div style={{ fontSize: 10 }}>
-                <span className="muted">{metric.baselineLabel ?? '对比上期'}</span>
+                <span className="muted">{metric.baselineLabel ?? tr("对比上期")}</span>
                 <DeltaChip metric={metric} />
               </div>
             ) : null}
@@ -104,7 +105,7 @@ function ActionsBlock({ block }: { block: ReportBlock }) {
         {(block.actions ?? []).map((action, index) => (
           <li key={index}>
             {action.text}
-            {action.impact ? <span className="muted"> · 预期影响：{action.impact}</span> : null}
+            {action.impact ? <span className="muted"> {tr(" · 预期影响：")}{action.impact}</span> : null}
             {action.owner || action.due ? (
               <span className="muted"> · {[action.owner, action.due].filter(Boolean).join(' / ')}</span>
             ) : null}
@@ -136,7 +137,7 @@ function Block({ block }: { block: ReportBlock }) {
             ...(hasBaseline
               ? {
                   extraSeries: [
-                    { name: block.baselineName ?? '上期', values: (block.series ?? []).map((point) => point.baseline ?? 0) },
+                    { name: block.baselineName ?? tr("上期"), values: (block.series ?? []).map((point) => point.baseline ?? 0) },
                   ],
                 }
               : {}),
@@ -153,7 +154,7 @@ function Block({ block }: { block: ReportBlock }) {
     const color = tone === 'good' ? 'var(--success)' : tone === 'bad' ? 'var(--danger)' : 'var(--text-muted)';
     return (
       <div className="panel" style={{ padding: 10, marginTop: 8 }}>
-        <div className="muted" style={{ fontSize: 10, marginBottom: 6 }}>{block.title ?? '对比'}</div>
+        <div className="muted" style={{ fontSize: 10, marginBottom: 6 }}>{block.title ?? tr("对比")}</div>
         <div className="row" style={{ gap: 18, alignItems: 'flex-end' }}>
           <div>
             <div className="muted" style={{ fontSize: 10 }}>{block.left?.label}</div>
@@ -164,7 +165,7 @@ function Block({ block }: { block: ReportBlock }) {
             <div className="mono" style={{ fontSize: 18 }}>{right.toLocaleString()}{block.right?.unit ?? ''}</div>
           </div>
           <div>
-            <div className="muted" style={{ fontSize: 10 }}>差值</div>
+            <div className="muted" style={{ fontSize: 10 }}>{tr("差值")}</div>
             <div className="mono" style={{ fontSize: 18, color }}>
               {block.delta ? `${block.delta.absolute > 0 ? '+' : ''}${block.delta.absolute.toLocaleString()}` : '—'}
               {block.delta?.percent !== null && block.delta?.percent !== undefined ? ` (${block.delta.percent > 0 ? '+' : ''}${block.delta.percent.toFixed(1)}%)` : ''}
@@ -197,7 +198,7 @@ export function ReportView({ spec }: { spec: ReportSpec }) {
       </div>
       {spec.executive ? (
         <div className="panel" style={{ padding: 12, marginBottom: 8, borderColor: 'var(--accent, #45c8c3)' }}>
-          <div className="muted" style={{ fontSize: 9, letterSpacing: '0.6px', textTransform: 'uppercase', marginBottom: 4 }}>管理层摘要</div>
+          <div className="muted" style={{ fontSize: 9, letterSpacing: '0.6px', textTransform: 'uppercase', marginBottom: 4 }}>{tr("管理层摘要")}</div>
           <div style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.5 }}>{spec.executive.headline}</div>
           {spec.executive.takeaways.length ? (
             <ul style={{ margin: '6px 0 0 16px', padding: 0, fontSize: 12, lineHeight: 1.7 }}>
@@ -227,7 +228,7 @@ export function ReportView({ spec }: { spec: ReportSpec }) {
       ))}
       {spec.meta.assumptions?.length ? (
         <div className="muted" style={{ fontSize: 9, marginBottom: 4 }}>
-          {spec.meta.assumptions.map((line) => <div key={line}>口径：{line}</div>)}
+          {spec.meta.assumptions.map((line) => <div key={line}>{tr("口径：")}{line}</div>)}
         </div>
       ) : null}
       {spec.meta.notes?.length ? (

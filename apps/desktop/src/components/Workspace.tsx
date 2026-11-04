@@ -8,6 +8,7 @@ import { DesignView } from './DesignView';
 import { QueryView } from './QueryView';
 import { RelationsView } from './RelationsView';
 import { Welcome } from './Welcome';
+import { t as tr } from '../i18n';
 
 function TabIcon({ kind }: { kind: string }) {
   if (kind === 'query') return <TerminalSquare size={12} />;
@@ -46,9 +47,9 @@ export function Workspace({ viewportWidth, sidebarFlowWidth }: { viewportWidth: 
                 e.preventDefault();
                 const others = tabs.filter((item) => item.id !== tab.id).length;
                 openContextMenu(e.clientX, e.clientY, [
-                  { label: '关闭', onClick: () => closeTab(tab.id) },
-                  { label: '关闭其它', disabled: others === 0, onClick: () => useApp.getState().closeOtherTabs(tab.id) },
-                  { label: '关闭全部', onClick: () => useApp.getState().closeAllTabs() },
+                  { label: tr("关闭"), onClick: () => closeTab(tab.id) },
+                  { label: tr("关闭其它"), disabled: others === 0, onClick: () => useApp.getState().closeOtherTabs(tab.id) },
+                  { label: tr("关闭全部"), onClick: () => useApp.getState().closeAllTabs() },
                 ]);
               }}
               title={tab.title}

@@ -6,48 +6,50 @@ import { api } from '../lib/api';
 import { useApp } from '../store';
 import type { ConnectionEditorState } from '../store';
 import { Modal, OptGroup, Option, Select } from './ui';
+import { t as tr } from '../i18n';
+import { groupFromLabel, groupLabel } from '../lib/groups';
 
 const COLORS = ['blue', 'green', 'orange', 'red', 'purple', 'cyan', 'gray'];
 
 /** Doris / StarRocks / GBase 8a 走 MySQL 协议，但属于分析型产品，单独成组。 */
 const OLAP_IDS = new Set<Engine>(['clickhouse', 'doris', 'starrocks', 'gbase8a']);
 const GROUP_ORDER = [
-  '文件 / 嵌入式',
-  '关系型 · MySQL 系',
-  '关系型 · PostgreSQL 系',
-  '关系型 · Oracle / 达梦',
-  '关系型 · SQL Server',
-  '分析型 / OLAP',
-  '时序',
-  '文档',
-  '键值',
-  '图',
-  '向量',
-  '搜索',
-  '宽列',
-  '其它',
+  tr("文件 / 嵌入式"),
+  tr("关系型 · MySQL 系"),
+  tr("关系型 · PostgreSQL 系"),
+  tr("关系型 · Oracle / 达梦"),
+  tr("关系型 · SQL Server"),
+  tr("分析型 / OLAP"),
+  tr("时序"),
+  tr("文档"),
+  tr("键值"),
+  tr("图"),
+  tr("向量"),
+  tr("搜索"),
+  tr("宽列"),
+  tr("其它"),
 ];
 
 function engineGroup(meta: EngineMeta): string {
-  if (meta.fileBased) return '文件 / 嵌入式';
-  if (OLAP_IDS.has(meta.id)) return '分析型 / OLAP';
+  if (meta.fileBased) return tr("文件 / 嵌入式");
+  if (OLAP_IDS.has(meta.id)) return tr("分析型 / OLAP");
   if (meta.model === 'relational') {
-    if (meta.family === 'mysql') return '关系型 · MySQL 系';
-    if (meta.family === 'postgres') return '关系型 · PostgreSQL 系';
-    if (meta.family === 'oracle' || meta.family === 'dm') return '关系型 · Oracle / 达梦';
-    if (meta.family === 'mssql') return '关系型 · SQL Server';
+    if (meta.family === 'mysql') return tr("关系型 · MySQL 系");
+    if (meta.family === 'postgres') return tr("关系型 · PostgreSQL 系");
+    if (meta.family === 'oracle' || meta.family === 'dm') return tr("关系型 · Oracle / 达梦");
+    if (meta.family === 'mssql') return tr("关系型 · SQL Server");
   }
   const byModel: Record<string, string> = {
-    relational: '关系型 · 其他',
-    document: '文档',
-    keyvalue: '键值',
-    graph: '图',
-    vector: '向量',
-    search: '搜索',
-    widecolumn: '宽列',
-    timeseries: '时序',
+    relational: tr("关系型 · 其他"),
+    document: tr("文档"),
+    keyvalue: tr("键值"),
+    graph: tr("图"),
+    vector: tr("向量"),
+    search: tr("搜索"),
+    widecolumn: tr("宽列"),
+    timeseries: tr("时序"),
   };
-  return byModel[meta.model] ?? '其它';
+  return byModel[meta.model] ?? tr("其它");
 }
 
 const GROUPED_ENGINES = GROUP_ORDER.map((label) => [label, ENGINES.filter((meta) => engineGroup(meta) === label)] as const)
@@ -71,7 +73,7 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
   const [engine, setEngine] = useState<Engine>(c?.engine ?? 'sqlite');
   const [color, setColor] = useState<string>(c?.color ?? 'blue');
   const [environment, setEnvironment] = useState<ConnectionConfig['environment']>(c?.environment ?? 'dev');
-  const [groupName, setGroupName] = useState(c?.groupName ?? '默认');
+  const [groupName, setGroupName] = useState(c?.groupName ?? '默认'); // i18n-ignore
   const [note, setNote] = useState(c?.note ?? '');
   const [host, setHost] = useState(c?.host ?? '127.0.0.1');
   const [port, setPort] = useState(String(c?.port ?? meta.defaultPort ?? ''));
@@ -107,7 +109,7 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
       engine,
       color,
       environment,
-      groupName: groupName.trim() || '默认',
+      groupName: groupName.trim() || '默认', // i18n-ignore
       note: note.trim() || undefined,
       host: meta.fileBased ? undefined : host.trim(),
       port: meta.fileBased ? undefined : Number(port) || undefined,
@@ -226,7 +228,7 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
             <div className="field full">
               <label>{t('filePath')}</label>
               <input className="input mono" value={database} onChange={(e) => setDatabase(e.target.value)} placeholder={engine === 'duckdb' ? 'D:/data/analytics.duckdb' : t('sqliteHint')} data-testid="connection-database" />
-              <span className="hint">{engine === 'duckdb' ? 'DuckDB 文件不存在时会自动创建；也可使用 :memory:。' : '支持绝对路径；示例库位于 AiDB 数据目录下。'}</span>
+              <span className="hint">{engine === 'duckdb' ? tr("DuckDB 文件不存在时会自动创建；也可使用 :memory:。") : tr("支持绝对路径；示例库位于 AiDB 数据目录下。")}</span>
             </div>
           ) : (
             <>
@@ -240,7 +242,7 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
               </div>
               {engine === 'oracle' ? (
                 <div className="field">
-                  <label>服务名 / SID</label>
+                  <label>{tr("服务名 / SID")}</label>
                   <input
                     className="input mono"
                     value={database}
@@ -267,36 +269,35 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
               )}
               {engineMeta(engine).model !== 'relational' ? (
                 <div className="field">
-                  <label>{engineMeta(engine).model === 'keyvalue' ? 'DB 索引' : '数据库'}</label>
+                  <label>{engineMeta(engine).model === 'keyvalue' ? tr("DB 索引") : tr("数据库")}</label>
                   <input
                     className="input mono"
                     value={database}
                     onChange={(e) => setDatabase(e.target.value)}
-                    placeholder={engineMeta(engine).model === 'keyvalue' ? '0' : '例如 app'}
+                    placeholder={engineMeta(engine).model === 'keyvalue' ? '0' : tr("例如 app")}
                     data-testid="connection-database"
                   />
                 </div>
               ) : null}
               {engine === 'oracle' || engineMeta(engine).model !== 'relational' ? null : (
                 <div className="field full">
-                  <span className="hint" style={{ margin: 0 }}>无需填写数据库：连接成功后会自动列出服务器上所有可访问的库，展开某个库再加载它的表。</span>
+                  <span className="hint" style={{ margin: 0 }}>{tr("无需填写数据库：连接成功后会自动列出服务器上所有可访问的库，展开某个库再加载它的表。")}</span>
                 </div>
               )}
             </>
           )}
 
           <div className="field full">
-            <label>分组</label>
-            <input className="input" value={groupName} onChange={(e) => setGroupName(e.target.value)} />
+            <label>{tr("分组")}</label>
+            <input className="input" value={groupLabel(groupName)} onChange={(e) => setGroupName(groupFromLabel(e.target.value))} />
           </div>
           <div className="field full">
             <label>{t('note')}</label>
-            <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="给 Agent 的业务背景备注（会进入连接上下文）" />
+            <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder={tr("给 Agent 的业务背景备注（会进入连接上下文）")} />
           </div>
           <div className="field full">
             <label className="checkbox">
-              <input type="checkbox" checked={readonly} onChange={(e) => setReadonly(e.target.checked)} data-testid="connection-readonly" /> {t('readonly')}（服务端强制，Agent 同样受限）
-            </label>
+              <input type="checkbox" checked={readonly} onChange={(e) => setReadonly(e.target.checked)} data-testid="connection-readonly" /> {t('readonly')}{tr("（服务端强制，Agent 同样受限） ")}</label>
           </div>
           <div className="field full">
             <div className="engine-note">
@@ -331,7 +332,7 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
                   <input className="input" value={sshUser} onChange={(e) => setSshUser(e.target.value)} data-testid="ssh-user" />
                 </div>
                 <div className="field">
-                  <label>认证方式</label>
+                  <label>{tr("认证方式")}</label>
                   <Select className="select" value={sshAuth} onChange={(e) => setSshAuth(e.target.value as 'password' | 'key')} data-testid="ssh-auth">
                     <Option value="password">{t('authByPassword')}</Option>
                     <Option value="key">{t('authByKey')}</Option>

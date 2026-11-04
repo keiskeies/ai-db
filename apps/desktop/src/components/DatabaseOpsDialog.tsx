@@ -3,6 +3,7 @@ import { Archive, Loader2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useApp } from '../store';
 import { Modal } from './ui';
+import { t as tr } from '../i18n';
 
 export type DatabaseDialogKind = 'create' | 'drop' | 'rename' | 'dump';
 
@@ -24,7 +25,7 @@ export function DatabaseOpsDialog({ kind, connectionId, database, onClose }: Pro
   const [result, setResult] = useState('');
 
   const title =
-    kind === 'create' ? '新建数据库' : kind === 'drop' ? `删除数据库 · ${database}` : kind === 'rename' ? `重命名数据库 · ${database}` : `转储 SQL 文件 · ${database}`;
+    kind === 'create' ? tr("新建数据库") : kind === 'drop' ? tr("删除数据库 · {0}", [database]) : kind === 'rename' ? tr("重命名数据库 · {0}", [database]) : tr("转储 SQL 文件 · {0}", [database]);
 
   const submit = async () => {
     setBusy(true);
@@ -33,11 +34,11 @@ export function DatabaseOpsDialog({ kind, connectionId, database, onClose }: Pro
       if (kind === 'dump') {
         const { backup } = await api.createBackup({ connectionId, database, label: `dump-${database}` });
         setResult(`${backup.path} · ${(backup.bytes / 1024).toFixed(1)} KB`);
-        notify('success', '数据库已转储', backup.path);
+        notify('success', tr("数据库已转储"), backup.path);
         return;
       }
       if (kind === 'drop' && confirmText.trim() !== database) {
-        setError('请输入完整数据库名确认删除');
+        setError(tr("请输入完整数据库名确认删除"));
         return;
       }
       const payload =
@@ -48,14 +49,14 @@ export function DatabaseOpsDialog({ kind, connectionId, database, onClose }: Pro
             : { connectionId, database, op: 'drop' };
       const res = await api.databaseOps(payload);
       if (res.supported === false) {
-        setError(res.message ?? '当前引擎不支持该操作');
+        setError(res.message ?? tr("当前引擎不支持该操作"));
         return;
       }
-      notify('success', kind === 'create' ? '数据库已创建' : kind === 'rename' ? '数据库已重命名' : '数据库已删除', name.trim() || database);
+      notify('success', kind === 'create' ? tr("数据库已创建") : kind === 'rename' ? tr("数据库已重命名") : tr("数据库已删除"), name.trim() || database);
       await loadSchema(connectionId, true);
       onClose();
     } catch (err: any) {
-      setError(err?.message ?? '操作失败');
+      setError(err?.message ?? tr("操作失败"));
     } finally {
       setBusy(false);
     }
@@ -64,17 +65,15 @@ export function DatabaseOpsDialog({ kind, connectionId, database, onClose }: Pro
   const footer =
     kind === 'dump' ? (
       <>
-        <button className="btn" onClick={onClose}>关闭</button>
+        <button className="btn" onClick={onClose}>{tr("关闭")}</button>
         <button className="btn primary" onClick={() => void submit()} disabled={busy} data-testid="db-op-submit">
-          {busy ? <Loader2 size={12} className="spin" /> : <Archive size={12} />} 开始转储
-        </button>
+          {busy ? <Loader2 size={12} className="spin" /> : <Archive size={12} />}{tr(" 开始转储 ")}</button>
       </>
     ) : (
       <>
-        <button className="btn" onClick={onClose}>取消</button>
+        <button className="btn" onClick={onClose}>{tr("取消")}</button>
         <button className={`btn ${kind === 'drop' ? 'danger' : 'primary'}`} onClick={() => void submit()} disabled={busy} data-testid="db-op-submit">
-          {busy ? <Loader2 size={12} className="spin" /> : null} 确认
-        </button>
+          {busy ? <Loader2 size={12} className="spin" /> : null}{tr(" 确认 ")}</button>
       </>
     );
 
@@ -83,18 +82,18 @@ export function DatabaseOpsDialog({ kind, connectionId, database, onClose }: Pro
       <div className="col gap-10">
         {kind === 'create' || kind === 'rename' ? (
           <div className="field">
-            <label>{kind === 'create' ? '数据库名' : '新数据库名'}</label>
+            <label>{kind === 'create' ? tr("数据库名") : tr("新数据库名")}</label>
             <input className="input mono" value={name} onChange={(e) => setName(e.target.value)} autoFocus data-testid="db-op-name" />
           </div>
         ) : null}
         {kind === 'drop' ? (
           <div className="field">
-            <label>输入 <span className="mono">{database}</span> 确认删除</label>
+            <label>{tr("输入 ")}<span className="mono">{database}</span> {tr(" 确认删除")}</label>
             <input className="input mono" value={confirmText} onChange={(e) => setConfirmText(e.target.value)} autoFocus data-testid="db-op-confirm" />
           </div>
         ) : null}
         {kind === 'dump' ? (
-          <p className="hint" style={{ margin: 0 }}>生成逻辑 SQL 转储文件，可在设置 → 数据中查看与恢复。</p>
+          <p className="hint" style={{ margin: 0 }}>{tr("生成逻辑 SQL 转储文件，可在设置 → 数据中查看与恢复。")}</p>
         ) : null}
         {result ? <pre className="ddl-block">{result}</pre> : null}
         {error ? <div className="risk-banner">{error}</div> : null}

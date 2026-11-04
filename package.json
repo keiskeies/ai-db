@@ -29,7 +29,10 @@
     "bench": "node --import tsx scripts/accuracy-bench.mjs",
     "verify:controls": "node scripts/audit-form-controls.mjs",
     "verify:docs": "node scripts/verify-docs.mjs",
-    "verify": "npm run verify:docs && npm run verify:controls && npm run typecheck && npm test && npm run build && npm run e2e"
+    "verify": "npm run verify:docs && npm run verify:controls && npm run verify:i18n && npm run typecheck && npm test && npm run build && npm run e2e",
+    "i18n:extract": "node scripts/i18n/extract.mjs",
+    "i18n:translate": "node scripts/i18n/translate.mjs --all",
+    "verify:i18n": "node scripts/i18n/extract.mjs && node scripts/i18n/scan-unwrapped.mjs --strict"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

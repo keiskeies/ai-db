@@ -5,11 +5,11 @@ import { formatRelative } from '../lib/format';
 import { useApp } from '../store';
 import { askConfirm } from './AskDialog';
 import { Select, Option } from './ui';
+import { t as tr } from '../i18n';
 
 export function MemoryDrawer() {
   const open = useApp((s) => s.memoryOpen);
   const t = useApp((s) => s.t);
-  const locale = useApp((s) => s.settings.locale);
   const memories = useApp((s) => s.memories);
   const query = useApp((s) => s.memoryQuery);
   const activeConnectionId = useApp((s) => s.activeConnectionId);
@@ -65,8 +65,7 @@ export function MemoryDrawer() {
           />
         </div>
         <p className="hint" style={{ marginTop: 6 }}>
-          四层记忆：工作记忆（会话）、情景记忆（摘要）、语义记忆（事实/偏好/结构）、程序记忆（流程）。术语与示例 SQL 属于业务上下文，在工具箱「Agent 上下文」中维护。跨会话自动检索。
-        </p>
+          {tr(" 四层记忆：工作记忆（会话）、情景记忆（摘要）、语义记忆（事实/偏好/结构）、程序记忆（流程）。术语与示例 SQL 属于业务上下文，在工具箱「Agent 上下文」中维护。跨会话自动检索。 ")}</p>
       </div>
       <div className="drawer-body">
         {showForm ? (
@@ -74,13 +73,13 @@ export function MemoryDrawer() {
             <div className="row gap-6">
               <Select className="select" value={kind} onChange={(e) => setKind(e.target.value as MemoryKind)}>
                 {MEMORY_KINDS.map((k) => (
-                  <Option key={k} value={k}>{MEMORY_KIND_LABELS[k][locale]}</Option>
+                  <Option key={k} value={k}>{tr(MEMORY_KIND_LABELS[k].zh)}</Option>
                 ))}
               </Select>
               <Select className="select" value={scope} onChange={(e) => setScope(e.target.value)}>
-                <Option value="global">全局</Option>
-                <Option value="connection">当前连接</Option>
-                <Option value="database">当前库</Option>
+                <Option value="global">{tr("全局")}</Option>
+                <Option value="connection">{tr("当前连接")}</Option>
+                <Option value="database">{tr("当前库")}</Option>
               </Select>
               <div className="spacer" />
               <input
@@ -94,8 +93,8 @@ export function MemoryDrawer() {
                 title={t('importance')}
               />
             </div>
-            <input className="input" placeholder="标题" value={title} onChange={(e) => setTitle(e.target.value)} />
-            <textarea className="textarea" rows={3} placeholder="内容（不要写入密码、密钥等凭据）" value={content} onChange={(e) => setContent(e.target.value)} />
+            <input className="input" placeholder={tr("标题")} value={title} onChange={(e) => setTitle(e.target.value)} />
+            <textarea className="textarea" rows={3} placeholder={tr("内容（不要写入密码、密钥等凭据）")} value={content} onChange={(e) => setContent(e.target.value)} />
             <div className="row">
               <div className="spacer" />
               <button className="btn small" onClick={() => setShowForm(false)}>{t('cancel')}</button>
@@ -137,7 +136,7 @@ export function MemoryDrawer() {
             ) : (
               <>
                 <div className="m-head">
-                  <span className="badge agent">{MEMORY_KIND_LABELS[memory.kind]?.[locale] ?? memory.kind}</span>
+                  <span className="badge agent">{MEMORY_KIND_LABELS[memory.kind] ? tr(MEMORY_KIND_LABELS[memory.kind].zh) : memory.kind}</span>
                   <span className="m-title">{memory.title}</span>
                   {memory.pinned ? <Pin size={11} style={{ color: 'var(--warning)' }} /> : null}
                 </div>
@@ -160,7 +159,7 @@ export function MemoryDrawer() {
                   >
                     <Pencil size={11} />
                   </button>
-                  <button className="icon-btn danger" onClick={async () => { if (await askConfirm({ message: '删除这条记忆？', danger: true, confirmLabel: '删除' })) void remove(memory.id); }}>
+                  <button className="icon-btn danger" onClick={async () => { if (await askConfirm({ message: tr("删除这条记忆？"), danger: true, confirmLabel: tr("删除") })) void remove(memory.id); }}>
                     <Trash2 size={11} />
                   </button>
                 </div>

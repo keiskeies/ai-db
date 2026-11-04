@@ -16,20 +16,21 @@ import { useApp } from '../../store';
 import { DatabaseSelect } from '../DatabaseSelect';
 import { askConfirm } from '../AskDialog';
 import { Select, Option } from '../ui';
+import { t as tr } from '../../i18n';
 
 const PHASE_LABEL: Record<TransferPhase, string> = {
-  create: '创建目标表',
-  read: '读取源表',
-  truncate: '清空目标表',
-  write: '写入数据',
+  create: tr("创建目标表"),
+  read: tr("读取源表"),
+  truncate: tr("清空目标表"),
+  write: tr("写入数据"),
 };
 
 const RUN_LABEL = {
-  running: '传输中',
-  done: '已完成',
-  partial: '部分失败',
-  canceled: '已取消',
-  failed: '传输中断',
+  running: tr("传输中"),
+  done: tr("已完成"),
+  partial: tr("部分失败"),
+  canceled: tr("已取消"),
+  failed: tr("传输中断"),
 } as const;
 
 interface PhaseLog {
@@ -253,23 +254,23 @@ function clock(ms: number): string {
 
 function phaseMeta(phase: PhaseLog): string {
   const parts: string[] = [];
-  if (phase.phase === 'read' && phase.rows != null) parts.push(`${fmtRows(phase.rows)} 行`);
-  if (phase.phase === 'create' && phase.columns != null) parts.push(`${phase.columns} 列`);
+  if (phase.phase === 'read' && phase.rows != null) parts.push(tr("{0} 行", [fmtRows(phase.rows)]));
+  if (phase.phase === 'create' && phase.columns != null) parts.push(tr("{0} 列", [phase.columns]));
   if (phase.phase === 'write') {
-    if (phase.rows != null) parts.push(`${fmtRows(phase.rows)} 行`);
-    if (phase.batches != null) parts.push(`${phase.batches} 批`);
+    if (phase.rows != null) parts.push(tr("{0} 行", [fmtRows(phase.rows)]));
+    if (phase.batches != null) parts.push(tr("{0} 批", [phase.batches]));
   }
   if (phase.durationMs != null) parts.push(shortDuration(phase.durationMs));
   return parts.join(' · ');
 }
 
 function livePhase(table: TableRun): string {
-  if (table.status === 'pending') return '等待';
-  if (table.status === 'skipped') return '未执行';
-  if (table.status === 'canceled') return table.rows ? `已取消 · ${fmtRows(table.rows)} 行` : '已取消';
-  if (table.status === 'error') return '失败';
-  if (table.status === 'ok') return `${fmtRows(table.rows)} 行${table.durationMs != null ? ` · ${shortDuration(table.durationMs)}` : ''}`;
-  const label = table.phase ? PHASE_LABEL[table.phase] : '准备中';
+  if (table.status === 'pending') return tr("等待");
+  if (table.status === 'skipped') return tr("未执行");
+  if (table.status === 'canceled') return table.rows ? tr("已取消 · {0} 行", [fmtRows(table.rows)]) : tr("已取消");
+  if (table.status === 'error') return tr("失败");
+  if (table.status === 'ok') return tr("{0} 行{1}", [fmtRows(table.rows), table.durationMs != null ? ` · ${shortDuration(table.durationMs)}` : '']);
+  const label = table.phase ? PHASE_LABEL[table.phase] : tr("准备中");
   if (table.phase === 'write' && table.totalRows) return `${label} ${fmtRows(table.rows)}/${fmtRows(table.totalRows)}`;
   return label;
 }
@@ -289,35 +290,35 @@ function buildLog(run: TransferRun): string {
   const canceled = run.tables.filter((table) => table.status === 'canceled').length;
   const skipped = run.tables.filter((table) => table.status === 'skipped').length;
   const elapsed = run.durationMs ?? ((run.finishedAt ?? Date.now()) - run.startedAt);
-  lines.push(`AI DB 数据传输 · ${new Date(run.startedAt).toLocaleString()}`);
-  lines.push(`${run.source} → ${run.target} · ${run.mode === 'replace' ? '清空后写入' : '追加写入'}`);
+  lines.push(tr("AI DB 数据传输 · {0}", [new Date(run.startedAt).toLocaleString()]));
+  lines.push(`${run.source} → ${run.target} · ${run.mode === 'replace' ? tr('清空后写入') : tr('追加写入')}`);
   lines.push('');
   for (const table of run.tables) {
     if (table.status === 'pending') continue;
     const stamp = table.startedAt ? `[${clockTime(table.startedAt)}] ` : '';
     if (table.status === 'skipped') {
-      lines.push(`${stamp}${table.name} · 未执行`);
+      lines.push(tr("{0}{1} · 未执行", [stamp, table.name]));
       continue;
     }
-    const flags = [table.created ? '新建' : '', table.truncated ? '清空' : ''].filter(Boolean).join(' · ');
-    if (table.status === 'running') lines.push(`${stamp}${table.name} · 进行中 · ${livePhase(table)}`);
-    else if (table.status === 'canceled') lines.push(`${stamp}${table.name} · 已取消 · 已写入 ${fmtRows(table.rows)} 行`);
-    else if (table.status === 'error') lines.push(`${stamp}${table.name} · 失败${table.rows ? ` · 已写入 ${fmtRows(table.rows)} 行` : ''} · ${table.error ?? '未知错误'}`);
-    else lines.push(`${stamp}${table.name} · ${fmtRows(table.rows)} 行${flags ? ` · ${flags}` : ''}${table.durationMs != null ? ` · ${shortDuration(table.durationMs)}` : ''}`);
+    const flags = [table.created ? tr("新建") : '', table.truncated ? tr("清空") : ''].filter(Boolean).join(' · ');
+    if (table.status === 'running') lines.push(tr("{0}{1} · 进行中 · {2}", [stamp, table.name, livePhase(table)]));
+    else if (table.status === 'canceled') lines.push(tr("{0}{1} · 已取消 · 已写入 {2} 行", [stamp, table.name, fmtRows(table.rows)]));
+    else if (table.status === 'error') lines.push(tr("{0}{1} · 失败{2} · {3}", [stamp, table.name, table.rows ? tr(" · 已写入 {0} 行", [fmtRows(table.rows)]) : '', table.error ?? tr("未知错误")]));
+    else lines.push(tr("{0}{1} · {2} 行{3}{4}", [stamp, table.name, fmtRows(table.rows), flags ? ` · ${flags}` : '', table.durationMs != null ? ` · ${shortDuration(table.durationMs)}` : '']));
     for (const phase of table.phases) {
       if (phase.state === 'running') continue;
       lines.push(
-        `  - ${PHASE_LABEL[phase.phase]} · ${phase.state === 'error' ? '失败' : phase.state === 'canceled' ? '已取消' : phaseMeta(phase)}`,
+        `  - ${PHASE_LABEL[phase.phase]} · ${phase.state === 'error' ? tr('失败') : phase.state === 'canceled' ? tr('已取消') : phaseMeta(phase)}`,
       );
     }
-    if (table.skippedColumns) lines.push(`  - 列映射：${table.skippedColumns} 列在目标表不存在，已跳过`);
-    if (table.limitReached) lines.push('  - 注意：达到单表 100,000 行上限，可能未完整复制');
+    if (table.skippedColumns) lines.push(tr("  - 列映射：{0} 列在目标表不存在，已跳过", [table.skippedColumns]));
+    if (table.limitReached) lines.push(tr("  - 注意：达到单表 100,000 行上限，可能未完整复制"));
   }
   lines.push('');
   lines.push(
-    `汇总：${RUN_LABEL[run.status]} · 成功 ${ok} · 失败 ${failed}${canceled ? ` · 取消 ${canceled}` : ''}${skipped ? ` · 未执行 ${skipped}` : ''} · ${fmtRows(rows)} 行 · 用时 ${clock(elapsed)}`,
+    tr("汇总：{0} · 成功 {1} · 失败 {2}{3}{4} · {5} 行 · 用时 {6}", [RUN_LABEL[run.status], ok, failed, canceled ? tr(" · 取消 {0}", [canceled]) : '', skipped ? tr(" · 未执行 {0}", [skipped]) : '', fmtRows(rows), clock(elapsed)]),
   );
-  if (run.error) lines.push(`错误：${run.error}`);
+  if (run.error) lines.push(tr("错误：{0}", [run.error]));
   return lines.join('\n');
 }
 
@@ -376,7 +377,7 @@ export function TransferTool() {
   const startTransfer = async () => {
     if (!sourceId || !targetId || !selected.size || targetReadonly) return;
     if (sourceId === targetId && sourceDb === targetDb && mode === 'replace') {
-      if (!(await askConfirm({ message: '源与目标是同一库，替换模式会清空目标表后再从自身复制。继续？', danger: true }))) return;
+      if (!(await askConfirm({ message: tr("源与目标是同一库，替换模式会清空目标表后再从自身复制。继续？"), danger: true }))) return;
     }
     const names = tables.filter((table) => selected.has(table.name)).map((table) => table.name);
     const controller = new AbortController();
@@ -408,12 +409,12 @@ export function TransferTool() {
           if (event.type === 'done') {
             done = true;
             const failed = event.result.results.filter((item) => item.status === 'error').length;
-            if (failed) notify('warning', '传输完成，但有失败', `${failed} 张表失败 · ${fmtRows(event.result.totalRows)} 行已写入`);
-            else notify('success', '数据传输完成', `${fmtRows(event.result.totalRows)} 行`);
+            if (failed) notify('warning', tr("传输完成，但有失败"), tr("{0} 张表失败 · {1} 行已写入", [failed, fmtRows(event.result.totalRows)]));
+            else notify('success', tr("数据传输完成"), tr("{0} 行", [fmtRows(event.result.totalRows)]));
           }
           if (event.type === 'error') {
             sawError = true;
-            notify('error', '数据传输中断', event.message);
+            notify('error', tr("数据传输中断"), event.message);
           }
           if (event.type === 'table-error') {
             setExpanded((prev) => new Set(prev).add(event.table));
@@ -422,15 +423,15 @@ export function TransferTool() {
         controller.signal,
       );
       if (!done && !sawError && !controller.signal.aborted) {
-        dispatch({ type: 'failed', message: '连接已中断，传输结果可能不完整' });
+        dispatch({ type: 'failed', message: tr("连接已中断，传输结果可能不完整") });
       }
     } catch (err: any) {
       if (controller.signal.aborted && !done) {
         dispatch({ type: 'canceled' });
-        notify('warning', '已取消数据传输', '已写入的数据保留，未执行的表不再开始');
+        notify('warning', tr("已取消数据传输"), tr("已写入的数据保留，未执行的表不再开始"));
       } else if (!done) {
-        dispatch({ type: 'failed', message: err?.message ?? '数据传输失败' });
-        notify('error', '数据传输失败', err?.message);
+        dispatch({ type: 'failed', message: err?.message ?? tr("数据传输失败") });
+        notify('error', tr("数据传输失败"), err?.message);
       }
     } finally {
       controllerRef.current = null;
@@ -451,9 +452,9 @@ export function TransferTool() {
     if (!run) return;
     try {
       await navigator.clipboard.writeText(buildLog(run));
-      notify('success', '过程日志已复制', `${run.tables.length} 张表`);
+      notify('success', tr("过程日志已复制"), tr("{0} 张表", [run.tables.length]));
     } catch (err: any) {
-      notify('error', '复制失败', err?.message);
+      notify('error', tr("复制失败"), err?.message);
     }
   };
 
@@ -480,12 +481,11 @@ export function TransferTool() {
   return (
     <div className="tool-pane">
       <div className="tool-pane-head">
-        <Table2 size={15} /> 数据传输
-        <span className="muted">跨连接复制表结构与数据，目标缺失表自动创建</span>
+        <Table2 size={15} /> {tr(" 数据传输 ")}<span className="muted">{tr("跨连接复制表结构与数据，目标缺失表自动创建")}</span>
       </div>
       <div className="tool-row" style={{ flexWrap: 'wrap' }}>
         <div className="field" style={{ flex: 1, minWidth: 240 }}>
-          <label>源连接 / 数据库</label>
+          <label>{tr("源连接 / 数据库")}</label>
           <div className="row gap-6">
             <Select className="select" style={{ flex: 1 }} value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
               {connections.map((conn) => <Option key={conn.id} value={conn.id}>{conn.name} · {conn.engine}</Option>)}
@@ -495,19 +495,19 @@ export function TransferTool() {
         </div>
         <ArrowRight size={15} className="muted" style={{ alignSelf: 'flex-end', marginBottom: 6 }} />
         <div className="field" style={{ flex: 1, minWidth: 240 }}>
-          <label>目标连接 / 数据库</label>
+          <label>{tr("目标连接 / 数据库")}</label>
           <div className="row gap-6">
             <Select className="select" style={{ flex: 1 }} value={targetId} onChange={(e) => setTargetId(e.target.value)}>
-              {connections.map((conn) => <Option key={conn.id} value={conn.id}>{conn.name} · {conn.engine}{conn.readonly ? '（只读）' : ''}</Option>)}
+              {connections.map((conn) => <Option key={conn.id} value={conn.id}>{conn.name} · {conn.engine}{conn.readonly ? tr("（只读）") : ''}</Option>)}
             </Select>
             <DatabaseSelect connectionId={targetId} value={targetDb} onChange={setTargetDb} testId="transfer-target-db" />
           </div>
         </div>
         <div className="field" style={{ width: 140 }}>
-          <label>写入模式</label>
+          <label>{tr("写入模式")}</label>
           <Select className="select" value={mode} onChange={(e) => setMode(e.target.value as 'append' | 'replace')}>
-            <Option value="append">追加</Option>
-            <Option value="replace">清空后写入</Option>
+            <Option value="append">{tr("追加")}</Option>
+            <Option value="replace">{tr("清空后写入")}</Option>
           </Select>
         </div>
       </div>
@@ -515,10 +515,10 @@ export function TransferTool() {
       <div className="transfer-grid">
         <div className="panel">
           <div className="panel-head">
-            源表 <span className="badge">{selected.size}/{tables.length}</span>
+            {tr(" 源表 ")}<span className="badge">{selected.size}/{tables.length}</span>
             <div className="spacer" />
-            <button className="btn ghost small" onClick={() => setSelected(new Set(tables.map((table) => table.name)))}>全选</button>
-            <button className="btn ghost small" onClick={() => setSelected(new Set())}>清空</button>
+            <button className="btn ghost small" onClick={() => setSelected(new Set(tables.map((table) => table.name)))}>{tr("全选")}</button>
+            <button className="btn ghost small" onClick={() => setSelected(new Set())}>{tr("清空")}</button>
           </div>
           <div className="transfer-list">
             {tables.map((table) => (
@@ -535,26 +535,23 @@ export function TransferTool() {
                 />
                 <span className="mono">{table.name}</span>
                 <span className="muted" style={{ marginLeft: 'auto', fontSize: 10, whiteSpace: 'nowrap' }}>
-                  {table.rows != null ? `≈${fmtRows(table.rows)} 行 · ` : ''}{table.columns ?? 0} 列
-                </span>
+                  {table.rows != null ? tr("≈{0} 行 · ", [fmtRows(table.rows)]) : ''}{table.columns ?? 0}{tr(" 列 ")}</span>
               </label>
             ))}
-            {!tables.length ? <div className="dash-empty">源连接没有表。</div> : null}
+            {!tables.length ? <div className="dash-empty">{tr("源连接没有表。")}</div> : null}
           </div>
         </div>
         <div className="panel">
           <div className="panel-head">
-            结果
-            <div className="spacer" />
+            {tr(" 结果 ")}<div className="spacer" />
             {run ? (
-              <button className="icon-btn" title="复制过程日志" aria-label="复制过程日志" data-testid="transfer-copy-log" onClick={() => void copyLog()}>
+              <button className="icon-btn" title={tr("复制过程日志")} aria-label={tr("复制过程日志")} data-testid="transfer-copy-log" onClick={() => void copyLog()}>
                 <Copy size={13} />
               </button>
             ) : null}
             {running ? (
               <button className="btn ghost small" data-testid="transfer-cancel" onClick={() => controllerRef.current?.abort()}>
-                <Square size={10} /> 取消
-              </button>
+                <Square size={10} /> {tr(" 取消 ")}</button>
             ) : null}
             <button
               className="btn primary small"
@@ -563,7 +560,7 @@ export function TransferTool() {
               disabled={running || !selected.size || targetReadonly}
             >
               {running ? <Loader2 size={12} className="spin" /> : <ArrowRight size={12} />}
-              {running ? '传输中' : '开始传输'}
+              {running ? tr("传输中") : tr("开始传输")}
             </button>
           </div>
           {run ? (
@@ -585,7 +582,7 @@ export function TransferTool() {
                 aria-valuemin={0}
                 aria-valuemax={100}
                 aria-valuenow={percent}
-                aria-label="传输进度"
+                aria-label={tr("传输进度")}
               >
                 {run.tables.map((table) => {
                   const fraction =
@@ -600,15 +597,15 @@ export function TransferTool() {
                 })}
               </div>
               <div className="xfer-stats">
-                <span><b>{completed}</b>/{total} 表</span>
-                <span><b>{fmtRows(writtenRows)}</b> 行</span>
-                {createdCount ? <span><b>{createdCount}</b> 新建</span> : null}
-                {failedCount ? <span className="is-danger"><b>{failedCount}</b> 失败</span> : null}
-                {canceledCount ? <span><b>{canceledCount}</b> 取消</span> : null}
-                {skippedCount ? <span><b>{skippedCount}</b> 未执行</span> : null}
+                <span><b>{completed}</b>/{total}{tr(" 表")}</span>
+                <span><b>{fmtRows(writtenRows)}</b> {tr(" 行")}</span>
+                {createdCount ? <span><b>{createdCount}</b> {tr(" 新建")}</span> : null}
+                {failedCount ? <span className="is-danger"><b>{failedCount}</b> {tr(" 失败")}</span> : null}
+                {canceledCount ? <span><b>{canceledCount}</b> {tr(" 取消")}</span> : null}
+                {skippedCount ? <span><b>{skippedCount}</b> {tr(" 未执行")}</span> : null}
               </div>
               <div className="xfer-route" title={`${run.source} → ${run.target}`}>
-                {run.source} → {run.target} · {run.mode === 'replace' ? '清空后写入' : '追加写入'}
+                {run.source} → {run.target} · {run.mode === 'replace' ? tr("清空后写入") : tr("追加写入")}
               </div>
               {run.status === 'failed' && run.error ? <div className="xfer-error">{run.error}</div> : null}
             </div>
@@ -620,13 +617,13 @@ export function TransferTool() {
                 <span className="mono">{label(targetId, targetDb)}</span>
               </div>
               <div className="xfer-plan-meta">
-                <span className="badge">{selected.size} 张表</span>
-                <span className="badge ddl">{mode === 'replace' ? '清空后写入' : '追加写入'}</span>
-                <span className="muted">目标缺失表自动创建</span>
+                <span className="badge">{selected.size}{tr(" 张表")}</span>
+                <span className="badge ddl">{mode === 'replace' ? tr("清空后写入") : tr("追加写入")}</span>
+                <span className="muted">{tr("目标缺失表自动创建")}</span>
               </div>
-              {hasEstimate ? <div className="xfer-plan-hint">源表估算约 {fmtRows(estimatedRows)} 行</div> : null}
-              {targetReadonly ? <div className="xfer-note warn">目标连接为只读，无法写入</div> : null}
-              <div className="xfer-plan-hint">开始后这里会实时显示每张表的建表、读取、清空与写入进度，以及逐阶段耗时。</div>
+              {hasEstimate ? <div className="xfer-plan-hint">{tr("源表估算约 ")}{fmtRows(estimatedRows)}{tr(" 行")}</div> : null}
+              {targetReadonly ? <div className="xfer-note warn">{tr("目标连接为只读，无法写入")}</div> : null}
+              <div className="xfer-plan-hint">{tr("开始后这里会实时显示每张表的建表、读取、清空与写入进度，以及逐阶段耗时。")}</div>
             </div>
           )}
           <div className="xfer-list" ref={listRef}>
@@ -653,8 +650,8 @@ export function TransferTool() {
                     </span>
                     <span className="xfer-row-main">
                       <span className="mono xfer-table">{table.name}</span>
-                      {table.created ? <span className="badge ddl">新建</span> : table.truncated ? <span className="badge write">清空</span> : null}
-                      {table.limitReached && table.status === 'ok' ? <span className="badge destructive" title="达到单表 100,000 行上限">上限</span> : null}
+                      {table.created ? <span className="badge ddl">{tr("新建")}</span> : table.truncated ? <span className="badge write">{tr("清空")}</span> : null}
+                      {table.limitReached && table.status === 'ok' ? <span className="badge destructive" title={tr("达到单表 100,000 行上限")}>{tr("上限")}</span> : null}
                     </span>
                     <span className={`xfer-row-side${table.status === 'error' ? ' is-danger' : ''}`}>{livePhase(table)}</span>
                     <span className="xfer-chev">{canExpand ? <ChevronRight size={11} className={open ? 'xfer-chev-open' : ''} /> : null}</span>
@@ -666,20 +663,19 @@ export function TransferTool() {
                           <span className="xfer-dot" />
                           <span>{PHASE_LABEL[phase.phase]}</span>
                           <span className="xfer-phase-meta">
-                            {phase.state === 'running' ? '进行中' : phase.state === 'error' ? '失败' : phase.state === 'canceled' ? '已取消' : phaseMeta(phase)}
+                            {phase.state === 'running' ? tr("进行中") : phase.state === 'error' ? tr("失败") : phase.state === 'canceled' ? tr("已取消") : phaseMeta(phase)}
                           </span>
                         </div>
                       ))}
                       {table.skippedColumns ? (
                         <div className="xfer-note">
-                          列映射：{table.columns ?? 0} 列写入，{table.skippedColumns} 列在目标表不存在，已跳过
-                        </div>
+                          {tr(" 列映射：")}{table.columns ?? 0}{tr(" 列写入，")}{table.skippedColumns}{tr(" 列在目标表不存在，已跳过 ")}</div>
                       ) : null}
-                      {table.limitReached ? <div className="xfer-note warn">达到单表 100,000 行上限，源表可能还有未复制的数据</div> : null}
+                      {table.limitReached ? <div className="xfer-note warn">{tr("达到单表 100,000 行上限，源表可能还有未复制的数据")}</div> : null}
                       {table.error ? <div className="xfer-error">{table.error}</div> : null}
                       {ddl ? (
                         <details className="xfer-ddl">
-                          <summary>建表语句</summary>
+                          <summary>{tr("建表语句")}</summary>
                           <pre>{ddl}</pre>
                         </details>
                       ) : null}
@@ -688,8 +684,8 @@ export function TransferTool() {
                 </div>
               );
             })}
-            {!run ? <div className="dash-empty">选择源表并开始传输。目标表不存在时会按目标方言创建；自增序列在跨库复制后可能需要重置。</div> : null}
-            {run && !run.tables.length ? <div className="dash-empty">这次传输没有可用的表。</div> : null}
+            {!run ? <div className="dash-empty">{tr("选择源表并开始传输。目标表不存在时会按目标方言创建；自增序列在跨库复制后可能需要重置。")}</div> : null}
+            {run && !run.tables.length ? <div className="dash-empty">{tr("这次传输没有可用的表。")}</div> : null}
           </div>
         </div>
       </div>

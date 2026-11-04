@@ -5,6 +5,7 @@ import { api } from '../../lib/api';
 import { useApp } from '../../store';
 import { askConfirm } from '../AskDialog';
 import { CapabilityForm } from './CapabilityForm';
+import { t as tr } from '../../i18n';
 
 /**
  * 服务器监控 —— 表单迁移到能力契约（`capabilities/monitor.json`）。
@@ -35,7 +36,7 @@ export function MonitorTool() {
       const { monitor: data } = await api.monitor(connectionId);
       setMonitor(data);
     } catch (err: any) {
-      notify('error', '监控失败', err?.message);
+      notify('error', tr("监控失败"), err?.message);
     } finally {
       setLoading(false);
     }
@@ -52,21 +53,20 @@ export function MonitorTool() {
   }, [auto, load]);
 
   const kill = async (sessionId: string) => {
-    if (!(await askConfirm({ message: `终止会话 ${sessionId}？`, detail: '该操作不可撤销，会话会被服务端强制断开。', danger: true, confirmLabel: '终止' }))) return;
+    if (!(await askConfirm({ message: tr("终止会话 {0}？", [sessionId]), detail: tr("该操作不可撤销，会话会被服务端强制断开。"), danger: true, confirmLabel: tr("终止") }))) return;
     try {
       await api.killSession({ connectionId, sessionId });
-      notify('success', '会话已终止');
+      notify('success', tr("会话已终止"));
       await load();
     } catch (err: any) {
-      notify('error', '终止失败', err?.message);
+      notify('error', tr("终止失败"), err?.message);
     }
   };
 
   return (
     <div className="tool-pane">
       <div className="tool-pane-head">
-        <Activity size={15} /> 服务器监控
-        <span className="muted">{capability.title.en} · 指标 / 会话 / 终止</span>
+        <Activity size={15} /> {tr(" 服务器监控 ")}<span className="muted">{tr(capability.title.zh)}{tr(" · 指标 / 会话 / 终止")}</span>
       </div>
       <div className="tool-row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
         <div style={{ width: 240 }}>
@@ -82,19 +82,18 @@ export function MonitorTool() {
           />
         </div>
         <button className="btn" onClick={() => void load()} disabled={loading}>
-          {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <RefreshCw size={12} />} 刷新
-        </button>
-        <label className="checkbox"><input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> 每 10s 自动刷新</label>
+          {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <RefreshCw size={12} />}{tr(" 刷新 ")}</button>
+        <label className="checkbox"><input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> {tr(" 每 10s 自动刷新")}</label>
         <span className="spacer" />
         {monitor?.version ? <span className="badge">{monitor.version}</span> : null}
       </div>
       <div className="tool-scroll">
-        {!monitor ? <div className="dash-empty">选择连接以读取指标。</div> : null}
+        {!monitor ? <div className="dash-empty">{tr("选择连接以读取指标。")}</div> : null}
         {monitor?.error ? <div className="risk-banner">{monitor.error}</div> : null}
         <div className="monitor-grid">
           {(monitor?.sections ?? []).map((section: any) => (
             <div key={section.title} className="panel">
-              <div className="panel-head">{section.title}{section.error ? <span className="badge destructive">错误</span> : null}</div>
+              <div className="panel-head">{section.title}{section.error ? <span className="badge destructive">{tr("错误")}</span> : null}</div>
               <div className="monitor-items">
                 {section.items.map((item: any) => (
                   <div key={item.label} className="monitor-item">
@@ -109,10 +108,10 @@ export function MonitorTool() {
         </div>
         {monitor?.sessions?.length ? (
           <div className="panel" style={{ marginTop: 8 }}>
-            <div className="panel-head">会话 <span className="badge">{monitor.sessions.length}</span></div>
+            <div className="panel-head">{tr("会话 ")}<span className="badge">{monitor.sessions.length}</span></div>
             <div className="mini-table-wrap">
               <table className="tool-table">
-                <thead><tr><th>ID</th><th>用户</th><th>库</th><th>状态</th><th>耗时</th><th>SQL</th><th /></tr></thead>
+                <thead><tr><th>ID</th><th>{tr("用户")}</th><th>{tr("库")}</th><th>{tr("状态")}</th><th>{tr("耗时")}</th><th>SQL</th><th /></tr></thead>
                 <tbody>
                   {monitor.sessions.slice(0, 50).map((session: any) => (
                     <tr key={session.id}>
@@ -123,7 +122,7 @@ export function MonitorTool() {
                       <td>{session.elapsed}</td>
                       <td title={session.query}>{String(session.query ?? '').slice(0, 90)}</td>
                       <td>
-                        <button className="icon-btn danger" title="终止会话" onClick={() => void kill(session.id)}>
+                        <button className="icon-btn danger" title={tr("终止会话")} onClick={() => void kill(session.id)}>
                           <Skull size={12} />
                         </button>
                       </td>

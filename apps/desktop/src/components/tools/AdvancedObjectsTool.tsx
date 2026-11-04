@@ -4,6 +4,7 @@ import { applyCapabilityDefaults, CAPABILITIES, getCapability, type Capability }
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
 import { CapabilityForm } from './CapabilityForm';
+import { t as tr } from '../../i18n';
 
 export function AdvancedObjectsTool() {
   const connections = useApp((s) => s.connections);
@@ -29,7 +30,7 @@ export function AdvancedObjectsTool() {
       setSelected(first);
       if (first) setTab(first.type === 'procedure' || first.type === 'function' ? 'routines' : first.type === 'sequence' ? 'sequences' : first.type === 'event' ? 'events' : 'triggers');
     } catch (err: any) {
-      notify('error', '加载失败', err?.message);
+      notify('error', tr("加载失败"), err?.message);
     } finally {
       setLoading(false);
     }
@@ -44,8 +45,7 @@ export function AdvancedObjectsTool() {
   return (
     <div className="tool-pane">
       <div className="tool-pane-head">
-        <Code2 size={15} /> 高级对象
-        <span className="muted">触发器 / 函数 / 序列 / 事件</span>
+        <Code2 size={15} /> {tr(" 高级对象 ")}<span className="muted">{tr("触发器 / 函数 / 序列 / 事件")}</span>
       </div>
       <div className="tool-row">
         <CapabilityForm
@@ -59,8 +59,7 @@ export function AdvancedObjectsTool() {
           testIdPrefix="objects"
         />
         <button className="btn" onClick={() => void load()} disabled={loading}>
-          {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <RefreshCw size={12} />} 刷新
-        </button>
+          {loading ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <RefreshCw size={12} />}{tr(" 刷新 ")}</button>
         {data ? (
           <span className="badge">
             {data.triggers.length} triggers · {data.routines.length} routines · {data.sequences.length} sequences
@@ -85,7 +84,7 @@ export function AdvancedObjectsTool() {
                   {item.table ? <span className="muted" style={{ fontSize: 9 }}>on {item.table}</span> : null}
                 </button>
               ))}
-              {!list.length ? <div className="dash-empty">{data.note ?? '该分类没有对象。'}</div> : null}
+              {!list.length ? <div className="dash-empty">{data.note ?? tr("该分类没有对象。")}</div> : null}
             </div>
           </div>
           <div className="object-def">
@@ -97,13 +96,13 @@ export function AdvancedObjectsTool() {
                   {selected.detail ? <span className="muted" style={{ fontSize: 10 }}>{selected.detail}</span> : null}
                 </div>
                 <pre className="sql-block" style={{ minHeight: 220, maxHeight: '100%', overflow: 'auto', whiteSpace: 'pre-wrap' }}>
-                  {selected.definition ?? '该引擎未返回定义，可在对象树中查看结构。'}
+                  {selected.definition ?? tr('该引擎未返回定义，可在对象树中查看结构。')}
                 </pre>
               </>
-            ) : <div className="dash-empty">选择一个对象查看定义。</div>}
+            ) : <div className="dash-empty">{tr("选择一个对象查看定义。")}</div>}
           </div>
         </div>
-      ) : <div className="dash-empty">选择连接以读取触发器、函数、序列与事件。</div>}
+      ) : <div className="dash-empty">{tr("选择连接以读取触发器、函数、序列与事件。")}</div>}
     </div>
   );
 }

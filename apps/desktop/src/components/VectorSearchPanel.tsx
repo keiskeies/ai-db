@@ -6,6 +6,7 @@ import { api } from '../lib/api';
 import { useApp } from '../store';
 import { DataGrid } from './DataGrid';
 import { Modal, Option, Select, Spinner } from './ui';
+import { t as tr } from '../i18n';
 
 export function VectorSearchPanel({
   connection,
@@ -60,7 +61,7 @@ export function VectorSearchPanel({
 
   const run = async () => {
     if (!collection) {
-      notify('warning', '请选择集合/表');
+      notify('warning', tr("请选择集合/表"));
       return;
     }
     let vector: number[] | undefined;
@@ -68,16 +69,16 @@ export function VectorSearchPanel({
       try {
         const parsed = JSON.parse(vectorText);
         if (!Array.isArray(parsed) || !parsed.length || parsed.some((value) => !Number.isFinite(Number(value)))) {
-          throw new Error('向量必须是数字数组');
+          throw new Error(tr("向量必须是数字数组"));
         }
         vector = parsed.map((value) => Number(value));
       } catch (err: any) {
-        setError(err?.message ?? '向量 JSON 不合法');
+        setError(err?.message ?? tr("向量 JSON 不合法"));
         return;
       }
     }
     if (!vector && !text.trim()) {
-      setError('请输入文本（需配置 Embedding）或向量 JSON');
+      setError(tr("请输入文本（需配置 Embedding）或向量 JSON"));
       return;
     }
     setRunning(true);
@@ -94,7 +95,7 @@ export function VectorSearchPanel({
       });
       setResult(found);
     } catch (err: any) {
-      setError(err?.message ?? '向量检索失败');
+      setError(err?.message ?? tr("向量检索失败"));
     } finally {
       setRunning(false);
     }
@@ -102,31 +103,30 @@ export function VectorSearchPanel({
 
   return (
     <Modal
-      title="向量检索"
+      title={tr("向量检索")}
       icon={<Sparkles size={15} />}
       onClose={onClose}
       wide
       footer={
         <>
-          <button className="btn" onClick={onClose}>关闭</button>
+          <button className="btn" onClick={onClose}>{tr("关闭")}</button>
           <button className="btn primary" onClick={() => void run()} disabled={running || !collection} data-testid="vector-search-run">
-            {running ? <Spinner /> : <Play size={12} />} 检索
-          </button>
+            {running ? <Spinner /> : <Play size={12} />}{tr(" 检索 ")}</button>
         </>
       }
     >
       <div className="form-grid">
         <div className="field">
-          <label>{isPg ? '表' : '集合'}</label>
+          <label>{isPg ? tr("表") : tr("集合")}</label>
           <Select className="select" value={collection} onChange={(e) => setCollection(e.target.value)} data-testid="vector-search-collection">
             {candidates.map((table) => (
               <Option key={table.name} value={table.name}>{table.name}</Option>
             ))}
           </Select>
-          {!candidates.length ? <span className="hint">{isPg ? '当前库没有 vector 列；请先安装 pgvector 并创建 vector 列。' : '没有可用的集合。'}</span> : null}
+          {!candidates.length ? <span className="hint">{isPg ? tr("当前库没有 vector 列；请先安装 pgvector 并创建 vector 列。") : tr("没有可用的集合。")}</span> : null}
         </div>
         <div className="field">
-          <label>向量字段 {isPg ? '（必填）' : '（命名向量，可留空）'}</label>
+          <label>{tr("向量字段 ")}{isPg ? tr("（必填）") : tr("（命名向量，可留空）")}</label>
           {isPg ? (
             <Select className="select" value={field} onChange={(e) => setField(e.target.value)} data-testid="vector-search-field">
               {vectorColumns.map((column) => (
@@ -134,7 +134,7 @@ export function VectorSearchPanel({
               ))}
             </Select>
           ) : (
-            <input className="input mono" value={field} onChange={(e) => setField(e.target.value)} placeholder="如 image_vector" data-testid="vector-search-field" />
+            <input className="input mono" value={field} onChange={(e) => setField(e.target.value)} placeholder={tr("如 image_vector")} data-testid="vector-search-field" />
           )}
         </div>
         <div className="field">
@@ -142,12 +142,12 @@ export function VectorSearchPanel({
           <input className="input" type="number" min={1} max={1000} value={topK} onChange={(e) => setTopK(Math.max(1, Math.min(1000, Number(e.target.value) || 1)))} data-testid="vector-search-topk" />
         </div>
         <div className="field full">
-          <label>查询文本（走 Embedding）</label>
-          <input className="input" value={text} onChange={(e) => setText(e.target.value)} placeholder="例如：与退款政策相关的段落" data-testid="vector-search-text" />
-          <span className="hint">在设置 → 向量检索（Embedding）中配置服务；也可以直接填入向量 JSON。</span>
+          <label>{tr("查询文本（走 Embedding）")}</label>
+          <input className="input" value={text} onChange={(e) => setText(e.target.value)} placeholder={tr("例如：与退款政策相关的段落")} data-testid="vector-search-text" />
+          <span className="hint">{tr("在设置 → 向量检索（Embedding）中配置服务；也可以直接填入向量 JSON。")}</span>
         </div>
         <div className="field full">
-          <label>向量 JSON（可选，优先于文本）</label>
+          <label>{tr("向量 JSON（可选，优先于文本）")}</label>
           <textarea className="input mono" rows={3} value={vectorText} onChange={(e) => setVectorText(e.target.value)} placeholder="[0.12, -0.03, 0.88, ...]" data-testid="vector-search-vector" />
         </div>
         {error ? <div className="field full"><span className="hint" style={{ color: 'var(--danger, #f16b62)' }}>{error}</span></div> : null}
@@ -155,7 +155,7 @@ export function VectorSearchPanel({
       {result ? (
         <div style={{ marginTop: 12 }}>
           <div className="row gap-4" style={{ marginBottom: 8, fontSize: 11.5, color: 'var(--text-muted)' }}>
-            <Database size={12} /> {result.rowCount} 条结果 · {result.durationMs}ms
+            <Database size={12} /> {result.rowCount}{tr(" 条结果 · ")}{result.durationMs}ms
           </div>
           <DataGrid columns={result.columns} rows={result.rows} testId="vector-result-grid" />
         </div>

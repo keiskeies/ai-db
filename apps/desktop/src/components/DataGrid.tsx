@@ -3,6 +3,7 @@ import { ArrowDown, ArrowUp, Copy, Trash2 } from 'lucide-react';
 import type { ResultField } from '@aidb/core';
 import { formatCell } from '../lib/format';
 import { useApp, type ContextMenuItem } from '../store';
+import { t as tr } from '../i18n';
 
 export interface DataGridProps {
   columns: ResultField[];
@@ -210,12 +211,12 @@ export function DataGrid({
                         return item.kind === 'null' ? '' : item.text;
                       }).join('	');
                       const items: ContextMenuItem[] = [
-                        { label: `复制「${col.name}」`, icon: <Copy size={12} />, onClick: () => void navigator.clipboard.writeText(cell).catch(() => undefined) },
-                        { label: '复制整行（制表符分隔）', onClick: () => void navigator.clipboard.writeText(line).catch(() => undefined) },
-                        { label: '复制列名', onClick: () => void navigator.clipboard.writeText(col.name).catch(() => undefined) },
+                        { label: tr("复制「{0}」", [col.name]), icon: <Copy size={12} />, onClick: () => void navigator.clipboard.writeText(cell).catch(() => undefined) },
+                        { label: tr("复制整行（制表符分隔）"), onClick: () => void navigator.clipboard.writeText(line).catch(() => undefined) },
+                        { label: tr("复制列名"), onClick: () => void navigator.clipboard.writeText(col.name).catch(() => undefined) },
                       ];
                       if (editable) {
-                        items.push({ label: '编辑此单元格', onClick: () => beginEdit(rowIndex, colIndex) });
+                        items.push({ label: tr("编辑此单元格"), onClick: () => beginEdit(rowIndex, colIndex) });
                       }
                       useApp.getState().openContextMenu(event.clientX, event.clientY, items);
                     }}
@@ -250,7 +251,7 @@ export function DataGrid({
           {visibleEnd < rows.length ? spacer((rows.length - visibleEnd) * safeRowHeight) : null}
         </tbody>
       </table>
-      {!rows.length ? <div className="empty-state" style={{ padding: 30 }}>没有数据</div> : null}
+      {!rows.length ? <div className="empty-state" style={{ padding: 30 }}>{tr("没有数据")}</div> : null}
     </div>
   );
 }

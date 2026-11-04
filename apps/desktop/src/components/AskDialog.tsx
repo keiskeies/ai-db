@@ -1,5 +1,6 @@
 import { AlertTriangle } from 'lucide-react';
 import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { t as tr } from '../i18n';
 
 /**
  * 应用自己的确认/输入弹层。window.confirm/prompt 由系统绘制：底色、字体、
@@ -126,10 +127,10 @@ export function AskHost() {
         </div>
         <div className="modal-foot">
           <button type="button" className="btn" data-testid="ask-cancel" onClick={() => settle(null)}>
-            {state.cancelLabel ?? '取消'}
+            {state.cancelLabel ?? tr("取消")}
           </button>
           <button ref={confirmRef} type="submit" className={`btn ${state.danger ? 'danger' : 'primary'}`} data-testid="ask-confirm">
-            {state.confirmLabel ?? '确定'}
+            {state.confirmLabel ?? tr("确定")}
           </button>
         </div>
       </form>

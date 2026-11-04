@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import type { GraphData, GraphNode } from '@aidb/core';
+import { t as tr } from '../i18n';
 
 const WIDTH = 900;
 const HEIGHT = 520;
@@ -282,10 +283,10 @@ export function GraphView({ graph }: { graph: GraphData }) {
           className="input graph-search"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="搜索节点 / 标签 / 属性"
-          aria-label="搜索图节点"
+          placeholder={tr("搜索节点 / 标签 / 属性")}
+          aria-label={tr("搜索图节点")}
         />
-        {isFiltering ? <span className="muted" style={{ fontSize: 11 }}>{matched.size} 个匹配</span> : null}
+        {isFiltering ? <span className="muted" style={{ fontSize: 11 }}>{matched.size}{tr(" 个匹配")}</span> : null}
         <div style={{ flex: 1 }} />
         {legend.map(([label, count]) => (
           <span key={label} data-testid="graph-legend-item" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--text-secondary)' }}>
@@ -293,9 +294,9 @@ export function GraphView({ graph }: { graph: GraphData }) {
             {label} {count}
           </span>
         ))}
-        <button className="icon-btn" title="放大" data-testid="graph-zoom-in" onClick={() => zoomBy(1.2)}>+</button>
-        <button className="icon-btn" title="缩小" data-testid="graph-zoom-out" onClick={() => zoomBy(1 / 1.2)}>−</button>
-        <button className="btn small" title="重置视图" data-testid="graph-reset" onClick={() => { setPositions(layoutGraph(graph)); setView({ x: 0, y: 0, scale: 1 }); }}>重置</button>
+        <button className="icon-btn" title={tr("放大")} data-testid="graph-zoom-in" onClick={() => zoomBy(1.2)}>+</button>
+        <button className="icon-btn" title={tr("缩小")} data-testid="graph-zoom-out" onClick={() => zoomBy(1 / 1.2)}>−</button>
+        <button className="btn small" title={tr("重置视图")} data-testid="graph-reset" onClick={() => { setPositions(layoutGraph(graph)); setView({ x: 0, y: 0, scale: 1 }); }}>{tr("重置")}</button>
       </div>
       <div style={{ display: 'flex', minHeight: 420 }}>
         <div ref={containerRef} style={{ flex: 1, minWidth: 0, position: 'relative' }}>
@@ -379,8 +380,7 @@ export function GraphView({ graph }: { graph: GraphData }) {
             </g>
           </svg>
           <div style={{ position: 'absolute', left: 10, bottom: 8, fontSize: 10, color: 'var(--text-muted)', pointerEvents: 'none' }}>
-            滚轮缩放 · 拖拽画布平移 · 拖动节点固定位置 · 点击节点查看属性
-          </div>
+            {tr(" 滚轮缩放 · 拖拽画布平移 · 拖动节点固定位置 · 点击节点查看属性 ")}</div>
         </div>
         {selected ? (
           <aside
@@ -389,9 +389,9 @@ export function GraphView({ graph }: { graph: GraphData }) {
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ width: 10, height: 10, borderRadius: 5, background: colorFor(selected.labels), flexShrink: 0 }} />
-              <strong style={{ fontSize: 12, wordBreak: 'break-all' }}>{selected.labels[0] ?? '节点'}</strong>
+              <strong style={{ fontSize: 12, wordBreak: 'break-all' }}>{selected.labels[0] ?? tr("节点")}</strong>
               <div style={{ flex: 1 }} />
-              <button className="icon-btn" title="关闭" onClick={() => setSelectedId(null)}>×</button>
+              <button className="icon-btn" title={tr("关闭")} onClick={() => setSelectedId(null)}>×</button>
             </div>
             <div className="muted" style={{ fontSize: 10, margin: '4px 0 8px', wordBreak: 'break-all' }}>{selected.id}</div>
             <table className="table" style={{ fontSize: 11 }}>
@@ -404,16 +404,16 @@ export function GraphView({ graph }: { graph: GraphData }) {
                     </tr>
                   ))
                 ) : (
-                  <tr><td className="muted">无属性</td></tr>
+                  <tr><td className="muted">{tr("无属性")}</td></tr>
                 )}
               </tbody>
             </table>
-            <div className="muted" style={{ fontSize: 10, marginTop: 8 }}>与其他节点有 {degrees.get(selected.id) ?? 0} 条关系</div>
+            <div className="muted" style={{ fontSize: 10, marginTop: 8 }}>{tr("与其他节点有 ")}{degrees.get(selected.id) ?? 0}{tr(" 条关系")}</div>
           </aside>
         ) : null}
       </div>
       <div style={{ padding: '6px 10px', fontSize: 11, color: 'var(--text-muted)', borderTop: '1px solid var(--border-panel)' }}>
-        {graph.nodes.length} 节点 · {graph.edges.length} 关系 · 缩放 {Math.round(view.scale * 100)}%
+        {graph.nodes.length}{tr(" 节点 · ")}{graph.edges.length}{tr(" 关系 · 缩放 ")}{Math.round(view.scale * 100)}%
       </div>
     </div>
   );
