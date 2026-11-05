@@ -1068,6 +1068,7 @@ export function SettingsModal() {
                     devices.map((device) => (
                       <div key={device.id} className="setting-card row" style={{ marginBottom: 6 }}>
                         <span className="badge">{device.platform}</span>
+                        {device.scope === 'mcp:readonly' && <span className="badge">{tr("只读 MCP")}</span>}
                         <div style={{ flex: 1 }}>
                           <div style={{ fontSize: 12 }}>{device.name}</div>
                           <div className="muted" style={{ fontSize: 10 }}>{tr("配对于 ")}{formatRelative(device.pairedAt)}</div>
