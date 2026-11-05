@@ -156,26 +156,42 @@ Agent 的调用路径：先 `mcp_list_servers` 拿到真实 id，再 `mcp_list_t
 
 具体参数以所用 MCP Server 的 README 为准；AiDB 不预置第三方包（内置 Server 是第一方实现）。配置后点击“发现工具”，Agent 即可在 `/ask` 中通过 `mcp_list_servers` / `mcp_list_tools` / `mcp_call` 使用。
 
-### 4.5 AiDB 作为 MCP Server（出站）
+### 4.5 AiDB 作为 MCP Server（出站）：一次性配对
 
-`scripts/aidb-mcp-server.mjs` 是 stdio MCP Server，把 AiDB 的只读工具暴露给 Claude Desktop / Cursor 等外部 MCP 客户端。先启动网关，再在客户端配置：
+`@aidb/mcp` 是 stdio MCP Server，把 AiDB 的**只读**工具暴露给 Claude Code / Claude Desktop / Cursor
+等外部客户端。与早期直接把 `AIDB_TOKEN` 写进配置的用法不同，现在通过**一次性配对**换取受限凭据：
 
-```json
-{
-  "mcpServers": {
-    "aidb": {
-      "command": "node",
-      "args": ["<AiDB 安装目录>/scripts/aidb-mcp-server.mjs"],
-      "env": { "AIDB_URL": "http://127.0.0.1:8787", "AIDB_TOKEN": "<网关 token>" }
-    }
-  }
-}
-```
+1. 启动网关；在 **设置 → Bridge → 为移动端配对** 生成 6 位配对码（5 分钟有效、单次消费）。
+2. 运行 `npx -y @aidb/mcp pair`，输入配对码与 Bridge 地址。CLI 调用 `POST /api/pair/claim`
+   并带上 `scope: 'mcp:readonly'`，把换到的 device token 写入本地 `0600` 凭据文件
+   （Windows `%APPDATA%\aidb-mcp\credentials.json`；其他平台 `~/.config/aidb-mcp/credentials.json`，
+   可用 `AIDB_MCP_CREDENTIALS` 覆盖）。
+3. 客户端配置里不再出现任何密钥：
 
-- `tools/list` 只返回 `read` 与 `dynamic` 工具；`tools/call` 走 `POST /agent/tools/:name`，服务端再次按风险过滤，写工具返回 `TOOL_READ_ONLY`。
-- 出站桥不暴露 `mcp_list_servers` / `mcp_list_tools` / `mcp_call`：本地 MCP（文件系统、Git、网页抓取）只能在 AiDB 内使用，外部客户端不能借道读取本机文件或访问网页。
-- 适合外部 Agent 让 AiDB 查结构、跑只读 SQL、做统计；写库仍必须回到 AiDB 内走审批。
-- 外部客户端拿到的结果文本含完整工具结果；token 只从环境变量读取，不写日志。
+   ```json
+   {
+     "mcpServers": {
+       "aidb": { "command": "npx", "args": ["-y", "@aidb/mcp"] }
+     }
+   }
+   ```
+
+`scope` 在网关鉴权中间件（`apps/gateway/src/routes.ts`）强制：`mcp:readonly` 凭据只能访问
+`GET /health`、`GET /capabilities`、`GET /agent/tools?for=mcp`、`POST /agent/tools/:name`；
+其余接口（包括没有 Agent 审批闸的 `POST /query`、`/connections`、`/settings`）一律
+`403 SCOPE_DENIED`。WebSocket / Agent 会话通道同样拒绝该凭据（`server.ts` 的 `authorized()`）。
+
+- `/agent/tools/:name` 桥继续按风险过滤：非 `read` 工具返回 `TOOL_READ_ONLY`；
+  `tools/list` 排除 `mcp_list_servers` / `mcp_list_tools` / `mcp_call`，本地 MCP
+  （文件系统、Git、网页抓取）只能在 AiDB 内使用。
+- `devices` 表新增 `scope` 列，默认 `'full'`（旧移动端配对不受影响）；桌面端
+  **设置 → 设备** 会显示「只读 MCP」徽标，可随时吊销，吊销后 token 立即失效。
+- 出站桥仍要求网关已启动；外部 Agent 可让 AiDB 查结构、跑只读 SQL、做统计，
+  写库必须回到 AiDB 内走审批。
+- 兼容旧用法：显式设置 `AIDB_URL` + `AIDB_TOKEN` 也能启动 `scripts/aidb-mcp-server.mjs`
+  （现为 `packages/aidb-mcp/bin/server.mjs` 的薄转发），但那是网关主令牌、不受 scope 限制，
+  **不推荐**。
+- token 只从凭据文件或环境变量读取，不写日志、不进 stdout；server 的诊断信息只走 stderr。
 
 ### 4.6 Agent 工具目录（只读）
 

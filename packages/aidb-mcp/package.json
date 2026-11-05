@@ -1,0 +1,29 @@
+{
+  "name": "@aidb/mcp",
+  "version": "0.1.0",
+  "description": "AiDB Studio read-only MCP server for Claude Code / Claude Desktop, with one-time device pairing",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "aidb-mcp": "./bin/aidb-mcp.mjs"
+  },
+  "files": [
+    "bin/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.5"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/keiskeies/ai-db"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}
