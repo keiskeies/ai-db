@@ -149,7 +149,9 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
   const authorized = (token: string): boolean => {
     if (!token) return false;
     if (safeEqual(token, config.token)) return true;
-    return Boolean(store.findDeviceByTokenHash(hashToken(token)));
+    // 出站 MCP 的只读配对凭据不能借 WebSocket 进入 Agent 会话。
+    const device = store.findDeviceByTokenHash(hashToken(token));
+    return Boolean(device && device.scope !== 'mcp:readonly');
   };
 
   wss.on('connection', (ws: WebSocket, req) => {
