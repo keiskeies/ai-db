@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { credentialsPath, readCredentials, writeCredentials } from '../bin/credentials.mjs';
+import { credentialsPath, readCredentials, writeCredentials, atomicWriteCredentials } from '../bin/credentials.mjs';
 
 const home = mkdtempSync(join(tmpdir(), 'aidb-mcp-creds-'));
 test.after(() => rmSync(home, { recursive: true, force: true }));
@@ -30,6 +30,25 @@ test('writeCredentials overwrites an existing credential file', () => {
   writeCredentials(second);
   assert.deepEqual(readCredentials(), second);
   delete process.env.AIDB_MCP_CREDENTIALS;
+});
+
+test('a failed rename preserves the previous credential', () => {
+  const file = join(home, 'atomic', 'credentials.json');
+  mkdirSync(join(home, 'atomic'), { recursive: true });
+  const first = { url: 'http://a', token: 'old-valid-token', deviceId: 'd1', pairedAt: 'p1' };
+  writeFileSync(file, JSON.stringify(first, null, 2) + '\n');
+  const failingIo = {
+    writeFileSync,
+    renameSync: () => { throw Object.assign(new Error('EPERM: simulated'), { code: 'EPERM' }); },
+    unlinkSync: () => {},
+    chmodSync: () => {},
+  };
+  assert.throws(
+    () => atomicWriteCredentials(file, { url: 'http://b', token: 'new', deviceId: 'd2', pairedAt: 'p2' }, failingIo),
+    /EPERM/,
+  );
+  // 关键契约：旧凭据仍然原封不动，用户不需要重新配对。
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).token, 'old-valid-token');
 });
 
 test('readCredentials throws a clear error when no credential exists', () => {

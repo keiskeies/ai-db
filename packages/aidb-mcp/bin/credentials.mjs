@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, renameSync, unlinkSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, renameSync, unlinkSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -32,25 +32,34 @@ export function readCredentials() {
   return { url: data.url, token: data.token, deviceId: data.deviceId, pairedAt: data.pairedAt };
 }
 
+const fsIo = { writeFileSync, renameSync, unlinkSync, chmodSync };
+
+/**
+ * 原子替换：先写同目录临时文件，再 rename 覆盖。
+ * 绝不能在 rename 之前删除目标文件——rename 失败时旧凭据会一起丢失。
+ * io 参数只用于测试注入失败路径。
+ */
+export function atomicWriteCredentials(file, value, io = fsIo) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    io.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+    io.renameSync(tmp, file);
+  } catch (err) {
+    try { io.unlinkSync(tmp); } catch { /* best effort */ }
+    throw err;
+  }
+  io.chmodSync(file, 0o600);
+  return file;
+}
+
 export function writeCredentials(value) {
   const file = credentialsPath();
   const dir = dirname(file);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const tmp = `${file}.${process.pid}.tmp`;
-  try {
-    writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
-    // Windows 上 renameSync 覆盖已存在文件会抛 EPERM/EEXIST；重新配对必须先删旧文件。
-    try { rmSync(file); } catch { /* 文件不存在时忽略 */ }
-    renameSync(tmp, file);
-  } catch (err) {
-    try { unlinkSync(tmp); } catch { /* best effort */ }
-    throw err;
-  }
-  chmodSync(file, 0o600);
+  atomicWriteCredentials(file, value);
   if (platform() !== 'win32') {
     // 目录权限在 mkdirSync 已存在时不会重设，显式补一次。
     try { chmodSync(dir, 0o700); } catch { /* best effort */ }
   }
   return file;
 }
-
