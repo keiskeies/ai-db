@@ -117,12 +117,12 @@ test('/pair/claim 对同一来源限流：10 次后返回 429', async () => {
   assert.match(blocked.headers.get('retry-after') ?? '', /^\d+$/);
 });
 
-test('claim with scope=mcp:readonly creates a read-only device', async () => {
-  const started = await primary.api('/pair/start', { method: 'POST', headers: { 'x-forwarded-for': '10.0.0.20' } });
-  const claimed = await primary.api('/pair/claim', {
+test('MCP pairing endpoints create a read-only device', async () => {
+  const started = await primary.api('/pair/mcp/start', { method: 'POST', headers: { 'x-forwarded-for': '10.0.0.20' } });
+  const claimed = await primary.api('/pair/mcp/claim', {
     method: 'POST',
     headers: { 'x-forwarded-for': '10.0.0.20' },
-    body: JSON.stringify({ code: started.body.code, deviceName: 'Claude Code', platform: 'claude-code', scope: 'mcp:readonly' }),
+    body: JSON.stringify({ code: started.body.code, deviceName: 'Claude Code', platform: 'claude-code' }),
   });
   assert.equal(claimed.status, 200, JSON.stringify(claimed.body));
   assert.equal(claimed.body.device.scope, 'mcp:readonly');
@@ -130,7 +130,7 @@ test('claim with scope=mcp:readonly creates a read-only device', async () => {
   assert.ok(devices.body.devices.some((device: { id: string; scope: string }) => device.id === claimed.body.device.id && device.scope === 'mcp:readonly'));
 });
 
-test('claim without scope defaults to full', async () => {
+test('mobile pairing endpoints create a full-scope device', async () => {
   const started = await primary.api('/pair/start', { method: 'POST', headers: { 'x-forwarded-for': '10.0.0.21' } });
   const claimed = await primary.api('/pair/claim', {
     method: 'POST',

@@ -35,12 +35,14 @@ after(async () => {
 
 async function claim(scope?: string): Promise<string> {
   const headers = { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` };
-  const started = await fetch(`http://127.0.0.1:${port}/api/pair/start`, { method: 'POST', headers });
+  const startPath = scope ? '/pair/mcp/start' : '/pair/start';
+  const claimPath = scope ? '/pair/mcp/claim' : '/pair/claim';
+  const started = await fetch(`http://127.0.0.1:${port}/api${startPath}`, { method: 'POST', headers });
   const s = (await started.json()) as { code: string };
-  const res = await fetch(`http://127.0.0.1:${port}/api/pair/claim`, {
+  const res = await fetch(`http://127.0.0.1:${port}/api${claimPath}`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ code: s.code, deviceName: 'test', platform: 'test', ...(scope ? { scope } : {}) }),
+    body: JSON.stringify({ code: s.code, deviceName: 'test', platform: 'test' }),
   });
   return ((await res.json()) as { token: string }).token;
 }

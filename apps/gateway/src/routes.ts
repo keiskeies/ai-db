@@ -115,6 +115,8 @@ export interface ApiDeps {
   skillWorker: SkillWorker;
   skillRunner: SkillRunner;
   pairCodes: Map<string, { expiresAt: number }>;
+  /** MCP 配对专用码池，与移动端 pairCodes 完全隔离，防止跨端点铸造凭据。 */
+  mcpPairCodes: Map<string, { expiresAt: number }>;
   scheduler: JobScheduler;
   commands: CommandRunner;
   startedAt: number;
@@ -239,7 +241,11 @@ export function createApiRouter(deps: ApiDeps): Router {
   };
 
   router.use((req, res, next) => {
-    const open = req.path === '/health' || req.path === '/pair/claim' || req.path.startsWith('/bots/');
+    const open =
+      req.path === '/health' ||
+      req.path === '/pair/claim' ||
+      req.path === '/pair/mcp/claim' ||
+      req.path.startsWith('/bots/');
     if (open) return next();
     const token = bearer(req);
     if (!token) {
@@ -2603,45 +2609,43 @@ export function createApiRouter(deps: ApiDeps): Router {
   });
 
   // ---------- pairing ----------
-  router.post(
-    '/pair/start',
-    ah(async (req, res) => {
-      if (!allowPairHit('start', req, 30, 60_000)) {
+  // 移动端与 MCP 是两条完全隔离的链路：独立端点、独立码池、scope 由服务端硬编码。
+  // 调用方无法通过 body.scope 铸造另一种凭据，码也不能跨端点兑换。
+  function startPair(pool: Map<string, { expiresAt: number }>, bucket: string, withQr: boolean) {
+    return ah(async (req, res) => {
+      if (!allowPairHit(bucket, req, 30, 60_000)) {
         pairRateLimited(res, 60);
         return;
       }
       const code = pairingCode();
-      deps.pairCodes.set(code, { expiresAt: Date.now() + 5 * 60 * 1000 });
-      for (const [k, v] of deps.pairCodes) if (v.expiresAt < Date.now()) deps.pairCodes.delete(k);
+      pool.set(code, { expiresAt: Date.now() + 5 * 60 * 1000 });
+      for (const [k, v] of pool) if (v.expiresAt < Date.now()) pool.delete(k);
       const origin = pairingOrigin(req, config);
       res.json({
         code,
         expiresIn: 300,
-        qrPayload: JSON.stringify({ v: 1, url: origin.url, host: origin.host, port: origin.port, code }),
+        ...(withQr ? { qrPayload: JSON.stringify({ v: 1, url: origin.url, host: origin.host, port: origin.port, code }) } : {}),
         host: origin.host,
         port: origin.port,
         url: origin.url,
       });
-    }),
-  );
+    });
+  }
 
-  router.post(
-    '/pair/claim',
-    ah(async (req, res) => {
-      if (!allowPairHit('claim', req, 10, 5 * 60_000)) {
+  function claimPair(pool: Map<string, { expiresAt: number }>, bucket: string, scope: 'full' | 'mcp:readonly', defaultName: string) {
+    return ah(async (req, res) => {
+      if (!allowPairHit(bucket, req, 10, 5 * 60_000)) {
         pairRateLimited(res, 300);
         return;
       }
       const body = obj(req.body, 'body');
       const code = String(body.code ?? '').trim();
-      const entry = deps.pairCodes.get(code);
+      const entry = pool.get(code);
       if (!entry || entry.expiresAt < Date.now()) throw Object.assign(new Error('配对码无效或已过期'), { code: 'PAIR_INVALID', status: 401 });
-      deps.pairCodes.delete(code);
+      pool.delete(code);
       const token = randomToken(32);
-      // 出站 MCP 客户端换取的是受限凭据；移动端不传 scope 时保持 full。
-      const scope = str(body.scope) === 'mcp:readonly' ? 'mcp:readonly' : 'full';
       const device = store.createDevice({
-        name: str(body.deviceName) ?? '移动设备',
+        name: str(body.deviceName) ?? defaultName,
         platform: str(body.platform) ?? 'unknown',
         tokenHash: hashToken(token),
         scope,
@@ -2652,8 +2656,26 @@ export function createApiRouter(deps: ApiDeps): Router {
         device,
         bridge: { host: origin.host, port: origin.port, url: origin.url, version: config.version },
       });
-    }),
-  );
+    });
+  }
+
+  const mcpPairingEnabled = (res: Response): boolean => {
+    if (store.getSettings().features.mcp) return true;
+    res.status(403).json({ error: { code: 'FEATURE_DISABLED', message: 'MCP 已在设置中关闭' } });
+    return false;
+  };
+
+  router.post('/pair/start', startPair(deps.pairCodes, 'start', true));
+  router.post('/pair/claim', claimPair(deps.pairCodes, 'claim', 'full', '移动设备'));
+
+  router.post('/pair/mcp/start', (req, res, next) => {
+    if (!mcpPairingEnabled(res)) return;
+    next();
+  }, startPair(deps.mcpPairCodes, 'mcp-start', false));
+  router.post('/pair/mcp/claim', (req, res, next) => {
+    if (!mcpPairingEnabled(res)) return;
+    next();
+  }, claimPair(deps.mcpPairCodes, 'mcp-claim', 'mcp:readonly', 'Claude Code'));
 
   router.get('/devices', (_req, res) => res.json({ devices: store.listDevices() }));
   router.delete('/devices/:id', (req, res) => {

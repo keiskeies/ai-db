@@ -100,6 +100,7 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
   app.use(express.json({ limit: '25mb' }));
 
   const pairCodes = new Map<string, { expiresAt: number }>();
+  const mcpPairCodes = new Map<string, { expiresAt: number }>();
   app.use(
     '/api',
     createApiRouter({
@@ -113,6 +114,7 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
       skillWorker,
       skillRunner,
       pairCodes,
+      mcpPairCodes,
       scheduler,
       startedAt: Date.now(),
     }),

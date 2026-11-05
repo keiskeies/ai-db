@@ -41,11 +41,12 @@ const api = (path: string, init: RequestInit = {}, token = TOKEN) =>
   });
 
 async function claim(scope?: string): Promise<{ token: string; id: string }> {
-  const started = await api('/pair/start', { method: 'POST' });
+  // MCP 专用链路：/pair/mcp/start + /pair/mcp/claim，scope 由服务端硬编码。
+  const started = await api(scope ? '/pair/mcp/start' : '/pair/start', { method: 'POST' });
   const s = (await started.json()) as { code: string };
-  const res = await api('/pair/claim', {
+  const res = await api(scope ? '/pair/mcp/claim' : '/pair/claim', {
     method: 'POST',
-    body: JSON.stringify({ code: s.code, deviceName: 'test', platform: 'test', ...(scope ? { scope } : {}) }),
+    body: JSON.stringify({ code: s.code, deviceName: 'test', platform: 'test' }),
   });
   const body = (await res.json()) as { token: string; device: { id: string } };
   assert.equal(res.status, 200, JSON.stringify(body));
