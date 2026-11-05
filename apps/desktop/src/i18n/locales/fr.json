@@ -3529,5 +3529,9 @@
   "，能力信息已自动预填": ", les informations de capacité ont été pré-remplies automatiquement",
   "；下方可逐个删除，删空后整键会消失。 ": "; Vous pouvez les supprimer un par un ci-dessous, et la clé entière disparaîtra après la suppression. ",
   "；设计见 docs/16-capability-contract.md。 ": ";Voir docs/16-capability-contract.md pour la conception. ",
-  "只读 MCP": "MCP en lecture seule"
+  "只读 MCP": "MCP en lecture seule",
+  "Claude Code 配对": "Claude Code pairing",
+  "为 Claude Code 配对": "Pair for Claude Code",
+  "在 Claude Code 中运行 npx -y @aidb/mcp pair，输入此配对码与 Bridge 地址，5 分钟内有效。": "Run npx -y @aidb/mcp pair in Claude Code and enter this code with the Bridge address. Valid for 5 minutes.",
+  "Bridge 地址：": "Adresse Bridge : "
 }

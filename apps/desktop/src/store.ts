@@ -214,6 +214,7 @@ interface AppStore {
   connectionEditor?: ConnectionEditorState;
   toasts: Toast[];
   pairing?: { code: string; expiresIn: number; host: string; port: number; url?: string; qrPayload?: string };
+  mcpPairing?: { code: string; expiresIn: number; host: string; port: number; url?: string };
   devices: DeviceInfo[];
 
   boot: () => Promise<void>;
@@ -288,6 +289,7 @@ interface AppStore {
   setPaletteOpen: (open: boolean) => void;
   saveSettings: (patch: Record<string, unknown>) => Promise<void>;
   startPairing: () => Promise<void>;
+  startMcpPairing: () => Promise<void>;
   loadDevices: () => Promise<void>;
   revokeDevice: (id: string) => Promise<void>;
 
@@ -1274,6 +1276,16 @@ export const useApp = create<AppStore>((set, get) => ({
     try {
       const pairing = await api.pairStart();
       set({ pairing });
+      await get().loadDevices();
+    } catch (err) {
+      get().notify('error', get().t('error'), errorText(err));
+    }
+  },
+
+  startMcpPairing: async () => {
+    try {
+      const mcpPairing = await api.pairMcpStart();
+      set({ mcpPairing });
       await get().loadDevices();
     } catch (err) {
       get().notify('error', get().t('error'), errorText(err));

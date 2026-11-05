@@ -3529,5 +3529,9 @@
   "，能力信息已自动预填": ", информация о возможностях была автоматически заполнена",
   "；下方可逐个删除，删空后整键会消失。 ": "; Вы можете удалять их по одному ниже, и весь ключ исчезнет после удаления. ",
   "；设计见 docs/16-capability-contract.md。 ": ";См. docs/16-capability-contract.md для дизайна. ",
-  "只读 MCP": "MCP только для чтения"
+  "只读 MCP": "MCP только для чтения",
+  "Claude Code 配对": "Claude Code pairing",
+  "为 Claude Code 配对": "Pair for Claude Code",
+  "在 Claude Code 中运行 npx -y @aidb/mcp pair，输入此配对码与 Bridge 地址，5 分钟内有效。": "Run npx -y @aidb/mcp pair in Claude Code and enter this code with the Bridge address. Valid for 5 minutes.",
+  "Bridge 地址：": "Адрес Bridge: "
 }

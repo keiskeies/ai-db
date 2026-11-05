@@ -64,8 +64,10 @@ export function SettingsModal() {
   const saveSettings = useApp((s) => s.saveSettings);
   const notify = useApp((s) => s.notify);
   const pairing = useApp((s) => s.pairing);
+  const mcpPairing = useApp((s) => s.mcpPairing);
   const devices = useApp((s) => s.devices);
   const startPairing = useApp((s) => s.startPairing);
+  const startMcpPairing = useApp((s) => s.startMcpPairing);
   const loadDevices = useApp((s) => s.loadDevices);
   const revokeDevice = useApp((s) => s.revokeDevice);
 
@@ -1060,6 +1062,34 @@ export function SettingsModal() {
                     </div>
                   ) : (
                     <p className="hint" style={{ marginTop: 8 }}>{t('pairHint')}</p>
+                  )}
+                </div>
+                <div className="setting-card">
+                  <div className="row">
+                    <KeyRound size={14} />
+                    <strong style={{ fontSize: 12 }}>{t('mcpPairing')}</strong>
+                    <div className="spacer" />
+                    <button className="btn small" onClick={() => void startMcpPairing()}>
+                      <RefreshCw size={11} /> {t('startMcpPairing')}
+                    </button>
+                  </div>
+                  {mcpPairing ? (
+                    <div className="pair-panel">
+                      <div className="pair-info">
+                        <div className="row">
+                          <span className="mono" style={{ fontSize: 26, letterSpacing: 8, color: 'var(--agent)' }}>{mcpPairing.code}</span>
+                          <span className="badge write">{tr("5 分钟有效")}</span>
+                          <div className="spacer" />
+                          <button className="icon-btn" title={tr("复制配对码")} onClick={() => void navigator.clipboard.writeText(mcpPairing.code)}>
+                            <ShieldCheck size={14} />
+                          </button>
+                        </div>
+                        <p className="hint">{t('mcpPairHint')}</p>
+                        <p className="hint">{tr("Bridge 地址：")}{mcpPairing.url ?? `${mcpPairing.host}:${mcpPairing.port}`}</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="hint" style={{ marginTop: 8 }}>{t('mcpPairHint')}</p>
                   )}
                 </div>
                 <div>

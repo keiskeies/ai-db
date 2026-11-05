@@ -3529,5 +3529,9 @@
   "，能力信息已自动预填": "能力情報は自動的に事前入力されています",
   "；下方可逐个删除，删空后整键会消失。 ": ";以下で 1 つずつ削除できます。削除するとキー全体が消えます。 ",
   "；设计见 docs/16-capability-contract.md。 ": "; 設計については docs/16-capability-contract.md を参照してください。 ",
-  "只读 MCP": "読み取り専用 MCP"
+  "只读 MCP": "読み取り専用 MCP",
+  "Claude Code 配对": "Claude Code pairing",
+  "为 Claude Code 配对": "Pair for Claude Code",
+  "在 Claude Code 中运行 npx -y @aidb/mcp pair，输入此配对码与 Bridge 地址，5 分钟内有效。": "Run npx -y @aidb/mcp pair in Claude Code and enter this code with the Bridge address. Valid for 5 minutes.",
+  "Bridge 地址：": "Bridge アドレス："
 }

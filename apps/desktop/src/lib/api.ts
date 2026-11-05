@@ -850,6 +850,7 @@ export const api = {
   restoreBackup: (id: string) => request<{ batch: QueryBatchResult }>(`/backups/${id}/restore`, { method: 'POST' }),
 
   pairStart: () => request<{ code: string; expiresIn: number; qrPayload: string; host: string; port: number; url: string }>('/pair/start', { method: 'POST' }),
+  pairMcpStart: () => request<{ code: string; expiresIn: number; host: string; port: number; url: string }>('/pair/mcp/start', { method: 'POST' }),
   devices: () => request<{ devices: DeviceInfo[] }>('/devices'),
   revokeDevice: (id: string) => request<void>(`/devices/${id}`, { method: 'DELETE' }),
 };

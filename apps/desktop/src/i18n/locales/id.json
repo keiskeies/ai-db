@@ -3529,5 +3529,9 @@
   "，能力信息已自动预填": ", informasi kemampuan telah diisi otomatis",
   "；下方可逐个删除，删空后整键会消失。 ": "; Anda dapat menghapusnya satu per satu di bawah, dan seluruh kunci akan hilang setelah dihapus. ",
   "；设计见 docs/16-capability-contract.md。 ": ";Lihat docs/16-capability-contract.md untuk desain. ",
-  "只读 MCP": "MCP hanya-baca"
+  "只读 MCP": "MCP hanya-baca",
+  "Claude Code 配对": "Claude Code pairing",
+  "为 Claude Code 配对": "Pair for Claude Code",
+  "在 Claude Code 中运行 npx -y @aidb/mcp pair，输入此配对码与 Bridge 地址，5 分钟内有效。": "Run npx -y @aidb/mcp pair in Claude Code and enter this code with the Bridge address. Valid for 5 minutes.",
+  "Bridge 地址：": "Alamat Bridge: "
 }
