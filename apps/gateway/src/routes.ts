@@ -221,9 +221,10 @@ export function createApiRouter(deps: ApiDeps): Router {
       // 出站 MCP 配对凭据只允许只读工具桥，避免借道 /query 等接口绕过审批。
       if (device.scope === 'mcp:readonly') {
         const p = req.path;
+        // 只放行 /agent/tools/<单个工具名>，不用宽前缀，避免未来新增子路由被意外继承权限。
         const allowed =
           (req.method === 'GET' && (p === '/health' || p === '/capabilities' || p === '/agent/tools')) ||
-          (req.method === 'POST' && p.startsWith('/agent/tools/'));
+          (req.method === 'POST' && /^\/agent\/tools\/[^/]+$/.test(p));
         if (!allowed) {
           res.status(403).json({ error: { code: 'SCOPE_DENIED', message: '只读 MCP 凭据不能访问该接口' } });
           return;

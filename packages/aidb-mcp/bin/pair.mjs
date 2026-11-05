@@ -2,7 +2,7 @@
 /** One-time pairing: exchange a 6-digit desktop code for a read-only device token. */
 import { createInterface } from 'node:readline';
 import { stdin as input, stdout as output } from 'node:process';
-import { writeCredentials, credentialsPath } from './credentials.mjs';
+import { writeCredentials } from './credentials.mjs';
 
 const rl = createInterface({ input, output });
 const ask = (question) => new Promise((resolve) => rl.question(question, resolve));

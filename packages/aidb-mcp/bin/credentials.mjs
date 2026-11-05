@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, chmodSync, renameSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, renameSync, unlinkSync, rmSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -39,6 +39,8 @@ export function writeCredentials(value) {
   const tmp = `${file}.${process.pid}.tmp`;
   try {
     writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+    // Windows 上 renameSync 覆盖已存在文件会抛 EPERM/EEXIST；重新配对必须先删旧文件。
+    try { rmSync(file); } catch { /* 文件不存在时忽略 */ }
     renameSync(tmp, file);
   } catch (err) {
     try { unlinkSync(tmp); } catch { /* best effort */ }
@@ -52,8 +54,3 @@ export function writeCredentials(value) {
   return file;
 }
 
-export function describeCredentialsFile(file = credentialsPath()) {
-  if (!existsSync(file)) return null;
-  const st = statSync(file);
-  return { path: file, mode: st.mode & 0o777 };
-}

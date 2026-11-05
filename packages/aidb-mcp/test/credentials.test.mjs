@@ -21,6 +21,17 @@ test('writeCredentials/readCredentials round-trip and use a private file', () =>
   delete process.env.AIDB_MCP_CREDENTIALS;
 });
 
+test('writeCredentials overwrites an existing credential file', () => {
+  const file = join(home, 'overwrite.json');
+  process.env.AIDB_MCP_CREDENTIALS = file;
+  const first = { url: 'http://a', token: 'old', deviceId: 'd1', pairedAt: 'p1' };
+  const second = { url: 'http://b', token: 'new', deviceId: 'd2', pairedAt: 'p2' };
+  writeCredentials(first);
+  writeCredentials(second);
+  assert.deepEqual(readCredentials(), second);
+  delete process.env.AIDB_MCP_CREDENTIALS;
+});
+
 test('readCredentials throws a clear error when no credential exists', () => {
   process.env.AIDB_MCP_CREDENTIALS = join(home, 'missing.json');
   assert.throws(() => readCredentials(), /npx -y @aidb\/mcp pair/);

@@ -67,6 +67,8 @@ test('mcp:readonly token can only reach the read-only MCP bridge', async () => {
     ['GET', '/settings', {}, 403, 'SCOPE_DENIED'],
     ['POST', '/query', { body: JSON.stringify({ connectionId: 'demo', sql: 'SELECT 1' }) }, 403, 'SCOPE_DENIED'],
     ['GET', '/mcp/servers', {}, 403, 'SCOPE_DENIED'],
+    // 不能靠 /agent/tools/ 前缀蒙混到别的路由。
+    ['POST', '/agent/tools/foo/bar', { body: JSON.stringify({ args: {} }) }, 403, 'SCOPE_DENIED'],
   ];
   for (const [method, path, init, status, code] of cases) {
     const res = await api(path, { ...init, method }, mcp.token);
