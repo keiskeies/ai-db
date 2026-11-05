@@ -9,7 +9,7 @@
 
 ## 0. 摘要
 
-AiDB 工具箱现在有 13 个功能模块（报告、自动化任务、数据传输、数据对比、结构对比同步、数据生成、服务器监控、用户与权限、数据字典、高级对象、数据库搜索、查询构建器、Agent 上下文），每个模块都有：一张手写的 React 表单、一个手写的 REST 端点、一段手写的参数校验、一个进程内执行函数。
+AiDB 工具箱现在有 14 个功能模块（报告、数据流处理、自动化任务、数据传输、数据对比、结构对比同步、数据生成、服务器监控、用户与权限、数据字典、高级对象、数据库搜索、查询构建器、Agent 上下文），每个模块都有：一张手写的 React 表单、一个手写的 REST 端点、一段手写的参数校验、一个进程内执行函数。
 
 **这份契约要解决的是：同一份"这个功能需要什么参数"的知识，现在被写了三遍（UI、端点校验、Agent 工具 schema），而且互相不知道对方存在。**
 
@@ -28,7 +28,7 @@ AiDB 工具箱现在有 13 个功能模块（报告、自动化任务、数据�
 ### 0.2 非目标
 
 - **不引入脚本执行能力**。若某功能有个字段值是一段脚本（如"上下游处理"的转换脚本），该字段的类型是 `code`，**脚本的解析、沙箱、超时、资源限制全部由该功能的执行器自己负责**，契约只声明"这里要填一段 JS、入参出参是什么"。契约层不认识"执行脚本"这件事。
-- 不改动 52 个 Agent 工具的语义、风险等级与数量。
+- 不改动 53 个 Agent 工具的语义、风险等级与数量。
 - 不新增工具（缺的 9 个工具是独立事项，见 §9.2）。
 - 不重写现有 UI 表单（渐进迁移，见 §7 M4）。
 - 不涉及定时任务的时间模型（独立文档）。
@@ -129,6 +129,7 @@ meta: {
 | 数据生成 | `POST /generate`（`:326`） | `generate_data` ✓ |
 | 服务器监控 | `GET /monitor`（`:356`）、`POST /monitor/kill`（`:365`） | **无** |
 | 自动化任务 | `GET/POST /jobs`（`:452-500`） | **无** |
+| 数据流处理 | `GET/POST /pipelines`、`POST /pipelines/:id/run`·`/stream`·`/trial`、`/pipelines/credentials` | `manage_pipeline` ✓ |
 | 用户与权限 | `GET /users`（`:376`）、`POST /users/action`（`:385`） | **无** |
 | 数据字典 | `GET /dictionary`（`:404`） | **无** |
 | 高级对象 | `GET /objects`（`:413`） | **无** |
@@ -180,6 +181,7 @@ packages/core/src/capabilities/
 ├── compare-data.json           # 数据对比
 ├── schema-sync.json            # 结构对比同步
 ├── jobs.json                   # 自动化任务
+├── pipelines.json              # 数据流处理
 ├── generate.json               # 数据生成
 ├── monitor.json                # 服务器监控
 ├── users.json                  # 用户与权限
@@ -382,6 +384,18 @@ export interface Capability {
 
 > **注意** `"tools": []`：自动化任务当前**没有** Agent 工具。契约可以先写好（让 Agent 知道有这个功能、知道怎么引导用户去 UI 操作），工具补齐后把 `tools` 填上即可，契约不变。
 
+#### 3.4.1 数据流处理：契约描述功能，步骤目录描述字段
+
+`pipelines` 契约只描述**这条 REST 表单**（name / description / connectionId / database / spec），不描述流水线内部。步骤层面的字段契约放在代码里——`packages/core/src/pipeline/spec.ts` 的 `PIPELINE_STEP_KINDS`，因为这三处都要用同一份定义：
+
+| 消费方 | 用途 |
+|---|---|
+| `validatePipelineSpec()` | 保存与运行前的结构 + 字段级校验（含 JSONPath、表达式、绑定引用的语法检查） |
+| `PipelinesTool` | 逐步骤渲染字段表单、按 `showWhen` 显隐、给试运行样本排版 |
+| 能力契约 / Agent 提示 | `describePipelineLanguage()` 产出一段步骤与函数清单，`manage_pipeline` 工具的 description 直接复用它 |
+
+`jobs` 契约新增 `pipeline` 类型时用 `payload`（对象，`{"pipelineIds": [...]}`）而不是数组字段：契约的 `json` 字段只接受对象，数组会在校验层被拒。id 数组的合法性交给执行层，消息更贴近用户（"至少要选一条流水线"）。
+
 ### 3.5 契约的三个消费方
 
 #### 3.5.1 Agent：能力目录注入系统提示
@@ -474,7 +488,7 @@ meta: {
 };
 ```
 
-**兼容性**：两个字段都是可选，现有 52 个工具不受影响，不需要改任何工具实现。
+**兼容性**：两个字段都是可选，现有 53 个工具不受影响，不需要改任何工具实现。
 
 #### 3.6.2 谁填 `progress`
 
@@ -511,7 +525,7 @@ meta: {
 | ✅ | ❌ | **告知用户"这个功能在 工具箱 → X 里，我暂时不能直接操作"**，不编造 |
 | ❌ | ✅ | 现状（工具存在但没有能力描述），Agent 只能靠工具 description 猜 |
 
-第三种是当前 12 个模块之外的 40 个工具的状态。**本文不要求给全部 52 个工具都写契约**——契约只覆盖"工具箱功能"这一层。
+第三种是当前 14 份契约之外的工具的状态。**本文不要求给全部 53 个工具都写契约**——契约只覆盖"工具箱功能"这一层。
 
 ## 4. 数据模型与接口
 
@@ -565,7 +579,7 @@ meta: {
 | `docs/16-capability-contract.md` 存在 | `required` 数组 |
 | 必需章节 | `['能力契约','字段类型','状态汇报','开发计划']` |
 | 契约文件与本文示例一致 | 文档里出现的 `capability id` 必须在 `packages/core/src/capabilities/` 下有对应文件 |
-| 12 个模块全覆盖 | `apps/desktop/src/components/tools/ToolsHub.tsx:33-46` 的 `TOOL_LIST` 条目数（12）= 契约文件数 |
+| 14 个模块全覆盖 | `apps/desktop/src/components/tools/ToolsHub.tsx:38-53` 的 `TOOL_LIST` 条目数（14）= 契约文件数 |
 
 > **注意**：不要用 `docs/02-feature-spec.md:156-172` 的表格行数做基准——那张表有 16 行，包含 SQL 片段 / SQL 文件 / 结果图表等**非工具箱模块**。真正的模块清单在 `ToolsHub.tsx` 的 `TOOL_LIST`。
 
@@ -575,7 +589,7 @@ meta: {
 |---|---|
 | 现有 15+ 个端点手写校验 | M3 只迁移 3 个高频端点（transfer / jobs / search）验证契约够用，其余保持 |
 | 现有 UI 表单 | v1 不动；M4 挑 2 个试迁 |
-| 现有 52 个工具 | 零改动（`meta.progress` / `meta.state` 是可选的） |
+| 现有 53 个工具 | 零改动（`meta.progress` / `meta.state` 是可选的） |
 | `transfer_data` 的字段名（`sourceConnectionId`）与 REST（`sourceId`）不一致 | **契约以 Agent 工具的命名为准**（`sourceConnectionId`）；REST 端点在迁移时改名为一致，或加别名映射。**这是本次要修的实际缺陷** |
 | `transfer_data` 缺 `limit` 字段 | 契约里声明 `limit`，工具 schema 补齐（`tools.ts:1017` 后加一项） |
 | 12 个契约文件的维护成本 | 由 `assertCapabilities()` 的 13 条校验兜住；新增功能忘写契约时，`verify-docs` 的"覆盖检查"会失败 |
@@ -773,7 +787,7 @@ M1 是硬前置；M3 与 M4 可以并行；M5 只依赖 M2。
 
 ### 9.6 不做的
 
-- 不给 52 个 Agent 工具都写契约（契约只覆盖工具箱功能层）。
+- 不给 53 个 Agent 工具都写契约（契约只覆盖工具箱功能层）。
 - 不让契约驱动权限（权限仍是 `policy.ts`，契约的 `maxRisk` 只用于校验自洽性）。
 - 不做契约的运行时热加载（启动时读一次）。
 - 不做多语言契约内容（`label` 只有 zh/en，与现有 `CommandDefinition` 一致）。
@@ -835,7 +849,7 @@ M1 是硬前置；M3 与 M4 可以并行；M5 只依赖 M2。
    原因：`scripts/verify-docs.mjs` 用纯 Node 动态 import TS 校验契约，而 `validate.ts` 若在运行时 import `../agent/tools`（无扩展名）会触发 `ERR_MODULE_NOT_FOUND`。让调用方注入后，契约模块对工具表零运行时依赖，verify-docs 与单测都能直接加载。
 
 2. **能力目录采用两级写法**（原设计每功能 5 行）。
-   原方案 12 条共 3,291 字符，超出 §9.3 的 1.4k token 预算。改为：有工具的给「id/标题/描述 + Call + States + 最多 2 条 Limits」，无工具的压成单行「标题（id）：描述 → 引导用户到工具箱」。实际 1,766 字符（约 1.2k token），并有测试守住 ≤ 2000。
+   原方案 12 条共 3,291 字符，超出 §9.3 的 1.4k token 预算。改为：有工具的给「id/标题/描述 + Call + States + 最多 2 条 Limits」，无工具的压成单行「标题（id）：描述 → 引导用户到工具箱」。实际 1,766 字符（约 1.2k token），并有测试守住预算；v1.5 把预算从 2,000 调到 2,300（约 1.5k token），因为「数据流处理」从只能引导变成带 `manage_pipeline` 的可调用功能，多出 Call/States/Limits 三行。
 
 3. **`phrase` 占位符校验放宽为「字段 + 约定结果 token」**。
    状态话术描述的是执行结果（`{rows}`、`{tables}`、`{error}`、`{current}`），这些不是表单字段。`validate.ts` 用 `PHRASE_RESULT_TOKENS` 白名单区分：命中字段或命中白名单即通过，其余报错。

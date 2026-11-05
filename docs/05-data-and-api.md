@@ -107,9 +107,30 @@ CREATE TABLE IF NOT EXISTS snippets (
 );
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, connection_id TEXT NOT NULL, database_name TEXT,
-  type TEXT NOT NULL CHECK (type IN ('query','backup')), sql TEXT,
+  type TEXT NOT NULL CHECK (type IN ('query','backup','pipeline')), sql TEXT, payload TEXT,
   interval_seconds INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
   last_run_at TEXT, last_status TEXT, last_error TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+
+-- 数据流处理：定义（JSON spec）与增量断点分开存，断点只在整条成功后回写。
+CREATE TABLE IF NOT EXISTS pipelines (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, connection_id TEXT, database_name TEXT,
+  spec_json TEXT NOT NULL, state_json TEXT, enabled INTEGER NOT NULL DEFAULT 1,
+  last_run_at TEXT, last_status TEXT, last_error TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+-- 每次运行一行，steps_json 里带每步状态/耗时/行列数/样本（截断），只保留最近 40 次。
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+  id TEXT PRIMARY KEY, pipeline_id TEXT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK (status IN ('running','ok','error')),
+  trigger TEXT NOT NULL, batch_at TEXT NOT NULL,
+  steps_json TEXT, message TEXT, error TEXT, rows_in INTEGER, rows_out INTEGER,
+  started_at TEXT NOT NULL, finished_at TEXT, duration_ms INTEGER, created_at TEXT NOT NULL
+);
+-- HTTP 凭证：密文列由 SecretBox（AES-256-GCM）加密，spec 里只引用 id。
+CREATE TABLE IF NOT EXISTS pipeline_credentials (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, summary TEXT, secret TEXT NOT NULL,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 
@@ -261,8 +282,17 @@ export interface QueryResult {
 | POST | `/monitor/kill` | 终止会话 |
 | GET | `/users` · POST `/users/action` | 用户列表 / 创建 / 删除 / 授权 |
 | GET | `/dictionary` | Markdown / DDL / JSON 字典 |
-| GET/POST | `/jobs` · PUT/DELETE `/jobs/:id` | 自动化任务 CRUD |
+| GET/POST | `/jobs` · PUT/DELETE `/jobs/:id` | 自动化任务 CRUD；`type=pipeline` 时 `payload={"pipelineIds":[...]}` |
 | POST | `/jobs/:id/run` | 立即运行任务 |
+| GET/POST | `/pipelines` · PUT/DELETE `/pipelines/:id` | 数据流流水线 CRUD；`spec` 落库前先过 `validatePipelineSpec` |
+| GET | `/pipelines/meta` | 步骤目录、Python 可用性、脚本开关 |
+| POST | `/pipelines/validate` | 只做契约校验，返回逐条问题 |
+| POST | `/pipelines/:id/run` | 同步跑一次，返回带每步状态的运行记录 |
+| POST | `/pipelines/:id/stream` | SSE 运行，事件：`run-start` / `step-start` / `step-done` / `step-error` / `done` / `error` |
+| POST | `/pipelines/:id/trial` | 试运行到第 `index` 步，目标端只渲染 SQL / 请求体 |
+| POST | `/pipelines/:id/cancel` · `/pipelines/:id/state/reset` | 取消运行 / 清空增量断点 |
+| GET | `/pipelines/:id/runs` · GET `/pipelines/runs/:runId` | 运行历史（每步行数、耗时、样本、预览） |
+| GET/POST/DELETE | `/pipelines/credentials` | 接口凭证（密文不出库） |
 | POST | `/backups/:id/restore` | 从备份恢复 |
 | POST | `/query` | `{connectionId, database?, sql, limit?, offset?, mode?}` → QueryResult。SQL 连接执行 SQL；MongoDB 为 JSON MQL；Redis 为单条命令；Cassandra/ScyllaDB 为 CQL；Qdrant/Milvus/Weaviate 为 JSON 向量查询；Elasticsearch/OpenSearch 为 JSON `_search` 请求 |
 | POST | `/vector/search` | `{connectionId, database?, collection, field?, vector?, text?, topK?, filter?}` → `{result}`；pgvector 需 field，Qdrant/Milvus 可选命名向量；text 走 Embedding |
@@ -423,6 +453,7 @@ type TransferEvent =
 - 设备 token 存 SecureStore。
 
 ## 7. 版本与迁移
-- `PRAGMA user_version` 记录 schema 版本（当前 3；v1→v2 重建 connections 以放开引擎约束，v3 增加 jobs）。
+- `PRAGMA user_version` 记录 schema 版本（数据流处理这版从 8 升到 9：重建 `jobs` 以放行 `type='pipeline'` 并加 `payload` 列，新增 `pipelines` / `pipeline_runs` / `pipeline_credentials`）。
+- `CHECK` 约束改不了 `ALTER`，所以放开枚举取值一律走「建新表 → 搬数据 → 删旧表」的事务重建，见 `store.ts` 的 `migrate()`。
 - 迁移脚本数组顺序执行、事务包裹；失败回滚并提示备份路径。
 - API 前缀 `/api`；协议版本在 `/health` 返回，UI 不兼容时提示升级。

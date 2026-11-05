@@ -55,6 +55,11 @@ export function setLocale(next: unknown): AppLocale {
   return locale;
 }
 
+/** 取当前语言：有些文案来自运行时的双语目录（不是源码字面量），只能就地二选一。 */
+export function currentLocale(): AppLocale {
+  return locale;
+}
+
 function lookup(language: AppLocale, text: string): string | undefined {
   if (language === 'zh-CN') return text;
   const catalog = catalogs[language];

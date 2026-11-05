@@ -14,6 +14,7 @@ import {
   Search,
   Sparkles,
   Table2,
+  Workflow,
   Wrench,
   X,
 } from 'lucide-react';
@@ -31,6 +32,7 @@ import { DataCompareTool } from './DataCompareTool';
 import { AdvancedObjectsTool } from './AdvancedObjectsTool';
 import { AgentContextTool } from './AgentContextTool';
 import { ReportsTool } from './ReportsTool';
+import { PipelinesTool } from './PipelinesTool';
 import { t as tr } from '../../i18n';
 
 const TOOL_LIST = [
@@ -42,7 +44,8 @@ const TOOL_LIST = [
   { id: 'transfer', label: tr("数据传输"), desc: tr("跨连接复制表与数据"), icon: <Table2 size={14} /> },
   { id: 'generate', label: tr("数据生成"), desc: tr("按列类型造测试数据"), icon: <Sparkles size={14} /> },
   { id: 'monitor', label: tr("服务器监控"), desc: tr("指标 / 会话 / 终止"), icon: <Gauge size={14} /> },
-  { id: 'jobs', label: tr("自动化任务"), desc: tr("定时查询与备份"), icon: <ListTodo size={14} /> },
+  { id: 'pipelines', label: tr("数据流处理"), desc: tr("接口/库取数 → 加工 → 写出"), icon: <Workflow size={14} /> },
+  { id: 'jobs', label: tr("自动化任务"), desc: tr("定时查询、备份与数据流"), icon: <ListTodo size={14} /> },
   { id: 'users', label: tr("用户与权限"), desc: tr("账号 / 角色 / 授权"), icon: <KeyRound size={14} /> },
   { id: 'dictionary', label: tr("数据字典"), desc: tr("Markdown / DDL 导出"), icon: <Database size={14} /> },
   { id: 'objects', label: tr("高级对象"), desc: tr("触发器 / 函数 / 序列"), icon: <Code2 size={14} /> },
@@ -94,6 +97,7 @@ export function ToolsHub() {
             {active === 'transfer' ? <TransferTool /> : null}
             {active === 'generate' ? <GeneratorTool /> : null}
             {active === 'monitor' ? <MonitorTool /> : null}
+            {active === 'pipelines' ? <PipelinesTool /> : null}
             {active === 'jobs' ? <JobsTool /> : null}
             {active === 'users' ? <UsersTool /> : null}
             {active === 'dictionary' ? <DictionaryTool /> : null}

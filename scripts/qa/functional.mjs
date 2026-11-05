@@ -82,7 +82,7 @@ async function main() {
     // ------------------------------------------------------------------ meta
     section('meta');
     await expectOk('health ok', 'GET', '/health', undefined, (j) => j.ok === true && j.demoReady === true);
-    await expectOk('bootstrap exposes 52 tools', 'GET', '/bootstrap', undefined, (j) => (Array.isArray(j.tools) ? j.tools.length : 0) === 52);
+    await expectOk('bootstrap exposes 53 tools', 'GET', '/bootstrap', undefined, (j) => (Array.isArray(j.tools) ? j.tools.length : 0) === 53);
     await expectOk('bootstrap has sessions/settings', 'GET', '/bootstrap', undefined, (j) => j.settings && Array.isArray(j.sessions));
     await expectOk('settings readable', 'GET', '/settings', undefined, (j) => typeof j.settings?.defaultLimit === 'number');
     originalSettings = (await api('GET', '/settings')).json.settings;
@@ -372,7 +372,7 @@ async function main() {
     // -------------------------------------------------------- direct read tools
     section('agent-tools-direct');
     const toolsList = await api('GET', '/agent/tools');
-    record('tools endpoint lists 52', toolsList.status === 200 && toolsList.json.tools.length === 52, { status: toolsList.status, count: toolsList.json?.tools?.length });
+    record('tools endpoint lists 53', toolsList.status === 200 && toolsList.json.tools.length === 53, { status: toolsList.status, count: toolsList.json?.tools?.length });
     const direct = [
       ['list_connections', {}],
       ['inspect_schema', { connectionId: demo.id, database: demoDatabase, tables: ['orders', 'customers'] }],

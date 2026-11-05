@@ -48,6 +48,8 @@ import {
   type MqlQuery,
   type QueryResult,
   type StatPoint,
+  type PipelineSpec,
+  validatePipelineSpec,
   type TableInfo,
   type ToolCall,
   type ToolDefinition,
@@ -58,6 +60,7 @@ import { DbError } from './drivers';
 import type { ConnectionManager } from './manager';
 import { assertExportable, dumpDatabase, exportNeedsStatement, importCsv, importDocuments, writeExportFile } from './services';
 import { generateData } from './features/generate';
+import { runPipelineAndRecord } from './features/pipelines';
 import { callMcpTool, listMcpTools } from './mcp';
 import { SkillStore } from './skills';
 import { SkillRunner } from './skillRunner';
@@ -201,6 +204,9 @@ export class ToolExecutor {
     if (!features.skills && (call.name.startsWith('skill_') || call.name === 'skill_worker_run')) {
       return { ok: false, summary: 'Skill 自动调用已关闭', error: { code: 'FEATURE_DISABLED', message: 'Agent 自动调用技能已关闭；可在设置 → Skills 手动运行' }, meta: { durationMs: 0 } };
     }
+    if (!features.pipelines && call.name === 'manage_pipeline') {
+      return { ok: false, summary: '数据流处理已关闭', error: { code: 'FEATURE_DISABLED', message: '数据流处理功能已关闭；可在 工具箱 → 数据流处理 顶部开启' }, meta: { durationMs: 0 } };
+    }
     if (!features.mcp && (call.name === 'mcp_list_servers' || call.name === 'mcp_list_tools' || call.name === 'mcp_call')) {
       return { ok: false, summary: 'MCP 功能已关闭', error: { code: 'FEATURE_DISABLED', message: 'MCP 已在设置中关闭' }, meta: { durationMs: 0 } };
     }
@@ -280,6 +286,21 @@ export class ToolExecutor {
     if (!conn) throw new DbError(`连接不存在：${id}`, { code: 'CONNECTION_NOT_FOUND' });
     // 把会话库盖到连接上，下面所有 databaseOf() 的兜底就自然指向它
     return ctx.database ? { ...conn, database: ctx.database } : conn;
+  }
+
+  /** 工具参数里的 id 经常是模型记不全的片段，允许用精确名字兜底定位。 */
+  private findPipeline(id: unknown, name: unknown) {
+    const direct = typeof id === 'string' && id.trim() ? this.store.getPipeline(id.trim()) : undefined;
+    if (direct) return direct;
+    const wanted = [typeof id === 'string' ? id.trim() : '', typeof name === 'string' ? name.trim() : ''].filter(Boolean);
+    for (const key of wanted) {
+      const hit = this.store.listPipelines().find((item) => item.name === key);
+      if (hit) return hit;
+    }
+    throw new DbError(`找不到数据流：${wanted.join(' / ') || '（需要 id 或 name）'}`, {
+      code: 'PIPELINE_NOT_FOUND',
+      hint: '先用 action=list 看清现有数据流的 id 与名字',
+    });
   }
 
   private databaseOf(call: ToolCall, conn: { database?: string }): string | undefined {
@@ -1374,6 +1395,100 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
           ...(progress ? { progress } : {}),
           rowsAffected: result.totalRows,
         });
+      }
+
+      case 'manage_pipeline': {
+        const action = String(a.action ?? 'list');
+
+        if (action === 'list') {
+          const list = this.store.listPipelines().map((item) => ({
+            id: item.id,
+            name: item.name,
+            description: item.description,
+            state: item.state,
+            lastStatus: item.lastStatus,
+            lastError: item.lastError,
+            steps: item.spec.steps.map((step) => ({ id: step.id, type: step.type, label: step.label })),
+          }));
+          return ok(started, `${list.length} 条数据流`, { pipelines: list });
+        }
+
+        const specIssues = (value: unknown) => validatePipelineSpec(value, { strictParams: true });
+
+        if (action === 'validate') {
+          const issues = specIssues(a.spec);
+          return ok(started, issues.length ? `定义有 ${issues.length} 处问题` : '定义可用', { issues }, { state: issues.length ? 'failed' : 'ok' });
+        }
+
+        if (action === 'create' || action === 'update') {
+          const issues = specIssues(a.spec);
+          if (issues.length) {
+            return {
+              ok: false,
+              summary: `定义有 ${issues.length} 处问题，先修再来`,
+              error: { code: 'PIPELINE_SPEC_INVALID', message: issues.map((issue) => issue.message).join('；'), hint: '按 message 逐条改 spec，再 validate 一次' },
+              meta: { durationMs: Date.now() - started, state: 'failed' },
+            };
+          }
+          const spec = a.spec as PipelineSpec;
+          if (action === 'create') {
+            const name = String(a.name ?? '').trim();
+            if (!name) throw new DbError('创建数据流需要 name', { code: 'INVALID_INPUT' });
+            const created = this.store.createPipeline({
+              name,
+              description: typeof a.description === 'string' ? a.description : undefined,
+              connectionId: typeof a.connectionId === 'string' ? a.connectionId : undefined,
+              database: typeof a.database === 'string' ? a.database : undefined,
+              spec,
+            });
+            return ok(started, `已创建数据流「${created.name}」（${spec.steps.length} 步）`, { id: created.id, steps: spec.steps.map((step) => ({ id: step.id, type: step.type })) }, { state: 'ok' });
+          }
+          const target = this.findPipeline(a.id, a.name);
+          const updated = this.store.updatePipeline(target.id, {
+            name: typeof a.name === 'string' && a.name.trim() ? a.name.trim() : target.name,
+            description: typeof a.description === 'string' ? a.description : target.description,
+            spec,
+          });
+          return ok(started, `已更新数据流「${updated.name}」（${spec.steps.length} 步）`, { id: updated.id }, { state: 'ok' });
+        }
+
+        if (action === 'run') {
+          const target = this.findPipeline(a.id, a.name);
+          const dryRun = a.dryRun === true;
+          const run = await runPipelineAndRecord({ store: this.store, manager: this.manager, config: this.config }, target, {
+            trigger: 'manual',
+            params: a.params && typeof a.params === 'object' ? (a.params as Record<string, unknown>) : undefined,
+            previewOnly: dryRun,
+          });
+          // 样本行不上对话：一行几百字节，历史里已经存过了。
+          const stepViews = run.steps.map((step) => ({
+            id: step.id,
+            type: step.type,
+            label: step.label,
+            status: step.status,
+            inRows: step.inRows,
+            outRows: step.outRows,
+            durationMs: step.durationMs,
+            error: step.error,
+            hint: step.meta?.hint,
+            ...(dryRun && step.preview ? { preview: step.preview.slice(0, 1200) } : {}),
+          }));
+          const summary = run.status === 'ok'
+            ? `${dryRun ? '预览通过' : '数据流完成'}：${run.steps.length} 步 / ${run.rowsOut ?? 0} 行`
+            : `数据流失败：${run.error ?? '未知错误'}`;
+          return ok(started, summary, { runId: run.id, status: run.status, steps: stepViews }, {
+            state: run.status === 'ok' ? 'ok' : 'failed',
+            rowsAffected: run.rowsOut,
+          });
+        }
+
+        if (action === 'delete') {
+          const target = this.findPipeline(a.id, a.name);
+          this.store.deletePipeline(target.id);
+          return ok(started, `已删除数据流「${target.name}」`, { id: target.id }, { state: 'ok' });
+        }
+
+        throw new DbError(`未知的 action：${action}`, { code: 'INVALID_INPUT', hint: '可用：list / validate / create / update / run / delete' });
       }
 
       default:

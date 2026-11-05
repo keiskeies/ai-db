@@ -139,6 +139,27 @@
 .monitor-items { padding: 4px 8px; }
 .monitor-item { display: flex; justify-content: space-between; gap: 10px; font-size: 10.5px; padding: 3px 0; border-bottom: 1px dotted var(--border-subtle); }
 .monitor-item strong { font-family: var(--font-mono); font-weight: 500; color: var(--text-primary); }
+/* 数据流处理：步骤卡片、字段区、样本表与写入预览 */
+.pipe-tpl { display: flex; flex-wrap: wrap; gap: 6px; }
+.pipe-pending { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border-subtle)); background: var(--warning-soft); border-radius: var(--radius-md); padding: 7px 8px; margin-bottom: 8px; }
+.pipe-field-spot { outline: 1px solid color-mix(in srgb, var(--warning) 70%, transparent); outline-offset: 2px; border-radius: var(--radius-sm); }
+
+.pipe-step { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 7px 8px; margin-bottom: 6px; background: var(--bg-panel); }
+.pipe-step.spot { border-color: color-mix(in srgb, var(--danger) 55%, var(--border-subtle)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 25%, transparent); }
+.pipe-error { display: block; width: 100%; text-align: left; margin-top: 6px; font: inherit; font-size: 10.5px; color: var(--danger); background: transparent; border: 0; padding: 0; cursor: pointer; }
+.pipe-error-inline { max-width: 360px; overflow: hidden; font: inherit; font-size: 10px; color: var(--danger); text-overflow: ellipsis; white-space: nowrap; background: transparent; border: 0; padding: 0; cursor: pointer; }
+.pipe-playground { margin-top: 6px; padding: 6px 8px; border: 1px dashed var(--border-subtle); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--bg-elevated) 60%, transparent); display: flex; flex-direction: column; gap: 5px; }
+
+.pipe-step:hover { border-color: color-mix(in srgb, var(--agent) 38%, var(--border-subtle)); }
+.pipe-fields { margin: 8px 0 2px 26px; padding: 8px; border-left: 2px solid color-mix(in srgb, var(--agent) 30%, transparent); background: var(--bg-elevated); border-radius: var(--radius-sm); }
+.pipe-sample { width: 100%; border-collapse: collapse; font-size: 10px; }
+.pipe-sample th, .pipe-sample td { border: 1px solid var(--border-subtle); padding: 3px 6px; text-align: left; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pipe-sample th { background: var(--code-bg); color: var(--text-muted); font-weight: 600; }
+.pipe-preview { margin-top: 6px; font-size: 10px; }
+.pipe-preview summary { color: var(--text-muted); cursor: pointer; }
+.pipe-preview pre { margin: 4px 0 0; padding: 6px 8px; background: var(--code-bg); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 10px; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow: auto; }
+.pipe-pick { display: flex; flex-direction: column; gap: 4px; max-height: 170px; overflow: auto; }
+
 .job-row { display: flex; align-items: center; gap: 6px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 7px 8px; margin-bottom: 6px; background: var(--bg-panel); }
 .job-main { flex: 1; min-width: 0; }
 .job-main .listMeta { font-size: 9.5px; color: var(--text-muted); margin-top: 2px; }

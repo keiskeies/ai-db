@@ -10,6 +10,7 @@ import { restoreDropStatements } from '../services';
 import { compareSchemas } from './schemaCompare';
 import { searchDatabase } from './search';
 import { transferData, TransferAbortedError, type TransferEvent, type TransferResult } from './transfer';
+import { createPipelinesRouter } from './pipelines';
 import { generateData } from './generate';
 import { killSession, monitorConnection } from './monitor';
 import { listUsers, manageUser } from './users';
@@ -479,13 +480,17 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
       const input = capabilityBody('jobs', req.body);
       const connectionId = String(input.connectionId);
       if (!store.getConnection(connectionId)) throw Object.assign(new Error('连接不存在'), { code: 'CONNECTION_NOT_FOUND', status: 404 });
-      const type = input.type === 'backup' ? 'backup' : 'query';
+      const type: 'query' | 'backup' | 'pipeline' = input.type === 'backup' ? 'backup' : input.type === 'pipeline' ? 'pipeline' : 'query';
+      const payload = input.payload && typeof input.payload === 'object' ? (input.payload as Record<string, unknown>) : {};
+      const pipelineIds = Array.isArray(payload.pipelineIds) ? payload.pipelineIds.map((id) => String(id)).filter(Boolean) : [];
+      if (type === 'pipeline' && !pipelineIds.length) throw Object.assign(new Error('数据流任务至少要选一条流水线'), { code: 'PIPELINE_REQUIRED', status: 400, hint: 'payload: {"pipelineIds": ["<流水线 id>"]}' });
       const job = store.createJob({
         name: String(input.name),
         connectionId,
         database: input.database as string | undefined,
         type,
         sql: input.sql as string | undefined,
+        payload: type === 'pipeline' ? { pipelineIds } : undefined,
         intervalSeconds: Math.max(30, Number(input.intervalSeconds) || 3600),
         enabled: input.enabled !== false,
       });
@@ -497,11 +502,14 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
     '/jobs/:id',
     ah(async (req, res) => {
       const body = obj(req.body, 'body');
+      const payload = body.payload && typeof body.payload === 'object' ? (body.payload as Record<string, unknown>) : undefined;
+      const pipelineIds = payload && Array.isArray(payload.pipelineIds) ? payload.pipelineIds.map((id) => String(id)).filter(Boolean) : undefined;
       const job = store.updateJob(req.params.id, {
         name: str(body.name),
         database: str(body.database),
         sql: str(body.sql),
-        type: body.type === 'backup' ? 'backup' : body.type === 'query' ? 'query' : undefined,
+        type: body.type === 'backup' ? 'backup' : body.type === 'pipeline' ? 'pipeline' : body.type === 'query' ? 'query' : undefined,
+        payload: pipelineIds === undefined ? undefined : { pipelineIds },
         intervalSeconds: body.intervalSeconds === undefined ? undefined : Number(body.intervalSeconds),
         enabled: body.enabled === undefined ? undefined : Boolean(body.enabled),
       });
@@ -521,6 +529,9 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
       res.json(await scheduler.runJob(req.params.id));
     }),
   );
+
+  // 数据流处理不要求 SQL 引擎：HTTP 取数 + 内存 DuckDB 计算对任何连接都成立。
+  router.use('/pipelines', createPipelinesRouter({ store, manager, config }));
 
   router.post(
     '/backups/:id/restore',

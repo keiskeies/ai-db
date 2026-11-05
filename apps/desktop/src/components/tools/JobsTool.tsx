@@ -6,41 +6,33 @@ import { DatabaseSelect } from '../DatabaseSelect';
 import { askConfirm } from '../AskDialog';
 import { Select, Option } from '../ui';
 import { t as tr } from '../../i18n';
+import type { JobInfo, PipelineInfo } from '@aidb/core';
 
-interface Job {
-  id: string;
-  name: string;
-  connectionId: string;
-  database?: string;
-  type: 'query' | 'backup';
-  sql?: string;
-  intervalSeconds: number;
-  enabled: boolean;
-  lastRunAt?: string;
-  lastStatus?: string;
-  lastError?: string;
-}
+type Job = JobInfo;
 
 export function JobsTool() {
   const connections = useApp((s) => s.connections);
   const activeConnectionId = useApp((s) => s.activeConnectionId);
   const notify = useApp((s) => s.notify);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [pipelines, setPipelines] = useState<PipelineInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState(tr("每小时统计订单"));
   const [connectionId, setConnectionId] = useState(activeConnectionId ?? connections[0]?.id ?? '');
   const [database, setDatabase] = useState('');
-  const [type, setType] = useState<'query' | 'backup'>('query');
+  const [type, setType] = useState<'query' | 'backup' | 'pipeline'>('query');
   const [sql, setSql] = useState('SELECT status, COUNT(*) AS n FROM orders GROUP BY status');
+  const [pipelineIds, setPipelineIds] = useState<string[]>([]);
   const [minutes, setMinutes] = useState(60);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
     try {
-      const { jobs: list } = await api.jobs();
-      setJobs(list as Job[]);
+      const [list, flows] = await Promise.all([api.jobs(), api.pipelines()]);
+      setJobs(list.jobs as Job[]);
+      setPipelines(flows.pipelines);
     } catch (err: any) {
       notify('error', tr("加载任务失败"), err?.message);
     } finally {
@@ -54,7 +46,16 @@ export function JobsTool() {
 
   const create = async () => {
     try {
-      await api.createJob({ name, connectionId, database: database || undefined, type, sql: type === 'query' ? sql : undefined, intervalSeconds: Math.max(30, minutes * 60), enabled: true });
+      await api.createJob({
+        name,
+        connectionId,
+        database: database || undefined,
+        type,
+        sql: type === 'query' ? sql : undefined,
+        payload: type === 'pipeline' ? { pipelineIds } : undefined,
+        intervalSeconds: Math.max(30, minutes * 60),
+        enabled: true,
+      });
       setShowForm(false);
       await load();
       notify('success', tr("任务已创建"));
@@ -108,9 +109,10 @@ export function JobsTool() {
             </div>
             <div className="field">
               <label>{tr("类型")}</label>
-              <Select className="select" value={type} onChange={(e) => setType(e.target.value as 'query' | 'backup')}>
+              <Select className="select" value={type} onChange={(e) => setType(e.target.value as 'query' | 'backup' | 'pipeline')}>
                 <Option value="query">{tr("SQL 查询")}</Option>
                 <Option value="backup">{tr("数据库备份")}</Option>
+                <Option value="pipeline">{tr("数据流处理")}</Option>
               </Select>
             </div>
             <div className="field">
@@ -123,10 +125,35 @@ export function JobsTool() {
                 <textarea className="textarea" rows={3} value={sql} onChange={(e) => setSql(e.target.value)} />
               </div>
             ) : null}
+            {type === 'pipeline' ? (
+              <div className="field full">
+                <label>{tr("要运行的数据流")}</label>
+                {!pipelines.length ? (
+                  <span className="hint">{tr('还没有数据流；先到 工具箱 → 数据流处理 建一条。')}</span>
+                ) : (
+                  <div className="pipe-pick">
+                    {pipelines.map((flow) => (
+                      <label key={flow.id} className="row gap-6" style={{ alignItems: 'center', fontSize: 11 }}>
+                        <input
+                          type="checkbox"
+                          checked={pipelineIds.includes(flow.id)}
+                          onChange={(e) => setPipelineIds((current) => (e.target.checked ? [...current, flow.id] : current.filter((item) => item !== flow.id)))}
+                        />
+                        <span>
+                          <strong>{flow.name}</strong>
+                          <span className="muted"> · {flow.spec.steps.length}{tr(' 步 ')}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+                <span className="hint">{tr('按上面的勾选顺序依次运行；一条失败不影响后面的继续跑。')}</span>
+              </div>
+            ) : null}
           </div>
           <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
             <button className="btn" onClick={() => setShowForm(false)}>{tr("取消")}</button>
-            <button className="btn primary" onClick={() => void create()} disabled={!name || !connectionId}>{tr("保存")}</button>
+            <button className="btn primary" onClick={() => void create()} disabled={!name || !connectionId || (type === 'pipeline' && !pipelineIds.length)}>{tr("保存")}</button>
           </div>
         </div>
       ) : null}
@@ -139,7 +166,7 @@ export function JobsTool() {
                 <div className="row gap-6">
                   <span className={`status-led ${job.lastStatus === 'ok' ? 'ok' : job.lastStatus === 'error' ? 'error' : ''}`} />
                   <strong>{job.name}</strong>
-                  <span className="badge">{job.type === 'backup' ? 'BACKUP' : 'SQL'}</span>
+                  <span className="badge">{job.type === 'backup' ? 'BACKUP' : job.type === 'pipeline' ? 'FLOW' : 'SQL'}</span>
                   {!job.enabled ? <span className="badge write">{tr("已暂停")}</span> : null}
                 </div>
                 <div className="listMeta">

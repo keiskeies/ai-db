@@ -12,6 +12,7 @@ import { AgentHost } from './agentHost';
 import { seedBuiltinMcpServers, bindSearchStore } from './builtinMcp';
 import { CommandRunner } from './commands/runner';
 import { refreshDashboardCards } from './features/dashboards';
+import { runPipelinesForJob } from './features/pipelines';
 import { shutdownMcpClients } from './mcp';
 import { SkillStore } from './skills';
 import { SkillRunner } from './skillRunner';
@@ -63,6 +64,7 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
   const skillWorker = new SkillWorker(store, skills, skillRunner, executor);
   executor.setSkillWorker(skillWorker);
   const scheduler = new JobScheduler(store, manager, config);
+  scheduler.setPipelineRunner((pipelineIds, batchAt) => runPipelinesForJob({ store, manager, config }, pipelineIds, batchAt));
   scheduler.setArtifactRunner(async (artifactId) => {
     try {
       const run = commands.startArtifact(artifactId);

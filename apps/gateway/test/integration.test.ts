@@ -9,6 +9,7 @@ import type { AddressInfo } from 'node:net';
 import WebSocket from 'ws';
 import { inflateRawSync } from 'node:zlib';
 import type { AgentEvent, ConnectionConfig, DatabaseSchema, TableInfo, ToolResult } from '@aidb/core';
+import { TOOL_NAMES } from '@aidb/core';
 import { createGateway } from '../src/server';
 import { defaultBriefPath } from '../src/features/databaseBrief';
 
@@ -92,7 +93,7 @@ test('health, bootstrap and demo seed', async () => {
 
   const boot = await api<{ connections: ConnectionConfig[]; tools: unknown[]; settings: { agent: { provider: string } } }>('/bootstrap');
   assert.equal(boot.status, 200);
-  assert.equal(boot.body.tools.length, 52);
+  assert.equal(boot.body.tools.length, TOOL_NAMES.length);
   demo = boot.body.connections.find((c) => c.engine === 'sqlite')!;
   assert.ok(demo, 'demo connection exists');
   assert.equal(boot.body.settings.agent.provider, 'local');

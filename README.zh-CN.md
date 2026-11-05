@@ -21,7 +21,7 @@
 
 <p align="center">
   <img alt="41 种数据库引擎" src="https://img.shields.io/badge/Engines-41-45C8C3?style=flat-square" />
-  <img alt="52 个 Agent 工具" src="https://img.shields.io/badge/Agent%20Tools-52-45C8C3?style=flat-square" />
+  <img alt="53 个 Agent 工具" src="https://img.shields.io/badge/Agent%20Tools-53-45C8C3?style=flat-square" />
   <img alt="macOS、Windows、Linux" src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-0B0E0D?style=flat-square" />
   <img alt="MIT 许可" src="https://img.shields.io/badge/License-MIT-E0AF63?style=flat-square" />
   <a href="https://github.com/keiskeies/ai-db"><img alt="GitHub stars" src="https://img.shields.io/github/stars/keiskeies/ai-db?style=flat-square&logo=github&label=Stars&color=E0AF63" /></a>
@@ -29,7 +29,7 @@
 
 AiDB 不是把聊天框嵌进数据库客户端。它以 Agent 为第一入口，把连接、结构、SQL、数据、仪表板、报告与审计统一成一套可执行的上下文。你用一句业务目标发起任务，Agent 用与人类相同的工具去查证、执行、验证和交付。
 
-从 41 种数据库引擎到 13 个生产力模块，从 52 个工具到 6 个命令工作流，所有能力都围绕一个原则构建：**Agent 能做的，必须可见、可控、可审计；Agent 不能做的，绝不假装能做。**
+从 41 种数据库引擎到 14 个生产力模块，从 53 个工具到 6 个命令工作流，所有能力都围绕一个原则构建：**Agent 能做的，必须可见、可控、可审计；Agent 不能做的，绝不假装能做。**
 
 桌面端使用 Electron + React，可同时以浏览器形态运行；移动端使用 Expo / React Native，通过 Bridge 与桌面共享连接、会话、记忆和设置。支持 Windows、macOS、Linux、Android、iOS 与 Web。
 
@@ -50,7 +50,7 @@ AiDB 的选择是把 Agent 放在任务主路径上，而不是侧边栏里。�
 | 层 | Agent 在此获得什么 |
 |---|---|
 | 意图 | 自然语言、`@table`、图片、斜杠命令与命令工作流 |
-| 执行 | 52 个工具，覆盖查询、写入、DDL、事务、图表、体检、对比与迁移 |
+| 执行 | 53 个工具，覆盖查询、写入、DDL、事务、图表、体检、对比、迁移与数据流 |
 | 上下文 | 真实 schema、业务别名、术语、示例 SQL、长期记忆、大库候选表检索 |
 | 控制 | 只读 / 询问 / 自动 / 全自动，审批、备份、审计与执行轨迹 |
 | 交付 | 图表、PDF、仪表板卡片、报告、Excel / PPTX、可重跑产物 |
@@ -58,10 +58,10 @@ AiDB 的选择是把 Agent 放在任务主路径上，而不是侧边栏里。�
 
 ## 能力概览
 
-- **52 个 Agent 工具**：查询、结构变更、数据写入、图表、体检、对比、迁移、Skill、MCP。
+- **53 个 Agent 工具**：查询、结构变更、数据写入、图表、体检、对比、迁移、数据流、Skill、MCP。
 - **6 个命令工作流**：`/report`、`/compare`、`/diff`、`/recon`、`/fix`、`/ask`，外加 `/init` 数据库交接文档。
 - **41 种数据库引擎**：关系型、文档、键值、图、向量、搜索、宽列、时序。
-- **13 个工具箱模块**：报告、搜索、查询构建、结构同步、数据对比、传输、生成、监控、自动化、用户、字典、高级对象、Agent 上下文。
+- **14 个工具箱模块**：报告、数据流处理、搜索、查询构建、结构同步、数据对比、传输、生成、监控、自动化、用户、字典、高级对象、Agent 上下文。
 - **7 种图表**：柱状、堆叠、折线、饼、散点、热力、雷达；折线支持预测区间与双轴。
 - **4 档权限**：只读、询问、自动、全自动；只读连接在服务端强制执行。
 
@@ -151,7 +151,7 @@ Agent 的能力不是一句“支持自然语言”。它由六件事共同决�
 - **导出**：回答可导出 PDF，打印样式保留图表背景色；也可复制。
 - **中断**：可停止当前回合，已输出内容保留，当前工具执行完成后标记 aborted。
 
-### 工具集：52 个可执行动作
+### 工具集：53 个可执行动作
 
 | 分组 | 工具 |
 |---|---|
@@ -162,16 +162,17 @@ Agent 的能力不是一句“支持自然语言”。它由六件事共同决�
 | 表结构与数据变更 | `create_table`、`alter_table`、`drop_object`、`manage_index`、`import_csv`、`export_result`、`generate_data` |
 | 分析、图表与体检 | `audit_database`、`check_data_quality`、`render_chart`、`analyze_chart`、`forecast_chart` |
 | 对比与迁移 | `schema_diff`、`recon_data`、`transfer_data` |
+| 数据流处理 | `manage_pipeline` |
 | 运维 | `backup_database` |
 | 计划与记忆 | `update_plan`、`memory_write`、`memory_search` |
 | Skill | `skill_list`、`skill_read`、`skill_write`、`skill_run`、`skill_list_files`、`skill_worker_run` |
 | MCP | `mcp_list_servers`、`mcp_list_tools`、`mcp_call` |
 
-工具入参使用 JSON Schema（`additionalProperties: false`），风险分级为 `read < write < ddl < destructive`。命令私有工具（如 `compose_report`、`submit_fix_plan`）只在该命令内可用，不计入 52 个全局工具。
+工具入参使用 JSON Schema（`additionalProperties: false`），风险分级为 `read < write < ddl < destructive`。命令私有工具（如 `compose_report`、`submit_fix_plan`）只在该命令内可用，不计入 53 个全局工具。
 
 ### 能力目录：让模型知道边界
 
-除了工具，系统提示还会注入一份 **能力目录**，来源是 `packages/core/src/capabilities/*.json` 的 13 份契约。契约声明每个功能是什么、需要哪些字段、有哪些状态、是否有对应 Agent 工具：
+除了工具，系统提示还会注入一份 **能力目录**，来源是 `packages/core/src/capabilities/*.json` 的 14 份契约。契约声明每个功能是什么、需要哪些字段、有哪些状态、是否有对应 Agent 工具：
 
 - 有工具的功能：写明工具名、参数和状态，模型直接调用；
 - 无工具的功能：压缩成“引导用户到工具箱 → X”，明确禁止编造参数或声称已完成；
@@ -419,7 +420,7 @@ SQL 仍然是数据库工作的硬通货。AiDB 不隐藏 SQL，而是把它变�
 
 ## 工具箱
 
-工具箱位于 Ribbon 的“其它”，13 个模块共用同一套 Bridge 与权限模型。每个模块都有一份能力契约，声明字段、类型、约束与状态，同时驱动 Agent 能力目录、REST 参数校验与 UI 表单渲染。
+工具箱位于 Ribbon 的“其它”，14 个模块共用同一套 Bridge 与权限模型。每个模块都有一份能力契约，声明字段、类型、约束与状态，同时驱动 Agent 能力目录、REST 参数校验与 UI 表单渲染。
 
 这意味着 Agent 不只是“看见有这些按钮”，而是知道每个模块需要什么参数、会返回什么状态、哪些操作必须由用户亲自完成。能力契约把“模型能不能用”和“功能是否存在”分开，避免模型编造一个不存在的接口。
 
@@ -432,8 +433,9 @@ SQL 仍然是数据库工作的硬通货。AiDB 不隐藏 SQL，而是把它变�
 | 数据对比 | 行数 + 主键指纹差异，按表替换同步 | 无专用工具（`recon_data` 覆盖行级对账） |
 | 数据传输 | 跨连接复制表结构与数据，自动建表，追加 / 清空后写入 | `transfer_data` |
 | 数据生成 | 按列语义、类型与外键造 1–5000 行测试数据，预览后插入 | `generate_data` |
+| 数据流处理 | 从接口或 SQL 取数，用 JSONPath / 表达式清洗，在内置 DuckDB 或 JS / Python 脚本里计算，再写回表或推送接口；支持单步试运行与增量断点 | `manage_pipeline` |
 | 服务器监控 | 引擎指标、会话列表，10s 刷新，终止会话 | 无 |
-| 自动化任务 | 定时 SQL / 备份任务，最小 30s 间隔，立即运行、启停、状态 | 无 |
+| 自动化任务 | 定时 SQL / 备份 / 数据流任务，最小 30s 间隔，立即运行、启停、状态 | 无 |
 | 用户与权限 | 账户 / 角色列表、创建、删除、授权 | 无 |
 | 数据字典 | Markdown / DDL / JSON 导出，含列类型、默认值、注释 | 无 |
 | 高级对象 | 触发器 / 函数 / 存储过程 / 序列 / 事件及定义查看 | 无 |
@@ -522,7 +524,7 @@ Agent 的价值不止于数据库内部。通知、Skill、MCP 与网络搜索�
   - `builtin-git`：只读 `status / log / diff / show`，固定参数白名单；
   - `builtin-web`：`fetch_url` / `web_search`，拦截 loopback、内网、链路本地和云元数据地址。
 - **AiDB 作为 MCP Server（出站）**：`scripts/aidb-mcp-server.mjs` 可把 AiDB 的只读工具暴露给外部 MCP 客户端。
-- **工具目录**：设置 → MCP 与工具中可搜索、按分组查看全部 52 个 Agent 工具及其风险约束。
+- **工具目录**：设置 → MCP 与工具中可搜索、按分组查看全部 53 个 Agent 工具及其风险约束。
 
 ### 网络搜索
 

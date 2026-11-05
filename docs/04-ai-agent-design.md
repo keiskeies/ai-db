@@ -123,13 +123,13 @@ for (step = 0; step < maxSteps; step++) {
 - `audit_database` 在入口过滤禁用表（实测 116 表库禁用 1 张后 `tablesChecked=115`），
   聚合结果再做一次递归脱敏，防止 findings/结果对象带出禁用表名。
 
-## 4. 工具目录（52 个）
+## 4. 工具目录（53 个）
 
-> 命令化的任务入口（`/report`、`/compare`、`/diff`、`/recon`、`/fix`）见 [命令化 Agent 工作流设计与开发计划](./11-command-workflows.md)。命令私有工具（如 `compose_report`）只在该命令的 Agent 步骤内可用，不计入下表的 52 个全局工具。
+> 命令化的任务入口（`/report`、`/compare`、`/diff`、`/recon`、`/fix`）见 [命令化 Agent 工作流设计与开发计划](./11-command-workflows.md)。命令私有工具（如 `compose_report`）只在该命令的 Agent 步骤内可用，不计入下表的 53 个全局工具。
 
 ### 4.0 能力目录（Capabilities）
 
-除工具表之外，系统提示还会注入一段**能力目录**（`apps/gateway/src/agentHost.ts` 的 `capabilityPromptBlock()`），来源是 `packages/core/src/capabilities/*.json` 的 12 份契约。它回答的是「软件自带功能有哪些、字段怎么填、返回什么状态」，与「工具能不能调」是两件事：
+除工具表之外，系统提示还会注入一段**能力目录**（`apps/gateway/src/agentHost.ts` 的 `capabilityPromptBlock()`），来源是 `packages/core/src/capabilities/*.json` 的 14 份契约。它回答的是「软件自带功能有哪些、字段怎么填、返回什么状态」，与「工具能不能调」是两件事：
 
 - **有工具的功能**：写明工具名、参数（`key:type`，`*` 表示必填）与状态 id，模型直接调用；
 - **无工具的功能**：压成一行「引导用户到工具箱 → X」，并明确禁止编造参数、声称已完成或自己拼 REST 请求。
@@ -192,6 +192,7 @@ for (step = 0; step < maxSteps; step++) {
 | 50 | `skill_run` | write | 按 aidb.skill.json 声明运行 python/node 入口 | `{ skill, entrypoint, runId? }` |
 | 51 | `skill_list_files` | read | 列出 Skill 运行的 workspace/input/output | `{ runId }` |
 | 52 | `skill_worker_run` | write | 在独立 Skill Worker 中运行技能，等待完成后返回最终答复与产物 | `{ skill, prompt, timeoutSeconds? }` |
+| 53 | `manage_pipeline` | write | 数据流处理的增删改查与运行：`list` / `validate` / `create` / `update` / `run` / `delete`；`run` 支持 `dryRun` 只渲染目标端 SQL/请求体不写库；返回逐步状态与行数，不含样本行 | `{ action, id?, name?, description?, connectionId?, database?, spec?, params?, dryRun? }` |
 
 \* `run_sql`、`run_mql`、`run_redis`、`run_cypher`、`run_cql`、`run_aql` 风险按各自语言的安全分类动态提升；`alter_table` 按 `operations` 动态判定（`add_column` 为 ddl、`drop_column` 为 destructive）；`mcp_call` 按内置 Server 的工具声明动态判定（只读工具为 read，写工具与外部 Server 为 write）；`dryRun=true` 时 DDL 只返回将执行的 SQL（用于预览）。`run_mql` / `run_redis` / `run_cypher` / `run_aql` / `vector_search` 仅用于对应模型的连接，SQL 专属工具（DDL、审计、图表等）在非 SQL 连接上明确返回不支持；例外是 `manage_index`，在 MongoDB 连接上改走结构化索引通道（同一实现服务对象信息面板的建删），不拼 SQL DDL。
 \** 导出写文件为 `write`，不触碰数据库。

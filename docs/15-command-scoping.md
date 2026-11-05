@@ -7,7 +7,7 @@
 
 ## 0. 摘要
 
-AiDB 的 Agent 目前每一回合都向模型下发**全部 52 个工具**，无论用户打的是 `/report` 还是随便问一句。命令（`/report`、`/compare`、`/diff`、`/recon`、`/fix`、`/init`）只是"提示词开关"，不改变模型能看见的工具集合。
+AiDB 的 Agent 目前每一回合都向模型下发**全部 53 个工具**，无论用户打的是 `/report` 还是随便问一句。命令（`/report`、`/compare`、`/diff`、`/recon`、`/fix`、`/init`）只是"提示词开关"，不改变模型能看见的工具集合。
 
 本文定义 **命令作用域（command scope）**：把命令从"提示词"升级为"工具作用域 + 提示词 + 风险上限"的三元组，并规定它在各种输入形态下的确定性解析规则。
 
@@ -59,7 +59,7 @@ AiDB 的 Agent 目前每一回合都向模型下发**全部 52 个工具**，无
 
 ### 1.3 现成的分组表被当成说明书
 
-`packages/core/src/agent/toolGroups.ts:16-49` 已把 52 个工具分成 11 组（connection 4 / sql 7 / dialect 7 / document 6 / structure 7 / analysis 5 / compare 3 / ops 1 / plan 3 / skill 6 / mcp 3），但只被"设置 → MCP 与工具"的只读目录页消费（`agentToolCatalog()`）。它是一张现成的路由表。
+`packages/core/src/agent/toolGroups.ts:16-50` 已把 53 个工具分成 12 组（connection 4 / sql 7 / dialect 7 / document 6 / structure 7 / analysis 5 / compare 3 / pipeline 1 / ops 1 / plan 3 / skill 6 / mcp 3），但只被"设置 → MCP 与工具"的只读目录页消费（`agentToolCatalog()`）。它是一张现成的路由表。
 
 ## 2. 概念模型
 
@@ -609,7 +609,7 @@ M1 与 M2 之间存在**唯一一次行为变更**：`/report` 下 `run_sql` 写
 
 ### 9.1 为什么不用 `/tool <name>` 直接暴露工具箱
 
-`/tool` 若做成"打开全部工具箱"，等于把 52 个工具换个地方，仍是全量。正确的形态是 `/tool <domain>`（`/tool analysis`、`/tool transfer`），映射到 `scopeGroups`，每个 domain 3–7 个工具。本阶段先把 `scopeGroups` 字段与展开逻辑做好，命令本身留到 §10.2。
+`/tool` 若做成"打开全部工具箱"，等于把 53 个工具换个地方，仍是全量。正确的形态是 `/tool <domain>`（`/tool analysis`、`/tool transfer`），映射到 `scopeGroups`，每个 domain 3–7 个工具。本阶段先把 `scopeGroups` 字段与展开逻辑做好，命令本身留到 §10.2。
 
 ### 9.2 作用域是回合级，不跨回合继承
 

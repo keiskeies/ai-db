@@ -31,6 +31,11 @@ import type {
   ModelInfo,
   NotificationChannelInfo,
   NotificationChannelType,
+  PipelineCredentialInfo,
+  PipelineEvent,
+  PipelineInfo,
+  PipelineRunInfo,
+  PipelineSpec,
   QueryBatchResult,
   QuestionSuggestion,
   QueryResult,
@@ -299,6 +304,35 @@ export async function streamTransfer(
     throw new ApiError(message, { code, status: res.status });
   }
   await readSse(res, (event) => onEvent(event as TransferEvent));
+}
+
+/** 数据流按步骤推进，事件里带每步行数与样本，界面据此画进度条。 */
+export async function streamPipelineRun(
+  pipelineId: string,
+  body: Record<string, unknown>,
+  onEvent: (event: PipelineEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`/api/pipelines/${encodeURIComponent(pipelineId)}/stream`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => '');
+    let message = tr("数据流运行失败（{0}）", [res.status]);
+    let code = 'PIPELINE_REQUEST';
+    try {
+      const parsed = JSON.parse(text);
+      message = parsed?.error?.message ?? message;
+      code = parsed?.error?.code ?? code;
+    } catch {
+      /* keep */
+    }
+    throw new ApiError(message, { code, status: res.status });
+  }
+  await readSse(res, (event) => onEvent(event as PipelineEvent));
 }
 
 export interface StoredAttachment {
@@ -798,6 +832,21 @@ export const api = {
   updateJob: (id: string, body: Record<string, unknown>) => request<{ job: any }>(`/jobs/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteJob: (id: string) => request<void>(`/jobs/${id}`, { method: 'DELETE' }),
   runJob: (id: string) => request<{ ok: boolean; message: string }>(`/jobs/${id}/run`, { method: 'POST' }),
+  // 数据流处理
+  pipelines: () => request<{ pipelines: PipelineInfo[] }>('/pipelines'),
+  pipelineMeta: () => request<{ steps: unknown[]; python: { ok: boolean; version?: string }; enabled: boolean; scriptsEnabled: boolean }>('/pipelines/meta'),
+  createPipeline: (body: { name: string; description?: string; connectionId?: string; database?: string; spec: PipelineSpec }) =>
+    request<{ pipeline: PipelineInfo }>('/pipelines', { method: 'POST', body: JSON.stringify(body) }),
+  updatePipeline: (id: string, body: Record<string, unknown>) => request<{ pipeline: PipelineInfo }>(`/pipelines/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deletePipeline: (id: string) => request<void>(`/pipelines/${id}`, { method: 'DELETE' }),
+  pipelineRuns: (id: string, limit = 20) => request<{ runs: PipelineRunInfo[] }>(`/pipelines/${id}/runs?limit=${limit}`),
+  runPipeline: (id: string, body: Record<string, unknown> = {}) => request<{ run: PipelineRunInfo }>(`/pipelines/${id}/run`, { method: 'POST', body: JSON.stringify(body) }),
+  trialPipeline: (id: string, body: Record<string, unknown> = {}) => request<{ run: PipelineRunInfo }>(`/pipelines/${id}/trial`, { method: 'POST', body: JSON.stringify(body) }),
+  cancelPipeline: (id: string) => request<{ ok: boolean }>(`/pipelines/${id}/cancel`, { method: 'POST' }),
+  resetPipelineState: (id: string) => request<{ pipeline: PipelineInfo }>(`/pipelines/${id}/state/reset`, { method: 'POST' }),
+  pipelineCredentials: () => request<{ credentials: PipelineCredentialInfo[] }>('/pipelines/credentials'),
+  createPipelineCredential: (body: Record<string, unknown>) => request<{ credential: PipelineCredentialInfo }>('/pipelines/credentials', { method: 'POST', body: JSON.stringify(body) }),
+  deletePipelineCredential: (id: string) => request<void>(`/pipelines/credentials/${id}`, { method: 'DELETE' }),
   restoreBackup: (id: string) => request<{ batch: QueryBatchResult }>(`/backups/${id}/restore`, { method: 'POST' }),
 
   pairStart: () => request<{ code: string; expiresIn: number; qrPayload: string; host: string; port: number; url: string }>('/pair/start', { method: 'POST' }),

@@ -267,7 +267,7 @@ try {
 const boot = (await api('/bootstrap')).body;
 demo = boot.connections.find((c) => c.engine === 'sqlite');
 check('bridge bootstrap', Boolean(demo), demo?.name);
-check('52 agent tools', boot.tools.length === 52, String(boot.tools.length));
+check('53 agent tools', boot.tools.length === 53, String(boot.tools.length));
 const builtinMcp = (await api('/mcp/servers')).body.servers.filter((server) => server.builtin);
 check('built-in MCP servers seeded', ['filesystem', 'git', 'web'].every((kind) => builtinMcp.some((server) => server.builtin === kind)), builtinMcp.map((server) => server.builtin).join(','));
 
@@ -1759,8 +1759,77 @@ const emptyFields = await page.locator('.tools-content .capability-form .field')
 );
 check('generate panel has no label-only fields', emptyFields === 0, `empty=${emptyFields}`);
 
+// 数据流处理：REST 建流水线 → 界面渲染步骤 → 点运行 → 复核运行历史与目标表
+const flowSpec = {
+  version: 1,
+  steps: [
+    { id: 'fetch', type: 'db.query', with: { connectionId: demo.id, sql: 'SELECT status, COUNT(*) AS n FROM orders GROUP BY status' } },
+    { id: 'output', type: 'db.write', with: { connectionId: demo.id, table: 'e2e_flow_status_stat', mode: 'replace', createMissing: true } },
+  ],
+};
+const flowCreate = await api('/pipelines', { method: 'POST', body: JSON.stringify({ name: 'E2E 数据流', spec: flowSpec }) });
+check('data flow created over REST', flowCreate.status === 201, `HTTP ${flowCreate.status} ${JSON.stringify(flowCreate.body).slice(0, 140)}`);
+const flowId = flowCreate.body?.pipeline?.id;
+await page.locator('.tools-nav button').filter({ hasText: '数据流处理' }).click();
+await page.waitForSelector('.pipe-step', { timeout: 10000 });
+const flowStepCount = await page.locator('.pipe-step').count();
+check('data flow editor renders steps', flowStepCount >= 2, `${flowStepCount} steps`);
+const flowSwitches = await page.locator('.settings-feature-bar input[type="checkbox"]').count();
+check('data flow feature bar exposes both switches', flowSwitches === 2, `${flowSwitches} switches`);
+const runButton = page.locator('.tool-pane button').filter({ hasText: '运行' }).first();
+check('data flow run button is enabled', !(await runButton.isDisabled()));
+await runButton.click();
+await page.waitForFunction(() => [...document.querySelectorAll('.tool-pane .pipe-step .status-led')].every((node) => node.classList.contains('ok')), null, { timeout: 40000 });
+const flowHistory = await api(`/pipelines/${flowId}/runs`);
+const latestRun = flowHistory.body?.runs?.[0];
+check('data flow run lands in history', flowHistory.status === 200 && latestRun?.status === 'ok', JSON.stringify(latestRun?.message ?? latestRun?.error ?? ''));
+const flowProbe = await api('/query', { method: 'POST', body: JSON.stringify({ connectionId: demo.id, sql: 'SELECT COUNT(*) AS c FROM e2e_flow_status_stat' }) });
+check('data flow wrote the target table', Number(flowProbe.body?.batch?.sets?.[0]?.rows?.[0]?.[0]) > 0, JSON.stringify(flowProbe.body?.batch?.sets?.[0]?.rows ?? flowProbe.body?.error ?? ''));
+// 起草体验：模板 → 待确认清单 → 点击定位 → 试运行拿列 → 自动映射 → 表达式试算 → AI 起草
+await page.locator('.tool-pane button').filter({ hasText: '新建' }).first().click();
+await page.waitForFunction(() => document.querySelectorAll('[data-testid^="pipe-tpl-"]').length === 5, null, { timeout: 10000 });
+check('data flow offers five starter templates', (await page.locator('[data-testid^="pipe-tpl-"]').count()) === 5);
+await page.locator('[data-testid="pipe-tpl-daily-rollup"]').click();
+await page.waitForSelector('[data-testid="pipe-pending-land-table"]');
+const pendingTotal = await page.locator('[data-testid^="pipe-pending-"]').count();
+check('template flags the fields still to confirm', pendingTotal === 4, `${pendingTotal} pending`);
+await page.locator('[data-testid="pipe-pending-fetch-sql"]').click();
+check('a pending chip spotlights its step and field', (await page.locator('.pipe-step.spot').count()) === 1 && (await page.locator('.pipe-field-spot').count()) === 1);
+await page.locator('.pipe-field-spot textarea, .pipe-field-spot input').first().fill('SELECT substr(created_at, 1, 10) AS dt, status, total_cents AS amount_cents FROM orders WHERE total_cents > 0');
+await page.locator('[data-testid="pipe-pending-land-table"]').click();
+await page.locator('.pipe-step.spot .pipe-field-spot input').first().fill('e2e_daily_rollup');
+await page.waitForFunction(() => document.querySelectorAll('[data-testid^="pipe-pending-"]').length === 2, null, { timeout: 8000 });
+check('confirming a field drops it from the list', (await page.locator('[data-testid^="pipe-pending-"]').count()) === 2);
+const trialSteps = page.locator('.pipe-step button[title="试运行到这一步"]');
+await trialSteps.nth(1).click();
+await page.waitForFunction(() => [...document.querySelectorAll('.pipe-step .status-led')].some((node) => node.classList.contains('ok')), null, { timeout: 40000 });
+const trialLeds = await page.locator('.pipe-step .status-led').evaluateAll((nodes) => nodes.map((node) => (node.classList.contains('ok') ? 'ok' : node.classList.contains('error') ? 'error' : 'pending')));
+check('trial run walks the template steps', trialLeds[1] === 'ok', trialLeds.join('|'));
+await page.locator('.pipe-step').nth(2).locator('button.icon-btn').first().click();
+await page.waitForSelector('[data-testid="pipe-auto-map"]', { timeout: 8000 });
+await page.locator('[data-testid="pipe-auto-map"]').click();
+await page.waitForFunction(() => [...document.querySelectorAll('.pipe-fields textarea')].some((node) => /dt/.test(node.value)), null, { timeout: 10000 });
+const mappedKeys = await page.locator('.pipe-fields textarea').evaluateAll((nodes) => nodes.map((node) => node.value).join('\n'));
+check('auto-map fills the write columns from real output', /dt/.test(mappedKeys) && /amount|total/.test(mappedKeys), mappedKeys.replace(/\s+/g, ' ').slice(0, 80));
+await page.locator('.tool-pane button').filter({ hasText: '新建' }).first().click();
+await page.waitForFunction(() => document.querySelectorAll('[data-testid^="pipe-tpl-"]').length === 5, null, { timeout: 10000 });
+await page.locator('[data-testid="pipe-tpl-api-clean-relay"]').click();
+await page.locator('[data-testid="pipe-pending-shape-project"]').click();
+const playground = page.locator('[data-testid="pipe-playground"]');
+check('map step offers a live sample playground', (await playground.count()) === 1, `panels=${await playground.count()}`);
+await page.locator('[data-testid="pipe-ai-brief"]').fill('把 orders 按 id 去重同步到 ods_orders');
+await page.locator('[data-testid="pipe-ai-draft"]').click();
+await page.screenshot({ path: join(shots, 'desktop-data-flow.png') });
+await api(`/pipelines/${flowId}`, { method: 'DELETE' });
+const leftoverFlows = (await api('/pipelines')).body?.pipelines ?? [];
+for (const item of leftoverFlows) await api(`/pipelines/${item.id}`, { method: 'DELETE' });
+
 await page.locator('.tools-modal .modal-head .icon-btn').click();
 await page.waitForTimeout(200);
+await page.waitForFunction(() => (document.querySelector('[data-testid="agent-input"]')?.value ?? '').includes('manage_pipeline'), null, { timeout: 8000 });
+const drafted = await page.locator('[data-testid="agent-input"]').inputValue();
+check('AI draft hands the agent a validate-then-run brief', drafted.includes('manage_pipeline') && drafted.includes('dryRun'), drafted.slice(0, 60));
+await page.fill('[data-testid="agent-input"]', '');
 await page.click('[data-testid="open-settings"]');
 await page.locator('.settings-nav button').filter({ hasText: '通知' }).click();
 await page.waitForFunction(() => document.querySelector('.settings-content')?.textContent?.includes('飞书群机器人'), null, { timeout: 10000 });
@@ -1851,7 +1920,7 @@ const catalogRows = await toolCatalog.locator('.agent-catalog-row').count();
 const catalogGroups = await toolCatalog.locator('.agent-catalog-group-head').count();
 check(
   'agent tool catalog lists every tool grouped by capability',
-  catalogRows === 52 && catalogGroups >= 8,
+  catalogRows === 53 && catalogGroups >= 8,
   `rows=${catalogRows} groups=${catalogGroups}`,
 );
 const catalogText = await toolCatalog.evaluate((el) => el.textContent ?? '');
@@ -1873,7 +1942,7 @@ await page.locator('.settings-nav button').filter({ hasText: '功能能力' }).c
 await page.waitForSelector('[data-testid="capability-catalog"]', { timeout: 10000 });
 await page.waitForFunction(() => document.querySelectorAll('.capability-card').length > 0, null, { timeout: 10000 });
 const capCards = await page.locator('.capability-card').count();
-check('capability page lists every toolbox module', capCards === 13, `cards=${capCards}`);
+check('capability page lists every toolbox module', capCards === 14, `cards=${capCards}`);
 
 const capText = await page.locator('[data-testid="capability-catalog"]').evaluate((el) => el.textContent ?? '');
 check(

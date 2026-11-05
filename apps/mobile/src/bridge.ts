@@ -13,6 +13,8 @@ import type {
   DeviceInfo,
   Memory,
   PermissionMode,
+  PipelineInfo,
+  PipelineRunInfo,
   QueryBatchResult,
 } from '@aidb/core';
 
@@ -381,6 +383,23 @@ export class BridgeClient {
 
   deleteArtifact(id: string) {
     return this.request<void>(`/artifacts/${id}`, { method: 'DELETE' });
+  }
+
+  // 数据流处理：移动端只看、只跑、只看历史；编辑与凭证管理留在桌面。
+  pipelines() {
+    return this.request<{ pipelines: PipelineInfo[] }>('/pipelines');
+  }
+
+  pipelineRuns(id: string, limit = 10) {
+    return this.request<{ runs: PipelineRunInfo[] }>(`/pipelines/${encodeURIComponent(id)}/runs?limit=${limit}`);
+  }
+
+  runPipeline(id: string) {
+    return this.request<{ run: PipelineRunInfo }>(`/pipelines/${encodeURIComponent(id)}/run`, { method: 'POST', body: JSON.stringify({}) });
+  }
+
+  resetPipelineState(id: string) {
+    return this.request<{ pipeline: PipelineInfo }>(`/pipelines/${encodeURIComponent(id)}/state/reset`, { method: 'POST' });
   }
 
   updateSession(id: string, patch: { title?: string; archived?: boolean }) {

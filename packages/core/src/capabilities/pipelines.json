@@ -1,0 +1,119 @@
+{
+  "id": "pipelines",
+  "route": {
+    "method": "POST",
+    "path": "/pipelines"
+  },
+  "title": {
+    "zh": "数据流处理",
+    "en": "Data flow"
+  },
+  "description": "接口/库取数 → 清洗 → SQL 或脚本加工 → 写出",
+  "whenToUse": "用户说「把 A 接口的数据同步到 B 库」「每天取数算完再推给别人」时",
+  "flow": [
+    "确认上游：HTTP 接口地址或某个库的 SQL",
+    "确认加工：字段映射、过滤表达式、SQL 计算或脚本",
+    "确认下游：写入哪张表（追加 / 清空重写 / 按主键先删后插），或推送到哪个接口",
+    "保存到 工具箱 → 数据流处理；需要定时时再建一个「数据流处理」类型的自动化任务"
+  ],
+  "fields": [
+    {
+      "key": "name",
+      "type": "text",
+      "label": {
+        "zh": "流水线名",
+        "en": "Name"
+      },
+      "required": true
+    },
+    {
+      "key": "description",
+      "type": "text",
+      "label": {
+        "zh": "说明",
+        "en": "Description"
+      }
+    },
+    {
+      "key": "connectionId",
+      "type": "connection",
+      "label": {
+        "zh": "默认连接",
+        "en": "Default connection"
+      },
+      "hint": "仅作默认值；每个步骤都能各自指定连接"
+    },
+    {
+      "key": "database",
+      "type": "database",
+      "label": {
+        "zh": "默认库",
+        "en": "Database"
+      }
+    },
+    {
+      "key": "spec",
+      "type": "json",
+      "label": {
+        "zh": "步骤定义",
+        "en": "Spec"
+      },
+      "required": true,
+      "signature": {
+        "input": "{version:1, params?, steps:[{id,type,with}]}",
+        "output": "步骤输出用 {{ steps.<id>.rows }} 传给后面"
+      },
+      "hint": "步骤类型：http.fetch / db.query / map / sql / script.js / script.py / db.write / http.push；先 validate 再 create；run 的 dryRun=true 只渲染不写库"
+    }
+  ],
+  "states": [
+    {
+      "id": "pending",
+      "label": {
+        "zh": "待运行",
+        "en": "Pending"
+      },
+      "phrase": "流水线已保存"
+    },
+    {
+      "id": "running",
+      "label": {
+        "zh": "运行中",
+        "en": "Running"
+      },
+      "phrase": "第 {current}/{total} 步：{label}"
+    },
+    {
+      "id": "ok",
+      "label": {
+        "zh": "成功",
+        "en": "Succeeded"
+      },
+      "terminal": true,
+      "phrase": "数据流完成：{count} 步 / {rows} 行"
+    },
+    {
+      "id": "failed",
+      "label": {
+        "zh": "失败",
+        "en": "Failed"
+      },
+      "terminal": true,
+      "phrase": "数据流失败：{error}"
+    }
+  ],
+  "progress": {
+    "supported": true,
+    "unit": "step"
+  },
+  "tools": [
+    "manage_pipeline"
+  ],
+  "maxRisk": "write",
+  "constraints": [
+    "SQL 步骤跑在内置 DuckDB 上，表名固定 input，不是业务库",
+    "script.js / script.py 需用户在设置里允许，且只做数据变换",
+    "接口密钥只存凭证库，spec 里只写 credential id",
+    "db.write 的跨引擎合并方式是按主键先删后插"
+  ]
+}

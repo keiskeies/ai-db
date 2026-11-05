@@ -263,6 +263,38 @@
 | 导出为报告 | 把当前卡片结果摊成 `ReportSpec`，建 report artifact 并记一次成功 run，走现成 deck 渲染导出 PPTX——仪表板负责日常观察，报告负责一次性汇报 |
 | 不支持的引擎 | 非 SQL 系（Mongo / Redis / Neo4j / ES）不提供仪表板入口 |
 
+## 8.10 数据流处理（v0.4）
+
+一条流水线 = 顺序执行的类型化步骤：**取数 → 加工 → 写出**。定义是纯 JSON（`PipelineSpec`），存在 Gateway 本地库，可被自动化任务按 id 选中定时运行。
+
+| 步骤 | 作用 | 关键字段 |
+|---|---|---|
+| `http.fetch` | 接口取数 | `url` / `method` / `headers` / `auth+credential` / `extract`（JSONPath） / `paginate`（page·cursor） / `stateField`+`stateParam`（增量断点） |
+| `db.query` | 库内取数 | `connectionId` / `database` / `sql`（可绑 `{{ }}`） / `maxRows` |
+| `map` | 清洗与投影 | `select` / `explode` / `filter` / `project`（列 = 表达式） / `distinct` / `sortBy` / `limit` |
+| `sql` | SQL 计算 | `sql`（表名固定 `input`，跑在内置 DuckDB 内存里，不回写业务库） |
+| `script.js` / `script.py` | 脚本加工 | `code`（`transform(rows, ctx)`）、`timeoutMs`、`maxRows` |
+| `db.write` | 写库 | `table` / `mode`（追加 / 清空重写 / 按主键先删后插） / `keyColumns` / `columns` 映射 / `createMissing` / `batchRows` |
+| `http.push` | 推送接口 | `url` / `bodyMode`（整批数组或模板） / `batchRows` / `concurrency` / `stopOnError` |
+
+| 行为 | 说明 |
+|---|---|
+| 表达式语言 | 过滤、投影、`{{ }}` 绑定共用一套总量安全子集（无赋值、无循环、拿不到原型链），支持中文列名与 30 余个白名单函数；JSONPath 实现 RFC 9535 的选取/切片/递归/过滤器子集 |
+| 步骤间传递 | 每步输出挂进 `{{ steps.<id>.rows / .raw / .count }}`，另有 `{{ params.* }}`、`{{ state.* }}`、`{{ run.batchAt }}` |
+| 增量运行 | 取数步骤可记录字段最大值作为断点，只在整条成功后回写；失败保留旧水位，重跑覆盖同一批 |
+| 试运行 | 跑到第 N 步，目标步骤只渲染真实 SQL / 请求体不执行；不落历史、不动断点 |
+| 运行可观测 | 每步状态、耗时、入/出行数、样本行、渲染出的语句与错误提示进 `pipeline_runs`，保留最近 40 次，SSE 实时推进度 |
+| 脚本边界 | 子进程执行，stdin 收 `{rows, params, state, run}`、stdout 回 `{rows, state}`；环境变量按白名单传递，没有数据库句柄与网络客户端；默认关闭，需在面板顶部显式允许 |
+| 密钥 | HTTP 认证只引用凭证 id，密文用 AES-256-GCM 存在 Gateway 本地库，spec、运行历史、审计与 AI 生成都不会带出明文 |
+| 定时 | 自动化任务新增 `pipeline` 类型，`payload.pipelineIds` 可多选，按顺序依次跑；一条失败不中断后面的，任务状态记 `2/3 条成功` |
+| 移动端 | 工具箱 → 数据流处理：看步骤链与断点、立即运行（二次确认）、看运行历史与每步 `入→出` 行数；编辑流水线与接口凭证管理只在桌面端 |
+| 起草体验 | 新建时给 5 个模板（接口数据入库 / 库到库增量搬运 / 每日汇总统计 / 查库推送接口 / 接口清洗后转发），选中即填好步骤，模板未改的字段进入「还需确认 N 处」清单，点一项展开对应步骤并高亮那个字段，改完自动消失。涉及 SQL 的模板按内置演示库的 `orders` 写，接自己的库时改的就是清单里那几项；e2e 会把「每日汇总统计」从模板一路跑到自动映射 |
+| 列映射 | `db.write` 的「按上一步列名自动映射」用上一次运行的输出列 ∩ 目标表真实列名生成映射；目标表不存在时照源列建表，映射留空由写入端按列名对齐 |
+| 表达式试算 | `map` 步骤带试算面板：拿上一步的真实样本行现算过滤 / 投影结果，改表达式即时看到前几行，不必整条跑完 |
+| 错误定位 | 运行失败的错误（含 hint）在原位置可点击，一步展开并高亮出错的步骤；折叠着的步骤也会显示红色错误摘要 |
+| AI 起草 | 面板顶部一句话描述 → 预填 Agent 输入框（提示词固定要求 `manage_pipeline` 先 `validate`、通过后 `create`、再 `run(dryRun=true)` 回报每步行数与渲染出的写入语句）；Agent 侧对不合法 spec 直接拒绝并回显校验信息 |
+| 不支持 | 不做分支/并行 DAG、不做跨引擎自动 schema 演进（目标表缺列直接报错并给出列名建议） |
+
 ## 9. AI Agent（摘要，详见 04）
 
 - 对话式执行数据库任务；工具调用可视化；计划清单；审批；verbose 折叠；`@` 引用；斜杠命令。
@@ -281,7 +313,7 @@
 | 查询 | 默认行数、超时、多语句开关（只读脚本不受限）、自动 LIMIT |
 | Agent | Provider 与密钥、模型、温度、最大步数、默认权限模式、变更前自动备份、记忆开关、压缩阈值 |
 | 网络搜索 | 12 个搜索后端（5 个免密钥 + 7 个 Key）启停、API Key 凭证库、numResults/concurrency/超时、时间范围、语言、去重、重排、安全搜索、健康遥测、出站代理、SearXNG 私有实例 |
-| MCP 与工具 | MCP 总开关、内置 filesystem/git/web 的目录与域名配置、外部 stdio Server 增删与工具发现、**Agent 工具目录（52 个，只读展示，不可逐个启停）** |
+| MCP 与工具 | MCP 总开关、内置 filesystem/git/web 的目录与域名配置、外部 stdio Server 增删与工具发现、**Agent 工具目录（53 个，只读展示，不可逐个启停）** |
 | Bridge | 监听地址/端口、设备管理（配对码、吊销）、TLS 提示 |
 | 数据 | 清空历史、导出审计、重置元数据库（危险） |
 | 关于 | 版本、平台、开源许可 |

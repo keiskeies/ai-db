@@ -37,6 +37,7 @@ export const AGENT_TOOL_GROUPS: AgentToolGroup[] = [
   },
   { id: 'analysis', label: '分析、图表与体检', tools: ['audit_database', 'check_data_quality', 'render_chart', 'analyze_chart', 'forecast_chart'] },
   { id: 'compare', label: '对比与迁移', tools: ['schema_diff', 'recon_data', 'transfer_data'] },
+  { id: 'pipeline', label: '数据流处理', tools: ['manage_pipeline'] },
   { id: 'ops', label: '运维', tools: ['backup_database'] },
   { id: 'plan', label: '计划与记忆', tools: ['update_plan', 'memory_write', 'memory_search'] },
   {

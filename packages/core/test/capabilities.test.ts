@@ -53,8 +53,8 @@ const FAKE_TOOLS = [
 
 // ---------- 契约自检 ----------
 
-test('13 个内置契约全部通过自检', () => {
-  assert.equal(CAPABILITIES.length, 13);
+test('14 个内置契约全部通过自检', () => {
+  assert.equal(CAPABILITIES.length, 14);
   assert.doesNotThrow(() => assertCapabilities(CAPABILITIES, TOOLS));
 });
 
@@ -154,7 +154,7 @@ test('getCapability / listCapabilities', () => {
   assert.equal(getCapability('transfer')?.title.zh, '数据传输');
   assert.equal(getCapability('nope'), undefined);
   const list = listCapabilities();
-  assert.equal(list.length, 13);
+  assert.equal(list.length, 14);
   assert.deepEqual(list.map((item) => item.id), CAPABILITIES.map((item) => item.id));
 });
 

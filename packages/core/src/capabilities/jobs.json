@@ -8,11 +8,11 @@
     "zh": "自动化任务",
     "en": "Automation jobs"
   },
-  "description": "按固定间隔执行 SQL 或备份，由调度器独立运行",
-  "whenToUse": "用户说「每天 / 每隔 N 分钟执行某段 SQL」「定时备份」时",
+  "description": "按固定间隔执行 SQL、备份，或按顺序运行选中的数据流流水线",
+  "whenToUse": "用户说「每天 / 每隔 N 分钟执行某段 SQL」「定时备份」「定时跑某条数据流」时",
   "flow": [
     "确认连接与库",
-    "确认要执行的 SQL，或选择备份类型",
+    "确认要执行的 SQL，或选择备份类型，或选择要运行的数据流",
     "确认间隔秒数（最小 30 秒）",
     "保存；之后由调度器独立运行，与本次对话无关"
   ],
@@ -66,6 +66,13 @@
             "zh": "备份",
             "en": "Backup"
           }
+        },
+        {
+          "value": "pipeline",
+          "label": {
+            "zh": "数据流处理",
+            "en": "Data flow"
+          }
         }
       ]
     },
@@ -87,6 +94,23 @@
         "output": "结果集行数写入审计"
       },
       "hint": "任务在无人值守时执行；请确保语句可重复执行且不会误伤数据"
+    },
+    {
+      "key": "payload",
+      "type": "json",
+      "label": {
+        "zh": "数据流载荷",
+        "en": "Payload"
+      },
+      "showWhen": {
+        "field": "type",
+        "equals": "pipeline"
+      },
+      "signature": {
+        "input": "{\"pipelineIds\": [\"<流水线 id>\"]}",
+        "output": "按数组顺序依次运行"
+      },
+      "hint": "对象，含 pipelineIds 字符串数组（至少一条）；id 从 工具箱 → 数据流处理 已保存的流水线里取，一条失败不影响后面的继续跑"
     },
     {
       "key": "intervalSeconds",
@@ -154,6 +178,7 @@
   "constraints": [
     "任务保存后由调度器独立运行，与创建它的对话无关",
     "最小间隔 30 秒",
+    "数据流类型必须给出 pipelineIds（至少一条已保存的流水线）",
     "任务执行的 SQL 写入审计，approval 标记为 scheduled",
     "当前没有对应的 Agent 工具：需要创建时引导用户到 工具箱 → 自动化任务"
   ]

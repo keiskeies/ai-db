@@ -73,17 +73,19 @@ test('提示块对空契约列表安全', () => {
   assert.match(capabilityPromptBlock([]), /none registered/);
 });
 
-test('提示块体量在预算内（≤ 2000 字符 ≈ 1.3k token）', () => {
+test('提示块体量在预算内（≤ 2300 字符 ≈ 1.5k token）', () => {
   const block = capabilityPromptBlock();
-  assert.ok(block.length <= 2000, `能力目录过大：${block.length} 字符`);
+  // 预算从 2000 提到 2300：把「数据流处理」从「只能引导」变成带 manage_pipeline 的可调用功能，
+  // 多出 Call / States / Limits 三行是功能变强的代价，压掉引导文案才是省错地方。
+  assert.ok(block.length <= 2300, `能力目录过大：${block.length} 字符`);
 });
 
 // ---------- API ----------
 
-test('GET /capabilities 返回全部契约（13 条）', async () => {
+test('GET /capabilities 返回全部契约（14 条）', async () => {
   const response = await api('/api/capabilities');
   assert.equal(response.status, 200);
-  assert.equal(response.body.capabilities.length, 13);
+  assert.equal(response.body.capabilities.length, 14);
   const transfer = response.body.capabilities.find((item: any) => item.id === 'transfer');
   assert.deepEqual(transfer.tools, ['transfer_data']);
 });

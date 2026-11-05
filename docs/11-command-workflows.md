@@ -87,7 +87,7 @@
 ### 1.1 现状
 
 - 斜线命令目前只是把一段固定文本填进输入框（`apps/desktop/src/components/AgentPanel.tsx` 的 `SLASH`），没有参数、没有独立执行，也没有产物。
-- Agent 的工具是 52 个静态定义（`packages/core/src/agent/tools.ts`），执行集中在 `apps/gateway/src/executor.ts`，风险分级与审批绑定在这份清单上。
+- Agent 的工具是 53 个静态定义（`packages/core/src/agent/tools.ts`），执行集中在 `apps/gateway/src/executor.ts`，风险分级与审批绑定在这份清单上。
 - Agent 上下文只带一个连接（`AgentRunInput.connection`、`AgentContextData.connection`），系统提示里只有一行 `Connection:`（`packages/core/src/agent/prompt.ts`）。
 - 工具箱里已经有一套确定性能力：结构对比 `apps/gateway/src/features/schemaCompare.ts`、数据对比 `apps/gateway/src/features/compareData.ts`、跨连接传输 `apps/gateway/src/features/transfer.ts`，以及定时查询 / 备份调度器 `apps/gateway/src/scheduler.ts`。但它们与 Agent、会话、产物是割裂的。
 - 定时任务只有 `query` 与 `backup` 两种类型，不能保存和刷新一份报告。
@@ -118,7 +118,7 @@
 - 不做后台自动写库。所有写操作必须由用户显式发起并经过审批。
 - 不在 v1 执行任意 JavaScript / Python / Shell。命令内只允许声明式工具与 SQL。
 - 不在 v1 做 MCP 客户端或插件市场；命令注册表为它们预留扩展位。
-- 不改变现有 52 个 Agent 工具的语义与风险等级；命令私有工具独立管理（§4.6）。
+- 不改变现有 53 个 Agent 工具的语义与风险等级；命令私有工具独立管理（§4.6）。
 
 ### 1.5 设计原则
 

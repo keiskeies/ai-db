@@ -4,6 +4,7 @@ import transfer from './transfer.json' with { type: 'json' };
 import compareData from './compare-data.json' with { type: 'json' };
 import schemaSync from './schema-sync.json' with { type: 'json' };
 import jobs from './jobs.json' with { type: 'json' };
+import pipelines from './pipelines.json' with { type: 'json' };
 import generate from './generate.json' with { type: 'json' };
 import monitor from './monitor.json' with { type: 'json' };
 import users from './users.json' with { type: 'json' };
@@ -23,6 +24,7 @@ export const CAPABILITIES: Capability[] = [
   compareData,
   schemaSync,
   jobs,
+  pipelines,
   generate,
   monitor,
   users,

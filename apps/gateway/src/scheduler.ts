@@ -12,6 +12,7 @@ export class JobScheduler {
   private artifactRunner?: (artifactId: string) => Promise<{ ok: boolean; message: string }>;
   private dashboardRunning = new Set<string>();
   private dashboardRunner?: (connectionId: string, database?: string) => Promise<{ ok: boolean; message: string }>;
+  private pipelineRunner?: (pipelineIds: string[], batchAt: string) => Promise<{ ok: number; failed: number; message: string }>;
 
   constructor(
     private store: Store,
@@ -25,6 +26,11 @@ export class JobScheduler {
 
   setDashboardRunner(runner: (connectionId: string, database?: string) => Promise<{ ok: boolean; message: string }>): void {
     this.dashboardRunner = runner;
+  }
+
+  /** 数据流任务把执行交给流水线 runner，与 artifact/dashboard 同一套注入方式。 */
+  setPipelineRunner(runner: (pipelineIds: string[], batchAt: string) => Promise<{ ok: number; failed: number; message: string }>): void {
+    this.pipelineRunner = runner;
   }
 
   start(): void {
@@ -127,6 +133,27 @@ export class JobScheduler {
           durationMs: Date.now() - started,
           meta: { jobId: job.id, job: job.name, rows },
         });
+      } else if (job.type === 'pipeline') {
+        const ids = (job.payload?.pipelineIds ?? []).filter((id) => typeof id === 'string' && id.length > 0);
+        if (!ids.length) throw new Error('数据流任务没有选择流水线');
+        if (!this.pipelineRunner) throw new Error('流水线执行器尚未就绪');
+        const result = await this.pipelineRunner(ids, new Date().toISOString());
+        message = result.message;
+        if (!result.failed) {
+          this.store.addAudit({
+            actor: 'user',
+            connectionId: job.connectionId,
+            database: job.database,
+            tool: 'job.pipeline',
+            risk: 'write',
+            approval: 'scheduled',
+            status: 'ok',
+            durationMs: Date.now() - started,
+            meta: { jobId: job.id, job: job.name, pipelines: ids.length, ok: result.ok },
+          });
+        } else {
+          throw new Error(message);
+        }
       } else {
         const backup = await dumpDatabase(this.store, this.manager, this.config, job.connectionId, job.database, `job:${job.name}`);
         message = `${backup.tables} 张表 / ${backup.rows} 行 → ${backup.path}`;

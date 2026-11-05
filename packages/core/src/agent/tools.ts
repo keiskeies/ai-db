@@ -1033,6 +1033,29 @@ x/y/ys/value/label are result column names, not SQL expressions.`,
     },
     summarize: (a) => `传输数据 ${a.sourceConnectionId} → ${a.targetConnectionId}`,
   },
+  {
+    name: 'manage_pipeline',
+    description:
+      'Create, validate, run, or delete data-flow pipelines: fetch from an HTTP API or a SQL query, reshape with JSONPath/expressions, aggregate in embedded DuckDB or a JS/Python script, then write to a table or push to an API. A spec is {version:1, params?:[{key,default}], steps:[{id,type,label?,with}]}; step types: http.fetch, db.query, map, sql (rows are table `input`), script.js, script.py, db.write (mode append|replace|delete_insert), http.push. Later steps read earlier output with {{ steps.<id>.rows }}, plus {{ params.x }}, {{ state.max }}, {{ run.batchAt }}. Always validate before create, and run with dryRun first to check the rendered SQL. Write operation.',
+    risk: 'write',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['action'],
+      properties: {
+        action: { type: 'string', enum: ['list', 'validate', 'create', 'update', 'run', 'delete'] },
+        id: { type: 'string', description: 'Pipeline id (or exact name) for validate/update/run/delete' },
+        name: { type: 'string', description: 'Required for create; also accepted to find a pipeline by name' },
+        description: { type: 'string' },
+        connectionId: { type: 'string', description: 'Default connection used by steps that do not set one' },
+        database: { type: 'string' },
+        spec: { type: 'object', additionalProperties: true, description: '{version:1, params?, steps:[{id,type,with}]}' },
+        params: { type: 'object', additionalProperties: true, description: 'Overrides for spec.params when running' },
+        dryRun: { type: 'boolean', description: 'run only: render sink SQL/body without writing or pushing' },
+      },
+    },
+    summarize: (a) => `数据流 ${a.action ?? ''}${a.name ? ` · ${a.name}` : ''}${a.id && !a.name ? ` · ${a.id}` : ''}`,
+  },
 ];
 
 

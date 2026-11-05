@@ -136,6 +136,7 @@ export type CapabilityId =
   | 'compare-data'
   | 'schema-sync'
   | 'jobs'
+  | 'pipelines'
   | 'generate'
   | 'monitor'
   | 'users'

@@ -576,6 +576,10 @@ export interface FeatureSettings {
   reportDeck: boolean;
   /** 允许 Agent 调用 MCP 工具；MCP Server 配置仍可管理。 */
   mcp: boolean;
+  /** 数据流处理（pipeline）总开关；关闭后流水线不再被调度执行。 */
+  pipelines: boolean;
+  /** 允许流水线里的 JS/Python 脚本步骤。脚本以子进程执行用户代码，默认关闭。 */
+  pipelineScripts: boolean;
 }
 
 export type SearchBackendId =
@@ -715,7 +719,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     baseUrl: 'https://api.openai.com/v1',
     model: 'text-embedding-3-small',
   },
-  features: { skills: true, reportDeck: true, mcp: true },
+  features: { skills: true, reportDeck: true, mcp: true, pipelines: true, pipelineScripts: false },
   search: {
     /** 只默认启用实测可达的免密钥后端；DuckDuckGo/SearXNG 需代理或自建，改为手动开启。 */
     enabled: ['exa', 'parallel', 'bing'],
@@ -798,8 +802,10 @@ export interface JobInfo {
   name: string;
   connectionId: string;
   database?: string;
-  type: 'query' | 'backup';
+  type: 'query' | 'backup' | 'pipeline';
   sql?: string;
+  /** 数据流处理任务的载荷：按数组顺序依次运行选中的流水线。 */
+  payload?: { pipelineIds: string[] };
   intervalSeconds: number;
   enabled: boolean;
   lastRunAt?: string;
