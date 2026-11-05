@@ -12,21 +12,37 @@ function harness(claimBody, claimStatus = 200) {
   const answers = ['123456', 'http://127.0.0.1:8787'];
   const logs = [];
   const writes = [];
+  const requests = [];
   return {
     logs,
     writes,
+    requests,
     io: {
       ask: async () => answers.shift() ?? '',
       log: (text) => logs.push(text),
       writeCredentials: (c) => { writes.push(c); return join(home, 'credentials.json'); },
-      fetch: async () => ({
-        ok: claimStatus >= 200 && claimStatus < 300,
-        status: claimStatus,
-        json: async () => claimBody,
-      }),
+      fetch: async (url, init) => {
+        requests.push({ url, init });
+        return {
+          ok: claimStatus >= 200 && claimStatus < 300,
+          status: claimStatus,
+          json: async () => claimBody,
+        };
+      },
     },
   };
 }
+
+test('posts to the isolated MCP claim endpoint without a caller-controlled scope', async () => {
+  const h = harness({ token: 'T', device: { id: 'd1', name: 'Claude Code', scope: 'mcp:readonly' } });
+  const result = await runPair(h.io);
+  assert.equal(result.ok, true);
+  assert.equal(h.requests.length, 1);
+  assert.match(h.requests[0].url, /\/api\/pair\/mcp\/claim$/);
+  const body = JSON.parse(h.requests[0].init.body);
+  assert.equal(body.scope, undefined, 'scope 由服务端硬编码，CLI 不应传');
+  assert.equal(body.code, '123456');
+});
 
 test('stores the URL the user entered, not the public bridge.url', async () => {
   const h = harness({

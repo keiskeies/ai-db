@@ -52,7 +52,7 @@ test.after(async () => {
 
 test('pair CLI stores the reachable local URL even when AIDB_PUBLIC_URL is set', async () => {
   const h = { 'content-type': 'application/json', authorization: 'Bearer ' + TOKEN };
-  const started = await fetch('http://127.0.0.1:' + port + '/api/pair/start', { method: 'POST', headers: h });
+  const started = await fetch('http://127.0.0.1:' + port + '/api/pair/mcp/start', { method: 'POST', headers: h });
   const { code } = await started.json();
 
   const child = spawn(process.execPath, [cli, 'pair'], {

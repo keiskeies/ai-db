@@ -26,7 +26,7 @@ export async function runPair(io = {}) {
   const write = io.writeCredentials ?? writeCredentials;
   const fetchImpl = io.fetch ?? fetch;
 
-  const code = (await ask('输入 AiDB 桌面端 设置 → Bridge → 为移动端配对 显示的 6 位配对码: ')).trim();
+  const code = (await ask('输入 AiDB 桌面端 设置 → Bridge → 为 Claude Code 配对 显示的 6 位配对码: ')).trim();
   if (!/^\d{6}$/.test(code)) {
     log('配对码必须是 6 位数字');
     return { ok: false };
@@ -36,10 +36,11 @@ export async function runPair(io = {}) {
 
   let response;
   try {
-    response = await fetchImpl(`${url}/api/pair/claim`, {
+    // 专用端点：与移动端配对隔离，scope 由服务端硬编码为 mcp:readonly。
+    response = await fetchImpl(`${url}/api/pair/mcp/claim`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ code, deviceName: 'Claude Code', platform: 'claude-code', scope: 'mcp:readonly' }),
+      body: JSON.stringify({ code, deviceName: 'Claude Code', platform: 'claude-code' }),
     });
   } catch (err) {
     log(`无法连接 Bridge（${url}）：${err.message}`);
