@@ -217,7 +217,21 @@ export function createApiRouter(deps: ApiDeps): Router {
     }
     if (safeEqual(token, config.token)) return next();
     const device = store.findDeviceByTokenHash(hashToken(token));
-    if (device) return next();
+    if (device) {
+      // 出站 MCP 配对凭据只允许只读工具桥，避免借道 /query 等接口绕过审批。
+      if (device.scope === 'mcp:readonly') {
+        const p = req.path;
+        const allowed =
+          (req.method === 'GET' && (p === '/health' || p === '/capabilities' || p === '/agent/tools')) ||
+          (req.method === 'POST' && p.startsWith('/agent/tools/'));
+        if (!allowed) {
+          res.status(403).json({ error: { code: 'SCOPE_DENIED', message: '只读 MCP 凭据不能访问该接口' } });
+          return;
+        }
+        res.locals.mcpReadonly = true;
+      }
+      return next();
+    }
     res.status(401).json({ error: { code: 'UNAUTHORIZED', message: '访问令牌无效或已吊销' } });
   });
 
