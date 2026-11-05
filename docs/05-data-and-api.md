@@ -86,7 +86,8 @@ CREATE INDEX idx_audit_time ON audit_log(created_at DESC);
 CREATE TABLE IF NOT EXISTS devices (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL,
   token_hash TEXT NOT NULL, paired_at TEXT NOT NULL, last_seen_at TEXT,
-  revoked INTEGER DEFAULT 0
+  revoked INTEGER DEFAULT 0,
+  scope TEXT NOT NULL DEFAULT 'full'   -- full|mcp:readonly；旧库通过 ensureColumn 补列
 );
 
 CREATE TABLE IF NOT EXISTS backups (
@@ -354,8 +355,12 @@ export interface QueryResult {
 | POST | `/search/query` | `{query, numResults?}` → 聚合结果（并发 fan-out、URL 去重、逐后端报告） |
 | POST | `/search/backends/:id/probe` | 用固定查询探测单个后端，返回最新健康状态 |
 | POST | `/pair/start` | 桌面发起配对：`{code, expiresIn, qrPayload}` |
-| POST | `/pair/claim` | 移动端兑换：`{code, deviceName, platform}` → `{token, bridgeId}` |
-| GET | `/devices` · DELETE `/devices/:id` | 设备管理 |
+| POST | `/pair/claim` | 兑换设备令牌：`{code, deviceName, platform, scope?}` → `{token, device, bridge}`；`scope='mcp:readonly'` 供出站 MCP 使用，缺省 `full` |
+| GET | `/devices` · DELETE `/devices/:id` | 设备管理（返回 `scope`）；吊销后 token 立即失效 |
+
+`scope='mcp:readonly'` 的凭据在鉴权中间件被限制为只能访问 `GET /health`、`GET /capabilities`、
+`GET /agent/tools?for=mcp`、`POST /agent/tools/:name`，其余接口返回 `403 SCOPE_DENIED`；
+WebSocket 通道拒绝该凭据。详见 [12-bots-and-mcp.md](./12-bots-and-mcp.md) §4.5。
 
 ### 3.1 认证
 - 桌面/浏览器：Bridge 启动时生成一次性 token（`AIDB_TOKEN` 或 Electron 注入），`Authorization: Bearer`。
