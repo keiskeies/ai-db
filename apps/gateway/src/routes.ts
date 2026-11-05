@@ -2581,10 +2581,13 @@ export function createApiRouter(deps: ApiDeps): Router {
       if (!entry || entry.expiresAt < Date.now()) throw Object.assign(new Error('配对码无效或已过期'), { code: 'PAIR_INVALID', status: 401 });
       deps.pairCodes.delete(code);
       const token = randomToken(32);
+      // 出站 MCP 客户端换取的是受限凭据；移动端不传 scope 时保持 full。
+      const scope = str(body.scope) === 'mcp:readonly' ? 'mcp:readonly' : 'full';
       const device = store.createDevice({
         name: str(body.deviceName) ?? '移动设备',
         platform: str(body.platform) ?? 'unknown',
         tokenHash: hashToken(token),
+        scope,
       });
       const origin = pairingOrigin(req, config);
       res.json({

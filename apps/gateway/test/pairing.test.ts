@@ -115,3 +115,28 @@ test('/pair/claim 对同一来源限流：10 次后返回 429', async () => {
   assert.equal(blocked.body.error.code, 'RATE_LIMITED');
   assert.match(blocked.headers.get('retry-after') ?? '', /^\d+$/);
 });
+
+test('claim with scope=mcp:readonly creates a read-only device', async () => {
+  const started = await primary.api('/pair/start', { method: 'POST', headers: { 'x-forwarded-for': '10.0.0.20' } });
+  const claimed = await primary.api('/pair/claim', {
+    method: 'POST',
+    headers: { 'x-forwarded-for': '10.0.0.20' },
+    body: JSON.stringify({ code: started.body.code, deviceName: 'Claude Code', platform: 'claude-code', scope: 'mcp:readonly' }),
+  });
+  assert.equal(claimed.status, 200, JSON.stringify(claimed.body));
+  assert.equal(claimed.body.device.scope, 'mcp:readonly');
+  const devices = await primary.api('/devices');
+  assert.ok(devices.body.devices.some((device: { id: string; scope: string }) => device.id === claimed.body.device.id && device.scope === 'mcp:readonly'));
+});
+
+test('claim without scope defaults to full', async () => {
+  const started = await primary.api('/pair/start', { method: 'POST', headers: { 'x-forwarded-for': '10.0.0.21' } });
+  const claimed = await primary.api('/pair/claim', {
+    method: 'POST',
+    headers: { 'x-forwarded-for': '10.0.0.21' },
+    body: JSON.stringify({ code: started.body.code, deviceName: '默认手机', platform: 'test' }),
+  });
+  assert.equal(claimed.status, 200, JSON.stringify(claimed.body));
+  assert.equal(claimed.body.device.scope, 'full');
+});
+
