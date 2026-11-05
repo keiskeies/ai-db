@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import QRCode from 'qrcode';
+import { secondsLeft, useNow } from '../lib/pairingCountdown';
 import {
   Bot,
   ChevronDown,
@@ -68,16 +69,10 @@ export function SettingsModal() {
   const devices = useApp((s) => s.devices);
   const startPairing = useApp((s) => s.startPairing);
   const startMcpPairing = useApp((s) => s.startMcpPairing);
-  // 配对码 60 秒倒计时：每秒刷新一次，归零后显示过期提示。
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!mcpPairing) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [mcpPairing]);
-  const mcpSecondsLeft = mcpPairing
-    ? Math.max(0, Math.ceil((mcpPairing.createdAt + mcpPairing.expiresIn * 1000 - now) / 1000))
-    : 0;
+  // 移动端与 MCP 两张卡片共用一个 60 秒倒计时：任一配对码存在时每秒刷新，归零后显示过期。
+  const now = useNow(Boolean(pairing || mcpPairing));
+  const mobileSecondsLeft = pairing ? secondsLeft(pairing.createdAt, pairing.expiresIn, now) : 0;
+  const mcpSecondsLeft = mcpPairing ? secondsLeft(mcpPairing.createdAt, mcpPairing.expiresIn, now) : 0;
   const loadDevices = useApp((s) => s.loadDevices);
   const revokeDevice = useApp((s) => s.revokeDevice);
 
@@ -1050,7 +1045,9 @@ export function SettingsModal() {
                       <div className="pair-info">
                         <div className="row">
                           <span className="mono" style={{ fontSize: 26, letterSpacing: 8, color: 'var(--agent)' }}>{pairing.code}</span>
-                          <span className="badge write">{tr("60 秒有效")}</span>
+                          <span className={mobileSecondsLeft > 0 ? 'badge write' : 'badge destructive'} data-testid="mobile-pair-countdown">
+                            {mobileSecondsLeft > 0 ? tr("剩余 {0} 秒", { 0: mobileSecondsLeft }) : tr("配对码已过期")}
+                          </span>
                           <div className="spacer" />
                           <button className="icon-btn" title={tr("复制配对码")} onClick={() => void navigator.clipboard.writeText(pairing.code)}>
                             <ShieldCheck size={14} />

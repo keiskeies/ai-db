@@ -213,7 +213,7 @@ interface AppStore {
   closeTools: () => void;
   connectionEditor?: ConnectionEditorState;
   toasts: Toast[];
-  pairing?: { code: string; expiresIn: number; host: string; port: number; url?: string; qrPayload?: string };
+  pairing?: { code: string; expiresIn: number; host: string; port: number; url?: string; qrPayload?: string; createdAt: number };
   mcpPairing?: { code: string; expiresIn: number; host: string; port: number; url?: string; createdAt: number };
   devices: DeviceInfo[];
 
@@ -1275,7 +1275,7 @@ export const useApp = create<AppStore>((set, get) => ({
   startPairing: async () => {
     try {
       const pairing = await api.pairStart();
-      set({ pairing });
+      set({ pairing: { ...pairing, createdAt: Date.now() } });
       await get().loadDevices();
     } catch (err) {
       get().notify('error', get().t('error'), errorText(err));
