@@ -365,7 +365,6 @@
   "1) 调用 update_plan：已完成的项标 done，当前这项标 doing，剩余项列清楚；\n": "1) 調用 update_plan：已完成的項標 done，當前這項標 doing，剩餘項列清楚；\n",
   "2) 在回复正文里写明「已完成什么、剩下什么、下一步具体做什么」，这段会被保存成续跑检查点；\n": "2) 在回覆正文裡寫明「已完成什麼、剩下什麼、下一步具體做什麼」，這段會被保存成續跑檢查點；\n",
   "3) 剩余工作优先用批量写法（一条语句覆盖多个对象），不要逐个对象慢慢来。": "3) 剩餘工作優先用批量寫法（一條語句覆蓋多個對象），不要逐個對象慢慢來。",
-  "5 分钟有效": "5 分鐘有效",
   "@scope/skill 或 skill@1.2.0": "@scope/skill 或 skill@1.2.0",
   "A 侧": "A 側",
   "A 侧 SQL": "A 側 SQL",
@@ -1595,7 +1594,6 @@
   "在已连接的库上执行 SQL，结果集转成行集": "在已連接的庫上執行 SQL，結果集轉成行集",
   "在数据库中查找…": "在資料庫中尋找…",
   "在查询窗口编写触发器": "在查詢視窗編寫觸發器",
-  "在移动端输入 Bridge 地址与配对码，5 分钟内有效。": "在行動端輸入 Bridge 位址與配對碼，5 分鐘內有效。",
   "在设置 → 向量检索（Embedding）中配置服务；也可以直接填入向量 JSON。": "在設定 → 向量檢索（Embedding）中配置服務；也可以直接填入向量 JSON。",
   "域名限制（可选）": "域名限制（可選）",
   "基于 Redis 的图数据库，兼容 Cypher": "基於 Redis 的圖數據庫，兼容 Cypher",
@@ -3530,8 +3528,13 @@
   "；下方可逐个删除，删空后整键会消失。 ": "；下方可逐一刪除，刪空後整鍵會消失。 ",
   "；设计见 docs/16-capability-contract.md。 ": "；設計見 docs/16-capability-contract.md。 ",
   "只读 MCP": "唯讀 MCP",
-  "Claude Code 配对": "Claude Code 配對",
-  "为 Claude Code 配对": "為 Claude Code 配對",
-  "在 Claude Code 中运行 npx -y @aidb/mcp pair，输入此配对码与 Bridge 地址，5 分钟内有效。": "在 Claude Code 中執行 npx -y @aidb/mcp pair，輸入此配對碼與 Bridge 位址，5 分鐘內有效。",
-  "Bridge 地址：": "Bridge 位址："
+  "Bridge 地址：": "Bridge 位址：",
+  "MCP 客户端配对": "MCP 用戶端配對",
+  "为 MCP 客户端配对": "為 MCP 用戶端配對",
+  "在任意 MCP 客户端（Claude Code / Cursor / Cline / Windsurf / Zed 等）中运行 npx -y @aidb/mcp pair，输入此配对码与 Bridge 地址，60 秒内有效。": "在任意 MCP 用戶端（Claude Code / Cursor / Cline / Windsurf / Zed 等）執行 npx -y @aidb/mcp pair，輸入此配對碼與 Bridge 位址，60 秒內有效。",
+  "在移动端输入 Bridge 地址与配对码，60 秒内有效。": "在行動裝置輸入 Bridge 位址與配對碼，60 秒內有效。",
+  "60 秒有效": "60 秒內有效",
+  "剩余 {0} 秒": "剩餘 {0} 秒",
+  "配对码已过期": "配對碼已過期",
+  "点击重新生成": "點擊重新產生"
 }

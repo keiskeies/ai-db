@@ -365,7 +365,6 @@
   "1) 调用 update_plan：已完成的项标 done，当前这项标 doing，剩余项列清楚；\n": "1) เรียกใช้ update_plan: รายการที่เสร็จสิ้นแล้วคือเสร็จสิ้น รายการปัจจุบันคือกำลังทำ และรายการที่เหลือจะแสดงอย่างชัดเจน;\n",
   "2) 在回复正文里写明「已完成什么、剩下什么、下一步具体做什么」，这段会被保存成续跑检查点；\n": "2) เขียน \"สิ่งที่เสร็จแล้ว สิ่งที่เหลืออยู่ และสิ่งที่ต้องทำต่อไป\" ในข้อความตอบกลับ ย่อหน้านี้จะถูกบันทึกเป็นจุดตรวจสอบต่อเนื่อง;\n",
   "3) 剩余工作优先用批量写法（一条语句覆盖多个对象），不要逐个对象慢慢来。": "3) งานที่เหลือควรเขียนเป็นชุดก่อน (หนึ่งคำสั่งครอบคลุมหลายวัตถุ) แทนที่จะทำช้าๆ ทีละงาน",
-  "5 分钟有效": "ใช้ได้ 5 นาที",
   "@scope/skill 或 skill@1.2.0": "@scope/skill หรือ skill@1.2.0",
   "A 侧": "ด้านหนึ่ง",
   "A 侧 SQL": "ด้าน A SQL",
@@ -1595,7 +1594,6 @@
   "在已连接的库上执行 SQL，结果集转成行集": "ดำเนินการ SQL บนไลบรารีที่เชื่อมต่อ และชุดผลลัพธ์จะถูกแปลงเป็นชุดแถว",
   "在数据库中查找…": "ค้นหาในฐานข้อมูล…",
   "在查询窗口编写触发器": "เขียนทริกเกอร์ในหน้าต่างคำสั่ง",
-  "在移动端输入 Bridge 地址与配对码，5 分钟内有效。": "ป้อนที่อยู่และรหัส Bridge บนมือถือ ใช้งานได้ 5 นาที",
   "在设置 → 向量检索（Embedding）中配置服务；也可以直接填入向量 JSON。": "ตั้งค่าบริการใน การตั้งค่า → การดึงเวกเตอร์ (Embedding); คุณยังสามารถกรอกเวกเตอร์ JSON โดยตรง",
   "域名限制（可选）": "ข้อจำกัดชื่อโดเมน (ไม่บังคับ)",
   "基于 Redis 的图数据库，兼容 Cypher": "ฐานข้อมูลกราฟโดยอิง Redis, เข้ากันได้กับ Cypher",
@@ -3530,8 +3528,13 @@
   "；下方可逐个删除，删空后整键会消失。 ": "; คุณสามารถลบทีละรายการด้านล่าง และทั้งคีย์จะหายไปหลังจากลบทั้งหมด ",
   "；设计见 docs/16-capability-contract.md。 ": ";ดู docs/16-capability-contract.md สำหรับการออกแบบ ",
   "只读 MCP": "MCP แบบอ่านอย่างเดียว",
-  "Claude Code 配对": "Claude Code pairing",
-  "为 Claude Code 配对": "Pair for Claude Code",
-  "在 Claude Code 中运行 npx -y @aidb/mcp pair，输入此配对码与 Bridge 地址，5 分钟内有效。": "Run npx -y @aidb/mcp pair in Claude Code and enter this code with the Bridge address. Valid for 5 minutes.",
-  "Bridge 地址：": "ที่อยู่ Bridge: "
+  "Bridge 地址：": "ที่อยู่ Bridge: ",
+  "MCP 客户端配对": "MCP client pairing",
+  "为 MCP 客户端配对": "Pair an MCP client",
+  "在任意 MCP 客户端（Claude Code / Cursor / Cline / Windsurf / Zed 等）中运行 npx -y @aidb/mcp pair，输入此配对码与 Bridge 地址，60 秒内有效。": "Run npx -y @aidb/mcp pair in any MCP client (Claude Code / Cursor / Cline / Windsurf / Zed, etc.) and enter this code with the Bridge address. Valid for 60 seconds.",
+  "在移动端输入 Bridge 地址与配对码，60 秒内有效。": "Enter the Bridge address and code on mobile. Valid for 60 seconds.",
+  "60 秒有效": "Valid for 60 seconds",
+  "剩余 {0} 秒": "{0}s remaining",
+  "配对码已过期": "Code expired",
+  "点击重新生成": "Click to regenerate"
 }

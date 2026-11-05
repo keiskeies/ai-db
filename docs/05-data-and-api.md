@@ -354,9 +354,9 @@ export interface QueryResult {
 | GET | `/search/backends` | 11 个搜索后端目录 + 健康遥测 + `keyStatus`（只返回是否已配置） |
 | POST | `/search/query` | `{query, numResults?}` → 聚合结果（并发 fan-out、URL 去重、逐后端报告） |
 | POST | `/search/backends/:id/probe` | 用固定查询探测单个后端，返回最新健康状态 |
-| POST | `/pair/start` | 桌面发起**移动端**配对：`{code, expiresIn, qrPayload}`；需主令牌 |
+| POST | `/pair/start` | 桌面发起**移动端**配对：`{code, expiresIn=60, qrPayload}`；需主令牌 |
 | POST | `/pair/claim` | 移动端兑换：`{code, deviceName, platform}` → `{token, device, bridge}`；`scope` 服务端硬编码 `full`，忽略请求体 |
-| POST | `/pair/mcp/start` | 桌面发起**MCP**配对：`{code, expiresIn, host, port, url}`；需主令牌；`features.mcp=false` 时 403 |
+| POST | `/pair/mcp/start` | 桌面发起**MCP 客户端**配对：`{code, expiresIn=60, host, port, url}`；`url` 为网关自身监听地址（不受请求 Host 影响）；需主令牌；`features.mcp=false` 时 403 |
 | POST | `/pair/mcp/claim` | MCP 兑换：`{code, deviceName, platform}` → `{token, device, bridge}`；`scope` 服务端硬编码 `mcp:readonly`，忽略请求体 |
 | GET | `/devices` · DELETE `/devices/:id` | 设备管理（返回 `scope`）；吊销后 token 立即失效 |
 

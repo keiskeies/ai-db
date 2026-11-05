@@ -365,7 +365,6 @@
   "1) 调用 update_plan：已完成的项标 done，当前这项标 doing，剩余项列清楚；\n": "1) update_planを呼び出す: 完了した項目は完了、現在の項目は進行中、残りの項目は明確にリストアップされます;\n",
   "2) 在回复正文里写明「已完成什么、剩下什么、下一步具体做什么」，这段会被保存成续跑检查点；\n": "2) 返信文中に「完了したこと、残っていること、次にすること」を書きます。この段落は継続チェックポイントとして保存されます;\n",
   "3) 剩余工作优先用批量写法（一条语句覆盖多个对象），不要逐个对象慢慢来。": "3) 残りの作業はまず一括で書くべきです（1つの文で複数のオブジェクトをカバー）、1つずつゆっくり作業するのではありません。",
-  "5 分钟有效": "5分間有効",
   "@scope/skill 或 skill@1.2.0": "@スコープ/スキルまたはスキル@1.2.0",
   "A 侧": "一方",
   "A 侧 SQL": "サイドA SQL",
@@ -1595,7 +1594,6 @@
   "在已连接的库上执行 SQL，结果集转成行集": "接続されたライブラリで SQL を実行すると、結果セットが行セットに変換されます。",
   "在数据库中查找…": "データベースで検索…",
   "在查询窗口编写触发器": "クエリウィンドウにトリガーを書き込む",
-  "在移动端输入 Bridge 地址与配对码，5 分钟内有效。": "モバイルで Bridge アドレスとコードを入力します。 5分間有効です。",
   "在设置 → 向量检索（Embedding）中配置服务；也可以直接填入向量 JSON。": "「設定」→「ベクトル取得 (埋め込み)」でサービスを設定します。ベクトル JSON を直接入力することもできます。",
   "域名限制（可选）": "ドメイン名の制限（オプション）",
   "基于 Redis 的图数据库，兼容 Cypher": "Redisに基づくグラフデータベース、Cypher互換",
@@ -3530,8 +3528,13 @@
   "；下方可逐个删除，删空后整键会消失。 ": ";以下で 1 つずつ削除できます。削除するとキー全体が消えます。 ",
   "；设计见 docs/16-capability-contract.md。 ": "; 設計については docs/16-capability-contract.md を参照してください。 ",
   "只读 MCP": "読み取り専用 MCP",
-  "Claude Code 配对": "Claude Code pairing",
-  "为 Claude Code 配对": "Pair for Claude Code",
-  "在 Claude Code 中运行 npx -y @aidb/mcp pair，输入此配对码与 Bridge 地址，5 分钟内有效。": "Run npx -y @aidb/mcp pair in Claude Code and enter this code with the Bridge address. Valid for 5 minutes.",
-  "Bridge 地址：": "Bridge アドレス："
+  "Bridge 地址：": "Bridge アドレス：",
+  "MCP 客户端配对": "MCP client pairing",
+  "为 MCP 客户端配对": "Pair an MCP client",
+  "在任意 MCP 客户端（Claude Code / Cursor / Cline / Windsurf / Zed 等）中运行 npx -y @aidb/mcp pair，输入此配对码与 Bridge 地址，60 秒内有效。": "Run npx -y @aidb/mcp pair in any MCP client (Claude Code / Cursor / Cline / Windsurf / Zed, etc.) and enter this code with the Bridge address. Valid for 60 seconds.",
+  "在移动端输入 Bridge 地址与配对码，60 秒内有效。": "Enter the Bridge address and code on mobile. Valid for 60 seconds.",
+  "60 秒有效": "Valid for 60 seconds",
+  "剩余 {0} 秒": "{0}s remaining",
+  "配对码已过期": "Code expired",
+  "点击重新生成": "Click to regenerate"
 }

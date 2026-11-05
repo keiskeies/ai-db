@@ -165,4 +165,28 @@ test('配对码为 6 位数字且由 CSPRNG 生成', () => {
   assert.ok(codes.size > 150, '200 次生成应有足够随机性，实际唯一值: ' + codes.size);
 });
 
+test('配对码有效期为 60 秒且两个 start 端点都返回 expiresIn=60', async () => {
+  const mcp = await primary.api('/pair/mcp/start', { method: 'POST', headers: { 'x-forwarded-for': '10.0.0.30' } });
+  assert.equal(mcp.status, 200, JSON.stringify(mcp.body));
+  assert.equal(mcp.body.expiresIn, 60);
+  const mobile = await primary.api('/pair/start', { method: 'POST', headers: { 'x-forwarded-for': '10.0.0.31' } });
+  assert.equal(mobile.status, 200, JSON.stringify(mobile.body));
+  assert.equal(mobile.body.expiresIn, 60);
+});
+
+test('MCP start 返回网关自身监听地址，不受请求 Host 影响', async () => {
+  const res = await primary.api('/pair/mcp/start', {
+    method: 'POST',
+    headers: { 'x-forwarded-for': '10.0.0.32', host: 'localhost:5180' },
+  });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  // 浏览器经 Vite 代理访问时 Host 是前端 5173/5180；MCP CLI 要的是网关自身端口。
+  assert.doesNotMatch(String(res.body.url), /:5180|:5173/);
+  const actualPort = Number(new URL(String(res.body.url)).port);
+  assert.ok(actualPort > 0 && actualPort !== 5180 && actualPort !== 5173, `url=${res.body.url}`);
+  assert.equal(res.body.port, actualPort);
+});
+
+
+
 

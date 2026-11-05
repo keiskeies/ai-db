@@ -44,6 +44,16 @@ test('posts to the isolated MCP claim endpoint without a caller-controlled scope
   assert.equal(body.code, '123456');
 });
 
+test('posts a vendor-neutral device identity', async () => {
+  const h = harness({ token: 'T', device: { id: 'd1', name: 'MCP Client', scope: 'mcp:readonly' } });
+  await runPair(h.io);
+  const body = JSON.parse(h.requests[0].init.body);
+  assert.equal(body.deviceName, 'MCP Client');
+  assert.equal(body.platform, 'mcp-client');
+  assert.doesNotMatch(JSON.stringify(body), /Claude|claude/);
+});
+
+
 test('stores the URL the user entered, not the public bridge.url', async () => {
   const h = harness({
     token: 'T',

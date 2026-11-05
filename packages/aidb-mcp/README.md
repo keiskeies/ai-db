@@ -2,13 +2,14 @@
 
 AiDB Studio 的只读 MCP Server，供 Claude Code / Claude Desktop / Cursor 使用。
 
-用 **一次性配对** 换取可吊销的只读设备凭据，Claude Code 配置里不再出现网关主令牌。
+用 **一次性配对** 换取可吊销的只读设备凭据，MCP 客户端配置里不再出现网关主令牌。
 需要 AiDB Bridge 已启动（桌面端内置，或独立部署）。
 
 ## 一次性配对
 
-1. 在 AiDB 桌面端打开 **设置 → Bridge → 为 Claude Code 配对**，读取 6 位配对码。
-   这是专用入口，与「为移动端配对」的码不通用。
+1. 在 AiDB 桌面端打开 **设置 → Bridge → MCP 客户端配对**，读取 6 位配对码（**60 秒**有效，界面有倒计时）。
+   这是专用入口，与「为移动端配对」的码不通用，适用于任意 MCP 客户端
+   （Claude Code / Cursor / Cline / Windsurf / Zed / Continue 等）。
 2. 运行：
 
    ```bash

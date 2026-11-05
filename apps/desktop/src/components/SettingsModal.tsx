@@ -68,6 +68,16 @@ export function SettingsModal() {
   const devices = useApp((s) => s.devices);
   const startPairing = useApp((s) => s.startPairing);
   const startMcpPairing = useApp((s) => s.startMcpPairing);
+  // 配对码 60 秒倒计时：每秒刷新一次，归零后显示过期提示。
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!mcpPairing) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [mcpPairing]);
+  const mcpSecondsLeft = mcpPairing
+    ? Math.max(0, Math.ceil((mcpPairing.createdAt + mcpPairing.expiresIn * 1000 - now) / 1000))
+    : 0;
   const loadDevices = useApp((s) => s.loadDevices);
   const revokeDevice = useApp((s) => s.revokeDevice);
 
@@ -1040,7 +1050,7 @@ export function SettingsModal() {
                       <div className="pair-info">
                         <div className="row">
                           <span className="mono" style={{ fontSize: 26, letterSpacing: 8, color: 'var(--agent)' }}>{pairing.code}</span>
-                          <span className="badge write">{tr("5 分钟有效")}</span>
+                          <span className="badge write">{tr("60 秒有效")}</span>
                           <div className="spacer" />
                           <button className="icon-btn" title={tr("复制配对码")} onClick={() => void navigator.clipboard.writeText(pairing.code)}>
                             <ShieldCheck size={14} />
@@ -1078,7 +1088,9 @@ export function SettingsModal() {
                       <div className="pair-info">
                         <div className="row">
                           <span className="mono" style={{ fontSize: 26, letterSpacing: 8, color: 'var(--agent)' }}>{mcpPairing.code}</span>
-                          <span className="badge write">{tr("5 分钟有效")}</span>
+                          <span className={mcpSecondsLeft > 0 ? 'badge write' : 'badge destructive'} data-testid="mcp-pair-countdown">
+                            {mcpSecondsLeft > 0 ? tr("剩余 {0} 秒", { 0: mcpSecondsLeft }) : tr("配对码已过期")}
+                          </span>
                           <div className="spacer" />
                           <button className="icon-btn" title={tr("复制配对码")} onClick={() => void navigator.clipboard.writeText(mcpPairing.code)}>
                             <ShieldCheck size={14} />

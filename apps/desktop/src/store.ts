@@ -214,7 +214,7 @@ interface AppStore {
   connectionEditor?: ConnectionEditorState;
   toasts: Toast[];
   pairing?: { code: string; expiresIn: number; host: string; port: number; url?: string; qrPayload?: string };
-  mcpPairing?: { code: string; expiresIn: number; host: string; port: number; url?: string };
+  mcpPairing?: { code: string; expiresIn: number; host: string; port: number; url?: string; createdAt: number };
   devices: DeviceInfo[];
 
   boot: () => Promise<void>;
@@ -1285,7 +1285,7 @@ export const useApp = create<AppStore>((set, get) => ({
   startMcpPairing: async () => {
     try {
       const mcpPairing = await api.pairMcpStart();
-      set({ mcpPairing });
+      set({ mcpPairing: { ...mcpPairing, createdAt: Date.now() } });
       await get().loadDevices();
     } catch (err) {
       get().notify('error', get().t('error'), errorText(err));

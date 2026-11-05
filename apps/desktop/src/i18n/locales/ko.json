@@ -365,7 +365,6 @@
   "1) 调用 update_plan：已完成的项标 done，当前这项标 doing，剩余项列清楚；\n": "1) update_plan을 호출하십시오: 완료된 항목은 완료됨, 현재 항목은 진행 중, 나머지 항목은 명확하게 나열됩니다;\n",
   "2) 在回复正文里写明「已完成什么、剩下什么、下一步具体做什么」，这段会被保存成续跑检查点；\n": "2) 답장의 본문에 '완료된 것, 남은 것, 다음에 할 일'을 작성하세요. 이 단락은 이어지는 체크포인트로 저장될 것입니다;\n",
   "3) 剩余工作优先用批量写法（一条语句覆盖多个对象），不要逐个对象慢慢来。": "3) 남은 작업은 천천히 하나씩 처리하기보다는 먼저 배치 단위로 작성해야 합니다(하나의 명세서가 여러 객체를 포함).",
-  "5 分钟有效": "5분간 유효",
   "@scope/skill 或 skill@1.2.0": "@scope/skill 또는 Skill@1.2.0",
   "A 侧": "한쪽",
   "A 侧 SQL": "측면 A SQL",
@@ -1595,7 +1594,6 @@
   "在已连接的库上执行 SQL，结果集转成行集": "연결된 라이브러리에서 SQL를 실행하면 결과 집합이 행 집합으로 변환됩니다.",
   "在数据库中查找…": "데이터베이스에서 찾기…",
   "在查询窗口编写触发器": "쿼리 창에 트리거 작성",
-  "在移动端输入 Bridge 地址与配对码，5 分钟内有效。": "모바일에서 Bridge 주소와 코드를 입력하세요. 5분간 유효합니다.",
   "在设置 → 向量检索（Embedding）中配置服务；也可以直接填入向量 JSON。": "설정 → 벡터 검색(임베딩)에서 서비스를 구성합니다. JSON 벡터를 직접 채울 수도 있습니다.",
   "域名限制（可选）": "도메인 이름 제한 (선택 사항)",
   "基于 Redis 的图数据库，兼容 Cypher": "Redis 기반 그래프 데이터베이스, Cypher와 호환",
@@ -3530,8 +3528,13 @@
   "；下方可逐个删除，删空后整键会消失。 ": "; 아래에서 하나씩 삭제하시면 되며, 삭제 후에는 키 전체가 사라집니다. ",
   "；设计见 docs/16-capability-contract.md。 ": ";설계는 docs/16-capability-contract.md를 참조하세요. ",
   "只读 MCP": "읽기 전용 MCP",
-  "Claude Code 配对": "Claude Code pairing",
-  "为 Claude Code 配对": "Pair for Claude Code",
-  "在 Claude Code 中运行 npx -y @aidb/mcp pair，输入此配对码与 Bridge 地址，5 分钟内有效。": "Run npx -y @aidb/mcp pair in Claude Code and enter this code with the Bridge address. Valid for 5 minutes.",
-  "Bridge 地址：": "Bridge 주소: "
+  "Bridge 地址：": "Bridge 주소: ",
+  "MCP 客户端配对": "MCP client pairing",
+  "为 MCP 客户端配对": "Pair an MCP client",
+  "在任意 MCP 客户端（Claude Code / Cursor / Cline / Windsurf / Zed 等）中运行 npx -y @aidb/mcp pair，输入此配对码与 Bridge 地址，60 秒内有效。": "Run npx -y @aidb/mcp pair in any MCP client (Claude Code / Cursor / Cline / Windsurf / Zed, etc.) and enter this code with the Bridge address. Valid for 60 seconds.",
+  "在移动端输入 Bridge 地址与配对码，60 秒内有效。": "Enter the Bridge address and code on mobile. Valid for 60 seconds.",
+  "60 秒有效": "Valid for 60 seconds",
+  "剩余 {0} 秒": "{0}s remaining",
+  "配对码已过期": "Code expired",
+  "点击重新生成": "Click to regenerate"
 }

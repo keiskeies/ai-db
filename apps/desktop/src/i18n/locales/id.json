@@ -365,7 +365,6 @@
   "1) 调用 update_plan：已完成的项标 done，当前这项标 doing，剩余项列清楚；\n": "1) Panggil update_plan: item yang selesai sudah dilakukan, item saat ini sedang dikerjakan, dan item yang tersisa tercantum dengan jelas;\n",
   "2) 在回复正文里写明「已完成什么、剩下什么、下一步具体做什么」，这段会被保存成续跑检查点；\n": "2) Tulis \"apa yang telah diselesaikan, apa yang tersisa, dan apa yang harus dilakukan selanjutnya\" di teks balasan. Paragraf ini akan disimpan sebagai titik pemeriksaan kelanjutan;\n",
   "3) 剩余工作优先用批量写法（一条语句覆盖多个对象），不要逐个对象慢慢来。": "3) Pekerjaan yang tersisa harus ditulis terlebih dahulu secara batch (satu pernyataan mencakup beberapa objek), daripada bekerja perlahan satu per satu.",
-  "5 分钟有效": "Berlaku selama 5 menit",
   "@scope/skill 或 skill@1.2.0": "@scope/skill atau skill@1.2.0",
   "A 侧": "Sebuah sisi",
   "A 侧 SQL": "Sisi A SQL",
@@ -1595,7 +1594,6 @@
   "在已连接的库上执行 SQL，结果集转成行集": "Jalankan SQL di perpustakaan yang terhubung, dan kumpulan hasil diubah menjadi kumpulan baris",
   "在数据库中查找…": "Cari di database…",
   "在查询窗口编写触发器": "Menulis trigger di jendela kueri",
-  "在移动端输入 Bridge 地址与配对码，5 分钟内有效。": "Masukkan alamat dan kode Bridge di ponsel. Berlaku selama 5 menit.",
   "在设置 → 向量检索（Embedding）中配置服务；也可以直接填入向量 JSON。": "Konfigurasikan layanan di Pengaturan → Pengambilan Vektor (Embedding); Anda juga dapat langsung mengisi vektor JSON.",
   "域名限制（可选）": "Pembatasan nama domain (opsional)",
   "基于 Redis 的图数据库，兼容 Cypher": "Database graf berbasis Redis, kompatibel dengan Cypher",
@@ -3530,8 +3528,13 @@
   "；下方可逐个删除，删空后整键会消失。 ": "; Anda dapat menghapusnya satu per satu di bawah, dan seluruh kunci akan hilang setelah dihapus. ",
   "；设计见 docs/16-capability-contract.md。 ": ";Lihat docs/16-capability-contract.md untuk desain. ",
   "只读 MCP": "MCP hanya-baca",
-  "Claude Code 配对": "Claude Code pairing",
-  "为 Claude Code 配对": "Pair for Claude Code",
-  "在 Claude Code 中运行 npx -y @aidb/mcp pair，输入此配对码与 Bridge 地址，5 分钟内有效。": "Run npx -y @aidb/mcp pair in Claude Code and enter this code with the Bridge address. Valid for 5 minutes.",
-  "Bridge 地址：": "Alamat Bridge: "
+  "Bridge 地址：": "Alamat Bridge: ",
+  "MCP 客户端配对": "MCP client pairing",
+  "为 MCP 客户端配对": "Pair an MCP client",
+  "在任意 MCP 客户端（Claude Code / Cursor / Cline / Windsurf / Zed 等）中运行 npx -y @aidb/mcp pair，输入此配对码与 Bridge 地址，60 秒内有效。": "Run npx -y @aidb/mcp pair in any MCP client (Claude Code / Cursor / Cline / Windsurf / Zed, etc.) and enter this code with the Bridge address. Valid for 60 seconds.",
+  "在移动端输入 Bridge 地址与配对码，60 秒内有效。": "Enter the Bridge address and code on mobile. Valid for 60 seconds.",
+  "60 秒有效": "Valid for 60 seconds",
+  "剩余 {0} 秒": "{0}s remaining",
+  "配对码已过期": "Code expired",
+  "点击重新生成": "Click to regenerate"
 }

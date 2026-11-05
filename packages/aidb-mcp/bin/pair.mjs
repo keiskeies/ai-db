@@ -26,7 +26,7 @@ export async function runPair(io = {}) {
   const write = io.writeCredentials ?? writeCredentials;
   const fetchImpl = io.fetch ?? fetch;
 
-  const code = (await ask('输入 AiDB 桌面端 设置 → Bridge → 为 Claude Code 配对 显示的 6 位配对码: ')).trim();
+  const code = (await ask('输入 AiDB 桌面端 设置 → Bridge → MCP 客户端配对 显示的 6 位配对码: ')).trim();
   if (!/^\d{6}$/.test(code)) {
     log('配对码必须是 6 位数字');
     return { ok: false };
@@ -40,7 +40,7 @@ export async function runPair(io = {}) {
     response = await fetchImpl(`${url}/api/pair/mcp/claim`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ code, deviceName: 'Claude Code', platform: 'claude-code' }),
+      body: JSON.stringify({ code, deviceName: 'MCP Client', platform: 'mcp-client' }),
     });
   } catch (err) {
     log(`无法连接 Bridge（${url}）：${err.message}`);
@@ -59,9 +59,9 @@ export async function runPair(io = {}) {
     return { ok: false };
   }
   const file = write(credentials);
-  log(`配对成功，设备 ${body.device?.name ?? 'Claude Code'}（${body.device?.id ?? ''}）`);
+  log(`配对成功，设备 ${body.device?.name ?? 'MCP Client'}（${body.device?.id ?? ''}）`);
   log(`凭据已写入 ${file}`);
-  log('现在可以在 Claude Code 中使用：npx -y @aidb/mcp');
+  log('现在可在任意 MCP 客户端（Claude Code / Cursor / Cline / Windsurf / Zed 等）中使用：npx -y @aidb/mcp');
   log('如需撤销：AiDB 桌面端 设置 → 设备 → 吊销');
   return { ok: true, file, credentials };
 }

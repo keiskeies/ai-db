@@ -81,6 +81,19 @@ const MCP_BRIDGE_EXCLUDED = new Set(['mcp_list_servers', 'mcp_list_tools', 'mcp_
  * backup_database 等被（错误地）标成 risk='read'，但会写持久状态或落盘。
  * 这里只列真正「读数据、无副作用」的工具，作为 mcp:readonly 凭据的硬边界。
  */
+/** 配对码有效期：60 秒，桌面端显示倒计时。移动端与 MCP 共用同一窗口。 */
+const PAIR_CODE_TTL_MS = 60_000;
+const PAIR_CODE_TTL_SECONDS = PAIR_CODE_TTL_MS / 1000;
+
+/** 网关自身的监听地址（不读请求 Host）：MCP CLI 跑在本机，要的是能连上 gateway 的地址，
+ *  不能被 Vite 代理带过来的前端 Host（如 localhost:5180）干扰。
+ *  端口取内核实际分配的 localPort，兼容 AIDB_PORT=0 的动态端口场景。 */
+function mcpBridgeAddress(req: Request, config: GatewayConfig): { url: string; host: string; port: number } {
+  const host = config.host === '0.0.0.0' || config.host === '::' ? '127.0.0.1' : config.host;
+  const port = Number(req.socket.localPort) || config.port;
+  return { url: `http://${host}:${port}`, host, port };
+}
+
 const MCP_READONLY_TOOLS = new Set([
   'list_connections',
   'inspect_schema',
@@ -2611,19 +2624,20 @@ export function createApiRouter(deps: ApiDeps): Router {
   // ---------- pairing ----------
   // 移动端与 MCP 是两条完全隔离的链路：独立端点、独立码池、scope 由服务端硬编码。
   // 调用方无法通过 body.scope 铸造另一种凭据，码也不能跨端点兑换。
-  function startPair(pool: Map<string, { expiresAt: number }>, bucket: string, withQr: boolean) {
+  function startPair(pool: Map<string, { expiresAt: number }>, bucket: string, withQr: boolean, forMcp = false) {
     return ah(async (req, res) => {
       if (!allowPairHit(bucket, req, 30, 60_000)) {
         pairRateLimited(res, 60);
         return;
       }
       const code = pairingCode();
-      pool.set(code, { expiresAt: Date.now() + 5 * 60 * 1000 });
+      pool.set(code, { expiresAt: Date.now() + PAIR_CODE_TTL_MS });
       for (const [k, v] of pool) if (v.expiresAt < Date.now()) pool.delete(k);
-      const origin = pairingOrigin(req, config);
+      // 移动端二维码要「客户端实际访问到的地址」；MCP CLI 要网关自身监听地址。
+      const origin = forMcp ? mcpBridgeAddress(req, config) : pairingOrigin(req, config);
       res.json({
         code,
-        expiresIn: 300,
+        expiresIn: PAIR_CODE_TTL_SECONDS,
         ...(withQr ? { qrPayload: JSON.stringify({ v: 1, url: origin.url, host: origin.host, port: origin.port, code }) } : {}),
         host: origin.host,
         port: origin.port,
@@ -2671,11 +2685,11 @@ export function createApiRouter(deps: ApiDeps): Router {
   router.post('/pair/mcp/start', (req, res, next) => {
     if (!mcpPairingEnabled(res)) return;
     next();
-  }, startPair(deps.mcpPairCodes, 'mcp-start', false));
+  }, startPair(deps.mcpPairCodes, 'mcp-start', false, true));
   router.post('/pair/mcp/claim', (req, res, next) => {
     if (!mcpPairingEnabled(res)) return;
     next();
-  }, claimPair(deps.mcpPairCodes, 'mcp-claim', 'mcp:readonly', 'Claude Code'));
+  }, claimPair(deps.mcpPairCodes, 'mcp-claim', 'mcp:readonly', 'MCP Client'));
 
   router.get('/devices', (_req, res) => res.json({ devices: store.listDevices() }));
   router.delete('/devices/:id', (req, res) => {

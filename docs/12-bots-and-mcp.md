@@ -161,8 +161,9 @@ Agent 的调用路径：先 `mcp_list_servers` 拿到真实 id，再 `mcp_list_t
 `@aidb/mcp` 是 stdio MCP Server，把 AiDB 的**只读**工具暴露给 Claude Code / Claude Desktop / Cursor
 等外部客户端。与早期直接把 `AIDB_TOKEN` 写进配置的用法不同，现在通过**一次性配对**换取受限凭据：
 
-1. 启动网关；在 **设置 → Bridge → 为 Claude Code 配对** 生成 6 位配对码（5 分钟有效、单次消费）。
-   这是与「为移动端配对」**完全独立**的入口，两者码池不通用。
+1. 启动网关；在 **设置 → Bridge → MCP 客户端配对** 生成 6 位配对码（**60 秒**有效、单次消费、桌面端显示倒计时）。
+   这是与「为移动端配对」**完全独立**的入口，两者码池不通用。适用于任意 MCP 客户端
+   （Claude Code / Claude Desktop / Cursor / Cline / Windsurf / Zed / Continue 等）。
 2. 运行 `npx -y @aidb/mcp pair`，输入配对码与 Bridge 地址。CLI 调用 `POST /api/pair/mcp/claim`
    （不带任何 `scope` 参数），服务端硬编码发放 `mcp:readonly` 凭据，写入本地 `0600` 文件
    （Windows `%APPDATA%\aidb-mcp\credentials.json`；其他平台 `~/.config/aidb-mcp/credentials.json`，
@@ -190,6 +191,9 @@ Agent 审批闸的 `POST /query`、`/connections`、`/settings`，以及 `GET /c
   `/pair/mcp/start`+`/pair/mcp/claim` 是 MCP（硬编码 `mcp:readonly`，无二维码）；
   各自独立码池与限流桶（`start`/`claim`/`mcp-start`/`mcp-claim`），跨池兑换返回 `PAIR_INVALID`。
   `features.mcp=false` 时两个 MCP 端点 `403 FEATURE_DISABLED`。
+- 配对码有效期统一为 **60 秒**（`PAIR_CODE_TTL_MS`），`expiresIn=60`，桌面端每秒刷新倒计时；
+  移动端二维码与 MCP 卡片共用该窗口。MCP start 返回网关自身监听地址
+  （`req.socket.localPort`，兼容 `AIDB_PORT=0`），不会被 Vite 代理的前端 Host 干扰。
 - 配对限流按 `req.socket.remoteAddress` 计数（不采用受 `trust proxy` 影响、可被
   `X-Forwarded-For` 伪造的 `req.ip`），配对码由 `crypto.randomInt` 生成；两个 start 端点
   均需主令牌，只有桌面端能生成配对码。
