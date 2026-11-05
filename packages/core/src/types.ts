@@ -833,4 +833,6 @@ export interface DeviceInfo {
   pairedAt: string;
   lastSeenAt?: string;
   revoked: boolean;
+  /** 'full' = mobile/full API access (default for legacy rows); 'mcp:readonly' = outbound MCP bridge only. */
+  scope: 'full' | 'mcp:readonly';
 }

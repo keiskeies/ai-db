@@ -105,7 +105,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_log(created_at DESC);
 CREATE TABLE IF NOT EXISTS devices (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL, token_hash TEXT NOT NULL,
-  paired_at TEXT NOT NULL, last_seen_at TEXT, revoked INTEGER DEFAULT 0
+  paired_at TEXT NOT NULL, last_seen_at TEXT, revoked INTEGER DEFAULT 0,
+  scope TEXT NOT NULL DEFAULT 'full'
 );
 CREATE TABLE IF NOT EXISTS backups (
   id TEXT PRIMARY KEY, connection_id TEXT NOT NULL, database_name TEXT, path TEXT NOT NULL,
@@ -675,6 +676,8 @@ export class Store {
       }
     }
     this.ensureColumn('jobs', 'payload', 'TEXT');
+    // 出站 MCP 配对凭据需要受限 scope；旧库补列后默认值 'full'，移动端不受影响。
+    this.ensureColumn('devices', 'scope', "TEXT NOT NULL DEFAULT 'full'");
     this.db.exec('PRAGMA user_version = 9');
   }
 
@@ -2482,18 +2485,19 @@ export class Store {
   }
 
   // ---------- devices ----------
-  createDevice(input: { name: string; platform: string; tokenHash: string }): DeviceInfo {
+  createDevice(input: { name: string; platform: string; tokenHash: string; scope?: DeviceInfo['scope'] }): DeviceInfo {
     const id = randomUUID();
     const now = iso();
-    this.exec('INSERT INTO devices (id,name,platform,token_hash,paired_at,revoked) VALUES (?,?,?,?,?,0)', [id, input.name, input.platform, input.tokenHash, now]);
-    return { id, name: input.name, platform: input.platform, pairedAt: now, revoked: false };
+    const scope = input.scope ?? 'full';
+    this.exec('INSERT INTO devices (id,name,platform,token_hash,paired_at,revoked,scope) VALUES (?,?,?,?,?,0,?)', [id, input.name, input.platform, input.tokenHash, now, scope]);
+    return { id, name: input.name, platform: input.platform, pairedAt: now, revoked: false, scope };
   }
 
   findDeviceByTokenHash(hash: string): DeviceInfo | undefined {
     const row = this.one<Record<string, any>>('SELECT * FROM devices WHERE token_hash = ? AND revoked = 0', [hash]);
     if (!row) return undefined;
     this.exec('UPDATE devices SET last_seen_at = ? WHERE id = ?', [iso(), row.id]);
-    return { id: row.id, name: row.name, platform: row.platform, pairedAt: row.paired_at, lastSeenAt: row.last_seen_at ?? undefined, revoked: false };
+    return { id: row.id, name: row.name, platform: row.platform, pairedAt: row.paired_at, lastSeenAt: row.last_seen_at ?? undefined, revoked: false, scope: row.scope ?? 'full' };
   }
 
   listDevices(): DeviceInfo[] {
@@ -2504,6 +2508,7 @@ export class Store {
       pairedAt: r.paired_at,
       lastSeenAt: r.last_seen_at ?? undefined,
       revoked: Boolean(r.revoked),
+      scope: r.scope ?? 'full',
     }));
   }
 
