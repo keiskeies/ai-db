@@ -354,18 +354,24 @@ export interface QueryResult {
 | GET | `/search/backends` | 11 个搜索后端目录 + 健康遥测 + `keyStatus`（只返回是否已配置） |
 | POST | `/search/query` | `{query, numResults?}` → 聚合结果（并发 fan-out、URL 去重、逐后端报告） |
 | POST | `/search/backends/:id/probe` | 用固定查询探测单个后端，返回最新健康状态 |
-| POST | `/pair/start` | 桌面发起配对：`{code, expiresIn, qrPayload}` |
-| POST | `/pair/claim` | 兑换设备令牌：`{code, deviceName, platform, scope?}` → `{token, device, bridge}`；`scope='mcp:readonly'` 供出站 MCP 使用，缺省 `full` |
+| POST | `/pair/start` | 桌面发起**移动端**配对：`{code, expiresIn, qrPayload}`；需主令牌 |
+| POST | `/pair/claim` | 移动端兑换：`{code, deviceName, platform}` → `{token, device, bridge}`；`scope` 服务端硬编码 `full`，忽略请求体 |
+| POST | `/pair/mcp/start` | 桌面发起**MCP**配对：`{code, expiresIn, host, port, url}`；需主令牌；`features.mcp=false` 时 403 |
+| POST | `/pair/mcp/claim` | MCP 兑换：`{code, deviceName, platform}` → `{token, device, bridge}`；`scope` 服务端硬编码 `mcp:readonly`，忽略请求体 |
 | GET | `/devices` · DELETE `/devices/:id` | 设备管理（返回 `scope`）；吊销后 token 立即失效 |
+
+移动端与 MCP 是**两条隔离链路**：各自独立端点、独立码池（`pairCodes` / `mcpPairCodes`）、
+各自独立的限流桶，码不能跨端点兑换（跨池一律 `401 PAIR_INVALID`）。`scope` 不再来自请求体，
+调用方无法铸造另一种凭据。
 
 `scope='mcp:readonly'` 的凭据在鉴权中间件被限制为只能访问 `GET /health`、
 `GET /agent/tools?for=mcp`、`POST /agent/tools/:name`，其余接口（含 `GET /capabilities`）
 返回 `403 SCOPE_DENIED`；桥上另有显式工具白名单 `MCP_READONLY_TOOLS`，挡住被错标为
 `risk='read'` 的 `memory_write` 等写状态工具。配对限流按 TCP 远端地址计数、配对码用 CSPRNG、
-`/pair/start` 需主令牌。WebSocket 通道拒绝该凭据。详见 [12-bots-and-mcp.md](./12-bots-and-mcp.md) §4.5。
+两个 start 端点均需主令牌。WebSocket 通道拒绝该凭据。详见 [12-bots-and-mcp.md](./12-bots-and-mcp.md) §4.5。
 
-注意：`/pair/claim` 不传 `scope` 时默认 `'full'`（移动端既有行为），该端点为开放路由，
-受 6 位一次性配对码与限流保护；不要把它当作给不可信调用方发凭据的接口。
+**破坏性变更**：旧版 `@aidb/mcp`（未发布）曾向 `/pair/claim` 发送 `scope:'mcp:readonly'`；
+现在该端点硬编码 `full`，旧包会静默获得 full 凭据，必须升级到走 `/pair/mcp/claim` 的版本。
 
 ### 3.1 认证
 - 桌面/浏览器：Bridge 启动时生成一次性 token（`AIDB_TOKEN` 或 Electron 注入），`Authorization: Bearer`。

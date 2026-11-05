@@ -161,9 +161,10 @@ Agent 的调用路径：先 `mcp_list_servers` 拿到真实 id，再 `mcp_list_t
 `@aidb/mcp` 是 stdio MCP Server，把 AiDB 的**只读**工具暴露给 Claude Code / Claude Desktop / Cursor
 等外部客户端。与早期直接把 `AIDB_TOKEN` 写进配置的用法不同，现在通过**一次性配对**换取受限凭据：
 
-1. 启动网关；在 **设置 → Bridge → 为移动端配对** 生成 6 位配对码（5 分钟有效、单次消费）。
-2. 运行 `npx -y @aidb/mcp pair`，输入配对码与 Bridge 地址。CLI 调用 `POST /api/pair/claim`
-   并带上 `scope: 'mcp:readonly'`，把换到的 device token 写入本地 `0600` 凭据文件
+1. 启动网关；在 **设置 → Bridge → 为 Claude Code 配对** 生成 6 位配对码（5 分钟有效、单次消费）。
+   这是与「为移动端配对」**完全独立**的入口，两者码池不通用。
+2. 运行 `npx -y @aidb/mcp pair`，输入配对码与 Bridge 地址。CLI 调用 `POST /api/pair/mcp/claim`
+   （不带任何 `scope` 参数），服务端硬编码发放 `mcp:readonly` 凭据，写入本地 `0600` 文件
    （Windows `%APPDATA%\aidb-mcp\credentials.json`；其他平台 `~/.config/aidb-mcp/credentials.json`，
    可用 `AIDB_MCP_CREDENTIALS` 覆盖）。
 3. 客户端配置里不再出现任何密钥：
@@ -185,9 +186,16 @@ Agent 审批闸的 `POST /query`、`/connections`、`/settings`，以及 `GET /c
   `tool.risk`：`memory_write` / `update_plan` / `backup_database` 等被错标成 `risk='read'`
   但会写持久状态或落盘，必须挡在白名单之外；白名单内的 `run_sql` 等仍由 `resolveRisk`
   二次判定为 `read` 才放行。`GET /agent/tools` 对受限凭据也只返回白名单工具，避免枚举全部目录。
+- 两条链路彻底隔离：`/pair/start`+`/pair/claim` 是移动端（硬编码 `full`，带二维码），
+  `/pair/mcp/start`+`/pair/mcp/claim` 是 MCP（硬编码 `mcp:readonly`，无二维码）；
+  各自独立码池与限流桶（`start`/`claim`/`mcp-start`/`mcp-claim`），跨池兑换返回 `PAIR_INVALID`。
+  `features.mcp=false` 时两个 MCP 端点 `403 FEATURE_DISABLED`。
 - 配对限流按 `req.socket.remoteAddress` 计数（不采用受 `trust proxy` 影响、可被
-  `X-Forwarded-For` 伪造的 `req.ip`），配对码由 `crypto.randomInt` 生成；`/pair/start`
-  需要主令牌，只有桌面端能生成配对码。
+  `X-Forwarded-For` 伪造的 `req.ip`），配对码由 `crypto.randomInt` 生成；两个 start 端点
+  均需主令牌，只有桌面端能生成配对码。
+- **破坏性变更**：旧版未发布的 `@aidb/mcp` 曾向 `/pair/claim` 传 `scope:'mcp:readonly'`；
+  现在该端点硬编码 `full`，旧包会静默获得 full 凭据，必须升级。桌面端设备列表用
+  「只读 MCP」徽标区分两类设备，可分别吊销。
 - `tools/list` 排除 `mcp_list_servers` / `mcp_list_tools` / `mcp_call`，本地 MCP
   （文件系统、Git、网页抓取）只能在 AiDB 内使用。
 - `devices` 表新增 `scope` 列，默认 `'full'`（旧移动端配对不受影响）；桌面端
