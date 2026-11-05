@@ -108,3 +108,21 @@ for (const [label, script] of [['仓库内 wrapper', repoServer], ['发布包入
     }
   });
 }
+
+test('server.mjs 忽略非对象/畸形 JSON 行后仍可继续服务', async () => {
+  const { child, call, stdoutLines } = spawnServer(publishedServer);
+  try {
+    child.stdin.write('null\n');
+    child.stdin.write('42\n');
+    child.stdin.write('"a string"\n');
+    child.stdin.write('{not json}\n');
+    child.stdin.write('\n');
+    const init = await call(1, 'initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
+    assert.equal(init.result.serverInfo.name, 'aidb-studio');
+    const listed = await call(2, 'tools/list');
+    assert.ok(Array.isArray(listed.result.tools));
+    for (const line of stdoutLines) assert.doesNotThrow(() => JSON.parse(line));
+  } finally {
+    child.kill();
+  }
+});

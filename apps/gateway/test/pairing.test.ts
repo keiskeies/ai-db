@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import type { AddressInfo } from 'node:net';
 import { createGateway } from '../src/server';
 import { listenRandom } from './helpers';
+import { pairingCode } from '../src/crypto';
 
 const TOKEN = 'pairing-test-token';
 
@@ -139,4 +140,29 @@ test('claim without scope defaults to full', async () => {
   assert.equal(claimed.status, 200, JSON.stringify(claimed.body));
   assert.equal(claimed.body.device.scope, 'full');
 });
+
+test('/pair/claim 限流按真实连接地址计数，伪造 X-Forwarded-For 无法绕过', async () => {
+  const statuses: number[] = [];
+  for (let attempt = 0; attempt < 11; attempt += 1) {
+    const response = await fetch(`${primary.base}/api/pair/claim`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': `10.99.${attempt}.1` },
+      body: JSON.stringify({ code: '000000' }),
+    });
+    statuses.push(response.status);
+    await response.arrayBuffer();
+  }
+  assert.ok(statuses.includes(429), `伪造 XFF 后应触发限流，实际：${statuses.join(',')}`);
+});
+
+test('配对码为 6 位数字且由 CSPRNG 生成', () => {
+  const codes = new Set<string>();
+  for (let i = 0; i < 200; i += 1) {
+    const code = pairingCode();
+    assert.match(code, /^\d{6}$/);
+    codes.add(code);
+  }
+  assert.ok(codes.size > 150, '200 次生成应有足够随机性，实际唯一值: ' + codes.size);
+});
+
 

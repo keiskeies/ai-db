@@ -3528,5 +3528,6 @@
   "，用逗号或空格分隔。删除不可撤销，请先用查询确认范围。 ": ", separado por vírgulas ou espaços. A exclusão é irrevogável, por favor confirme o escopo com uma consulta primeiro. ",
   "，能力信息已自动预填": ", as informações de capacidade foram preenchidas automaticamente",
   "；下方可逐个删除，删空后整键会消失。 ": "; Você pode deletá-las uma por uma abaixo, e a chave inteira desaparecerá após a exclusão. ",
-  "；设计见 docs/16-capability-contract.md。 ": "; Veja docs/16-capability-contract.md para o design. "
+  "；设计见 docs/16-capability-contract.md。 ": "; Veja docs/16-capability-contract.md para o design. ",
+  "只读 MCP": "MCP somente leitura"
 }

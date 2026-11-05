@@ -36,9 +36,12 @@ AiDB Studio 的只读 MCP Server，供 Claude Code / Claude Desktop / Cursor 使
 ## 安全边界
 
 - 配对生成的 device token 的 `scope = mcp:readonly`，网关在鉴权中间件层只允许它访问
-  `GET /health`、`GET /capabilities`、`GET /agent/tools`、`POST /agent/tools/:name`。
-- `/agent/tools/:name` 桥本身仍强制 `risk === 'read'`，写/DDL 工具返回 `TOOL_READ_ONLY`。
-- WebSocket / Agent 会话通道拒绝该凭据。
+  `GET /health`、`GET /agent/tools?for=mcp`、`POST /agent/tools/:name`。
+- `/agent/tools/:name` 桥对受限凭据使用显式白名单（不只靠 `risk` 字段，因为部分会写状态的
+  工具被错标为 `read`），且 `run_sql` 等仍由 `resolveRisk` 二次判定为只读才放行。
+- WebSocket / Agent 会话通道拒绝该凭据；`GET /capabilities` 也不在白名单内。
+- 配对限流按 TCP 远端地址计数（不可被 `X-Forwarded-For` 伪造），配对码由 `crypto.randomInt`
+  生成，`/pair/start` 需网关主令牌。
 - 网关只保存 token 的 SHA-256 hash；桌面端 **设置 → 设备** 可随时吊销，立即生效。
 - 遗留用法：设置 `AIDB_URL` + `AIDB_TOKEN` 环境变量也能启动，但那是网关主令牌、
   权限不受限，**不推荐**。

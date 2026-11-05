@@ -177,12 +177,18 @@ Agent 的调用路径：先 `mcp_list_servers` 拿到真实 id，再 `mcp_list_t
    ```
 
 `scope` 在网关鉴权中间件（`apps/gateway/src/routes.ts`）强制：`mcp:readonly` 凭据只能访问
-`GET /health`、`GET /capabilities`、`GET /agent/tools?for=mcp`、`POST /agent/tools/:name`；
-其余接口（包括没有 Agent 审批闸的 `POST /query`、`/connections`、`/settings`）一律
+`GET /health`、`GET /agent/tools?for=mcp`、`POST /agent/tools/:name`；其余接口（包括没有
+Agent 审批闸的 `POST /query`、`/connections`、`/settings`，以及 `GET /capabilities`）一律
 `403 SCOPE_DENIED`。WebSocket / Agent 会话通道同样拒绝该凭据（`server.ts` 的 `authorized()`）。
 
-- `/agent/tools/:name` 桥继续按风险过滤：非 `read` 工具返回 `TOOL_READ_ONLY`；
-  `tools/list` 排除 `mcp_list_servers` / `mcp_list_tools` / `mcp_call`，本地 MCP
+- `/agent/tools/:name` 桥对受限凭据使用**显式工具白名单** `MCP_READONLY_TOOLS`，而不是只靠
+  `tool.risk`：`memory_write` / `update_plan` / `backup_database` 等被错标成 `risk='read'`
+  但会写持久状态或落盘，必须挡在白名单之外；白名单内的 `run_sql` 等仍由 `resolveRisk`
+  二次判定为 `read` 才放行。`GET /agent/tools` 对受限凭据也只返回白名单工具，避免枚举全部目录。
+- 配对限流按 `req.socket.remoteAddress` 计数（不采用受 `trust proxy` 影响、可被
+  `X-Forwarded-For` 伪造的 `req.ip`），配对码由 `crypto.randomInt` 生成；`/pair/start`
+  需要主令牌，只有桌面端能生成配对码。
+- `tools/list` 排除 `mcp_list_servers` / `mcp_list_tools` / `mcp_call`，本地 MCP
   （文件系统、Git、网页抓取）只能在 AiDB 内使用。
 - `devices` 表新增 `scope` 列，默认 `'full'`（旧移动端配对不受影响）；桌面端
   **设置 → 设备** 会显示「只读 MCP」徽标，可随时吊销，吊销后 token 立即失效。

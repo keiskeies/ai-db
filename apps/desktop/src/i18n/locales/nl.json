@@ -3528,5 +3528,6 @@
   "，用逗号或空格分隔。删除不可撤销，请先用查询确认范围。 ": ", gescheiden door komma's of spaties. Verwijdering is onherroepelijk, bevestig eerst het bereik met de query. ",
   "，能力信息已自动预填": ", de capaciteitsinformatie is automatisch vooraf ingevuld",
   "；下方可逐个删除，删空后整键会消失。 ": "; Je kunt ze hieronder één voor één verwijderen, en de hele sleutel verdwijnt na verwijdering. ",
-  "；设计见 docs/16-capability-contract.md。 ": "; Zie docs/16-capability-contract.md voor ontwerp. "
+  "；设计见 docs/16-capability-contract.md。 ": "; Zie docs/16-capability-contract.md voor ontwerp. ",
+  "只读 MCP": "Alleen-lezen MCP"
 }

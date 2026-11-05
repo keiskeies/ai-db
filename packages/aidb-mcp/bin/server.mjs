@@ -73,7 +73,8 @@ input.on('line', (line) => {
     process.stderr.write('[aidb-mcp] invalid JSON-RPC line\n');
     return;
   }
-  if (message.id === undefined) return;
+  // JSON.parse('null'/'42'/字符串) 不抛错但返回非对象；访问 .id 会 TypeError 直接崩掉整个会话。
+  if (!message || typeof message !== 'object' || Array.isArray(message) || message.id === undefined) return;
   void (async () => {
     try {
       if (message.method === 'initialize') {
@@ -108,6 +109,13 @@ input.on('line', (line) => {
     } catch (err) {
       fail(message.id, -32603, String(err?.message ?? err));
     }
-  })();
+  })().catch((err) => {
+    // 客户端断开后 write() 可能抛 EPIPE；不能让它变成未处理的 rejection 拖垮进程。
+    process.stderr.write(`[aidb-mcp] request failed: ${String(err?.message ?? err)}\n`);
+  });
+});
+
+process.on('unhandledRejection', (err) => {
+  process.stderr.write(`[aidb-mcp] unhandled rejection: ${String(err?.message ?? err)}\n`);
 });
 input.on('close', () => process.exit(0));

@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 
 /** AES-256-GCM secret box for connection credentials and API keys at rest. */
 export class SecretBox {
@@ -50,5 +50,6 @@ export function safeEqual(a: string, b: string): boolean {
 }
 
 export function pairingCode(): string {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  // CSPRNG：6 位码空间只有 10^6，Math.random() 可被预测，不能用于配对凭据。
+  return String(100000 + randomInt(0, 900000));
 }

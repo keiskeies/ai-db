@@ -3528,5 +3528,6 @@
   "，用逗号或空格分隔。删除不可撤销，请先用查询确认范围。 ": ", dipisahkan dengan koma atau spasi. Penghapusan tidak dapat dibatalkan, silakan konfirmasi cakupan dengan query terlebih dahulu. ",
   "，能力信息已自动预填": ", informasi kemampuan telah diisi otomatis",
   "；下方可逐个删除，删空后整键会消失。 ": "; Anda dapat menghapusnya satu per satu di bawah, dan seluruh kunci akan hilang setelah dihapus. ",
-  "；设计见 docs/16-capability-contract.md。 ": ";Lihat docs/16-capability-contract.md untuk desain. "
+  "；设计见 docs/16-capability-contract.md。 ": ";Lihat docs/16-capability-contract.md untuk desain. ",
+  "只读 MCP": "MCP hanya-baca"
 }

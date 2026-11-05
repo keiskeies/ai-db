@@ -358,9 +358,14 @@ export interface QueryResult {
 | POST | `/pair/claim` | 兑换设备令牌：`{code, deviceName, platform, scope?}` → `{token, device, bridge}`；`scope='mcp:readonly'` 供出站 MCP 使用，缺省 `full` |
 | GET | `/devices` · DELETE `/devices/:id` | 设备管理（返回 `scope`）；吊销后 token 立即失效 |
 
-`scope='mcp:readonly'` 的凭据在鉴权中间件被限制为只能访问 `GET /health`、`GET /capabilities`、
-`GET /agent/tools?for=mcp`、`POST /agent/tools/:name`，其余接口返回 `403 SCOPE_DENIED`；
-WebSocket 通道拒绝该凭据。详见 [12-bots-and-mcp.md](./12-bots-and-mcp.md) §4.5。
+`scope='mcp:readonly'` 的凭据在鉴权中间件被限制为只能访问 `GET /health`、
+`GET /agent/tools?for=mcp`、`POST /agent/tools/:name`，其余接口（含 `GET /capabilities`）
+返回 `403 SCOPE_DENIED`；桥上另有显式工具白名单 `MCP_READONLY_TOOLS`，挡住被错标为
+`risk='read'` 的 `memory_write` 等写状态工具。配对限流按 TCP 远端地址计数、配对码用 CSPRNG、
+`/pair/start` 需主令牌。WebSocket 通道拒绝该凭据。详见 [12-bots-and-mcp.md](./12-bots-and-mcp.md) §4.5。
+
+注意：`/pair/claim` 不传 `scope` 时默认 `'full'`（移动端既有行为），该端点为开放路由，
+受 6 位一次性配对码与限流保护；不要把它当作给不可信调用方发凭据的接口。
 
 ### 3.1 认证
 - 桌面/浏览器：Bridge 启动时生成一次性 token（`AIDB_TOKEN` 或 Electron 注入），`Authorization: Bearer`。

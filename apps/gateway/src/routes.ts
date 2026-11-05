@@ -76,6 +76,35 @@ import { createFeatureRouter } from './features/routes';
 /** The outbound MCP bridge is for database reads; never expose the local MCP proxy (filesystem/web). */
 const MCP_BRIDGE_EXCLUDED = new Set(['mcp_list_servers', 'mcp_list_tools', 'mcp_call']);
 
+/**
+ * 出站只读桥的工具白名单。不能只靠 tool.risk：memory_write / update_plan /
+ * backup_database 等被（错误地）标成 risk='read'，但会写持久状态或落盘。
+ * 这里只列真正「读数据、无副作用」的工具，作为 mcp:readonly 凭据的硬边界。
+ */
+const MCP_READONLY_TOOLS = new Set([
+  'list_connections',
+  'inspect_schema',
+  'search_objects',
+  'run_sql',            // 桥上仍由 resolveRisk 判定为 read 才放行
+  'explain_sql',
+  'sample_rows',
+  'profile_column',
+  'get_query_history',
+  'analyze_chart',
+  'forecast_chart',
+  'render_chart',
+  'schema_diff',
+  'recon_data',
+  'memory_search',
+  'vector_search',
+  'search_index',
+  'run_mql',
+  'run_redis',
+  'run_cypher',
+  'run_cql',
+  'run_aql',
+]);
+
 export interface ApiDeps {
   config: GatewayConfig;
   store: Store;
@@ -190,7 +219,9 @@ export function createApiRouter(deps: ApiDeps): Router {
   // 配对码是 6 位数字，必须限制尝试频率；/pair/start 也需要限流，避免已认证端被滥用刷码。
   const pairHits = new Map<string, number[]>();
   const allowPairHit = (bucket: string, req: Request, limit: number, windowMs: number): boolean => {
-    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    // 不能用 req.ip：server.ts 设了 trust proxy=true，客户端可用 X-Forwarded-For 伪造它绕过限流。
+    // socket.remoteAddress 是 TCP 层真实来源，不可由请求头控制。
+    const ip = req.socket.remoteAddress || 'unknown';
     const key = `${bucket}:${ip}`;
     const now = Date.now();
     const hits = (pairHits.get(key) ?? []).filter((at) => now - at < windowMs);
@@ -223,7 +254,7 @@ export function createApiRouter(deps: ApiDeps): Router {
         const p = req.path;
         // 只放行 /agent/tools/<单个工具名>，不用宽前缀，避免未来新增子路由被意外继承权限。
         const allowed =
-          (req.method === 'GET' && (p === '/health' || p === '/capabilities' || p === '/agent/tools')) ||
+          (req.method === 'GET' && (p === '/health' || p === '/agent/tools')) ||
           (req.method === 'POST' && /^\/agent\/tools\/[^/]+$/.test(p));
         if (!allowed) {
           res.status(403).json({ error: { code: 'SCOPE_DENIED', message: '只读 MCP 凭据不能访问该接口' } });
@@ -2184,11 +2215,17 @@ export function createApiRouter(deps: ApiDeps): Router {
 
   // ---------- agent ----------
   router.get('/agent/tools', (req, res) => {
-    if (str(req.query.for) === 'mcp' && !store.getSettings().features.mcp) {
+    // 受限凭据永远只看到出站桥的工具目录，不能借省略 for=mcp 枚举全部 52 个工具。
+    const forMcp = str(req.query.for) === 'mcp' || res.locals.mcpReadonly === true;
+    if (forMcp && !store.getSettings().features.mcp) {
       res.status(403).json({ error: { code: 'FEATURE_DISABLED', message: 'MCP 已在设置中关闭' } });
       return;
     }
-    const tools = str(req.query.for) === 'mcp' ? TOOLS.filter((tool) => !MCP_BRIDGE_EXCLUDED.has(tool.name)) : TOOLS;
+    const tools = res.locals.mcpReadonly === true
+      ? TOOLS.filter((tool) => MCP_READONLY_TOOLS.has(tool.name) && !MCP_BRIDGE_EXCLUDED.has(tool.name))
+      : forMcp
+        ? TOOLS.filter((tool) => !MCP_BRIDGE_EXCLUDED.has(tool.name))
+        : TOOLS;
     res.json({ tools });
   });
 
@@ -2221,6 +2258,11 @@ export function createApiRouter(deps: ApiDeps): Router {
       const tool = getTool(name);
       if (!tool) {
         res.status(404).json({ error: { code: 'TOOL_NOT_FOUND', message: `工具不存在：${name}` } });
+        return;
+      }
+      // mcp:readonly 配对凭据走显式白名单：risk 字段不可信（见 MCP_READONLY_TOOLS）。
+      if (res.locals.mcpReadonly && !MCP_READONLY_TOOLS.has(name)) {
+        res.status(403).json({ error: { code: 'TOOL_NOT_EXPOSED', message: `只读 MCP 凭据不允许调用 ${name}` } });
         return;
       }
       const body = obj(req.body, 'body');

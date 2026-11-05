@@ -54,15 +54,16 @@ async function claim(scope?: string): Promise<{ token: string; id: string }> {
 
 test('mcp:readonly token can only reach the read-only MCP bridge', async () => {
   const mcp = await claim('mcp:readonly');
-  // 用真实连接 id，避免把「连接不存在」的 400 误当成 scope 拒绝。
-  const conns = (await (await api('/connections')).json()) as { connections: Array<{ id: string }> };
-  const connectionId = conns.connections[0]?.id ?? 'demo';
   const cases: Array<[string, string, RequestInit, number, string?]> = [
     ['GET', '/health', {}, 200],
-    ['GET', '/capabilities', {}, 200],
+    ['GET', '/capabilities', {}, 403, 'SCOPE_DENIED'],
     ['GET', '/agent/tools?for=mcp', {}, 200],
     ['POST', '/agent/tools/list_connections', { body: JSON.stringify({ args: {} }) }, 200],
-    ['POST', '/agent/tools/create_table', { body: JSON.stringify({ args: {} }) }, 403, 'TOOL_READ_ONLY'],
+    // risk 错标成 'read' 但会写持久状态的工具，必须被显式白名单拒绝。
+    ['POST', '/agent/tools/memory_write', { body: JSON.stringify({ args: { kind: 'fact', title: 'PWN', content: 'x' } }) }, 403, 'TOOL_NOT_EXPOSED'],
+    ['POST', '/agent/tools/update_plan', { body: JSON.stringify({ args: {} }) }, 403, 'TOOL_NOT_EXPOSED'],
+    ['POST', '/agent/tools/backup_database', { body: JSON.stringify({ args: {} }) }, 403, 'TOOL_NOT_EXPOSED'],
+    ['POST', '/agent/tools/create_table', { body: JSON.stringify({ args: {} }) }, 403, 'TOOL_NOT_EXPOSED'],
     ['GET', '/connections', {}, 403, 'SCOPE_DENIED'],
     ['GET', '/settings', {}, 403, 'SCOPE_DENIED'],
     ['POST', '/query', { body: JSON.stringify({ connectionId: 'demo', sql: 'SELECT 1' }) }, 403, 'SCOPE_DENIED'],
@@ -80,6 +81,14 @@ test('mcp:readonly token can only reach the read-only MCP bridge', async () => {
       await res.arrayBuffer();
     }
   }
+});
+
+test('mcp:readonly token cannot enumerate the full tool catalog', async () => {
+  const mcp = await claim('mcp:readonly');
+  const res = await api('/agent/tools', {}, mcp.token);
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { tools: Array<{ name: string }> };
+  assert.ok(!body.tools.some((t) => ['mcp_call', 'mcp_list_servers', 'mcp_list_tools', 'memory_write', 'create_table'].includes(t.name)));
 });
 
 test('revoking the device invalidates the mcp:readonly credential', async () => {

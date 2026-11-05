@@ -3528,5 +3528,6 @@
   "，用逗号或空格分隔。删除不可撤销，请先用查询确认范围。 ": ", phân tách bằng dấu phẩy hoặc khoảng trắng. Việc xóa là không thể hồi phục, vui lòng xác nhận phạm vi với truy vấn trước. ",
   "，能力信息已自动预填": ", thông tin khả năng đã được điền tự động",
   "；下方可逐个删除，删空后整键会消失。 ": "; Bạn có thể xóa chúng từng cái một bên dưới, và toàn bộ khóa sẽ biến mất sau khi xóa. ",
-  "；设计见 docs/16-capability-contract.md。 ": "; Xem docs/16-capability-contract.md để biết thiết kế. "
+  "；设计见 docs/16-capability-contract.md。 ": "; Xem docs/16-capability-contract.md để biết thiết kế. ",
+  "只读 MCP": "MCP chỉ đọc"
 }

@@ -3528,5 +3528,6 @@
   "，用逗号或空格分隔。删除不可撤销，请先用查询确认范围。 ": ", getrennt durch Kommas oder Leerzeichen. Die Löschung ist unwiderruflich, bitte bestätigen Sie den Geltungsbereich zunächst mit einer Abfrage. ",
   "，能力信息已自动预填": ", die Fähigkeitsinformationen wurden automatisch vorausgefüllt",
   "；下方可逐个删除，删空后整键会消失。 ": "; Sie können sie unten einzeln löschen. Der gesamte Schlüssel verschwindet nach dem Löschen. ",
-  "；设计见 docs/16-capability-contract.md。 ": ";Informationen zum Design finden Sie unter docs/16-capability-contract.md. "
+  "；设计见 docs/16-capability-contract.md。 ": ";Informationen zum Design finden Sie unter docs/16-capability-contract.md. ",
+  "只读 MCP": "Nur-Lese-MCP"
 }

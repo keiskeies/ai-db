@@ -3528,5 +3528,6 @@
   "，用逗号或空格分隔。删除不可撤销，请先用查询确认范围。 ": ", virgüller veya boşluklarla ayrılmış. Silme geri alınamaz, lütfen kapsamı önce sorgu ile doğrulayın. ",
   "，能力信息已自动预填": ", yetenek bilgisi otomatik olarak doldurulmuştur",
   "；下方可逐个删除，删空后整键会消失。 ": "; Aşağıda tek tek silebilirsiniz ve tüm anahtar silindikten sonra kaybolacaktır. ",
-  "；设计见 docs/16-capability-contract.md。 ": "; Tasarım için docs/16-capability-contract.md dosyasına bakın. "
+  "；设计见 docs/16-capability-contract.md。 ": "; Tasarım için docs/16-capability-contract.md dosyasına bakın. ",
+  "只读 MCP": "Salt-okunur MCP"
 }
