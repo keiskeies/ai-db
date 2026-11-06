@@ -2,6 +2,7 @@ import { Redis } from 'ioredis';
 import { parseRedisCommandLine } from '@aidb/core';
 import type { Engine, QueryResult, RedisKeyDetail, RedisQuery, StructuredQuery, TableInfo } from '@aidb/core';
 import { DbError, type CreateRedisKeyInput, type Driver, type DriverTestResult, type RedisKeyDriver, type RunOptions, type StructuredQueryDriver } from './types';
+import { mapLimit } from './concurrency';
 import { withQueryTimeout } from './timeout';
 
 const MODULE_LABEL: Record<string, string> = {
@@ -382,7 +383,8 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
       try {
         const raw = (await client.call('FT._LIST')) as unknown;
         const names = Array.isArray(raw) ? raw.map((name) => String(name)).filter(Boolean) : [];
-        for (const name of names) {
+        // 每个索引一次 FT.INFO；索引多时串行会明显拖慢键空间首屏。
+        const indexes = await mapLimit(names, 6, async (name): Promise<TableInfo> => {
           let docs: number | undefined;
           try {
             const info = (await client.call('FT.INFO', name)) as unknown;
@@ -393,7 +395,7 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
           } catch {
             /* FT.INFO 在旧版本可能不可用 */
           }
-          tables.push({
+          return {
             name,
             type: 'table',
             kind: 'index',
@@ -404,8 +406,9 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
               { name: 'score', type: 'float', nullable: true, primaryKey: false },
               { name: 'fields', type: 'json', nullable: true, primaryKey: false },
             ],
-          });
-        }
+          };
+        });
+        tables.push(...indexes);
       } catch {
         /* 未安装 RediSearch：只展示键空间 */
       }

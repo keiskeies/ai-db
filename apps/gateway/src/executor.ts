@@ -1651,7 +1651,8 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
         database,
         maxRows: 5,
         allowMulti: false,
-        autoLimit: false,
+        // 重复主键组可能有几十万，必须让数据库只回 5 行，而不是全表分组后在内存里截。
+        autoLimit: true,
         actor: 'agent',
       });
       duplicates = dupBatch.sets[0]?.rows ?? [];

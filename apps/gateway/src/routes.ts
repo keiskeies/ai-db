@@ -2063,7 +2063,8 @@ export function createApiRouter(deps: ApiDeps): Router {
         tableName = table.name;
         sql = buildSelectTable(conn.engine, table.name, { schema: engineUsesSchema(conn.engine) ? table.schema : undefined, limit });
       } else throw Object.assign(new Error('sql 或 table 必填'), { code: 'INVALID_INPUT', status: 400 });
-      const batch = await manager.query(connectionId, sql, { database, maxRows: limit, allowMulti: false, autoLimit: false, actor: 'user' });
+      // 行数上限要下推进 SQL：否则「导出 1 万行」也会先把整表拉回内存再截断。
+      const batch = await manager.query(connectionId, sql, { database, maxRows: limit, allowMulti: false, autoLimit: true, actor: 'user' });
       const set = batch.sets[0];
       if (!set) throw Object.assign(new Error('没有可导出的结果'), { code: 'EMPTY_RESULT', status: 400 });
       const file = writeExportFile({ dir: config.exportDir, format, columns: set.columns.map((c) => c.name), rows: set.rows, tableName, engine: conn.engine });

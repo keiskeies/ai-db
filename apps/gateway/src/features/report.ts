@@ -161,7 +161,8 @@ async function rowsQuery(
   maxRows = 24,
 ): Promise<Array<Array<unknown>>> {
   try {
-    const batch = await manager.query(conn.id, sql, { database, maxRows, allowMulti: false, autoLimit: false, actor: 'user' });
+    // 报告里的分组聚合可能命中超大表；把行数上限下推成 LIMIT，别把整组结果拉回来。
+    const batch = await manager.query(conn.id, sql, { database, maxRows, allowMulti: false, autoLimit: true, actor: 'user' });
     return batch.sets[0]?.rows ?? [];
   } catch {
     return [];

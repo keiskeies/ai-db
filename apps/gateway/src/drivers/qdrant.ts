@@ -1,6 +1,7 @@
 import type { ColumnInfo, Engine, IndexInfo, QueryResult, StructuredQuery, TableInfo, VectorQuery } from '@aidb/core';
 import { randomUUID } from 'node:crypto';
 import { vectorQueryFromArgs } from '@aidb/core';
+import { mapLimit } from './concurrency';
 import type {
   CollectionIndexDriver,
   CollectionIndexInput,
@@ -126,8 +127,9 @@ export class QdrantDriver implements VectorQueryDriver, DocumentWriteDriver, Obj
 
   async describe(): Promise<TableInfo[]> {
     const response = await this.request<{ result: { collections: Array<{ name: string }> } }>('/collections');
-    const tables: TableInfo[] = [];
-    for (const collection of response.result.collections ?? []) {
+    const collections = response.result.collections ?? [];
+    // 每个集合要两次请求（详情 + 采样），串行时上百个集合就是几百次往返。
+    return mapLimit(collections, 6, async (collection): Promise<TableInfo> => {
       try {
         const detail = await this.request<any>(`/collections/${encodeURIComponent(collection.name)}`);
         const result = detail.result ?? {};
@@ -170,7 +172,7 @@ export class QdrantDriver implements VectorQueryDriver, DocumentWriteDriver, Obj
           /* sampling is best effort */
         }
         attrs.points = Number(result.points_count ?? 0);
-        tables.push({
+        return {
           name: collection.name,
           type: 'table',
           kind: 'vector_collection',
@@ -178,12 +180,11 @@ export class QdrantDriver implements VectorQueryDriver, DocumentWriteDriver, Obj
           columns,
           indexes: payloadIndexes,
           comment: attrs.dimension ? `vector(${attrs.dimension}) · ${attrs.metric}` : 'Qdrant collection',
-        });
+        };
       } catch {
-        tables.push({ name: collection.name, type: 'table', kind: 'vector_collection' });
+        return { name: collection.name, type: 'table', kind: 'vector_collection' };
       }
-    }
-    return tables;
+    });
   }
 
   async executeQuery(query: StructuredQuery, opts: RunOptions = {}): Promise<QueryResult> {

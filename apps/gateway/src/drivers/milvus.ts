@@ -1,5 +1,6 @@
 import type { ColumnInfo, Engine, QueryResult, StructuredQuery, TableInfo, VectorQuery } from '@aidb/core';
 import { vectorQueryFromArgs } from '@aidb/core';
+import { mapLimit } from './concurrency';
 import type { DeleteDocumentsInput, DocumentWriteDriver, DriverTestResult, RunOptions, VectorQueryDriver, WriteDocumentInput, WriteDocumentResult } from './types';
 import { DbError } from './types';
 
@@ -135,8 +136,8 @@ export class MilvusDriver implements VectorQueryDriver, DocumentWriteDriver {
   async describe(): Promise<TableInfo[]> {
     const list = await this.request<any>('/v2/vectordb/collections/list', {});
     const names: string[] = list?.data?.collectionNames ?? list?.data ?? [];
-    const tables: TableInfo[] = [];
-    for (const name of names) {
+    // 每个集合一次 describe 请求，串行时上百个集合会拖垮对象树首屏。
+    return mapLimit(names, 6, async (name): Promise<TableInfo> => {
       try {
         const detail = await this.request<any>('/v2/vectordb/collections/describe', { collectionName: name });
         const data = detail.data ?? {};
@@ -149,19 +150,18 @@ export class MilvusDriver implements VectorQueryDriver, DocumentWriteDriver {
           autoIncrement: Boolean(field.autoId ?? field.auto_id),
         }));
         const vector = columns.find((column) => /^vector\(/.test(column.type));
-        tables.push({
+        return {
           name,
           type: 'table',
           kind: 'vector_collection',
           rowEstimate: data.numEntities ?? data.num_entities,
           columns,
           comment: vector ? `${vector.type} · ${data.indexes?.[0]?.metricType ?? data.metric_type ?? 'metric'}` : 'Milvus collection',
-        });
+        };
       } catch {
-        tables.push({ name, type: 'table', kind: 'vector_collection' });
+        return { name, type: 'table', kind: 'vector_collection' };
       }
-    }
-    return tables;
+    });
   }
 
   async executeQuery(query: StructuredQuery, opts: RunOptions = {}): Promise<QueryResult> {

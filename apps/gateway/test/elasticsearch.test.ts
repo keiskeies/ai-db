@@ -17,7 +17,7 @@ test('describe lists indices on ES 7.6 without unsupported cat parameters', asyn
     if (url.includes('/_cat/indices')) {
       return json([{ index: 'logs-2026', health: 'green', 'docs.count': '42' }]);
     }
-    if (url.includes('/_all/_mapping')) {
+    if (url.includes('/_mapping')) {
       return json({
         'logs-2026': {
           mappings: { properties: { msg: { type: 'text' }, meta: { properties: { ip: { type: 'ip' } } } } },
@@ -46,7 +46,7 @@ test('ES 6 typed mappings and numeric hits.total stay readable', async () => {
     const url = String(input);
     if (url.endsWith(':9200/')) return json({ version: { number: '6.8.23' } });
     if (url.includes('/_cat/indices')) return json([{ index: 'logs-2026', health: 'green', 'docs.count': '42' }]);
-    if (url.includes('/_all/_mapping')) {
+    if (url.includes('/_mapping')) {
       return json({
         'logs-2026': { mappings: { doc: { properties: { msg: { type: 'text' }, meta: { properties: { ip: { type: 'ip' } } } } } } },
       });
@@ -142,6 +142,33 @@ test('search retries without track_total_hits when the server does not know it',
     assert.equal(searchBodies.length, 2);
     assert.equal('track_total_hits' in searchBodies[0], true);
     assert.equal('track_total_hits' in searchBodies[1], false);
+  } finally {
+    mocked.mock.restore();
+  }
+});
+
+test('describe batches mapping requests instead of one huge _all/_mapping', async () => {
+  const names = Array.from({ length: 130 }, (_, index) => `idx-${index}`);
+  const mappingUrls: string[] = [];
+  const mocked = mock.method(globalThis, 'fetch', async (input: any) => {
+    const url = String(input);
+    if (url.includes('/_cat/indices')) return json(names.map((name) => ({ index: name, health: 'green', 'docs.count': '1' })));
+    if (url.includes('/_mapping')) {
+      mappingUrls.push(url);
+      const batch = url.replace(/^https?:\/\/[^/]+\//, '').split('/_mapping')[0].split(',');
+      return json(Object.fromEntries(batch.map((name) => [name, { mappings: { properties: { title: { type: 'text' } } } }])));
+    }
+    return json({}, 404);
+  });
+  try {
+    const driver = new ElasticsearchDriver({ host: '127.0.0.1', port: 9200 });
+    const tables = await driver.describe();
+    assert.equal(tables.length, 130);
+    // 130 个索引按 60 一批 = 3 次请求，并且只取 mappings，不再一次拉整份 _all/_mapping。
+    assert.equal(mappingUrls.length, 3);
+    assert.ok(mappingUrls.every((url) => url.includes('filter_path')), mappingUrls.join('\n'));
+    assert.ok(mappingUrls.every((url) => !url.includes('_all')), mappingUrls.join('\n'));
+    assert.deepEqual(tables[0].columns?.map((column) => column.name), ['_id', 'title']);
   } finally {
     mocked.mock.restore();
   }

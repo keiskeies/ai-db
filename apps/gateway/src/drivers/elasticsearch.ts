@@ -13,6 +13,10 @@ import type {
   WriteDocumentResult,
 } from './types';
 import { DbError } from './types';
+import { mapLimit } from './concurrency';
+
+/** 一次 _mapping 请求带多少个索引；几千索引的集群不该用一次 _all/_mapping 换回上百 MB。 */
+const MAPPING_BATCH = 60;
 
 export interface ElasticsearchOptions {
   host: string;
@@ -215,8 +219,6 @@ export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDri
    * cat 会被 403，但索引级 mapping 权限仍然可读，此时从 mapping 的键还原索引。
    */
   private async indexSnapshot(): Promise<{ indices: Array<Record<string, any>>; mapping: Record<string, any> }> {
-    // mapping 只是补充列信息；受权限限制或体量过大时不能连带索引列表一起失败。
-    const mappingPromise = this.request<Record<string, any>>('/_all/_mapping').catch((): Record<string, any> => ({}));
     let catError: unknown;
     let indices: Array<Record<string, any>> | undefined;
     try {
@@ -226,11 +228,32 @@ export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDri
     } catch (err) {
       catError = err;
     }
-    const mapping = await mappingPromise;
-    if (indices) return { indices, mapping };
+    if (indices) {
+      // mapping 只是补充列信息；受权限限制或体量过大时不能连带索引列表一起失败。
+      const names = indices.map((index) => String(index.index)).filter(Boolean);
+      return { indices, mapping: await this.mappingsFor(names) };
+    }
+    const mapping = await this.request<Record<string, any>>('/_all/_mapping?filter_path=*.mappings').catch(
+      (): Record<string, any> => ({}),
+    );
     const names = Object.keys(mapping ?? {});
     if (names.length) return { indices: names.map((name) => ({ index: name })), mapping };
     throw catError instanceof Error ? catError : new DbError('无法读取索引列表', { code: 'SEARCH_INDICES' });
+  }
+
+  /**
+   * 分批取 mapping，并只保留 mappings 字段（settings/aliases 对列信息没用）。
+   * 单次 _all/_mapping 在几千索引的集群上会一次换回上百 MB。
+   */
+  private async mappingsFor(names: string[]): Promise<Record<string, any>> {
+    if (!names.length) return {};
+    const batches: string[][] = [];
+    for (let i = 0; i < names.length; i += MAPPING_BATCH) batches.push(names.slice(i, i + MAPPING_BATCH));
+    const parts = await mapLimit(batches, 4, async (batch) => {
+      const path = `/${batch.map((name) => encodeURIComponent(name)).join(',')}/_mapping?filter_path=*.mappings`;
+      return this.request<Record<string, any>>(path).catch((): Record<string, any> => ({}));
+    });
+    return Object.assign({}, ...parts);
   }
 
   async executeQuery(query: StructuredQuery, opts: RunOptions = {}): Promise<QueryResult> {

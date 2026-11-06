@@ -153,9 +153,22 @@ export function Sidebar() {
 
   useEffect(() => {
     // 重启后只恢复了展开状态，schema 是内存态；不给展开的连接补一次加载会一直停在 Loading…
-    for (const conn of connections) {
-      if (expanded[conn.id] && !schemas[conn.id]) void loadSchema(conn.id);
-    }
+    const pending = connections.filter((conn) => expanded[conn.id] && !schemas[conn.id]);
+    if (!pending.length) return;
+    let cancelled = false;
+    // 展开状态可能一次恢复十几个连接，并发上限 2，避免启动瞬间同时打十几个库。
+    const queue = [...pending];
+    const worker = async () => {
+      for (;;) {
+        const conn = queue.shift();
+        if (!conn || cancelled) return;
+        await loadSchema(conn.id);
+      }
+    };
+    void Promise.all(Array.from({ length: Math.min(2, queue.length) }, worker));
+    return () => {
+      cancelled = true;
+    };
   }, [connections, expanded, schemas, loadSchema]);
 
   const openMenu = (e: React.MouseEvent, items: ContextMenuItem[]) => {

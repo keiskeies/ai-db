@@ -2,6 +2,7 @@ import neo4j from 'neo4j-driver';
 import type { Driver as BoltDriver, Node as Neo4jNode, Relationship as Neo4jRelationship } from 'neo4j-driver';
 import type { ColumnInfo, Engine, GraphData, QueryResult, StructuredQuery, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions, StructuredQueryDriver } from './types';
+import { mapLimit } from './concurrency';
 import { DbError } from './types';
 
 export interface Neo4jOptions {
@@ -265,34 +266,42 @@ export class Neo4jDriver implements StructuredQueryDriver {
           ? 'MATCH ()-[r]->() RETURN DISTINCT type(r) AS relationshipType ORDER BY relationshipType'
           : 'CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType ORDER BY relationshipType',
       );
-      const tables: TableInfo[] = [];
-      for (const record of labelsResult.records.slice(0, 200)) {
+      // 一个 session 同时只能跑一条查询，所以并发采样各自开一条 session；
+      // 否则 200 个标签 + 200 个关系类型就是 400 次串行往返。
+      const sample = async (cypher: string): Promise<unknown[]> => {
+        const scoped = this.driver().session({ database: db });
+        try {
+          const result = await scoped.run(cypher);
+          return result.records.map((record) => record.get(0));
+        } finally {
+          await scoped.close();
+        }
+      };
+      const labelTables = await mapLimit(labelsResult.records.slice(0, 200), 4, async (record): Promise<TableInfo> => {
         const label = String(record.get('label'));
         const table: TableInfo = { name: label, type: 'table', kind: 'node_label', comment: '节点标签' };
         try {
           const safe = label.replace(/`/g, '``');
-          const sample = await session.run(`MATCH (n:\`${safe}\`) RETURN n LIMIT 30`);
-          const nodes = sample.records.map((item) => item.get('n')).filter((value): value is Neo4jNode => neo4j.isNode(value));
+          const nodes = (await sample(`MATCH (n:\`${safe}\`) RETURN n LIMIT 30`)).filter((value): value is Neo4jNode => neo4j.isNode(value));
           table.columns = inferColumns(nodes, false);
         } catch {
           table.columns = [];
         }
-        tables.push(table);
-      }
-      for (const record of relResult.records.slice(0, 200)) {
+        return table;
+      });
+      const relTables = await mapLimit(relResult.records.slice(0, 200), 4, async (record): Promise<TableInfo> => {
         const type = String(record.get('relationshipType'));
         const table: TableInfo = { name: type, type: 'table', kind: 'edge_label', comment: '关系类型' };
         try {
           const safe = type.replace(/`/g, '``');
-          const sample = await session.run(`MATCH ()-[r:\`${safe}\`]->() RETURN r LIMIT 30`);
-          const rels = sample.records.map((item) => item.get('r')).filter((value): value is Neo4jRelationship => neo4j.isRelationship(value));
+          const rels = (await sample(`MATCH ()-[r:\`${safe}\`]->() RETURN r LIMIT 30`)).filter((value): value is Neo4jRelationship => neo4j.isRelationship(value));
           table.columns = inferColumns(rels, true);
         } catch {
           table.columns = [];
         }
-        tables.push(table);
-      }
-      return tables;
+        return table;
+      });
+      return [...labelTables, ...relTables];
     } catch (err: any) {
       throw new DbError(err?.message ?? `无法读取 Neo4j 数据库 ${db}`, { code: err?.code ?? 'NEO4J_ERROR' });
     } finally {

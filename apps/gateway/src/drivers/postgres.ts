@@ -99,19 +99,22 @@ export class PostgresDriver implements Driver {
   async describe(database?: string): Promise<TableInfo[]> {
     const pool = this.pool(database);
     try {
-      const tablesRes = await pool.query(
-        `SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema NOT IN ${SYSTEM_SCHEMAS} ORDER BY table_schema, table_name`,
-      );
+      // 六条 catalog 查询互不依赖，并发发出；池子只有 3 条连接，多出来的排队而不是串行等待。
       // 列、索引、外键都只是补充信息：Greenplum/Redshift 等 PG 分支可能缺某个系统视图，
       // 不能因为一个查询失败就把整棵对象树判空。
-      const columnsRes = await pool
-        .query(
-          `SELECT table_schema, table_name, column_name, data_type, udt_name, is_nullable, column_default FROM information_schema.columns WHERE table_schema NOT IN ${SYSTEM_SCHEMAS} ORDER BY table_schema, table_name, ordinal_position`,
-        )
-        .catch(() => ({ rows: [] as any[] }));
-      // indkey 是索引列 attnum 的有序列表；在 JS 里还原列名与顺序，避免依赖 PG 9.5+ 的 array_position。
-      const indexesRes = await pool
-        .query(`
+      const empty = { rows: [] as any[] };
+      const [tablesRes, columnsRes, indexesRes, attrsRes, fksRes, estRes] = await Promise.all([
+        pool.query(
+          `SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema NOT IN ${SYSTEM_SCHEMAS} ORDER BY table_schema, table_name`,
+        ),
+        pool
+          .query(
+            `SELECT table_schema, table_name, column_name, data_type, udt_name, is_nullable, column_default FROM information_schema.columns WHERE table_schema NOT IN ${SYSTEM_SCHEMAS} ORDER BY table_schema, table_name, ordinal_position`,
+          )
+          .catch(() => empty),
+        // indkey 是索引列 attnum 的有序列表；在 JS 里还原列名与顺序，避免依赖 PG 9.5+ 的 array_position。
+        pool
+          .query(`
         SELECT n.nspname AS schema, t.relname AS table, i.relname AS index, ix.indisunique AS unique,
                ix.indisprimary AS primary, ix.indkey AS indkey, ix.indrelid AS relid
         FROM pg_index ix
@@ -120,17 +123,17 @@ export class PostgresDriver implements Driver {
         JOIN pg_namespace n ON n.oid = t.relnamespace
         WHERE n.nspname NOT IN ${SYSTEM_SCHEMAS}
         ORDER BY t.relname, i.relname`)
-        .catch(() => ({ rows: [] as any[] }));
-      const attrsRes = await pool
-        .query(`
+          .catch(() => empty),
+        pool
+          .query(`
         SELECT a.attrelid AS relid, a.attnum, a.attname AS column
         FROM pg_attribute a
         JOIN pg_class t ON t.oid = a.attrelid
         JOIN pg_namespace n ON n.oid = t.relnamespace
         WHERE a.attnum > 0 AND NOT a.attisdropped AND n.nspname NOT IN ${SYSTEM_SCHEMAS}`)
-        .catch(() => ({ rows: [] as any[] }));
-      const fksRes = await pool
-        .query(`
+          .catch(() => empty),
+        pool
+          .query(`
         SELECT tc.table_schema AS schema, tc.table_name AS table, tc.constraint_name AS name,
                kcu.column_name AS column, ccu.table_name AS ref_table, ccu.column_name AS ref_column
         FROM information_schema.table_constraints tc
@@ -140,13 +143,14 @@ export class PostgresDriver implements Driver {
           ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema
         WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema NOT IN ${SYSTEM_SCHEMAS}
         ORDER BY tc.table_schema, tc.table_name, tc.constraint_name`)
-        .catch(() => ({ rows: [] as any[] }));
-      const estRes = await pool
-        .query(`
+          .catch(() => empty),
+        pool
+          .query(`
         SELECT n.nspname AS schema, c.relname AS table, c.reltuples AS estimate
         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE c.relkind IN ('r','p') AND n.nspname NOT IN ${SYSTEM_SCHEMAS}`)
-        .catch(() => ({ rows: [] as any[] }));
+          .catch(() => empty),
+      ]);
       let hypertables: Array<Record<string, any>> = [];
       if (this.engine === 'timescale') {
         try {
