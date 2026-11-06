@@ -1,14 +1,25 @@
 import { FileCode2, LayoutDashboard, Network, Plus, Table2, TerminalSquare, Wrench, X } from 'lucide-react';
+import { lazy, Suspense } from 'react';
 import { useApp } from '../store';
 import { PaneSplitter } from './PaneSplitter';
-import { AgentPanel } from './AgentPanel';
-import { DashboardView } from './DashboardView';
-import { DataView } from './DataView';
-import { DesignView } from './DesignView';
-import { QueryView } from './QueryView';
-import { RelationsView } from './RelationsView';
 import { Welcome } from './Welcome';
 import { t as tr } from '../i18n';
+
+// 每种页签一个异步块：查询编辑器（CodeMirror ~440KB）和数据/图表视图只在切到该页签时取。
+const AgentPanel = lazy(() => import('./AgentPanel').then((m) => ({ default: m.AgentPanel })));
+const DashboardView = lazy(() => import('./DashboardView').then((m) => ({ default: m.DashboardView })));
+const DataView = lazy(() => import('./DataView').then((m) => ({ default: m.DataView })));
+const DesignView = lazy(() => import('./DesignView').then((m) => ({ default: m.DesignView })));
+const QueryView = lazy(() => import('./QueryView').then((m) => ({ default: m.QueryView })));
+const RelationsView = lazy(() => import('./RelationsView').then((m) => ({ default: m.RelationsView })));
+
+function ViewFallback({ fill }: { fill?: boolean }) {
+  return (
+    <div className="loading-inline" style={fill ? { padding: '36px 0', justifyContent: 'center', width: '100%' } : { padding: '18px 12px' }}>
+      <span className="spinner" aria-label="loading" />
+    </div>
+  );
+}
 
 function TabIcon({ kind }: { kind: string }) {
   if (kind === 'query') return <TerminalSquare size={12} />;
@@ -75,12 +86,14 @@ export function Workspace({ viewportWidth, sidebarFlowWidth }: { viewportWidth: 
           </button>
           <div className="tab-spacer" />
         </div>
-        {active?.kind === 'welcome' || !active ? <Welcome /> : null}
-        {active?.kind === 'data' ? <DataView tab={active} /> : null}
-        {active?.kind === 'query' ? <QueryView tab={active} /> : null}
-        {active?.kind === 'design' ? <DesignView tab={active} /> : null}
-        {active?.kind === 'relations' ? <RelationsView tab={active} /> : null}
-        {active?.kind === 'dashboard' ? <DashboardView tab={active} /> : null}
+        <Suspense fallback={<ViewFallback fill />}>
+          {active?.kind === 'welcome' || !active ? <Welcome /> : null}
+          {active?.kind === 'data' ? <DataView tab={active} /> : null}
+          {active?.kind === 'query' ? <QueryView tab={active} /> : null}
+          {active?.kind === 'design' ? <DesignView tab={active} /> : null}
+          {active?.kind === 'relations' ? <RelationsView tab={active} /> : null}
+          {active?.kind === 'dashboard' ? <DashboardView tab={active} /> : null}
+        </Suspense>
       </main>
       {agentOpen ? (
         <>
@@ -93,7 +106,9 @@ export function Workspace({ viewportWidth, sidebarFlowWidth }: { viewportWidth: 
             onCommit={(width) => setAgentWidth(width, true)}
             testId="splitter-agent"
           />
-          <AgentPanel />
+          <Suspense fallback={<ViewFallback />}>
+            <AgentPanel />
+          </Suspense>
         </>
       ) : null}
     </>

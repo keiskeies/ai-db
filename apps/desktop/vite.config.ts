@@ -30,5 +30,18 @@ export default defineConfig({
     outDir: 'dist',
     target: 'chrome110',
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks(id: string) {
+          if (!id.includes('node_modules')) return undefined;
+          if (/[\\/]node_modules[\\/](codemirror|@codemirror|@lezer)[\\/]/.test(id)) return 'vendor-codemirror';
+          if (/[\\/]node_modules[\\/](react-markdown|remark-|micromark|mdast-|unist-|decode-named|character-entities|devlop|hast-|property-information|space-separated|html-url-|trim-|zwitch|bail|vfile|is-plain-obj|ccount|escape-string-regexp|markdown-table|parse-entities)/.test(id)) return 'vendor-markdown';
+          if (/[\\/]node_modules[\\/]qrcode[\\/]/.test(id)) return 'vendor-qrcode';
+          if (/[\\/]node_modules[\\/](react|react-dom|scheduler|zustand|use-sync-external-store)[\\/]/.test(id)) return 'vendor-react';
+          if (/[\\/]node_modules[\\/]lucide-react[\\/]/.test(id)) return 'vendor-icons';
+          return undefined;
+        },
+      },
+    },
   },
 });

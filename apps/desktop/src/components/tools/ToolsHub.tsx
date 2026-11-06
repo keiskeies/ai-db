@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { createElement, lazy, Suspense, useState } from 'react';
 import {
   ArrowLeftRight,
   BarChart3,
@@ -19,21 +19,25 @@ import {
   X,
 } from 'lucide-react';
 import { useApp } from '../../store';
-import { SearchTool } from './SearchTool';
-import { QueryBuilderTool } from './QueryBuilderTool';
-import { SchemaCompareTool } from './SchemaCompareTool';
-import { TransferTool } from './TransferTool';
-import { GeneratorTool } from './GeneratorTool';
-import { MonitorTool } from './MonitorTool';
-import { JobsTool } from './JobsTool';
-import { UsersTool } from './UsersTool';
-import { DictionaryTool } from './DictionaryTool';
-import { DataCompareTool } from './DataCompareTool';
-import { AdvancedObjectsTool } from './AdvancedObjectsTool';
-import { AgentContextTool } from './AgentContextTool';
-import { ReportsTool } from './ReportsTool';
-import { PipelinesTool } from './PipelinesTool';
 import { t as tr } from '../../i18n';
+
+// 14 个工具面板体量差很多（数据流处理、结构对比都是千行级），按选中项取。
+const views = {
+  reports: lazy(() => import('./ReportsTool').then((m) => ({ default: m.ReportsTool }))),
+  search: lazy(() => import('./SearchTool').then((m) => ({ default: m.SearchTool }))),
+  builder: lazy(() => import('./QueryBuilderTool').then((m) => ({ default: m.QueryBuilderTool }))),
+  compare: lazy(() => import('./SchemaCompareTool').then((m) => ({ default: m.SchemaCompareTool }))),
+  datacompare: lazy(() => import('./DataCompareTool').then((m) => ({ default: m.DataCompareTool }))),
+  transfer: lazy(() => import('./TransferTool').then((m) => ({ default: m.TransferTool }))),
+  generate: lazy(() => import('./GeneratorTool').then((m) => ({ default: m.GeneratorTool }))),
+  monitor: lazy(() => import('./MonitorTool').then((m) => ({ default: m.MonitorTool }))),
+  pipelines: lazy(() => import('./PipelinesTool').then((m) => ({ default: m.PipelinesTool }))),
+  jobs: lazy(() => import('./JobsTool').then((m) => ({ default: m.JobsTool }))),
+  users: lazy(() => import('./UsersTool').then((m) => ({ default: m.UsersTool }))),
+  dictionary: lazy(() => import('./DictionaryTool').then((m) => ({ default: m.DictionaryTool }))),
+  objects: lazy(() => import('./AdvancedObjectsTool').then((m) => ({ default: m.AdvancedObjectsTool }))),
+  agentcontext: lazy(() => import('./AgentContextTool').then((m) => ({ default: m.AgentContextTool }))),
+} as const;
 
 const TOOL_LIST = [
   { id: 'reports', label: tr("报告"), desc: tr("结论先行 / 可导出 Excel · PPT"), icon: <FileChartColumn size={14} /> },
@@ -89,20 +93,21 @@ export function ToolsHub() {
             {!visible.length ? <div className="dash-empty">{tr("没有匹配的工具")}</div> : null}
           </div>
           <div className="tools-content">
-            {active === 'reports' ? <ReportsTool /> : null}
-            {active === 'search' ? <SearchTool /> : null}
-            {active === 'builder' ? <QueryBuilderTool /> : null}
-            {active === 'compare' ? <SchemaCompareTool /> : null}
-            {active === 'datacompare' ? <DataCompareTool /> : null}
-            {active === 'transfer' ? <TransferTool /> : null}
-            {active === 'generate' ? <GeneratorTool /> : null}
-            {active === 'monitor' ? <MonitorTool /> : null}
-            {active === 'pipelines' ? <PipelinesTool /> : null}
-            {active === 'jobs' ? <JobsTool /> : null}
-            {active === 'users' ? <UsersTool /> : null}
-            {active === 'dictionary' ? <DictionaryTool /> : null}
-            {active === 'objects' ? <AdvancedObjectsTool /> : null}
-            {active === 'agentcontext' ? <AgentContextTool /> : null}
+            {(() => {
+              const View = active in views ? views[active as keyof typeof views] : undefined;
+              if (!View) return null;
+              return (
+                <Suspense
+                  fallback={
+                    <div className="loading-inline" style={{ padding: '18px 12px' }}>
+                      <span className="spinner" aria-label="loading" />
+                    </div>
+                  }
+                >
+                  {createElement(View)}
+                </Suspense>
+              );
+            })()}
           </div>
         </div>
       </div>

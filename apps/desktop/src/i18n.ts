@@ -1,24 +1,6 @@
 import { APP_LOCALES, isRtlLocale, normalizeLocale, type AppLocale } from '@aidb/core';
 import { en as legacyEn, zh as legacyZh } from './i18n/legacy';
-import ar from './i18n/locales/ar.json';
-import de from './i18n/locales/de.json';
 import en from './i18n/locales/en.json';
-import es from './i18n/locales/es.json';
-import fr from './i18n/locales/fr.json';
-import hi from './i18n/locales/hi.json';
-import id from './i18n/locales/id.json';
-import it from './i18n/locales/it.json';
-import ja from './i18n/locales/ja.json';
-import ko from './i18n/locales/ko.json';
-import nl from './i18n/locales/nl.json';
-import pl from './i18n/locales/pl.json';
-import ptBR from './i18n/locales/pt-BR.json';
-import ru from './i18n/locales/ru.json';
-import th from './i18n/locales/th.json';
-import tr from './i18n/locales/tr.json';
-import uk from './i18n/locales/uk.json';
-import vi from './i18n/locales/vi.json';
-import zhTW from './i18n/locales/zh-TW.json';
 
 export type Locale = AppLocale;
 export type I18nKey = keyof typeof legacyZh;
@@ -26,27 +8,57 @@ export type I18nVars = Record<string, string | number | null | undefined> | Arra
 
 export const LOCALES = APP_LOCALES;
 
-const catalogs: Record<Exclude<AppLocale, 'zh-CN'>, Record<string, string>> = {
-  en: en as Record<string, string>,
-  'zh-TW': zhTW as Record<string, string>,
-  ja: ja as Record<string, string>,
-  ko: ko as Record<string, string>,
-  de: de as Record<string, string>,
-  fr: fr as Record<string, string>,
-  es: es as Record<string, string>,
-  'pt-BR': ptBR as Record<string, string>,
-  it: it as Record<string, string>,
-  ru: ru as Record<string, string>,
-  ar: ar as Record<string, string>,
-  hi: hi as Record<string, string>,
-  id: id as Record<string, string>,
-  vi: vi as Record<string, string>,
-  th: th as Record<string, string>,
-  tr: tr as Record<string, string>,
-  nl: nl as Record<string, string>,
-  pl: pl as Record<string, string>,
-  uk: uk as Record<string, string>,
+const catalogModule = (value: unknown): Record<string, string> => ((value as { default?: Record<string, string> })?.default ?? value) as Record<string, string>;
+
+/**
+ * 除英文外的 18 套目录各自 ~270KB，全部静态引入会让首屏 JS 膨胀到 7MB。
+ * 目录按语言切分后只在启动时取当前语言那一份；未加载完成时 translate
+ * 自动退到英文目录，再退到中文源文，不会白屏。
+ */
+const localeLoaders: Partial<Record<Exclude<AppLocale, 'zh-CN' | 'en'>, () => Promise<Record<string, string>>>> = {
+  'zh-TW': async () => catalogModule(await import('./i18n/locales/zh-TW.json')),
+  ja: async () => catalogModule(await import('./i18n/locales/ja.json')),
+  ko: async () => catalogModule(await import('./i18n/locales/ko.json')),
+  de: async () => catalogModule(await import('./i18n/locales/de.json')),
+  fr: async () => catalogModule(await import('./i18n/locales/fr.json')),
+  es: async () => catalogModule(await import('./i18n/locales/es.json')),
+  'pt-BR': async () => catalogModule(await import('./i18n/locales/pt-BR.json')),
+  it: async () => catalogModule(await import('./i18n/locales/it.json')),
+  ru: async () => catalogModule(await import('./i18n/locales/ru.json')),
+  ar: async () => catalogModule(await import('./i18n/locales/ar.json')),
+  hi: async () => catalogModule(await import('./i18n/locales/hi.json')),
+  id: async () => catalogModule(await import('./i18n/locales/id.json')),
+  vi: async () => catalogModule(await import('./i18n/locales/vi.json')),
+  th: async () => catalogModule(await import('./i18n/locales/th.json')),
+  tr: async () => catalogModule(await import('./i18n/locales/tr.json')),
+  nl: async () => catalogModule(await import('./i18n/locales/nl.json')),
+  pl: async () => catalogModule(await import('./i18n/locales/pl.json')),
+  uk: async () => catalogModule(await import('./i18n/locales/uk.json')),
 };
+
+const catalogs: Partial<Record<Exclude<AppLocale, 'zh-CN'>, Record<string, string>>> = {
+  en: en as Record<string, string>,
+};
+const catalogLoads = new Map<AppLocale, Promise<void>>();
+
+/** 装载当前界面语言的翻译目录；重复调用共享同一份 Promise。 */
+export function ensureLocaleCatalog(locale: unknown): Promise<void> {
+  const active = normalizeLocale(locale);
+  if (active === 'zh-CN' || catalogs[active as Exclude<AppLocale, 'zh-CN'>]) return Promise.resolve();
+  const pending = catalogLoads.get(active);
+  if (pending) return pending;
+  const load = localeLoaders[active as keyof typeof localeLoaders]?.()
+    .then((catalog) => {
+      catalogs[active as Exclude<AppLocale, 'zh-CN'>] = catalog;
+    })
+    .catch(() => {
+      // 取不到就先用英文兜底，但留下一次重试机会（网络抖动不该把语言永久钉死）。
+      catalogLoads.delete(active);
+    });
+  if (!load) return Promise.resolve();
+  catalogLoads.set(active, load);
+  return load;
+}
 
 const legacyZhMap = legacyZh as Record<string, string>;
 const legacyEnMap = legacyEn as Record<string, string>;
@@ -74,6 +86,7 @@ export function getI18nLocale(): AppLocale {
 
 export function setI18nLocale(next: unknown): AppLocale {
   currentLocale = normalizeLocale(next);
+  void ensureLocaleCatalog(currentLocale);
   try {
     localStorage.setItem(LOCALE_CACHE_KEY, currentLocale);
   } catch {

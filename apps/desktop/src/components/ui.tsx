@@ -2,19 +2,19 @@ import { Check, ChevronDown, Copy, Info, X } from 'lucide-react';
 import {
   Children,
   isValidElement,
+  lazy,
   useCallback,
   useId,
   useLayoutEffect,
   useMemo,
   useRef,
+  Suspense,
   useState,
   type CSSProperties,
   type InputHTMLAttributes,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import type { Risk } from '@aidb/core';
 import { useApp } from '../store';
 
@@ -473,39 +473,14 @@ export function CopyButton({ text, small = true }: { text: string; small?: boole
   );
 }
 
-function CodeBlock({ children, className }: { children?: ReactNode; className?: string }) {
-  const text = String(children ?? '').replace(/\n$/, '');
-  return (
-    <pre>
-      <code className={className}>{text}</code>
-      <span className="code-copy">
-        <CopyButton text={text} />
-      </span>
-    </pre>
-  );
-}
+const MarkdownBody = lazy(() => import('./MarkdownBody'));
 
 export function Markdown({ children }: { children: string }) {
   return (
     <div className="prose">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          pre: ({ children }) => <>{children}</>,
-          code: ({ className, children }: any) => {
-            const isBlock = String(children ?? '').includes('\n') || Boolean(className);
-            if (isBlock) return <CodeBlock className={className}>{children}</CodeBlock>;
-            return <code>{children}</code>;
-          },
-          a: ({ href, children }) => (
-            <a href={href} target="_blank" rel="noreferrer">
-              {children}
-            </a>
-          ),
-        }}
-      >
-        {children}
-      </ReactMarkdown>
+      <Suspense fallback={<Spinner />}>
+        <MarkdownBody>{children}</MarkdownBody>
+      </Suspense>
     </div>
   );
 }

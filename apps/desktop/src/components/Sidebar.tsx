@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import {
   ChevronRight,
   Database,
@@ -39,13 +39,17 @@ import { desktopBridge, desktopDialogUi } from '../lib/desktop';
 import { groupFromLabel, groupLabel, groupOfConnection } from '../lib/groups';
 import { deliverExport } from '../lib/exportDelivery';
 import { EngineIcon } from './EngineIcon';
-import { TableOpsDialog, type TableDialogKind } from './TableOpsDialog';
-import { DatabaseOpsDialog, type DatabaseDialogKind } from './DatabaseOpsDialog';
-import { CreateObjectDialog } from './CreateObjectDialog';
-import { DropObjectDialog } from './DropObjectDialog';
+import type { TableDialogKind } from './TableOpsDialog';
+import type { DatabaseDialogKind } from './DatabaseOpsDialog';
 import { askConfirm, askPrompt } from './AskDialog';
-import { TableInfoDialog } from './TableInfoDialog';
 import { t as tr } from '../i18n';
+
+// 右键菜单才用到的弹窗不占首屏：打开哪一个就取哪一个。
+const TableOpsDialog = lazy(() => import('./TableOpsDialog').then((m) => ({ default: m.TableOpsDialog })));
+const DatabaseOpsDialog = lazy(() => import('./DatabaseOpsDialog').then((m) => ({ default: m.DatabaseOpsDialog })));
+const CreateObjectDialog = lazy(() => import('./CreateObjectDialog').then((m) => ({ default: m.CreateObjectDialog })));
+const DropObjectDialog = lazy(() => import('./DropObjectDialog').then((m) => ({ default: m.DropObjectDialog })));
+const TableInfoDialog = lazy(() => import('./TableInfoDialog').then((m) => ({ default: m.TableInfoDialog })));
 
 const COLORS: Record<string, string> = {
   blue: '#5b93ff',
@@ -963,53 +967,55 @@ export function Sidebar() {
           <RefreshCw size={14} />
         </button>
       </div>
-      {tableDialog ? (
-        <TableOpsDialog
-          kind={tableDialog.kind}
-          connectionId={tableDialog.conn.id}
-          database={tableDialog.schema.name}
-          schema={tableDialog.table.schema}
-          table={tableDialog.table.name}
-          initialWithData={tableDialog.withData}
-          onClose={() => setTableDialog(null)}
-        />
-      ) : null}
-      {infoTable ? (
-        <TableInfoDialog
-          table={infoTable.table}
-          database={infoTable.database}
-          objectLabel={infoTable.objectLabel}
-          relational={infoTable.relational ?? true}
-          connectionId={infoTable.connectionId}
-          manageIndexes={infoTable.manageIndexes}
-          canAddField={infoTable.canAddField}
-          engine={infoTable.engine}
-          onClose={() => setInfoTable(null)}
-        />
-      ) : null}
-      {dropDialog ? (
-        <DropObjectDialog
-          connection={dropDialog.conn}
-          database={dropDialog.database}
-          name={dropDialog.name}
-          onClose={() => setDropDialog(null)}
-        />
-      ) : null}
-      {objectDialog ? (
-        <CreateObjectDialog
-          connection={objectDialog.conn}
-          database={objectDialog.database}
-          onClose={() => setObjectDialog(null)}
-        />
-      ) : null}
-      {dbDialog ? (
-        <DatabaseOpsDialog
-          kind={dbDialog.kind}
-          connectionId={dbDialog.conn.id}
-          database={dbDialog.database}
-          onClose={() => setDbDialog(null)}
-        />
-      ) : null}
+      <Suspense fallback={null}>
+        {tableDialog ? (
+          <TableOpsDialog
+            kind={tableDialog.kind}
+            connectionId={tableDialog.conn.id}
+            database={tableDialog.schema.name}
+            schema={tableDialog.table.schema}
+            table={tableDialog.table.name}
+            initialWithData={tableDialog.withData}
+            onClose={() => setTableDialog(null)}
+          />
+        ) : null}
+        {infoTable ? (
+          <TableInfoDialog
+            table={infoTable.table}
+            database={infoTable.database}
+            objectLabel={infoTable.objectLabel}
+            relational={infoTable.relational ?? true}
+            connectionId={infoTable.connectionId}
+            manageIndexes={infoTable.manageIndexes}
+            canAddField={infoTable.canAddField}
+            engine={infoTable.engine}
+            onClose={() => setInfoTable(null)}
+          />
+        ) : null}
+        {dropDialog ? (
+          <DropObjectDialog
+            connection={dropDialog.conn}
+            database={dropDialog.database}
+            name={dropDialog.name}
+            onClose={() => setDropDialog(null)}
+          />
+        ) : null}
+        {objectDialog ? (
+          <CreateObjectDialog
+            connection={objectDialog.conn}
+            database={objectDialog.database}
+            onClose={() => setObjectDialog(null)}
+          />
+        ) : null}
+        {dbDialog ? (
+          <DatabaseOpsDialog
+            kind={dbDialog.kind}
+            connectionId={dbDialog.conn.id}
+            database={dbDialog.database}
+            onClose={() => setDbDialog(null)}
+          />
+        ) : null}
+      </Suspense>
     </aside>
   );
 }

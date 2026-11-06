@@ -178,6 +178,7 @@ Electron 打包配置集中在 `apps/desktop/electron-builder.yml`；Bridge 以 
 - Agent 上下文：schema 摘要压缩（表名+列名+类型，仅相关表），会话 token 超过阈值触发滚动摘要（compaction）。
 - 流式：SSE 事件批量合并（16ms）；UI 增量渲染，Markdown 节流解析。
 - 元数据库 WAL + 预处理语句 + 索引（session_id, scope, updated_at）。
+- 桌面首屏：入口 JS 约 0.7MB（含当前语言的翻译目录），20 种语言各成一个独立块、只取界面语言那一份；编辑器（CodeMirror）、Markdown 渲染器、工具箱与右键弹窗按使用时刻异步加载。
 
 ## 8. 可扩展点
 

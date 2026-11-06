@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, lazy, Suspense, type ReactNode } from 'react';
 import type { ContextMenuItem } from './store';
 import { desktopBridge, type OpenTablePayload } from './lib/desktop';
 import {
@@ -24,18 +24,20 @@ import {
   Users,
 } from 'lucide-react';
 import { useApp } from './store';
-import { CommandPalette } from './components/CommandPalette';
 import { AskHost } from './components/AskDialog';
 import { ContextMenuHost } from './components/ContextMenu';
 import { PaneSplitter } from './components/PaneSplitter';
-import { ConnectionModal } from './components/ConnectionModal';
-import { MemoryDrawer } from './components/MemoryDrawer';
-import { SettingsModal } from './components/SettingsModal';
-import { ToolsHub } from './components/tools/ToolsHub';
 import { Sidebar } from './components/Sidebar';
 import { Toasts } from './components/ui';
 import { Workspace } from './components/Workspace';
 import { t as tr } from './i18n';
+
+// 弹层各自成块：只在真正打开时取代码，首屏不必背设置面板和工具箱。
+const CommandPalette = lazy(() => import('./components/CommandPalette').then((m) => ({ default: m.CommandPalette })));
+const ConnectionModal = lazy(() => import('./components/ConnectionModal').then((m) => ({ default: m.ConnectionModal })));
+const MemoryDrawer = lazy(() => import('./components/MemoryDrawer').then((m) => ({ default: m.MemoryDrawer })));
+const SettingsModal = lazy(() => import('./components/SettingsModal').then((m) => ({ default: m.SettingsModal })));
+const ToolsHub = lazy(() => import('./components/tools/ToolsHub').then((m) => ({ default: m.ToolsHub })));
 
 /** 图标描边渐变：lucide 图标是单色 stroke，用 userSpaceOnUse 保证整枚图标共用一条 0→24 的渐变。 */
 const RIBBON_TONES: Record<string, [string, string]> = {
@@ -179,6 +181,11 @@ export default function App() {
   const setSettingsOpen = useApp((s) => s.setSettingsOpen);
   const setPaletteOpen = useApp((s) => s.setPaletteOpen);
   const openTools = useApp((s) => s.openTools);
+  const settingsOpen = useApp((s) => s.settingsOpen);
+  const toolsOpen = useApp((s) => s.toolsOpen);
+  const memoryOpen = useApp((s) => s.memoryOpen);
+  const connectionEditor = useApp((s) => s.connectionEditor);
+  const paletteOpen = useApp((s) => s.paletteOpen);
   const openQuery = useApp((s) => s.openQuery);
   const openRelations = useApp((s) => s.openRelations);
   const openDashboard = useApp((s) => s.openDashboard);
@@ -433,11 +440,13 @@ export default function App() {
         <span className="item version">v0.0.1</span>
       </div>
 
-      <MemoryDrawer />
-      <SettingsModal />
-      <ToolsHub />
-      <ConnectionModal />
-      <CommandPalette />
+      <Suspense fallback={null}>
+        {memoryOpen ? <MemoryDrawer /> : null}
+        {settingsOpen ? <SettingsModal /> : null}
+        {toolsOpen ? <ToolsHub /> : null}
+        {connectionEditor ? <ConnectionModal /> : null}
+        {paletteOpen ? <CommandPalette /> : null}
+      </Suspense>
       <ContextMenuHost />
       <AskHost />
       <Toasts />

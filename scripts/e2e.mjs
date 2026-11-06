@@ -579,6 +579,18 @@ await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
 await page.waitForTimeout(900);
 check('switching to Chinese repaints the UI', (await page.locator('.sidebar').innerText()).includes('连接'));
 
+// 中文是源语言、不需要目录，英文目录又是静态打包的：只有第三种语言能证明异步目录真的解包成功。
+await api('/settings', { method: 'PUT', body: JSON.stringify({ locale: 'ja' }) });
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
+await page.waitForTimeout(900);
+const jaRibbon = await page.locator('[data-testid="ribbon"]').innerText();
+check('lazy locale catalog repaints the UI', jaRibbon.includes('接続') && !jaRibbon.includes('Connections'), jaRibbon.replace(/\s+/g, ' ').slice(0, 40));
+await api('/settings', { method: 'PUT', body: JSON.stringify({ locale: 'zh-CN' }) });
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
+await page.waitForTimeout(900);
+
 // ---------------- 布局：折叠 / 拖宽 / 右键接管 ----------------
 const sidebarBox = await page.locator('.sidebar').boundingBox();
 await page.click('[data-testid="toggle-sidebar"]');
@@ -2376,12 +2388,13 @@ check(
     chartPanelScroll <= 1,
   wideChart ? `${Math.round(wideChart.width)}x${Math.round(wideChart.height)}, scroll ${chartPanelScroll}` : 'no chart',
 );
+const barBox = await page.locator('[data-testid="chart-extra-columns"]').boundingBox();
 const pinBox = await page.locator('[data-testid="chart-pin-dashboard"]').boundingBox();
-const extraBox = await page.locator('[data-testid="chart-extra-total"]').boundingBox();
 check(
   '对比列 left and 加入仪表板 right share one bar',
-  Boolean(pinBox && extraBox) && extraBox.x < pinBox.x && Math.abs(extraBox.y + extraBox.height / 2 - (pinBox.y + pinBox.height / 2)) < 8,
-  pinBox && extraBox ? `extra ${Math.round(extraBox.x)}, pin ${Math.round(pinBox.x)}` : 'no bar',
+  // 对比列按钮按结果列命名且会随当前度量变化，这里断言的是同一条工具条：两端对齐、同一行。
+  Boolean(barBox && pinBox) && pinBox.x > barBox.x + barBox.width / 2 && Math.abs(pinBox.y + pinBox.height / 2 - (barBox.y + barBox.height / 2)) < 8,
+  barBox && pinBox ? `bar ${Math.round(barBox.width)}px, pin ${Math.round(pinBox.x - barBox.x)}px` : 'no bar',
 );
 await page.setViewportSize({ width: 1440, height: 900 });
 await page.waitForTimeout(400);
