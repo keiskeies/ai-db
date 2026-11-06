@@ -311,15 +311,10 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
               {engineMeta(engine).model === 'search' ? (
                 <div className="field">
                   <label>{tr("认证方式")}</label>
-                  <select
-                    className="input"
-                    value={authMode}
-                    onChange={(e) => setAuthMode(e.target.value as 'basic' | 'apikey')}
-                    data-testid="connection-auth-mode"
-                  >
-                    <option value="basic">{tr("用户名 + 密码")}</option>
-                    <option value="apikey">{tr("API Key")}</option>
-                  </select>
+                  <Select className="select" value={authMode} onChange={(e) => setAuthMode(e.target.value as 'basic' | 'apikey')} data-testid="connection-auth-mode">
+                    <Option value="basic">{tr("用户名 + 密码")}</Option>
+                    <Option value="apikey">{tr("API Key")}</Option>
+                  </Select>
                 </div>
               ) : null}
               {engineMeta(engine).model !== 'relational' ? (
@@ -368,15 +363,10 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
               {engine === 'redis' ? (
                 <div className="field">
                   <label>{tr("部署形态")}</label>
-                  <select
-                    className="input"
-                    value={redisMode}
-                    onChange={(e) => setRedisMode(e.target.value as 'standalone' | 'cluster')}
-                    data-testid="connection-redis-mode"
-                  >
-                    <option value="standalone">{tr("单机 / 主从（16 个库）")}</option>
-                    <option value="cluster">{tr("Redis Cluster（只有 db0）")}</option>
-                  </select>
+                  <Select className="select" value={redisMode} onChange={(e) => setRedisMode(e.target.value as 'standalone' | 'cluster')} data-testid="connection-redis-mode">
+                    <Option value="standalone">{tr("单机 / 主从（16 个库）")}</Option>
+                    <Option value="cluster">{tr("Redis Cluster（只有 db0）")}</Option>
+                  </Select>
                 </div>
               ) : null}
               {engine === 'oracle' || engineMeta(engine).model !== 'relational' ? null : (
