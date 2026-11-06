@@ -53,7 +53,8 @@ export function sqlLiteral(value: unknown, engine: Engine): string {
   if (value === null || value === undefined) return 'NULL';
   if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'NULL';
   if (typeof value === 'bigint') return value.toString();
-  if (typeof value === 'boolean') return engine === 'postgresql' || engine === 'cockroachdb' ? (value ? 'TRUE' : 'FALSE') : value ? '1' : '0';
+  // 按方言判断，不能只认 postgresql/cockroachdb；Kingbase/openGauss/Timescale 等别名同样不接受 1/0 写 boolean。
+  if (typeof value === 'boolean') return dialectOf(engine) === 'postgres' ? (value ? 'TRUE' : 'FALSE') : value ? '1' : '0';
   if (Buffer.isBuffer(value)) return `X'${value.toString('hex')}'`;
   if (typeof value === 'object') return quoteLiteral(JSON.stringify(value));
   return quoteLiteral(String(value));

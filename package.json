@@ -10,7 +10,7 @@
     "apps/mobile"
   ],
   "engines": {
-    "node": ">=22.5"
+    "node": ">=22.13"
   },
   "scripts": {
     "dev": "npm run build:core && concurrently -k -n bridge,ui \"npm run dev:gateway\" \"npm run dev:web\"",

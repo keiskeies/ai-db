@@ -190,7 +190,9 @@ function findSystemNode() {
       if (!fs.existsSync(candidate)) continue;
       const version = spawnSync(candidate, ['-v'], { encoding: 'utf8', windowsHide: true }).stdout?.trim() ?? '';
       const [major, minor] = version.replace(/^v/, '').split('.').map(Number);
-      if (major > 22 || (major === 22 && minor >= 5)) return candidate;
+      // node:sqlite 从 22.13 / 23.4 起才不需要 --experimental-sqlite；更早的 22.x 会让 Bridge 启动失败。
+      const sqliteReady = major >= 24 || (major === 22 && minor >= 13) || (major === 23 && minor >= 4);
+      if (sqliteReady) return candidate;
     } catch {
       /* try next candidate */
     }
@@ -210,7 +212,7 @@ async function startEmbeddedGateway() {
     if (backupDir) console.log('[desktop] pre-upgrade backup:', backupDir);
   }
   // dmdb 需要 --openssl-legacy-provider，而 Electron 内置 Node 不接受该参数；
-  // 有系统 Node（>=22.5）时优先用它启动 Bridge，否则回退到 Electron Node（达梦连接会给出明确提示）。
+  // 有系统 Node（>=22.13）时优先用它启动 Bridge，否则回退到 Electron Node（达梦连接会给出明确提示）。
   const nodeBin = findSystemNode();
   const env = {
     ...process.env,

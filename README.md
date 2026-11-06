@@ -13,7 +13,7 @@
 
 <p align="center">
   <img alt="TypeScript 5.7" src="https://img.shields.io/badge/TypeScript-5.7-3178C6?style=flat-square&logo=typescript&logoColor=white" />
-  <img alt="Node.js ≥ 22.5" src="https://img.shields.io/badge/Node.js-%E2%89%A522.5-339933?style=flat-square&logo=nodedotjs&logoColor=white" />
+  <img alt="Node.js ≥ 22.13" src="https://img.shields.io/badge/Node.js-%E2%89%A522.13-339933?style=flat-square&logo=nodedotjs&logoColor=white" />
   <img alt="Electron 45" src="https://img.shields.io/badge/Electron-45-47848F?style=flat-square&logo=electron&logoColor=white" />
   <img alt="React 18" src="https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=0B0E0D" />
   <img alt="Expo 52" src="https://img.shields.io/badge/Expo-52-000020?style=flat-square&logo=expo&logoColor=white" />
@@ -113,7 +113,7 @@ AiDB puts the Agent on the main path of the task, not in a sidebar. Here, the Ag
 
 ## Quick start
 
-Requires **Node.js ≥ 22.5** (the Bridge uses the built-in `node:sqlite`) and npm 10+.
+Requires **Node.js ≥ 22.13** (the Bridge uses the built-in `node:sqlite`, which needs the 22.13+/23.4+ runtime) and npm 10+.
 
 ```bash
 npm install

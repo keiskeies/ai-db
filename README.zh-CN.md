@@ -13,7 +13,7 @@
 
 <p align="center">
   <img alt="TypeScript 5.7" src="https://img.shields.io/badge/TypeScript-5.7-3178C6?style=flat-square&logo=typescript&logoColor=white" />
-  <img alt="Node.js ≥ 22.5" src="https://img.shields.io/badge/Node.js-%E2%89%A522.5-339933?style=flat-square&logo=nodedotjs&logoColor=white" />
+  <img alt="Node.js ≥ 22.13" src="https://img.shields.io/badge/Node.js-%E2%89%A522.13-339933?style=flat-square&logo=nodedotjs&logoColor=white" />
   <img alt="Electron 45" src="https://img.shields.io/badge/Electron-45-47848F?style=flat-square&logo=electron&logoColor=white" />
   <img alt="React 18" src="https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=0B0E0D" />
   <img alt="Expo 52" src="https://img.shields.io/badge/Expo-52-000020?style=flat-square&logo=expo&logoColor=white" />
@@ -113,7 +113,7 @@ AiDB 的选择是把 Agent 放在任务主路径上，而不是侧边栏里。�
 
 ## 快速开始
 
-要求 **Node.js ≥ 22.5**（Bridge 使用内置 `node:sqlite`）和 npm 10+。
+要求 **Node.js ≥ 22.13**（Bridge 使用内置 `node:sqlite`，22.13+/23.4+ 才不需要实验 flag）和 npm 10+。
 
 ```bash
 npm install
