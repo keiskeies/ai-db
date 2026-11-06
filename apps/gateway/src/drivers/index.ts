@@ -243,6 +243,7 @@ export async function createDriver(config: ConnectionConfig, secret: ConnectionS
         host: connectHost,
         port: connectPort,
         token: secret.password,
+        user: config.username,
         database: config.database || meta.defaultDatabase,
         ssl: config.ssl,
       });

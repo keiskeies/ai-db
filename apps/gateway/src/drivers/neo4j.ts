@@ -227,12 +227,33 @@ export class Neo4jDriver implements StructuredQueryDriver {
     return database || this.opts.database || this.opts.defaultDatabase || 'neo4j';
   }
 
+  /** Neo4j 3.5 没有多数据库，session({database}) 会被 driver 直接拒绝；探测到旧主版本就退回默认会话。 */
+  private serverMajor: number | null = null;
+
+  private async probe(): Promise<void> {
+    if (this.serverMajor !== null) return;
+    try {
+      const info = await this.driver().getServerInfo();
+      const match = /\/(\d+)\./.exec(String(info?.agent ?? ''));
+      this.serverMajor = match ? Number(match[1]) : null;
+    } catch {
+      this.serverMajor = null;
+    }
+  }
+
+  private openSession(database?: string | null) {
+    if (this.serverMajor !== null && this.serverMajor < 4) return this.driver().session();
+    return this.driver().session({ database: database ?? this.database() });
+  }
+
   async test(): Promise<DriverTestResult> {
     const started = Date.now();
     try {
       const driver = this.driver();
       await driver.verifyConnectivity();
       const info = await driver.getServerInfo();
+      const match = /\/(\d+)\./.exec(String(info?.agent ?? ''));
+      this.serverMajor = match ? Number(match[1]) : null;
       return { ok: true, version: info.agent || 'Neo4j', latencyMs: Date.now() - started };
     } catch (err: any) {
       return { ok: false, latencyMs: Date.now() - started, message: err?.message ?? '连接失败' };
@@ -240,6 +261,8 @@ export class Neo4jDriver implements StructuredQueryDriver {
   }
 
   async listDatabases(): Promise<string[]> {
+    await this.probe();
+    if (this.serverMajor !== null && this.serverMajor < 4) return [this.opts.defaultDatabase ?? 'neo4j'];
     const session = this.driver().session({ database: 'system' });
     try {
       const result = await session.run('SHOW DATABASES YIELD name RETURN name ORDER BY name');
@@ -254,7 +277,8 @@ export class Neo4jDriver implements StructuredQueryDriver {
 
   async describe(database?: string): Promise<TableInfo[]> {
     const db = this.database(database);
-    const session = this.driver().session({ database: db });
+    await this.probe();
+    const session = this.openSession(db);
     try {
       const labelsResult = await session.run(
         this.engine === 'memgraph'
@@ -269,7 +293,7 @@ export class Neo4jDriver implements StructuredQueryDriver {
       // 一个 session 同时只能跑一条查询，所以并发采样各自开一条 session；
       // 否则 200 个标签 + 200 个关系类型就是 400 次串行往返。
       const sample = async (cypher: string): Promise<unknown[]> => {
-        const scoped = this.driver().session({ database: db });
+        const scoped = this.openSession(db);
         try {
           const result = await scoped.run(cypher);
           return result.records.map((record) => record.get(0));
@@ -315,7 +339,8 @@ export class Neo4jDriver implements StructuredQueryDriver {
     if (!text) throw new DbError('Cypher 不能为空', { code: 'CYPHER_EMPTY' });
     const maxRows = Math.max(1, Math.min(opts.maxRows && opts.maxRows > 0 ? opts.maxRows : 200, 1000));
     const started = Date.now();
-    const session = this.driver().session({ database: this.database(opts.database) });
+    await this.probe();
+    const session = this.openSession(this.database(opts.database));
     try {
       const result = await session.run(text, query.params ?? {}, { timeout: opts.timeoutMs });
       const updates = result.summary?.counters?.updates?.() ?? {};

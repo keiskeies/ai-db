@@ -125,7 +125,14 @@ export class MilvusDriver implements VectorQueryDriver, DocumentWriteDriver {
       await this.request('/v2/vectordb/collections/list', {});
       return { ok: true, version: 'Milvus', latencyMs: Date.now() - started };
     } catch (err: any) {
-      return { ok: false, latencyMs: Date.now() - started, message: err?.message ?? '连接失败' };
+      // /v2/vectordb 是 2.4 才有的 REST 面；旧版本只会 404，不说清楚会被当成网络故障。
+      const missing = /404|not found|no route/i.test(`${err?.code ?? ''} ${err?.message ?? ''}`);
+      const message = err?.message ?? '连接失败';
+      return {
+        ok: false,
+        latencyMs: Date.now() - started,
+        message: missing ? `${message}（/v2/vectordb REST 接口需要 Milvus 2.4+，旧版本请升级）` : message,
+      };
     }
   }
 

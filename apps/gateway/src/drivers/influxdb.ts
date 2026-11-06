@@ -6,9 +6,13 @@ export interface InfluxdbOptions {
   host: string;
   port: number;
   token?: string;
+  /** InfluxDB 1.x 用用户名密码（或 u/p 查询参数），没有 2.x/3.x 的 token 概念。 */
+  user?: string;
   database?: string;
   ssl?: boolean;
 }
+
+type InfluxGeneration = 1 | 2 | 3;
 
 type Row = Record<string, unknown>;
 
@@ -83,23 +87,90 @@ export class InfluxdbDriver implements Driver {
     return `${this.opts.ssl ? 'https' : 'http'}://${this.opts.host || '127.0.0.1'}:${this.opts.port || 8086}`;
   }
 
-  private headers(): Record<string, string> {
+  private headers(basic = false): Record<string, string> {
     const headers: Record<string, string> = { 'content-type': 'application/json', connection: 'close' };
-    if (this.opts.token) headers.authorization = `Bearer ${this.opts.token}`;
+    // 1.x 没有 token 体系，只有用户名密码；Bearer 会被它当无效凭据拒掉。
+    if (basic && this.opts.user) {
+      headers.authorization = `Basic ${Buffer.from(`${this.opts.user}:${this.opts.token ?? ''}`).toString('base64')}`;
+    } else if (this.opts.token) {
+      headers.authorization = `Bearer ${this.opts.token}`;
+    }
     return headers;
   }
 
-  private async send(path: string, init: { method?: string; body?: string; timeoutMs?: number } = {}): Promise<Response> {
+  private async send(path: string, init: { method?: string; body?: string; timeoutMs?: number; basic?: boolean; raw?: boolean } = {}): Promise<Response> {
     try {
       return await fetch(`${this.base()}${path}`, {
         method: init.method ?? 'GET',
-        headers: this.headers(),
+        headers: init.raw ? { 'content-type': 'text/plain', ...this.headers(init.basic) } : this.headers(init.basic),
         body: init.body,
         signal: AbortSignal.timeout(init.timeoutMs ?? 30000),
       });
     } catch (err: any) {
       throw new DbError(`InfluxDB 请求失败：${err?.message ?? '网络错误'}`, { code: 'INFLUXDB_NETWORK' });
     }
+  }
+
+  private generation?: InfluxGeneration;
+  private serverVersion = '';
+
+  /**
+   * 1.x / 2.x 有 /ping 并回 X-Influxdb-Version，3.x 只有 /health。
+   * 三代接口的路径与查询语言都不同，必须先分代再决定后续请求走哪条路。
+   */
+  private async detect(): Promise<InfluxGeneration> {
+    if (this.generation) return this.generation;
+    const ping = await this.send('/ping', { timeoutMs: 8000 }).catch(() => null);
+    const header = String(ping?.headers?.get('x-influxdb-version') ?? '');
+    if (/^1\./.test(header)) {
+      this.serverVersion = header;
+      this.generation = 1;
+      return 1;
+    }
+    if (/^2\./.test(header)) {
+      this.serverVersion = header;
+      this.generation = 2;
+      return 2;
+    }
+    const health = await this.send('/health', { timeoutMs: 8000 }).catch(() => null);
+    if (health?.ok) {
+      const body = (await health.json().catch(() => null)) as { version?: string } | null;
+      this.serverVersion = String(body?.version ?? '');
+      this.generation = 3;
+      return 3;
+    }
+    // 探测不到就沿用当前实现（v3），真实失败会由随后的请求如实抛出。
+    this.generation = 3;
+    return 3;
+  }
+
+  /** InfluxDB 1.x 的 /query 结果形态：results[].series[] 每列一组 values。 */
+  private async queryV1Series(query: string, database?: string, timeoutMs = 30000): Promise<Array<{ name?: string; columns: string[]; values?: unknown[][] }>> {
+    const params = new URLSearchParams({ q: query, epoch: 'ns' });
+    const db = database || this.opts.database;
+    if (db) params.set('db', db);
+    const response = await this.send(`/query?${params.toString()}`, { basic: true, timeoutMs });
+    const text = await response.text();
+    let parsed: { results?: Array<{ error?: string; series?: Array<{ name?: string; columns: string[]; values?: unknown[][] }> }> } | null = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
+    if (!response.ok) throw new DbError(parsed?.results?.[0]?.error ?? text.slice(0, 300) ?? `InfluxDB 返回 ${response.status}`, { code: `INFLUXDB_${response.status}` });
+    const result = parsed?.results?.[0];
+    if (result?.error) throw new DbError(`InfluxDB 执行失败：${result.error}`, { code: 'INFLUXDB_ERROR' });
+    return result?.series ?? [];
+  }
+
+  private async queryV1Rows(query: string, database?: string, timeoutMs = 30000): Promise<Row[]> {
+    const rows: Row[] = [];
+    for (const series of await this.queryV1Series(query, database, timeoutMs)) {
+      for (const values of series.values ?? []) {
+        rows.push(Object.fromEntries(series.columns.map((column, index) => [column, values[index]])));
+      }
+    }
+    return rows;
   }
 
   private async queryRows(sql: string, database?: string, timeoutMs = 30000): Promise<Row[]> {
@@ -131,8 +202,20 @@ export class InfluxdbDriver implements Driver {
   async test(): Promise<DriverTestResult> {
     const started = Date.now();
     try {
+      const generation = await this.detect();
+      if (generation === 2) {
+        return {
+          ok: false,
+          latencyMs: Date.now() - started,
+          message: `检测到 InfluxDB ${this.serverVersion || '2.x'}：本引擎的查询走 DataFusion SQL（/api/v3/query_sql），需要 InfluxDB 3；2.x 请改用 Flux 客户端或升级到 3`,
+        };
+      }
+      if (generation === 1) {
+        await this.queryV1Rows('SHOW DATABASES', undefined, 8000);
+        return { ok: true, version: `InfluxDB ${this.serverVersion || '1.x'}`, latencyMs: Date.now() - started };
+      }
       await this.queryRows('SELECT 1 AS ok', undefined, 8000);
-      return { ok: true, version: 'InfluxDB 3', latencyMs: Date.now() - started };
+      return { ok: true, version: `InfluxDB 3${this.serverVersion ? ` ${this.serverVersion}` : ''}`, latencyMs: Date.now() - started };
     } catch (err: any) {
       const health = await this.send('/health', { timeoutMs: 8000 }).catch(() => null);
       if (health?.ok) return { ok: true, version: 'InfluxDB 3', latencyMs: Date.now() - started };
@@ -141,6 +224,12 @@ export class InfluxdbDriver implements Driver {
   }
 
   async listDatabases(): Promise<string[]> {
+    if ((await this.detect()) === 1) {
+      const rows = await this.queryV1Rows('SHOW DATABASES');
+      return rows
+        .map((row) => String(row.name ?? ''))
+        .filter((name) => name && !SYSTEM_DATABASES.has(name));
+    }
     const response = await this.send('/api/v3/configure/database?format=json');
     if (!response.ok) throw new DbError(`InfluxDB 返回 ${response.status}`, { code: `INFLUXDB_${response.status}` });
     const body = (await response.json().catch(() => [])) as Array<Record<string, unknown>>;
@@ -154,6 +243,42 @@ export class InfluxdbDriver implements Driver {
     let db = database || this.opts.database;
     if (!db) db = (await this.listDatabases())[0];
     if (!db) return [];
+    if ((await this.detect()) === 1) {
+      // 1.x 没有 information_schema：measurement 与 field key 各一条 SHOW 查询。
+      const measurements = await this.queryV1Rows('SHOW MEASUREMENTS', db);
+      const fieldSeries = await this.queryV1Series('SHOW FIELD KEYS', db);
+      const byTable = new Map<string, ColumnInfo[]>();
+      for (const series of fieldSeries) {
+        const columns = series.columns ?? [];
+        const measurementIndex = columns.indexOf('measurement');
+        const keyIndex = columns.indexOf('fieldKey');
+        const typeIndex = columns.indexOf('fieldType');
+        for (const values of series.values ?? []) {
+          const name = measurementIndex >= 0 ? String(values[measurementIndex] ?? '') : String(series.name ?? '').replace(/,$/, '');
+          const field = keyIndex >= 0 ? String(values[keyIndex] ?? '') : '';
+          if (!name || !field) continue;
+          const list = byTable.get(name) ?? [];
+          list.push({
+            name: field,
+            type: baseType(typeIndex >= 0 ? String(values[typeIndex] ?? '') : 'string'),
+            nullable: true,
+            primaryKey: false,
+          });
+          byTable.set(name, list);
+        }
+      }
+      return measurements
+        .map((row) => String(row.name ?? ''))
+        .filter(Boolean)
+        .map((name) => ({
+          name,
+          type: 'table' as const,
+          kind: 'table' as const,
+          schema: db,
+          columns: byTable.get(name) ?? [],
+          comment: 'measurement',
+        }));
+    }
     const tables = await this.queryRows(
       `SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = 'iox' ORDER BY table_name`,
       db,
@@ -191,7 +316,9 @@ export class InfluxdbDriver implements Driver {
   async run(sql: string, opts: RunOptions = {}): Promise<QueryResult> {
     const started = Date.now();
     const statement = sql.trim();
-    const rows = await this.queryRows(statement, opts.database || this.opts.database, opts.timeoutMs ?? 30000);
+    const rows = (await this.detect()) === 1
+      ? await this.queryV1Rows(statement, opts.database || this.opts.database, opts.timeoutMs ?? 30000)
+      : await this.queryRows(statement, opts.database || this.opts.database, opts.timeoutMs ?? 30000);
     const names: string[] = [];
     const seen = new Set<string>();
     for (const row of rows.slice(0, 50)) {
@@ -234,17 +361,18 @@ export class InfluxdbDriver implements Driver {
     const payload = lines.map((line) => line.trim()).filter(Boolean);
     if (!payload.length) throw new DbError('行协议内容不能为空', { code: 'INFLUXDB_WRITE' });
     const db = database || this.opts.database || 'aidb';
-    let response: Response;
-    try {
-      response = await fetch(`${this.base()}/api/v3/write_lp?db=${encodeURIComponent(db)}&precision=nanosecond`, {
-        method: 'POST',
-        headers: { 'content-type': 'text/plain', ...(this.opts.token ? { authorization: `Bearer ${this.opts.token}` } : {}) },
-        body: payload.join('\n'),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-    } catch (err: any) {
-      throw new DbError(`InfluxDB 请求失败：${err?.message ?? '网络错误'}`, { code: 'INFLUXDB_NETWORK' });
-    }
+    // 1.x 的写入端点是 /write，且用 Basic 认证；3.x 是 /api/v3/write_lp + Bearer。
+    const generation = await this.detect();
+    const path = generation === 1
+      ? `/write?db=${encodeURIComponent(db)}&precision=ns`
+      : `/api/v3/write_lp?db=${encodeURIComponent(db)}&precision=nanosecond`;
+    const response = await this.send(path, {
+      method: 'POST',
+      body: payload.join('\n'),
+      timeoutMs,
+      raw: true,
+      basic: generation === 1,
+    });
     if (!response.ok) {
       const detail = (await response.text().catch(() => '')).trim();
       throw new DbError(detail || `InfluxDB 写入失败：HTTP ${response.status}`, { code: `INFLUXDB_${response.status}` });

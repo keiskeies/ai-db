@@ -43,17 +43,17 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 | 关系型 | DuckDB | duckdb-file | sqlite | 浏览 + SQL + 数据编辑；DDL 设计器关闭 |
 | 分析型 | ClickHouse | clickhouse-http | clickhouse | 无结构同步/数据对比 |
 | 时序 | TDengine | tdengine-http | tdengine | taosAdapter REST（6041）；超级表/子表浏览 + SQL；无网格编辑 |
-| 时序 | InfluxDB | influxdb-http | influxdb | InfluxDB 3 `/api/v3/query_sql`（DataFusion SQL）；measurement 浏览 + SQL + EXPLAIN；DDL 关闭 |
+| 时序 | InfluxDB | influxdb-http | influxdb | 自动分代：3.x 走 `/api/v3/query_sql`（DataFusion SQL），1.x 走 `/query` + InfluxQL（`SHOW MEASUREMENTS` / `SHOW FIELD KEYS` / `/write`），2.x 明确拒绝并说明需要升级到 3；measurement 浏览 + 查询 + EXPLAIN；DDL 关闭 |
 | 文档 | MongoDB | mongodb | —（MQL） | 浏览 + 查询 + 结果；无 DDL/备份 |
 | 键值 | Redis | redis | —（命令） | 浏览 + 命令 + 结果；识别 Redis Stack 模块与 RediSearch 索引；键可删除（UNLINK）、索引可删除（FT.DROPINDEX）；无 DDL/备份 |
 | 宽列 | Cassandra | cassandra | —（CQL） | keyspace/table 浏览 + CQL；无 JOIN/DDL 设计器 |
 | 宽列 | ScyllaDB | cassandra | —（CQL） | 复用 Cassandra 驱动与 CQL |
-| 图 | Neo4j | bolt | —（Cypher） | 标签/关系浏览 + Cypher + 计划 + 交互式图视图 |
+| 图 | Neo4j | bolt | —（Cypher） | 标签/关系浏览 + Cypher + 计划 + 交互式图视图；3.5 等无多库版本自动退回默认会话 |
 | 图 | Memgraph | bolt | —（Cypher） | 复用 Neo4j Bolt 驱动；标签/关系浏览 + Cypher + 交互式图视图 |
 | 图 | FalkorDB | falkordb | —（Cypher） | Redis 模块（GRAPH.QUERY）；图/标签浏览 + Cypher + 交互式图视图；参数内联为 `CYPHER k=v` 前缀 |
 | 图 | ArangoDB | arangodb-http | —（AQL） | HTTP `/_api/cursor` 执行 AQL；文档集合/边集合浏览 + AQL + 交互式图视图；`@bindVar` / `@@collection` 绑定参数 |
 | 向量 | Qdrant | qdrant-http | —（JSON） | 集合/维度/payload 浏览 + scroll/向量检索 |
-| 向量 | Milvus | milvus-http | —（JSON） | collection/schema 浏览 + query/向量检索 |
+| 向量 | Milvus | milvus-http | —（JSON） | collection/schema 浏览 + query/向量检索；`/v2/vectordb` REST 需 2.4+，缺失时给出明确提示 |
 | 向量 | Weaviate | weaviate-http | —（JSON） | class/properties 浏览 + scroll/nearVector |
 | 搜索 | Elasticsearch | elasticsearch-http | —（DSL） | 索引/mapping 浏览 + `_search` DSL |
 | 搜索 | OpenSearch | elasticsearch-http | —（DSL） | 兼容 Elasticsearch `_search` DSL |
