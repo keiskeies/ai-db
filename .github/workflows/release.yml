@@ -43,6 +43,19 @@ jobs:
           npm --workspace apps/gateway run build
           npm --workspace apps/desktop run build
 
+      - name: Ensure app-builder binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver=$(node -p "require('./node_modules/app-builder-bin/package.json').version")
+          tmp=$(mktemp -d)
+          curl -fsSL "https://registry.npmjs.org/app-builder-bin/-/app-builder-bin-${ver}.tgz" -o "$tmp/ab.tgz" || { echo "::error::download app-builder-bin failed"; exit 1; }
+          tar xzf "$tmp/ab.tgz" -C "$tmp"
+          rm -rf node_modules/app-builder-bin
+          mv "$tmp/package" node_modules/app-builder-bin
+          chmod +x node_modules/app-builder-bin/linux/*/app-builder node_modules/app-builder-bin/mac/app-builder_* 2>/dev/null || true
+          ls -la node_modules/app-builder-bin/linux/x64/app-builder node_modules/app-builder-bin/mac/app-builder_arm64
+
       - name: Diagnose toolchain
         shell: bash
         working-directory: apps/desktop
