@@ -143,8 +143,10 @@ export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDri
 
   async describe(): Promise<TableInfo[]> {
     const [indices, mapping] = await Promise.all([
-      this.request<Array<Record<string, any>>>('/_cat/indices?format=json&expand_wildcards=open'),
-      this.request<Record<string, any>>('/_all/_mapping'),
+      // ES 7.6 及更早版本不认识 cat 接口的 expand_wildcards 参数（会回 400），默认就只列 open 索引。
+      this.request<Array<Record<string, any>>>('/_cat/indices?format=json'),
+      // mapping 只是补充列信息；受权限限制或体量过大时不能连带索引列表一起失败。
+      this.request<Record<string, any>>('/_all/_mapping').catch((): Record<string, any> => ({})),
     ]);
     return (indices ?? []).map((index) => {
       const name = String(index.index);
