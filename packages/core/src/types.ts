@@ -107,12 +107,23 @@ export interface ConnectionConfig {
   sslInsecure?: boolean;
   /** 搜索类引擎（ES / OpenSearch）的认证方式；apikey 时密码字段存的是 API Key。 */
   authMode?: 'basic' | 'apikey';
+  /** 部署形态相关的连接参数；不同引擎只用自己看得懂的字段。 */
+  options?: ConnectionOptions;
   ssh?: SshConfig;
   readonly: boolean;
   note?: string;
   createdAt: string;
   updatedAt: string;
   lastUsedAt?: string;
+}
+
+export interface ConnectionOptions {
+  /** MongoDB 副本集名：Docker/Atlas 节点回内部主机名时，靠它或直连才能连上。 */
+  replicaSet?: string;
+  /** MongoDB 认证库（默认是目标库，用户建在 admin 时必须指定）。 */
+  authSource?: string;
+  /** MongoDB 单节点直连，跳过拓扑发现。 */
+  directConnection?: boolean;
 }
 
 export interface ConnectionSecret {

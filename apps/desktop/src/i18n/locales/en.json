@@ -3540,5 +3540,8 @@
   "不校验证书": "Do not verify the certificate",
   "证书自签或不匹配主机名时勾选；仍加密，但不校验证书链": "Tick for self-signed or hostname-mismatched certificates — traffic stays encrypted, but the certificate chain is not verified",
   "用户名 + 密码": "Username + password",
+  "认证库": "Authentication database",
+  "副本集名称，可留空": "Replica set name — leave blank when unused",
+  "直连该节点，跳过副本集发现": "Connect straight to this node and skip replica set discovery",
   "保存当前 SQL": "Save current SQL"
 }

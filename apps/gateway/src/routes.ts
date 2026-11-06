@@ -150,10 +150,20 @@ function obj(value: unknown, name: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function num(value: unknown, fallback: number, min: number, max: number): number {
-  const n = Number(value);
+function num(value: unknown, fallback: number, min: number, max: number): number {  const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, Math.floor(n)));
+}
+
+/** 部署形态参数只接受白名单字段；其余一律丢弃，避免把任意 JSON 写进连接配置。 */
+function connectionOptions(value: unknown): ConnectionConfig['options'] | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const out: NonNullable<ConnectionConfig['options']> = {};
+  if (typeof raw.replicaSet === 'string' && raw.replicaSet.trim()) out.replicaSet = raw.replicaSet.trim();
+  if (typeof raw.authSource === 'string' && raw.authSource.trim()) out.authSource = raw.authSource.trim();
+  if (typeof raw.directConnection === 'boolean') out.directConnection = raw.directConnection;
+  return out;
 }
 
 function bearer(req: Request): string {
@@ -335,6 +345,7 @@ export function createApiRouter(deps: ApiDeps): Router {
         ssl: Boolean(body.ssl),
         sslInsecure: Boolean(body.sslInsecure),
         authMode: body.authMode === 'apikey' ? 'apikey' : body.authMode === 'basic' ? 'basic' : undefined,
+        options: connectionOptions(body.options),
         ssh: body.ssh as ConnectionConfig['ssh'],
         readonly: Boolean(body.readonly),
         note: str(body.note),
@@ -364,6 +375,7 @@ export function createApiRouter(deps: ApiDeps): Router {
         ssl: body.ssl === undefined ? undefined : Boolean(body.ssl),
         sslInsecure: body.sslInsecure === undefined ? undefined : Boolean(body.sslInsecure),
         authMode: body.authMode === 'apikey' ? 'apikey' : body.authMode === 'basic' ? 'basic' : body.authMode === undefined ? undefined : 'basic',
+        options: body.options === undefined ? undefined : connectionOptions(body.options),
         ssh: body.ssh as ConnectionConfig['ssh'],
         readonly: body.readonly === undefined ? undefined : Boolean(body.readonly),
         note: str(body.note),
@@ -430,6 +442,7 @@ export function createApiRouter(deps: ApiDeps): Router {
         ssl: Boolean(body.ssl),
         sslInsecure: Boolean(body.sslInsecure),
         authMode: body.authMode === 'apikey' ? 'apikey' : body.authMode === 'basic' ? 'basic' : undefined,
+        options: connectionOptions(body.options),
         ssh: body.ssh as ConnectionConfig['ssh'],
         readonly: false,
         createdAt: now,

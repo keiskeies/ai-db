@@ -25,6 +25,9 @@ export interface MongoOptions {
   password?: string;
   database?: string;
   ssl?: boolean;
+  replicaSet?: string;
+  authSource?: string;
+  directConnection?: boolean;
 }
 
 const SYSTEM_DATABASES = new Set(['admin', 'local', 'config']);
@@ -225,8 +228,18 @@ export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver, 
     const database = this.opts.database ? `/${encodeURIComponent(this.opts.database)}` : '';
     const params = new URLSearchParams();
     if (this.opts.ssl) params.set('tls', 'true');
+    if (this.opts.replicaSet) params.set('replicaSet', this.opts.replicaSet);
+    if (this.opts.authSource) params.set('authSource', this.opts.authSource);
+    if (this.opts.directConnection) params.set('directConnection', 'true');
     const query = params.toString();
-    return `mongodb://${auth}${this.opts.host || '127.0.0.1'}:${this.opts.port || 27017}${database}${query ? `?${query}` : ''}`;
+    // 副本集可以填多个种子节点；已带端口的条目不再补默认端口。
+    const hosts = (this.opts.host || '127.0.0.1')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => (item.includes(':') ? item : `${item}:${this.opts.port || 27017}`))
+      .join(',');
+    return `mongodb://${auth}${hosts}${database}${query ? `?${query}` : ''}`;
   }
 
   private connect(): Promise<MongoClient> {

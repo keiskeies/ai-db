@@ -156,6 +156,9 @@ export async function createDriver(config: ConnectionConfig, secret: ConnectionS
         password: secret.password,
         database: config.database,
         ssl: config.ssl,
+        replicaSet: config.options?.replicaSet,
+        authSource: config.options?.authSource,
+        directConnection: config.options?.directConnection,
       });
       return { driver, close: () => closeWithTunnel(driver) };
     }

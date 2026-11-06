@@ -83,6 +83,9 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
   const [ssl, setSsl] = useState(Boolean(c?.ssl));
   const [sslInsecure, setSslInsecure] = useState(Boolean(c?.sslInsecure));
   const [authMode, setAuthMode] = useState<'basic' | 'apikey'>(c?.authMode ?? 'basic');
+  const [replicaSet, setReplicaSet] = useState(c?.options?.replicaSet ?? '');
+  const [authSource, setAuthSource] = useState(c?.options?.authSource ?? '');
+  const [directConnection, setDirectConnection] = useState(Boolean(c?.options?.directConnection));
   const [readonly, setReadonly] = useState(Boolean(c?.readonly));
   const [sshEnabled, setSshEnabled] = useState(Boolean(c?.ssh?.enabled));
   const [sshHost, setSshHost] = useState(c?.ssh?.host ?? '');
@@ -121,6 +124,14 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
       ssl,
       sslInsecure: ssl ? sslInsecure : false,
       authMode: engineMeta(engine).model === 'search' ? authMode : undefined,
+      options:
+        engine === 'mongodb'
+          ? {
+              replicaSet: replicaSet.trim() || undefined,
+              authSource: authSource.trim() || undefined,
+              directConnection: directConnection || undefined,
+            }
+          : undefined,
       readonly,
       ssh:
         !meta.fileBased && sshEnabled
@@ -319,6 +330,37 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
                     data-testid="connection-database"
                   />
                 </div>
+              ) : null}
+              {engine === 'mongodb' ? (
+                <>
+                  <div className="field">
+                    <label>Replica Set</label>
+                    <input
+                      className="input mono"
+                      value={replicaSet}
+                      onChange={(e) => setReplicaSet(e.target.value)}
+                      placeholder={tr("副本集名称，可留空")}
+                      data-testid="connection-replica-set"
+                    />
+                  </div>
+                  <div className="field">
+                    <label>{tr("认证库")}</label>
+                    <input
+                      className="input mono"
+                      value={authSource}
+                      onChange={(e) => setAuthSource(e.target.value)}
+                      placeholder="admin"
+                      data-testid="connection-auth-source"
+                    />
+                  </div>
+                  <div className="field">
+                    {/* Docker / Atlas / SSH 隧道下拓扑发现返回的是内部主机名，直连才能稳定连上 */}
+                    <label className="checkbox">
+                      <input type="checkbox" checked={directConnection} onChange={(e) => setDirectConnection(e.target.checked)} data-testid="connection-direct" />
+                      {tr("直连该节点，跳过副本集发现")}
+                    </label>
+                  </div>
+                </>
               ) : null}
               {engine === 'oracle' || engineMeta(engine).model !== 'relational' ? null : (
                 <div className="field full">
