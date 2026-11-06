@@ -81,6 +81,8 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
   const [username, setUsername] = useState(c?.username ?? meta.defaultUsername ?? '');
   const [password, setPassword] = useState('');
   const [ssl, setSsl] = useState(Boolean(c?.ssl));
+  const [sslInsecure, setSslInsecure] = useState(Boolean(c?.sslInsecure));
+  const [authMode, setAuthMode] = useState<'basic' | 'apikey'>(c?.authMode ?? 'basic');
   const [readonly, setReadonly] = useState(Boolean(c?.readonly));
   const [sshEnabled, setSshEnabled] = useState(Boolean(c?.ssh?.enabled));
   const [sshHost, setSshHost] = useState(c?.ssh?.host ?? '');
@@ -117,6 +119,8 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
       username: meta.fileBased ? undefined : username.trim(),
       password: password || undefined,
       ssl,
+      sslInsecure: ssl ? sslInsecure : false,
+      authMode: engineMeta(engine).model === 'search' ? authMode : undefined,
       readonly,
       ssh:
         !meta.fileBased && sshEnabled
@@ -252,20 +256,22 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
                   />
                 </div>
               ) : null}
+              {engineMeta(engine).model === 'search' && authMode === 'apikey' ? null : (
+                <div className="field">
+                  <label>{t('username')}</label>
+                  <input
+                    className="input"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    autoComplete="off"
+                    name="aidb-connection-user"
+                    data-form-type="other"
+                    data-testid="connection-username"
+                  />
+                </div>
+              )}
               <div className="field">
-                <label>{t('username')}</label>
-                <input
-                  className="input"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  autoComplete="off"
-                  name="aidb-connection-user"
-                  data-form-type="other"
-                  data-testid="connection-username"
-                />
-              </div>
-              <div className="field">
-                <label>{t('password')}</label>
+                <label>{engineMeta(engine).model === 'search' && authMode === 'apikey' ? tr("API Key") : t('password')}</label>
                 <SecretInput
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -275,12 +281,33 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
                 />
               </div>
               {engineMeta(engine).supportsSsl ? (
-                <div className="field" style={{ justifyContent: 'flex-end' }}>
+                <div className="field" style={{ justifyContent: 'flex-end', gap: 6 }}>
                   <label className="checkbox"><input type="checkbox" checked={ssl} onChange={(e) => setSsl(e.target.checked)} /> SSL</label>
+                  {/* MySQL 8 默认自签、内网 IP 证书没有受信 CA：只给「加密」一个开关等于逼用户关掉 TLS。 */}
+                  {ssl ? (
+                    <label className="checkbox" title={tr("证书自签或不匹配主机名时勾选；仍加密，但不校验证书链")}>
+                      <input type="checkbox" checked={sslInsecure} onChange={(e) => setSslInsecure(e.target.checked)} data-testid="connection-ssl-insecure" />
+                      {tr("不校验证书")}
+                    </label>
+                  ) : null}
                 </div>
               ) : (
                 <div />
               )}
+              {engineMeta(engine).model === 'search' ? (
+                <div className="field">
+                  <label>{tr("认证方式")}</label>
+                  <select
+                    className="input"
+                    value={authMode}
+                    onChange={(e) => setAuthMode(e.target.value as 'basic' | 'apikey')}
+                    data-testid="connection-auth-mode"
+                  >
+                    <option value="basic">{tr("用户名 + 密码")}</option>
+                    <option value="apikey">{tr("API Key")}</option>
+                  </select>
+                </div>
+              ) : null}
               {engineMeta(engine).model !== 'relational' ? (
                 <div className="field">
                   <label>{engineMeta(engine).model === 'keyvalue' ? tr("DB 索引") : tr("数据库")}</label>

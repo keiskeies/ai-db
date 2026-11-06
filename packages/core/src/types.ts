@@ -103,6 +103,10 @@ export interface ConnectionConfig {
   username?: string;
   hasPassword?: boolean;
   ssl?: boolean;
+  /** 加密但不校验证书链：MySQL 自签证书、内网 IP 证书、企业自签 CA 都靠它。 */
+  sslInsecure?: boolean;
+  /** 搜索类引擎（ES / OpenSearch）的认证方式；apikey 时密码字段存的是 API Key。 */
+  authMode?: 'basic' | 'apikey';
   ssh?: SshConfig;
   readonly: boolean;
   note?: string;

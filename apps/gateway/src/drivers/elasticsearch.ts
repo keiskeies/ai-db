@@ -14,6 +14,8 @@ import type {
 } from './types';
 import { DbError } from './types';
 import { mapLimit } from './concurrency';
+import { tlsDispatcher } from './ssl';
+import type { Agent } from 'undici';
 
 /** 一次 _mapping 请求带多少个索引；几千索引的集群不该用一次 _all/_mapping 换回上百 MB。 */
 const MAPPING_BATCH = 60;
@@ -23,7 +25,10 @@ export interface ElasticsearchOptions {
   port: number;
   user?: string;
   password?: string;
+  /** ES 8 的 API Key（`Authorization: ApiKey <token>`）；很多安全集群只发 Key，不发密码。 */
+  apiKey?: string;
   ssl?: boolean;
+  sslInsecure?: boolean;
 }
 
 interface ServerInfo {
@@ -129,6 +134,8 @@ export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDri
   engine: Engine;
   /** 版本只用于选择请求参数，不参与功能矩阵；失败时按“未知版本”走保守路径。 */
   private serverInfo?: Promise<ServerInfo | undefined>;
+  private dispatcher?: Agent;
+  private dispatcherChecked = false;
 
   constructor(private opts: ElasticsearchOptions, engine: Engine = 'elasticsearch') {
     this.engine = engine;
@@ -152,10 +159,21 @@ export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDri
 
   private headers(): Record<string, string> {
     const headers: Record<string, string> = { 'content-type': 'application/json' };
-    if (this.opts.user) {
+    // API Key 优先：ES 8 的安全集群常只下发 Key，而 username 会残留成默认值。
+    if (this.opts.apiKey) headers.authorization = `ApiKey ${this.opts.apiKey}`;
+    else if (this.opts.user) {
       headers.authorization = `Basic ${Buffer.from(`${this.opts.user}:${this.opts.password ?? ''}`).toString('base64')}`;
     }
     return headers;
+  }
+
+  /** 自签 HTTPS 服务需要跳过证书校验；dispatcher 只在真的开了 SSL 时才建。 */
+  private get agent(): Agent | undefined {
+    if (this.dispatcher === undefined && !this.dispatcherChecked) {
+      this.dispatcher = tlsDispatcher(this.opts);
+      this.dispatcherChecked = true;
+    }
+    return this.dispatcher;
   }
 
   private async request<T>(path: string, init: RequestInit = {}, timeoutMs = 30000): Promise<T> {
@@ -165,7 +183,8 @@ export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDri
         ...init,
         headers: { ...this.headers(), ...(init.headers ?? {}) },
         signal: AbortSignal.timeout(timeoutMs),
-      });
+        ...(this.agent ? { dispatcher: this.agent } : {}),
+      } as RequestInit);
     } catch (err: any) {
       throw new DbError(`${this.engine === 'opensearch' ? 'OpenSearch' : 'Elasticsearch'} 请求失败：${err?.message ?? '网络错误'}`, {
         code: 'SEARCH_NETWORK',
@@ -318,7 +337,8 @@ export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDri
       response = await fetch(`${this.base()}/${encodeURIComponent(index)}/_doc/${encodeURIComponent(id)}`, {
         headers: this.headers(),
         signal: AbortSignal.timeout(30000),
-      });
+        ...(this.agent ? { dispatcher: this.agent } : {}),
+      } as RequestInit);
     } catch (err: any) {
       throw new DbError(`${this.engine === 'opensearch' ? 'OpenSearch' : 'Elasticsearch'} 请求失败：${err?.message ?? '网络错误'}`, {
         code: 'SEARCH_NETWORK',
@@ -412,5 +432,8 @@ export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDri
 
   async close(): Promise<void> {
     /* fetch has no persistent connection */
+    await this.dispatcher?.close().catch(() => undefined);
+    this.dispatcher = undefined;
+    this.dispatcherChecked = false;
   }
 }

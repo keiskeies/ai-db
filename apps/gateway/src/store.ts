@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS connections (
   environment TEXT NOT NULL DEFAULT 'dev' CHECK (environment IN ('dev','staging','prod')),
   group_name TEXT NOT NULL DEFAULT '默认',
   host TEXT, port INTEGER, database TEXT, username TEXT,
-  secret TEXT, ssl INTEGER NOT NULL DEFAULT 0, ssh_json TEXT,
+  secret TEXT, ssl INTEGER NOT NULL DEFAULT 0, ssl_insecure INTEGER NOT NULL DEFAULT 0, auth_mode TEXT, ssh_json TEXT,
   readonly INTEGER NOT NULL DEFAULT 0, note TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_used_at TEXT
 );
@@ -315,6 +315,8 @@ interface ConnectionRow {
   username: string | null;
   secret: string | null;
   ssl: number;
+  ssl_insecure: number;
+  auth_mode: string | null;
   ssh_json: string | null;
   readonly: number;
   note: string | null;
@@ -421,6 +423,8 @@ export interface ConnectionInput {
   sshPrivateKey?: string;
   sshPassphrase?: string;
   ssl?: boolean;
+  sslInsecure?: boolean;
+  authMode?: 'basic' | 'apikey';
   ssh?: SshConfig;
   readonly?: boolean;
   note?: string;
@@ -611,6 +615,10 @@ export class Store {
     }
     // 连接不再要求填库名之后，会话必须自己记住选中的库，否则重开会话会悄悄跑回默认库
     this.ensureColumn('agent_sessions', 'database', 'TEXT');
+    // 「加密但不校验证书」必须落库：自签证书的库在重启后不该退回校验失败
+    this.ensureColumn('connections', 'ssl_insecure', 'INTEGER NOT NULL DEFAULT 0');
+    // 搜索类引擎的 API Key 认证方式同样要跨重启保留
+    this.ensureColumn('connections', 'auth_mode', 'TEXT');
     // 会话累计用量：轮次/步数/缓存命中都要跨会话保留，否则重开会话状态条就空了
     this.ensureColumn('agent_sessions', 'turns', 'INTEGER DEFAULT 0');
     this.ensureColumn('agent_sessions', 'steps', 'INTEGER DEFAULT 0');
@@ -725,6 +733,8 @@ export class Store {
       username: row.username ?? undefined,
       hasPassword: Boolean(row.secret),
       ssl: Boolean(row.ssl),
+      sslInsecure: Boolean(row.ssl_insecure),
+      authMode: row.auth_mode === 'apikey' ? 'apikey' : row.auth_mode === 'basic' ? 'basic' : undefined,
       ssh,
       readonly: Boolean(row.readonly),
       note: row.note ?? undefined,
@@ -765,8 +775,8 @@ export class Store {
     if (sshPassphrase) secret.sshPassphrase = sshPassphrase;
     const ssh = input.ssh ? { ...input.ssh, password: undefined, passphrase: undefined } : undefined;
     this.exec(
-      `INSERT INTO connections (id,name,engine,color,environment,group_name,host,port,database,username,secret,ssl,ssh_json,readonly,note,created_at,updated_at,last_used_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)`,
+      `INSERT INTO connections (id,name,engine,color,environment,group_name,host,port,database,username,secret,ssl,ssl_insecure,auth_mode,ssh_json,readonly,note,created_at,updated_at,last_used_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)`,
       [
         id,
         input.name,
@@ -780,6 +790,8 @@ export class Store {
         input.username ?? null,
         Object.keys(secret).length ? this.box.encrypt(secret) : null,
         input.ssl ? 1 : 0,
+        input.sslInsecure ? 1 : 0,
+        input.authMode ?? null,
         ssh ? JSON.stringify(ssh) : null,
         input.readonly ? 1 : 0,
         input.note ?? null,
@@ -820,12 +832,14 @@ export class Store {
       database: patch.database !== undefined ? patch.database : row.database,
       username: patch.username !== undefined ? patch.username : row.username,
       ssl: patch.ssl !== undefined ? (patch.ssl ? 1 : 0) : row.ssl,
+      sslInsecure: patch.sslInsecure !== undefined ? (patch.sslInsecure ? 1 : 0) : row.ssl_insecure,
+      authMode: patch.authMode !== undefined ? patch.authMode : row.auth_mode,
       readonly: patch.readonly !== undefined ? (patch.readonly ? 1 : 0) : row.readonly,
       note: patch.note !== undefined ? patch.note : row.note,
     };
     this.exec(
       `UPDATE connections SET name=?, engine=?, color=?, environment=?, group_name=?, host=?, port=?, database=?, username=?,
-        secret=?, ssl=?, ssh_json=?, readonly=?, note=?, updated_at=? WHERE id=?`,
+        secret=?, ssl=?, ssl_insecure=?, auth_mode=?, ssh_json=?, readonly=?, note=?, updated_at=? WHERE id=?`,
       [
         next.name,
         next.engine,
@@ -838,6 +852,8 @@ export class Store {
         next.username ?? null,
         Object.keys(secret).length ? this.box.encrypt(secret) : null,
         next.ssl,
+        next.sslInsecure,
+        next.authMode ?? null,
         ssh,
         next.readonly,
         next.note ?? null,

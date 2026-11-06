@@ -3,6 +3,7 @@ import type { Pool } from 'pg';
 import type { ColumnInfo, Engine, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions } from './types';
 import { DbError, toRowArray } from './types';
+import { nodeTlsOptions } from './ssl';
 
 const { Pool: PgPool } = pg;
 
@@ -13,6 +14,7 @@ export interface PgOptions {
   password?: string;
   database?: string;
   ssl?: boolean;
+  sslInsecure?: boolean;
 }
 
 const OIDS: Record<number, string> = {
@@ -70,7 +72,7 @@ export class PostgresDriver implements Driver {
         user: this.opts.user,
         password: this.opts.password,
         database: key,
-        ssl: this.opts.ssl ? { rejectUnauthorized: true } : undefined,
+        ssl: nodeTlsOptions(this.opts),
         max: 3,
         connectionTimeoutMillis: 10000,
         application_name: 'AiDB Studio',

@@ -5,6 +5,7 @@ import type { ConnectionPool, Transaction } from 'mssql';
 import type { ColumnInfo, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions } from './types';
 import { DbError, toRowArray } from './types';
+import { trustServerCertificate } from './ssl';
 
 export interface SqlServerOptions {
   host: string;
@@ -13,6 +14,7 @@ export interface SqlServerOptions {
   password?: string;
   database?: string;
   ssl?: boolean;
+  sslInsecure?: boolean;
 }
 
 interface PgAgg {
@@ -39,7 +41,8 @@ export class SqlServerDriver implements Driver {
         database: key,
         options: {
           encrypt: Boolean(this.opts.ssl),
-          trustServerCertificate: false,
+          // 内网 SQL Server 几乎都是自签证书；不校验时必须能连上而不是直接失败。
+          trustServerCertificate: trustServerCertificate(this.opts),
           enableArithAbort: true,
         },
         pool: { max: 3, min: 0, idleTimeoutMillis: 30000 },

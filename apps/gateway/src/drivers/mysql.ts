@@ -4,6 +4,7 @@ import { engineMeta } from '@aidb/core';
 import type { ColumnInfo, Engine, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions } from './types';
 import { DbError, toRowArray } from './types';
+import { nodeTlsOptions } from './ssl';
 
 export interface MysqlOptions {
   host: string;
@@ -12,6 +13,7 @@ export interface MysqlOptions {
   password?: string;
   database?: string;
   ssl?: boolean;
+  sslInsecure?: boolean;
 }
 
 const MYSQL_TYPES: Record<number, string> = {
@@ -90,7 +92,7 @@ export class MysqlDriver implements Driver {
         user: this.opts.user,
         password: this.opts.password,
         database: key || undefined,
-        ssl: this.opts.ssl ? { rejectUnauthorized: true } : undefined,
+        ssl: nodeTlsOptions(this.opts),
         waitForConnections: true,
         connectionLimit: 3,
         connectTimeout: 10000,
@@ -317,7 +319,7 @@ export class MysqlDriver implements Driver {
       user: this.opts.user,
       password: this.opts.password,
       database: database || this.opts.database || undefined,
-      ssl: this.opts.ssl ? { rejectUnauthorized: true } : undefined,
+      ssl: nodeTlsOptions(this.opts),
       connectTimeout: 10000,
       multipleStatements: true,
     });

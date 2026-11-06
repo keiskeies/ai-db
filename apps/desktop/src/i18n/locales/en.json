@@ -3536,5 +3536,9 @@
   "60 秒有效": "Valid for 60 seconds",
   "剩余 {0} 秒": "{0}s remaining",
   "配对码已过期": "Code expired",
-  "点击重新生成": "Click to regenerate"
+  "点击重新生成": "Click to regenerate",
+  "不校验证书": "Do not verify the certificate",
+  "证书自签或不匹配主机名时勾选；仍加密，但不校验证书链": "Tick for self-signed or hostname-mismatched certificates — traffic stays encrypted, but the certificate chain is not verified",
+  "用户名 + 密码": "Username + password",
+  "保存当前 SQL": "Save current SQL"
 }

@@ -69,6 +69,7 @@ export async function createDriver(config: ConnectionConfig, secret: ConnectionS
           password: secret.password,
           database: config.database,
           ssl: config.ssl,
+          sslInsecure: config.sslInsecure,
         },
         config.engine,
       );
@@ -83,6 +84,7 @@ export async function createDriver(config: ConnectionConfig, secret: ConnectionS
           password: secret.password,
           database: config.database || 'postgres',
           ssl: config.ssl,
+          sslInsecure: config.sslInsecure,
         },
         config.engine,
       );
@@ -96,6 +98,7 @@ export async function createDriver(config: ConnectionConfig, secret: ConnectionS
         password: secret.password,
         database: config.database,
         ssl: config.ssl,
+        sslInsecure: config.sslInsecure,
       });
       return { driver, close: () => closeWithTunnel(driver) };
     }
@@ -259,7 +262,9 @@ export async function createDriver(config: ConnectionConfig, secret: ConnectionS
           port: connectPort,
           user: config.username,
           password: secret.password,
+          apiKey: config.authMode === 'apikey' ? secret.password : undefined,
           ssl: config.ssl,
+          sslInsecure: config.sslInsecure,
         },
         config.engine,
       );

@@ -174,6 +174,22 @@ test('describe batches mapping requests instead of one huge _all/_mapping', asyn
   }
 });
 
+test('ES API Key replaces Basic auth, and Basic still applies without it', async () => {
+  const seen: string[] = [];
+  const mocked = mock.method(globalThis, 'fetch', async (_input: any, init?: any) => {
+    seen.push(String(init?.headers?.authorization ?? ''));
+    return json({ version: { number: '8.13.0' } });
+  });
+  try {
+    await new ElasticsearchDriver({ host: '127.0.0.1', port: 9200, user: 'elastic', password: 'pw', apiKey: 'kvT3Xg:abc' }).test();
+    await new ElasticsearchDriver({ host: '127.0.0.1', port: 9200, user: 'elastic', password: 'pw' }).test();
+  } finally {
+    mocked.mock.restore();
+  }
+  assert.equal(seen[0], 'ApiKey kvT3Xg:abc');
+  assert.equal(seen[1], `Basic ${Buffer.from('elastic:pw').toString('base64')}`);
+});
+
 test('describe keeps the index list when mapping is forbidden', async () => {
   const mocked = mock.method(globalThis, 'fetch', async (input: any) => {
     const url = String(input);
