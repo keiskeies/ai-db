@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import {
   buildCreateIndex,
@@ -8,17 +9,21 @@ import {
   engineMeta,
   engineUsesSchema,
   isSqlEngine,
+  placeholder,
   quoteIdent,
   quoteLiteral,
   quoteQualified,
   type ColumnDef,
   type ConnectionConfig,
+  type DialectId,
   type Engine,
   type IndexDef,
+  type QueryBatchResult,
+  type QueryResult,
   type TableInfo,
 } from '@aidb/core';
 import type { GatewayConfig } from './config';
-import { DbError } from './drivers';
+import { DbError, type Driver } from './drivers';
 import { toXlsx } from './xlsx';
 import type { ConnectionManager } from './manager';
 import type { Store } from './store';
@@ -49,13 +54,67 @@ export function toCsv(columns: string[], rows: unknown[][]): string {
   return '\uFEFF' + [columns.map(escapeCsv).join(','), ...rows.map((r) => r.map(escapeCsv).join(','))].join('\r\n') + '\r\n';
 }
 
+const BINARY_LITERAL: Record<string, (hex: string) => string> = {
+  postgres: (hex) => `decode('${hex}', 'hex')`,
+  mssql: (hex) => `0x${hex}`,
+  oracle: (hex) => `hextoraw('${hex}')`,
+  dm: (hex) => `hextoraw('${hex}')`,
+  clickhouse: (hex) => `unhex('${hex}')`,
+  tdengine: (hex) => `x'${hex}'`,
+  influxdb: (hex) => `decode('${hex}')`,
+  mysql: (hex) => `X'${hex}'`,
+  sqlite: (hex) => `X'${hex}'`,
+};
+
+function pad(value: number, size = 2): string {
+  return String(value).padStart(size, '0');
+}
+
+/** 本地墙钟时间：PG 的 timestamp（无时区）按会话时区解析，转成 UTC 会整体偏移。 */
+function localStamp(date: Date): string {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} `
+    + `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
+}
+
+function localOffset(date: Date): string {
+  const minutes = -date.getTimezoneOffset();
+  const sign = minutes < 0 ? '-' : '+';
+  const abs = Math.abs(minutes);
+  return `${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+}
+
+function dateLiteral(date: Date, dialect: DialectId): string {
+  const stamp = localStamp(date);
+  // Oracle 与达梦的默认日期格式不是 ISO，裸字符串会按 NLS 解析失败。
+  if (dialect === 'oracle' || dialect === 'dm') return `TO_TIMESTAMP(${quoteLiteral(stamp)}, 'YYYY-MM-DD HH24:MI:SS.FF3')`;
+  if (dialect === 'mssql') return quoteLiteral(`${stamp.slice(0, 10)}T${stamp.slice(11)}`);
+  if (dialect === 'influxdb') return quoteLiteral(date.toISOString());
+  // PG 带偏移：timestamptz 保留瞬时，timestamp 会忽略偏移并保留墙钟。
+  if (dialect === 'postgres') return quoteLiteral(`${stamp}${localOffset(date)}`);
+  return quoteLiteral(stamp);
+}
+
+function binaryLiteral(value: Uint8Array, engine: Engine, dialect: DialectId): string {
+  const hex = Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('hex');
+  // DuckDB 的 BLOB 字面量不是标准 X'…'。
+  if (engine === 'duckdb') return `'\\x${hex}'::BLOB`;
+  return (BINARY_LITERAL[dialect] ?? BINARY_LITERAL.mysql)(hex);
+}
+
 export function sqlLiteral(value: unknown, engine: Engine): string {
   if (value === null || value === undefined) return 'NULL';
   if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'NULL';
   if (typeof value === 'bigint') return value.toString();
   // 按方言判断，不能只认 postgresql/cockroachdb；Kingbase/openGauss/Timescale 等别名同样不接受 1/0 写 boolean。
   if (typeof value === 'boolean') return dialectOf(engine) === 'postgres' ? (value ? 'TRUE' : 'FALSE') : value ? '1' : '0';
-  if (Buffer.isBuffer(value)) return `X'${value.toString('hex')}'`;
+  if (value instanceof Date) return dateLiteral(value, dialectOf(engine));
+  // node:sqlite 的 BLOB 是 Uint8Array，不是 Buffer；按对象 JSON 化会得到 {"0":1,…} 这种垃圾。
+  if (value instanceof Uint8Array) return binaryLiteral(value, engine, dialectOf(engine));
+  // PG 驱动把数组列返回成 JS 数组，JSON 串无法隐式转成 integer[] 等数组类型。
+  if (Array.isArray(value)) {
+    if (dialectOf(engine) !== 'postgres') return quoteLiteral(JSON.stringify(value));
+    return value.length ? `ARRAY[${value.map((item) => sqlLiteral(item, engine)).join(', ')}]` : `'{}'`;
+  }
   if (typeof value === 'object') return quoteLiteral(JSON.stringify(value));
   return quoteLiteral(String(value));
 }
@@ -452,6 +511,84 @@ export function restoreDropStatements(engine: Engine, dump: string): string[] {
   return drops;
 }
 
+const DUMP_CHUNK_ROWS = 2000;
+const OFFSET_DIALECTS = new Set<DialectId>(['sqlite', 'mysql', 'postgres', 'mssql', 'clickhouse', 'tdengine']);
+const KEYSET_DIALECTS = new Set<DialectId>(['sqlite', 'mysql', 'postgres', 'mssql', 'clickhouse']);
+
+type DumpPlan = { mode: 'single' } | { mode: 'offset'; order: string[] } | { mode: 'keyset'; column: string };
+
+/**
+ * 备份读取计划：单列主键走 keyset（不会像 OFFSET 那样越往后越慢），复合主键走 OFFSET。
+ * 没有唯一键时宁可一次性读完：靠非唯一列排序分页会漏行或重复行。
+ */
+export function dumpReadPlan(engine: Engine, table: TableInfo): DumpPlan {
+  const dialect = dialectOf(engine);
+  if (!OFFSET_DIALECTS.has(dialect)) return { mode: 'single' };
+  const pk = (table.columns ?? []).filter((column) => column.primaryKey).map((column) => column.name);
+  if (pk.length === 1 && KEYSET_DIALECTS.has(dialect)) return { mode: 'keyset', column: pk[0] };
+  if (pk.length) return { mode: 'offset', order: pk };
+  return { mode: 'single' };
+}
+
+export function dumpPageSql(engine: Engine, base: string, order: string[], limit: number, offset: number): string {
+  const orderBy = ` ORDER BY ${order.map((name) => quoteIdent(name, engine)).join(', ')}`;
+  if (dialectOf(engine) === 'mssql') return `${base}${orderBy} OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY`;
+  return `${base}${orderBy} LIMIT ${limit} OFFSET ${offset}`;
+}
+
+export function dumpKeysetSql(engine: Engine, base: string, column: string, limit: number, cursor: unknown): string {
+  const quoted = quoteIdent(column, engine);
+  const where = cursor === undefined ? '' : ` WHERE ${quoted} > ${placeholder(engine, 1)}`;
+  const orderBy = ` ORDER BY ${quoted}`;
+  if (dialectOf(engine) === 'mssql') return `${base}${where}${orderBy} OFFSET 0 ROWS FETCH NEXT ${limit} ROWS ONLY`;
+  return `${base}${where}${orderBy} LIMIT ${limit}`;
+}
+
+async function writeTableRows(
+  write: (text: string) => Promise<void>,
+  driver: Driver,
+  engine: Engine,
+  table: TableInfo,
+  base: string,
+  database: string | undefined,
+): Promise<number> {  const plan = dumpReadPlan(engine, table);
+  const schema = engineUsesSchema(engine) ? table.schema : undefined;
+  let names: string[] | undefined;
+  let rowCount = 0;
+  const emit = async (result: QueryResult) => {
+    if (!names) names = result.columns.map((column) => column.name);
+    for (let i = 0; i < result.rows.length; i += DUMP_CHUNK_ROWS) {
+      const chunk = result.rows.slice(i, i + DUMP_CHUNK_ROWS);
+      await write(toSqlInserts(engine, table.name, names, chunk, schema));
+      rowCount += chunk.length;
+    }
+  };
+  if (plan.mode === 'single') {
+    await emit(await driver.run(base, { database }));
+    return rowCount;
+  }
+  if (plan.mode === 'offset') {
+    for (let offset = 0; ; offset += DUMP_CHUNK_ROWS) {
+      const result = await driver.run(dumpPageSql(engine, base, plan.order, DUMP_CHUNK_ROWS, offset), { database });
+      await emit(result);
+      if (result.rows.length < DUMP_CHUNK_ROWS) return rowCount;
+    }
+  }
+  let cursor: unknown;
+  for (;;) {
+    const sql = dumpKeysetSql(engine, base, plan.column, DUMP_CHUNK_ROWS, cursor);
+    const result = cursor === undefined
+      ? await driver.run(sql, { database })
+      : await driver.runParams(sql, [cursor], { database });
+    await emit(result);
+    if (result.rows.length < DUMP_CHUNK_ROWS) return rowCount;
+    const index = result.columns.findIndex((column) => column.name.toLowerCase() === plan.column.toLowerCase());
+    const last = result.rows[result.rows.length - 1];
+    if (index < 0 || !last || last[index] === null || last[index] === undefined) return rowCount;
+    cursor = last[index];
+  }
+}
+
 export async function dumpDatabase(  store: Store,
   manager: ConnectionManager,
   config: GatewayConfig,
@@ -463,55 +600,128 @@ export async function dumpDatabase(  store: Store,
   if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
   const schemas = await manager.schema(connectionId, database, true);
   const driver = await manager.rawDriver(connectionId);
-  const lines: string[] = [
-    `-- AiDB Studio backup`,
-    `-- connection: ${conn.name} (${conn.engine})`,
-    `-- database: ${database ?? conn.database ?? ''}`,
-    `-- created: ${new Date().toISOString()}`,
-    '',
-  ];
-  let tableCount = 0;
-  let rowCount = 0;
-  for (const schema of schemas) {
-    for (const table of schema.tables) {
-      if (table.type !== 'table') continue;
-      const columns = table.columns ?? [];
-      if (!columns.length) continue;
-      tableCount++;
-      const columnDefs: ColumnDef[] = columns.map((c) => ({
-        name: c.name,
-        type: c.type,
-        nullable: c.nullable,
-        defaultValue: c.defaultValue !== undefined && c.defaultValue !== null && !/[()]|::/.test(String(c.defaultValue)) ? String(c.defaultValue) : undefined,
-        primaryKey: c.primaryKey,
-        autoIncrement: c.autoIncrement,
-      }));
-      const indexes: IndexDef[] = (table.indexes ?? [])
-        .filter((i) => !i.primary)
-        .map((i) => ({ name: i.name, columns: i.columns, unique: i.unique }));
-      lines.push(`-- table ${table.name}`);
-      lines.push(buildCreateTable(conn.engine, { table: table.name, columns: columnDefs, indexes: [], schema: engineUsesSchema(conn.engine) ? table.schema : undefined }) + ';');
-      for (const idx of indexes) {
-        lines.push(buildCreateIndex(conn.engine, table.name, idx, engineUsesSchema(conn.engine) ? table.schema : undefined) + ';');
-      }
-      const target = quoteQualified([engineUsesSchema(conn.engine) ? table.schema : undefined, table.name], conn.engine);
-      const result = await driver.run(`SELECT * FROM ${target}`, { database: conn.database });
-      const names = result.columns.map((c) => c.name);
-      for (let i = 0; i < result.rows.length; i += 300) {
-        const chunk = result.rows.slice(i, i + 300);
-        lines.push(toSqlInserts(conn.engine, table.name, names, chunk, engineUsesSchema(conn.engine) ? table.schema : undefined));
-        rowCount += chunk.length;
-      }
-      lines.push('');
-    }
-  }
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const safeName = (database ?? conn.database ?? conn.name).replace(/[^\w\u4e00-\u9fff-]+/g, '_').slice(0, 40);
   const path = join(config.backupDir, `${conn.name.replace(/[^\w\u4e00-\u9fff-]+/g, '_')}-${safeName}-${stamp}.sql`);
-  writeFileSync(path, lines.join('\n'), 'utf8');
+  // 边读边写：整库备份不能再把「全部行 + 全部 INSERT 文本 + join 后的巨型字符串」同时留在内存里。
+  const stream = createWriteStream(path, { flags: 'w' });
+  const write = (text: string) =>
+    new Promise<void>((resolveWrite, rejectWrite) => {
+      stream.write(`${text}\n`, (err) => (err ? rejectWrite(err) : resolveWrite()));
+    });
+  let tableCount = 0;
+  let rowCount = 0;
+  try {
+    await write(`-- AiDB Studio backup`);
+    await write(`-- connection: ${conn.name} (${conn.engine})`);
+    await write(`-- database: ${database ?? conn.database ?? ''}`);
+    await write(`-- created: ${new Date().toISOString()}`);
+    await write('');
+    for (const schema of schemas) {
+      for (const table of schema.tables) {
+        if (table.type !== 'table') continue;
+        const columns = table.columns ?? [];
+        if (!columns.length) continue;
+        tableCount++;
+        const columnDefs: ColumnDef[] = columns.map((c) => ({
+          name: c.name,
+          type: c.type,
+          nullable: c.nullable,
+          defaultValue: c.defaultValue !== undefined && c.defaultValue !== null && !/[()]|::/.test(String(c.defaultValue)) ? String(c.defaultValue) : undefined,
+          primaryKey: c.primaryKey,
+          autoIncrement: c.autoIncrement,
+        }));
+        const indexes: IndexDef[] = (table.indexes ?? [])
+          .filter((i) => !i.primary)
+          .map((i) => ({ name: i.name, columns: i.columns, unique: i.unique }));
+        await write(`-- table ${table.name}`);
+        await write(buildCreateTable(conn.engine, { table: table.name, columns: columnDefs, indexes: [], schema: engineUsesSchema(conn.engine) ? table.schema : undefined }) + ';');
+        for (const idx of indexes) {
+          await write(buildCreateIndex(conn.engine, table.name, idx, engineUsesSchema(conn.engine) ? table.schema : undefined) + ';');
+        }
+        const target = quoteQualified([engineUsesSchema(conn.engine) ? table.schema : undefined, table.name], conn.engine);
+        // 备份的是哪个库就用哪个库读数据；写死 conn.database 会把非默认库的备份读成默认库的表。
+        rowCount += await writeTableRows(write, driver, conn.engine, table, `SELECT * FROM ${target}`, database ?? conn.database);
+        await write('');
+      }
+    }
+  } finally {
+    await new Promise<void>((resolveClose, rejectClose) => {
+      stream.once('close', () => resolveClose());
+      stream.once('error', rejectClose);
+      stream.end();
+    });
+  }
   const bytes = statSync(path).size;
   const record = store.addBackup({ connectionId, database, path, format: 'sql', bytes, label });
   return { id: record.id, createdAt: record.createdAt, path, bytes, tables: tableCount, rows: rowCount };
+}
+
+const RESTORE_BATCH_BYTES = 4 * 1024 * 1024;
+
+/**
+ * 逐条读出备份脚本。AiDB 的 dump 一条语句一行（CREATE TABLE 会跨行），
+ * 因此以「行尾分号」作为边界即可，不必把整个文件读进内存再 split。
+ */
+export async function* readSqlStatements(path: string): AsyncGenerator<string> {
+  const lines = createInterface({ input: createReadStream(path, { encoding: 'utf8' }), crlfDelay: Infinity });
+  let buffer = '';
+  for await (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('--')) continue;
+    buffer = buffer ? `${buffer}\n${line}` : line;
+    if (trimmed.endsWith(';')) {
+      yield buffer.trim();
+      buffer = '';
+    }
+  }
+  if (buffer.trim()) yield buffer.trim();
+}
+
+export async function restoreBackupFile(
+  store: Store,
+  manager: ConnectionManager,
+  connectionId: string,
+  path: string,
+  database?: string,
+): Promise<QueryBatchResult> {
+  const conn = store.getConnection(connectionId);
+  if (!conn) throw new DbError('备份对应的连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+  const started = Date.now();
+  const timeoutMs = store.getSettings().queryTimeoutMs;
+  // 第一遍只留 CREATE 的表头，用来生成 DROP；第二遍才真正回放，避免整库脚本进内存。
+  const headers: string[] = [];
+  for await (const statement of readSqlStatements(path)) {
+    if (/^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|VIEW)\b/i.test(statement)) headers.push(statement.split('\n', 1)[0]);
+  }
+  const drops = restoreDropStatements(conn.engine, headers.join('\n'));
+  const driver = await manager.rawDriver(connectionId);
+  const viaScript = typeof driver.execScript === 'function';
+  const sets: QueryResult[] = [];
+  const messages: string[] = [];
+  let pending = '';
+  let statements = 0;
+  const flush = async () => {
+    if (!pending.trim()) return;
+    const script = pending;
+    pending = '';
+    if (viaScript) {
+      // SQLite / DuckDB 走整段脚本：几十万条 INSERT 逐条执行会阻塞事件循环十几分钟。
+      await manager.execScript(connectionId, `BEGIN;\n${script}\nCOMMIT;`, { database, timeoutMs, actor: 'user' });
+    } else {
+      const batch = await manager.query(connectionId, script, { database, allowMulti: true, autoLimit: false, timeoutMs, actor: 'user' });
+      sets.push(...batch.sets);
+    }
+  };
+  pending = drops.length ? `${drops.join('\n')}\n` : '';
+  for await (const statement of readSqlStatements(path)) {
+    pending += `${statement}\n`;
+    statements += 1;
+    if (pending.length >= RESTORE_BATCH_BYTES) await flush();
+  }
+  await flush();
+  messages.push(viaScript ? `备份已恢复 · ${statements} 条语句` : `备份已恢复 · ${statements} 条语句 · ${sets.length} 个结果集`);
+  return { sets, messages, durationMs: Date.now() - started };
 }
 
 export function auditCsv(rows: Array<Record<string, unknown>>): string {

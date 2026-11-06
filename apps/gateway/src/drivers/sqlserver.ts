@@ -262,6 +262,16 @@ export class SqlServerDriver implements Driver {
     }
   }
 
+  /** 备份恢复用：整段 T-SQL 批处理一次提交，省掉逐条语句的往返。 */
+  async execScript(sql: string, database?: string): Promise<void> {
+    const pool = await this.pool(database);
+    try {
+      await pool.request().batch(sql);
+    } catch (err: any) {
+      throw new DbError(err?.message ?? 'SQL Server 脚本执行失败', { code: err?.code ?? 'MSSQL_SCRIPT_ERROR' });
+    }
+  }
+
   async close(): Promise<void> {
     for (const [sessionId] of this.txTransactions) {
       await this.finishTransaction(sessionId, false).catch(() => undefined);

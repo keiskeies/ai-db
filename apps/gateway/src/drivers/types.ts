@@ -21,7 +21,7 @@ export interface Driver {
   run(sql: string, opts?: RunOptions): Promise<QueryResult>;
   runParams(sql: string, params: unknown[], opts?: RunOptions): Promise<QueryResult>;
   /** 一次性执行多语句脚本（备份恢复等大脚本），避免逐条语句的往返开销。 */
-  execScript?(sql: string): Promise<void>;
+  execScript?(sql: string, database?: string): Promise<void>;
   close(): Promise<void>;
 }
 

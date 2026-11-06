@@ -303,6 +303,30 @@ export class MysqlDriver implements Driver {
   }
 
   /** 连接被回收前必须回滚，避免事务悬挂占用连接。 */
+  /**
+   * 备份恢复用：一批语句一次往返。
+   * 主池固定 multipleStatements:false（普通查询不该被拼接成语句流），脚本走这条一次性连接。
+   */
+  async execScript(sql: string, database?: string): Promise<void> {
+    const connection = await mysql.createConnection({
+      host: this.opts.host,
+      port: this.opts.port,
+      user: this.opts.user,
+      password: this.opts.password,
+      database: database || this.opts.database || undefined,
+      ssl: this.opts.ssl ? { rejectUnauthorized: true } : undefined,
+      connectTimeout: 10000,
+      multipleStatements: true,
+    });
+    try {
+      await connection.query(sql);
+    } catch (err: any) {
+      throw new DbError(err?.message ?? 'MySQL 脚本执行失败', { code: err?.code ?? 'MYSQL_SCRIPT_ERROR' });
+    } finally {
+      await connection.end().catch(() => undefined);
+    }
+  }
+
   async close(): Promise<void> {
     for (const [sessionId] of this.txConnections) {
       await this.finishTransaction(sessionId, 'rollback').catch(() => undefined);

@@ -328,6 +328,18 @@ export class PostgresDriver implements Driver {
     }
   }
 
+  /** 备份恢复用：PG 的 simple query 一次往返执行整段脚本，脚本内任一语句失败整段回滚。 */
+  async execScript(sql: string, database?: string): Promise<void> {
+    const client = await this.pool(database).connect();
+    try {
+      await client.query(sql);
+    } catch (err: any) {
+      throw new DbError(err?.message ?? 'PostgreSQL 脚本执行失败', { code: err?.code ?? 'PG_SCRIPT_ERROR' });
+    } finally {
+      client.release();
+    }
+  }
+
   /** 连接被回收前先回滚，避免事务悬挂占着连接。 */
   async close(): Promise<void> {
     for (const [sessionId] of this.txClients) {

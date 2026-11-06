@@ -1247,7 +1247,7 @@ export class ConnectionManager {
     const driver = await this.driverFor(connectionId);
     if (!driver.execScript) return false;
     const started = Date.now();
-    await driver.execScript(sql);
+    await driver.execScript(sql, opts.database ?? conn.database);
     this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
