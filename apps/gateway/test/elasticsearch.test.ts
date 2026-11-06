@@ -40,6 +40,113 @@ test('describe lists indices on ES 7.6 without unsupported cat parameters', asyn
   }
 });
 
+test('ES 6 typed mappings and numeric hits.total stay readable', async () => {
+  const searchBodies: Array<Record<string, any>> = [];
+  const mocked = mock.method(globalThis, 'fetch', async (input: any, init?: any) => {
+    const url = String(input);
+    if (url.endsWith(':9200/')) return json({ version: { number: '6.8.23' } });
+    if (url.includes('/_cat/indices')) return json([{ index: 'logs-2026', health: 'green', 'docs.count': '42' }]);
+    if (url.includes('/_all/_mapping')) {
+      return json({
+        'logs-2026': { mappings: { doc: { properties: { msg: { type: 'text' }, meta: { properties: { ip: { type: 'ip' } } } } } } },
+      });
+    }
+    if (url.includes('/logs-2026/_search')) {
+      searchBodies.push(JSON.parse(init.body));
+      return json({ hits: { total: 42, hits: [{ _id: '1', _source: { msg: 'hi' } }] } });
+    }
+    return json({}, 404);
+  });
+  try {
+    const driver = new ElasticsearchDriver({ host: '127.0.0.1', port: 9200 });
+    const tables = await driver.describe();
+    assert.deepEqual(tables[0].columns?.map((column) => column.name), ['_id', 'msg', 'meta.ip']);
+
+    const result = await driver.run(JSON.stringify({ index: 'logs-2026', query: { match_all: {} }, size: 1 }));
+    assert.equal(result.rowCount, 1);
+    assert.equal(result.truncated, true);
+    assert.deepEqual(result.messages, ['total=42']);
+    // ES 6 不认识 track_total_hits；版本探测到 6.x 后不应继续发送。
+    assert.equal('track_total_hits' in searchBodies[0], false, JSON.stringify(searchBodies[0]));
+  } finally {
+    mocked.mock.restore();
+  }
+});
+
+test('OpenSearch 2.x is treated as the ES 7 API baseline', async () => {
+  let searchBody: Record<string, any> | undefined;
+  const mocked = mock.method(globalThis, 'fetch', async (input: any, init?: any) => {
+    const url = String(input);
+    if (url.endsWith(':9200/')) {
+      return json({ version: { distribution: 'opensearch', number: '2.11.1' } });
+    }
+    if (url.includes('/docs/_search')) {
+      searchBody = JSON.parse(init.body);
+      return json({ hits: { total: { value: 3, relation: 'eq' }, hits: [{ _id: '1', _source: {} }] } });
+    }
+    return json({}, 404);
+  });
+  try {
+    const driver = new ElasticsearchDriver({ host: '127.0.0.1', port: 9200 });
+    assert.equal((await driver.test()).version, 'OpenSearch 2.11.1');
+    const result = await driver.run(JSON.stringify({ index: 'docs', size: 1 }));
+    assert.equal(result.truncated, true);
+    assert.equal(searchBody?.track_total_hits, true);
+  } finally {
+    mocked.mock.restore();
+  }
+});
+
+test('describe falls back to mapping keys when cat indices is forbidden', async () => {
+  const mocked = mock.method(globalThis, 'fetch', async (input: any) => {
+    const url = String(input);
+    if (url.endsWith(':9200/')) return json({ version: { number: '8.13.0' } });
+    if (url.includes('/_cat/indices')) return json({ error: { reason: 'action [indices:monitor/stats] is unauthorized' } }, 403);
+    if (url.includes('/_all/_mapping')) {
+      return json({
+        'kbook-books': { mappings: { properties: { title: { type: 'text' } } } },
+        'book_index': { mappings: { properties: { author: { type: 'text' } } } },
+      });
+    }
+    return json({}, 404);
+  });
+  try {
+    const driver = new ElasticsearchDriver({ host: '127.0.0.1', port: 9200 });
+    const tables = await driver.describe();
+    assert.deepEqual(tables.map((table) => table.name), ['kbook-books', 'book_index']);
+    assert.deepEqual(tables[0].columns?.map((column) => column.name), ['_id', 'title']);
+  } finally {
+    mocked.mock.restore();
+  }
+});
+
+test('search retries without track_total_hits when the server does not know it', async () => {
+  const searchBodies: Array<Record<string, any>> = [];
+  const mocked = mock.method(globalThis, 'fetch', async (input: any, init?: any) => {
+    const url = String(input);
+    if (url.endsWith(':9200/')) return json({ error: 'forbidden' }, 403);
+    if (url.includes('/legacy/_search')) {
+      const body = JSON.parse(init.body);
+      searchBodies.push(body);
+      if ('track_total_hits' in body) {
+        return json({ error: { reason: 'unknown key [track_total_hits]' } }, 400);
+      }
+      return json({ hits: { total: 5, hits: [{ _id: '1', _source: {} }] } });
+    }
+    return json({}, 404);
+  });
+  try {
+    const driver = new ElasticsearchDriver({ host: '127.0.0.1', port: 9200 });
+    const result = await driver.run(JSON.stringify({ index: 'legacy', size: 1 }));
+    assert.equal(result.truncated, true);
+    assert.equal(searchBodies.length, 2);
+    assert.equal('track_total_hits' in searchBodies[0], true);
+    assert.equal('track_total_hits' in searchBodies[1], false);
+  } finally {
+    mocked.mock.restore();
+  }
+});
+
 test('describe keeps the index list when mapping is forbidden', async () => {
   const mocked = mock.method(globalThis, 'fetch', async (input: any) => {
     const url = String(input);

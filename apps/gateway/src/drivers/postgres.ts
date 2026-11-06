@@ -39,6 +39,17 @@ const OIDS: Record<number, string> = {
 
 const SYSTEM_SCHEMAS = `('pg_catalog','information_schema')`;
 
+/** int2vector 在 node-postgres 里是字符串（如 "1 3"）；解析成有序 attnum。 */
+function indexKeyColumns(indkey: unknown): number[] {
+  const raw = Array.isArray(indkey) ? indkey.join(' ') : String(indkey ?? '');
+  return raw
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(Number)
+    .filter((value) => Number.isFinite(value) && value > 0);
+}
+
 export class PostgresDriver implements Driver {
   engine: Engine;
   private pools = new Map<string, Pool>();
@@ -91,20 +102,35 @@ export class PostgresDriver implements Driver {
       const tablesRes = await pool.query(
         `SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema NOT IN ${SYSTEM_SCHEMAS} ORDER BY table_schema, table_name`,
       );
-      const columnsRes = await pool.query(
-        `SELECT table_schema, table_name, column_name, data_type, udt_name, is_nullable, column_default FROM information_schema.columns WHERE table_schema NOT IN ${SYSTEM_SCHEMAS} ORDER BY table_schema, table_name, ordinal_position`,
-      );
-      const indexesRes = await pool.query(`
+      // 列、索引、外键都只是补充信息：Greenplum/Redshift 等 PG 分支可能缺某个系统视图，
+      // 不能因为一个查询失败就把整棵对象树判空。
+      const columnsRes = await pool
+        .query(
+          `SELECT table_schema, table_name, column_name, data_type, udt_name, is_nullable, column_default FROM information_schema.columns WHERE table_schema NOT IN ${SYSTEM_SCHEMAS} ORDER BY table_schema, table_name, ordinal_position`,
+        )
+        .catch(() => ({ rows: [] as any[] }));
+      // indkey 是索引列 attnum 的有序列表；在 JS 里还原列名与顺序，避免依赖 PG 9.5+ 的 array_position。
+      const indexesRes = await pool
+        .query(`
         SELECT n.nspname AS schema, t.relname AS table, i.relname AS index, ix.indisunique AS unique,
-               ix.indisprimary AS primary, a.attname AS column, array_position(ix.indkey, a.attnum) AS ord
+               ix.indisprimary AS primary, ix.indkey AS indkey, ix.indrelid AS relid
         FROM pg_index ix
         JOIN pg_class t ON t.oid = ix.indrelid
         JOIN pg_class i ON i.oid = ix.indexrelid
         JOIN pg_namespace n ON n.oid = t.relnamespace
-        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
         WHERE n.nspname NOT IN ${SYSTEM_SCHEMAS}
-        ORDER BY t.relname, i.relname, ord`);
-      const fksRes = await pool.query(`
+        ORDER BY t.relname, i.relname`)
+        .catch(() => ({ rows: [] as any[] }));
+      const attrsRes = await pool
+        .query(`
+        SELECT a.attrelid AS relid, a.attnum, a.attname AS column
+        FROM pg_attribute a
+        JOIN pg_class t ON t.oid = a.attrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE a.attnum > 0 AND NOT a.attisdropped AND n.nspname NOT IN ${SYSTEM_SCHEMAS}`)
+        .catch(() => ({ rows: [] as any[] }));
+      const fksRes = await pool
+        .query(`
         SELECT tc.table_schema AS schema, tc.table_name AS table, tc.constraint_name AS name,
                kcu.column_name AS column, ccu.table_name AS ref_table, ccu.column_name AS ref_column
         FROM information_schema.table_constraints tc
@@ -113,11 +139,14 @@ export class PostgresDriver implements Driver {
         JOIN information_schema.constraint_column_usage ccu
           ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema
         WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema NOT IN ${SYSTEM_SCHEMAS}
-        ORDER BY tc.table_schema, tc.table_name, tc.constraint_name`);
-      const estRes = await pool.query(`
+        ORDER BY tc.table_schema, tc.table_name, tc.constraint_name`)
+        .catch(() => ({ rows: [] as any[] }));
+      const estRes = await pool
+        .query(`
         SELECT n.nspname AS schema, c.relname AS table, c.reltuples AS estimate
         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE c.relkind IN ('r','p') AND n.nspname NOT IN ${SYSTEM_SCHEMAS}`);
+        WHERE c.relkind IN ('r','p') AND n.nspname NOT IN ${SYSTEM_SCHEMAS}`)
+        .catch(() => ({ rows: [] as any[] }));
       let hypertables: Array<Record<string, any>> = [];
       if (this.engine === 'timescale') {
         try {
@@ -150,13 +179,34 @@ export class PostgresDriver implements Driver {
         const t = tables.get(`${r.hypertable_schema}.${r.hypertable_name}`);
         if (t) t.comment = `超表 · ${Number(r.num_chunks ?? 0)} chunks`;
       }
+      const attributes = new Map<string, Map<number, string>>();
+      for (const r of attrsRes.rows as Array<Record<string, any>>) {
+        const relid = String(r.relid);
+        const map = attributes.get(relid) ?? new Map<number, string>();
+        map.set(Number(r.attnum), String(r.column));
+        attributes.set(relid, map);
+      }
       const primaryCols = new Map<string, Set<string>>();
+      const indexMap = new Map<string, IndexInfo>();
       for (const r of indexesRes.rows as Array<Record<string, any>>) {
-        if (r.primary) {
-          const key = `${r.schema}.${r.table}`;
-          const set = primaryCols.get(key) ?? new Set<string>();
-          set.add(r.column);
-          primaryCols.set(key, set);
+        const columns = attributes.get(String(r.relid));
+        if (!columns) continue;
+        const key = `${r.schema}.${r.table}.${r.index}`;
+        let idx = indexMap.get(key);
+        if (!idx) {
+          idx = { name: r.index, columns: [], unique: Boolean(r.unique), primary: Boolean(r.primary) };
+          indexMap.set(key, idx);
+        }
+        for (const attnum of indexKeyColumns(r.indkey)) {
+          const column = columns.get(attnum);
+          if (!column) continue;
+          idx.columns.push(column);
+          if (r.primary) {
+            const tableKey = `${r.schema}.${r.table}`;
+            const set = primaryCols.get(tableKey) ?? new Set<string>();
+            set.add(column);
+            primaryCols.set(tableKey, set);
+          }
         }
       }
       for (const r of columnsRes.rows as Array<Record<string, any>>) {
@@ -170,16 +220,6 @@ export class PostgresDriver implements Driver {
           defaultValue: r.column_default ?? null,
           primaryKey: Boolean(pkSet?.has(r.column_name)),
         });
-      }
-      const indexMap = new Map<string, IndexInfo>();
-      for (const r of indexesRes.rows as Array<Record<string, any>>) {
-        const key = `${r.schema}.${r.table}.${r.index}`;
-        let idx = indexMap.get(key);
-        if (!idx) {
-          idx = { name: r.index, columns: [], unique: Boolean(r.unique), primary: Boolean(r.primary) };
-          indexMap.set(key, idx);
-        }
-        idx.columns.push(r.column);
       }
       for (const [key, idx] of indexMap) {
         const [schema, table] = key.split('.');

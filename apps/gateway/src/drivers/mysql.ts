@@ -116,8 +116,14 @@ export class MysqlDriver implements Driver {
   }
 
   async listDatabases(): Promise<string[]> {
-    const [rows] = await this.pool().query('SHOW DATABASES');
-    return (rows as Array<Record<string, string>>).map((r) => r.Database ?? Object.values(r)[0]);
+    try {
+      const [rows] = await this.pool().query('SHOW DATABASES');
+      return (rows as Array<Record<string, string>>).map((r) => r.Database ?? Object.values(r)[0]);
+    } catch {
+      // 部分 MySQL 协议实现/受限账号不开放 SHOW DATABASES；information_schema 是标准回落。
+      const [rows] = await this.pool().query('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA ORDER BY SCHEMA_NAME');
+      return (rows as Array<Record<string, string>>).map((r) => r.SCHEMA_NAME ?? Object.values(r)[0]);
+    }
   }
 
   async describe(database?: string): Promise<TableInfo[]> {
@@ -129,21 +135,27 @@ export class MysqlDriver implements Driver {
         'SELECT TABLE_NAME, TABLE_TYPE, TABLE_COMMENT, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME',
         [db],
       );
-      const [columnRows] = await pool.query(
+      // 列/索引/外键是补充信息。Doris、StarRocks、GBase 8a 等 MySQL 协议实现
+      // 并非每张 information_schema 表都齐全，单表缺失不应让对象树整体为空。
+      const optionalRows = async (sql: string): Promise<Array<Record<string, any>>> => {
+        try {
+          const [rows] = await pool.query(sql, [db]);
+          return Array.isArray(rows) ? (rows as Array<Record<string, any>>) : [];
+        } catch {
+          return [];
+        }
+      };
+      const columnRows = await optionalRows(
         'SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_KEY, EXTRA, COLUMN_COMMENT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME, ORDINAL_POSITION',
-        [db],
       );
-      const [indexRows] = await pool.query(
+      const indexRows = await optionalRows(
         'SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, INDEX_TYPE, INDEX_COMMENT FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX',
-        [db],
       );
-      const [fkRows] = await pool.query(
+      const fkRows = await optionalRows(
         'SELECT TABLE_NAME, CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME, REFERENCED_TABLE_SCHEMA FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = ? AND REFERENCED_TABLE_NAME IS NOT NULL ORDER BY TABLE_NAME, CONSTRAINT_NAME',
-        [db],
       );
-      const [fkRuleRows] = await pool.query(
+      const fkRuleRows = await optionalRows(
         'SELECT CONSTRAINT_NAME, DELETE_RULE, UPDATE_RULE FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = ?',
-        [db],
       );
       const tables = new Map<string, TableInfo>();
       for (const row of tableRows as Array<Record<string, any>>) {

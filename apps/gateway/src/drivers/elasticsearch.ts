@@ -22,6 +22,43 @@ export interface ElasticsearchOptions {
   ssl?: boolean;
 }
 
+interface ServerInfo {
+  label: string;
+  number: string;
+  major: number | null;
+  /** OpenSearch 版本号从 1.x 起算，但 API 基线是 ES 7.10；不能按 ES 主版本判断。 */
+  trackTotalHits: boolean;
+}
+
+function parseServerInfo(info: Record<string, any> | undefined): ServerInfo {
+  const distribution = String(info?.version?.distribution ?? '');
+  const number = String(info?.version?.number ?? '');
+  const major = Number.parseInt(number, 10);
+  const openSearch = /opensearch/i.test(distribution);
+  return {
+    label: openSearch ? 'OpenSearch' : 'Elasticsearch',
+    number,
+    major: Number.isFinite(major) ? major : null,
+    trackTotalHits: openSearch || (Number.isFinite(major) && major >= 7),
+  };
+}
+
+/**
+ * ES 6 及更早版本的 mapping 仍然带类型层：mappings.doc.properties。
+ * 7.x 之后是 mappings.properties；两种都要能读出字段。
+ */
+function mappingProperties(entry: Record<string, any> | undefined): Record<string, any> | undefined {
+  const mappings = entry?.mappings;
+  if (!mappings || typeof mappings !== 'object') return undefined;
+  if (mappings.properties && typeof mappings.properties === 'object') return mappings.properties;
+  for (const [name, value] of Object.entries(mappings)) {
+    if (name.startsWith('_')) continue;
+    const properties = (value as Record<string, any> | undefined)?.properties;
+    if (properties && typeof properties === 'object') return properties;
+  }
+  return undefined;
+}
+
 function flattenProperties(properties: Record<string, any> | undefined, prefix = '', out: ColumnInfo[] = []): ColumnInfo[] {
   for (const [name, value] of Object.entries(properties ?? {})) {
     const field = prefix ? `${prefix}.${name}` : name;
@@ -86,9 +123,20 @@ function hitsToResult(hits: Array<Record<string, any>>, started: number, stateme
 
 export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDriver, FieldAddDriver {
   engine: Engine;
+  /** 版本只用于选择请求参数，不参与功能矩阵；失败时按“未知版本”走保守路径。 */
+  private serverInfo?: Promise<ServerInfo | undefined>;
 
   constructor(private opts: ElasticsearchOptions, engine: Engine = 'elasticsearch') {
     this.engine = engine;
+  }
+
+  private info(): Promise<ServerInfo | undefined> {
+    if (!this.serverInfo) {
+      this.serverInfo = this.request<Record<string, any>>('/')
+        .then((info) => parseServerInfo(info))
+        .catch(() => undefined);
+    }
+    return this.serverInfo;
   }
 
   private base(): string {
@@ -130,8 +178,10 @@ export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDri
   async test(): Promise<DriverTestResult> {
     const started = Date.now();
     try {
-      const info = await this.request<any>('/');
-      return { ok: true, version: `${info?.version?.distribution ?? 'Elasticsearch'} ${info?.version?.number ?? ''}`.trim(), latencyMs: Date.now() - started };
+      const info = await this.request<Record<string, any>>('/');
+      this.serverInfo = Promise.resolve(parseServerInfo(info));
+      const parsed = parseServerInfo(info);
+      return { ok: true, version: `${parsed.label} ${parsed.number}`.trim(), latencyMs: Date.now() - started };
     } catch (err: any) {
       return { ok: false, latencyMs: Date.now() - started, message: err?.message ?? '连接失败' };
     }
@@ -142,15 +192,10 @@ export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDri
   }
 
   async describe(): Promise<TableInfo[]> {
-    const [indices, mapping] = await Promise.all([
-      // ES 7.6 及更早版本不认识 cat 接口的 expand_wildcards 参数（会回 400），默认就只列 open 索引。
-      this.request<Array<Record<string, any>>>('/_cat/indices?format=json'),
-      // mapping 只是补充列信息；受权限限制或体量过大时不能连带索引列表一起失败。
-      this.request<Record<string, any>>('/_all/_mapping').catch((): Record<string, any> => ({})),
-    ]);
-    return (indices ?? []).map((index) => {
+    const { indices, mapping } = await this.indexSnapshot();
+    return indices.map((index) => {
       const name = String(index.index);
-      const properties = mapping?.[name]?.mappings?.properties;
+      const properties = mappingProperties(mapping?.[name]);
       return {
         name,
         type: 'table',
@@ -165,6 +210,29 @@ export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDri
     });
   }
 
+  /**
+   * 索引列表优先走 _cat/indices；某些 8.x 安全角色没有 cluster monitor，
+   * cat 会被 403，但索引级 mapping 权限仍然可读，此时从 mapping 的键还原索引。
+   */
+  private async indexSnapshot(): Promise<{ indices: Array<Record<string, any>>; mapping: Record<string, any> }> {
+    // mapping 只是补充列信息；受权限限制或体量过大时不能连带索引列表一起失败。
+    const mappingPromise = this.request<Record<string, any>>('/_all/_mapping').catch((): Record<string, any> => ({}));
+    let catError: unknown;
+    let indices: Array<Record<string, any>> | undefined;
+    try {
+      // ES 7.6 及更早版本不认识 cat 接口的 expand_wildcards 参数（会回 400），默认就只列 open 索引。
+      const response = await this.request<Array<Record<string, any>>>('/_cat/indices?format=json');
+      if (Array.isArray(response)) indices = response;
+    } catch (err) {
+      catError = err;
+    }
+    const mapping = await mappingPromise;
+    if (indices) return { indices, mapping };
+    const names = Object.keys(mapping ?? {});
+    if (names.length) return { indices: names.map((name) => ({ index: name })), mapping };
+    throw catError instanceof Error ? catError : new DbError('无法读取索引列表', { code: 'SEARCH_INDICES' });
+  }
+
   async executeQuery(query: StructuredQuery, opts: RunOptions = {}): Promise<QueryResult> {
     if (query.language !== 'search') throw new DbError('搜索驱动只接受 JSON DSL 查询', { code: 'SEARCH_ONLY' });
     return this.search(query, opts);
@@ -174,17 +242,31 @@ export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDri
     if (!query.index) throw new DbError('index 不能为空', { code: 'SEARCH_INDEX' });
     const started = Date.now();
     const size = Math.max(1, Math.min(query.size ?? opts.maxRows ?? 100, 10000));
-    const body: Record<string, unknown> = { ...(query.body ?? {}), size, track_total_hits: true };
+    const info = await this.info();
+    const body: Record<string, unknown> = { ...(query.body ?? {}), size };
+    // track_total_hits 是 7.x 才稳定支持的参数；6.x 只能在响应里读到数字形态的 hits.total。
+    // 版本未知时先试，服务端明确不认识该参数再退回不带参数的请求。
+    if (body.track_total_hits === undefined && (!info || info.trackTotalHits)) body.track_total_hits = true;
     if (!body.query) body.query = { match_all: {} };
-    const response = await this.request<any>(
-      `/${encodeURIComponent(query.index)}/_search`,
-      { method: 'POST', body: JSON.stringify(body) },
-      opts.timeoutMs ?? 30000,
-    );
+    const path = `/${encodeURIComponent(query.index)}/_search`;
+    const init = { method: 'POST', body: JSON.stringify(body) };
+    let response: any;
+    try {
+      response = await this.request<any>(path, init, opts.timeoutMs ?? 30000);
+    } catch (err: any) {
+      const retryable =
+        body.track_total_hits === true &&
+        info === undefined &&
+        /track_total_hits/i.test(String(err?.message ?? ''));
+      if (!retryable) throw err;
+      delete body.track_total_hits;
+      response = await this.request<any>(path, { method: 'POST', body: JSON.stringify(body) }, opts.timeoutMs ?? 30000);
+    }
     const hits = response?.hits?.hits ?? [];
-    // 用 total 判断是否真的还有未返回的命中；只看 hits.length >= size 会把“刚好取满”误报为截断。
-    const total = Number(response?.hits?.total?.value ?? hits.length);
-    const relation = String(response?.hits?.total?.relation ?? 'eq');
+    // 7.x+ 是 { value, relation }；6.x 及更早是数字。两种都要按真实总数判断截断。
+    const rawTotal = response?.hits?.total;
+    const total = typeof rawTotal === 'number' ? rawTotal : Number(rawTotal?.value ?? hits.length);
+    const relation = typeof rawTotal === 'number' ? 'eq' : String(rawTotal?.relation ?? 'eq');
     const truncated = relation === 'gte' ? hits.length >= size : total > hits.length;
     return hitsToResult(hits, started, JSON.stringify({ ...query, size }), truncated, total);
   }

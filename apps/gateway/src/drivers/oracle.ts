@@ -12,6 +12,11 @@ export interface OracleOptions {
   ssl?: boolean;
 }
 
+/** ORA-00904：11g 上查询了 12c 才存在的列。 */
+function missingColumn(err: any): boolean {
+  return Number(err?.errorNum) === 904 || /ORA-00904/i.test(String(err?.message ?? ''));
+}
+
 export class OracleDriver implements Driver {
   engine = 'oracle' as const;
   private pools = new Map<string, oracledb.Pool>();
@@ -64,11 +69,20 @@ export class OracleDriver implements Driver {
     const pool = await this.pool();
     const connection = await pool.getConnection();
     try {
-      const result = await connection.execute(
-        "SELECT username FROM all_users WHERE oracle_maintained = 'N' ORDER BY username",
-        [],
-        { outFormat: oracledb.OUT_FORMAT_OBJECT },
-      );
+      let result;
+      try {
+        result = await connection.execute(
+          "SELECT username FROM all_users WHERE oracle_maintained = 'N' ORDER BY username",
+          [],
+          { outFormat: oracledb.OUT_FORMAT_OBJECT },
+        );
+      } catch (err) {
+        // ORACLE_MAINTAINED 是 12c 新增列，11g 不认识。
+        if (!missingColumn(err)) throw err;
+        result = await connection.execute('SELECT username FROM all_users ORDER BY username', [], {
+          outFormat: oracledb.OUT_FORMAT_OBJECT,
+        });
+      }
       return (result.rows ?? []).map((row: any) => String(row.USERNAME));
     } finally {
       await connection.close().catch(() => undefined);
@@ -86,34 +100,48 @@ export class OracleDriver implements Driver {
         [this.owner, this.owner],
         { outFormat: oracledb.OUT_FORMAT_OBJECT },
       );
-      const columns = await connection.execute(
-        `SELECT OWNER, TABLE_NAME, COLUMN_NAME, DATA_TYPE, DATA_LENGTH, CHAR_LENGTH, DATA_PRECISION, DATA_SCALE,
-                NULLABLE, DATA_DEFAULT, IDENTITY_COLUMN
-         FROM ALL_TAB_COLUMNS WHERE OWNER = :1 ORDER BY TABLE_NAME, COLUMN_ID`,
-        [this.owner],
-        { outFormat: oracledb.OUT_FORMAT_OBJECT },
-      );
-      const indexes = await connection.execute(
-        `SELECT i.OWNER, i.TABLE_NAME, i.INDEX_NAME, i.UNIQUENESS, c.COLUMN_NAME,
+      // IDENTITY_COLUMN 是 12c 新增列；11g 先去掉它，至少把表与普通列显示出来。
+      const columns: any = await (async () => {
+        const sql = (identity: boolean) => `SELECT OWNER, TABLE_NAME, COLUMN_NAME, DATA_TYPE, DATA_LENGTH, CHAR_LENGTH, DATA_PRECISION, DATA_SCALE,
+                NULLABLE, DATA_DEFAULT${identity ? ', IDENTITY_COLUMN' : ', NULL AS IDENTITY_COLUMN'}
+         FROM ALL_TAB_COLUMNS WHERE OWNER = :1 ORDER BY TABLE_NAME, COLUMN_ID`;
+        try {
+          return await connection.execute(sql(true), [this.owner], { outFormat: oracledb.OUT_FORMAT_OBJECT });
+        } catch (err) {
+          if (!missingColumn(err)) return { rows: [] };
+          try {
+            return await connection.execute(sql(false), [this.owner], { outFormat: oracledb.OUT_FORMAT_OBJECT });
+          } catch {
+            return { rows: [] };
+          }
+        }
+      })();
+      // 索引和外键只是补充信息：权限受限或旧版本视图缺失时，不能连带对象树一起失败。
+      const indexes: any = await connection
+        .execute(
+          `SELECT i.OWNER, i.TABLE_NAME, i.INDEX_NAME, i.UNIQUENESS, c.COLUMN_NAME,
                 (SELECT k.CONSTRAINT_TYPE FROM ALL_CONSTRAINTS k
                   WHERE k.OWNER = i.OWNER AND k.CONSTRAINT_NAME = i.INDEX_NAME AND k.TABLE_NAME = i.TABLE_NAME) AS CONSTRAINT_TYPE
          FROM ALL_INDEXES i
          JOIN ALL_IND_COLUMNS c ON c.INDEX_OWNER = i.OWNER AND c.INDEX_NAME = i.INDEX_NAME
          WHERE i.OWNER = :1 ORDER BY i.TABLE_NAME, i.INDEX_NAME, c.COLUMN_POSITION`,
-        [this.owner],
-        { outFormat: oracledb.OUT_FORMAT_OBJECT },
-      );
-      const fks = await connection.execute(
-        `SELECT c.OWNER, c.TABLE_NAME, c.CONSTRAINT_NAME, cc.COLUMN_NAME, rc.TABLE_NAME AS REF_TABLE, rcc.COLUMN_NAME AS REF_COLUMN
+          [this.owner],
+          { outFormat: oracledb.OUT_FORMAT_OBJECT },
+        )
+        .catch(() => ({ rows: [] }));
+      const fks: any = await connection
+        .execute(
+          `SELECT c.OWNER, c.TABLE_NAME, c.CONSTRAINT_NAME, cc.COLUMN_NAME, rc.TABLE_NAME AS REF_TABLE, rcc.COLUMN_NAME AS REF_COLUMN
          FROM ALL_CONSTRAINTS c
          JOIN ALL_CONS_COLUMNS cc ON cc.OWNER = c.OWNER AND cc.CONSTRAINT_NAME = c.CONSTRAINT_NAME
          JOIN ALL_CONSTRAINTS r ON r.OWNER = c.R_OWNER AND r.CONSTRAINT_NAME = c.R_CONSTRAINT_NAME
          JOIN ALL_CONS_COLUMNS rcc ON rcc.OWNER = r.OWNER AND rcc.CONSTRAINT_NAME = r.CONSTRAINT_NAME AND rcc.POSITION = cc.POSITION
          WHERE c.CONSTRAINT_TYPE = 'R' AND c.OWNER = :1
          ORDER BY c.TABLE_NAME, c.CONSTRAINT_NAME, cc.POSITION`,
-        [this.owner],
-        { outFormat: oracledb.OUT_FORMAT_OBJECT },
-      );
+          [this.owner],
+          { outFormat: oracledb.OUT_FORMAT_OBJECT },
+        )
+        .catch(() => ({ rows: [] }));
 
       const map = new Map<string, TableInfo>();
       for (const row of (tables.rows ?? []) as any[]) {
