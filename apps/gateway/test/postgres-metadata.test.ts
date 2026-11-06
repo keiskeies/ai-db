@@ -58,6 +58,41 @@ test('PG index columns come from indkey without array_position', async () => {
   assert.equal(sqls.some((sql) => sql.includes('array_position')), false);
 });
 
+test('PG identity and generated columns are surfaced, and old servers still list columns', async () => {
+  const build = (handler: (sql: string) => any) => {
+    const driver = new PostgresDriver({ host: '127.0.0.1', port: 5432, user: 'postgres', database: 'postgres' });
+    (driver as any).pool = () =>
+      fakePool((sql) => {
+        if (sql.includes('information_schema.tables')) return { rows: [tableRow] };
+        if (sql.includes('information_schema.columns')) return { rows: columnRows };
+        return handler(sql);
+      });
+    return driver;
+  };
+
+  const modern = await build((sql) => {
+    if (sql.includes('attidentity')) {
+      return {
+        rows: [
+          { schema: 'public', table: 't1', column: 'id', attidentity: 'd', attgenerated: '' },
+          { schema: 'public', table: 't1', column: 'name', attidentity: '', attgenerated: 's' },
+        ],
+      };
+    }
+    return { rows: [] };
+  }).describe();
+  assert.equal(modern[0].columns?.[0].autoIncrement, true);
+  assert.equal(modern[0].columns?.[1].generated, 'stored');
+
+  // PG 9.x / Greenplum 6 没有 attidentity 列：这条查询只能自己失败，不能连累普通列信息。
+  const legacy = await build((sql) => {
+    if (sql.includes('attidentity')) throw new Error('column "attidentity" does not exist');
+    return { rows: [] };
+  }).describe();
+  assert.deepEqual(legacy[0].columns?.map((column) => column.name), ['id', 'name']);
+  assert.equal(legacy[0].columns?.[0].autoIncrement, undefined);
+});
+
 test('PG tables and columns survive an index catalog failure', async () => {
   const driver = new PostgresDriver({ host: '127.0.0.1', port: 5432, user: 'postgres', database: 'postgres' });
   (driver as any).pool = () =>

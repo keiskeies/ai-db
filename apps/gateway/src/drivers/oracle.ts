@@ -17,6 +17,30 @@ function missingColumn(err: any): boolean {
   return Number(err?.errorNum) === 904 || /ORA-00904/i.test(String(err?.message ?? ''));
 }
 
+const thickMode = { attempted: false, ready: false };
+
+/** thin 模式最低支持 12.1；给了 Instant Client 目录就切到 thick 模式，11g 也能连。 */
+function ensureThickMode(): void {
+  if (thickMode.attempted) return;
+  thickMode.attempted = true;
+  const libDir = String(process.env.AIDB_ORACLE_CLIENT_DIR ?? '').trim();
+  if (!libDir) return;
+  try {
+    oracledb.initOracleClient({ libDir });
+    thickMode.ready = true;
+  } catch {
+    /* 初始化失败继续走 thin，连接报错时给出可执行的提示 */
+  }
+}
+
+export function oracleVersionHint(err: any): string | undefined {
+  const message = String(err?.message ?? '');
+  if (!/not supported by node-oracledb in Thin mode|DPY-3050|server version/i.test(message)) return undefined;
+  return thickMode.ready
+    ? undefined
+    : 'Oracle 11g 及以下需要 Oracle Instant Client（thick 模式）：设置 AIDB_ORACLE_CLIENT_DIR 指向解压目录后重启 Bridge，或升级到 12.1+';
+}
+
 export class OracleDriver implements Driver {
   engine = 'oracle' as const;
   private pools = new Map<string, oracledb.Pool>();
@@ -29,6 +53,7 @@ export class OracleDriver implements Driver {
   }
 
   private async pool(database?: string): Promise<oracledb.Pool> {
+    ensureThickMode();
     const service = database || this.opts.database || 'ORCL';
     let pool = this.pools.get(service);
     if (!pool) {
@@ -59,7 +84,8 @@ export class OracleDriver implements Driver {
       const row = (result.rows?.[0] ?? {}) as { BANNER?: string };
       return { ok: true, version: row.BANNER ?? 'Oracle Database', latencyMs: Date.now() - started };
     } catch (err: any) {
-      return { ok: false, latencyMs: Date.now() - started, message: err.message };
+      const hint = oracleVersionHint(err);
+      return { ok: false, latencyMs: Date.now() - started, message: hint ? `${err.message}（${hint}）` : err.message };
     } finally {
       await connection?.close().catch(() => undefined);
     }

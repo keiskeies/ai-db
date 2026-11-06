@@ -25,6 +25,34 @@ function normalize(value: unknown): unknown {
   return value;
 }
 
+/** Cassandra 2.x 的 validator 是 Java 类名，展示成 CQL 类型名才有意义。 */
+function legacyColumnType(validator: unknown): string {
+  const raw = String(validator ?? '').split('.').pop() ?? '';
+  const map: Record<string, string> = {
+    UTF8Type: 'text',
+    AsciiType: 'ascii',
+    SimpleUUIDType: 'uuid',
+    UUIDType: 'uuid',
+    TimeUUIDType: 'timeuuid',
+    Int32Type: 'int',
+    Int64Type: 'bigint',
+    LongType: 'bigint',
+    BooleanType: 'boolean',
+    DoubleType: 'double',
+    FloatType: 'float',
+    DecimalType: 'decimal',
+    BytesType: 'blob',
+    TimestampType: 'timestamp',
+    DateType: 'date',
+    InetAddressType: 'inet',
+    CounterColumnType: 'counter',
+    ListType: 'list',
+    SetType: 'set',
+    MapType: 'map',
+  };
+  return map[raw] ?? raw.replace(/Type$/, '').toLowerCase();
+}
+
 export class CassandraDriver implements Driver {
   engine: Engine;
   private clients = new Map<string, Client>();
@@ -71,19 +99,69 @@ export class CassandraDriver implements Driver {
   }
 
   async listDatabases(): Promise<string[]> {
+    let client: Client;
     try {
-      const client = await this.ready();
-      const result = await client.execute('SELECT keyspace_name FROM system_schema.keyspaces');
-      return (result.rows as unknown as Array<{ keyspace_name: string }>).map((row) => String(row.keyspace_name)).sort();
+      client = await this.ready();
     } catch (err: any) {
       throw new DbError(err?.message ?? '无法读取 keyspace', { code: 'CASSANDRA_ERROR' });
     }
+    try {
+      const result = await client.execute('SELECT keyspace_name FROM system_schema.keyspaces');
+      return (result.rows as unknown as Array<{ keyspace_name: string }>).map((row) => String(row.keyspace_name)).sort();
+    } catch (err: any) {
+      // 3.0 之前元数据在 system.schema_keyspaces；不能因为表名搬家就报「读不到 keyspace」。
+      try {
+        const legacy = await client.execute('SELECT keyspace_name FROM system.schema_keyspaces');
+        return (legacy.rows as unknown as Array<{ keyspace_name: string }>).map((row) => String(row.keyspace_name)).sort();
+      } catch {
+        throw new DbError(err?.message ?? '无法读取 keyspace', { code: 'CASSANDRA_ERROR' });
+      }
+    }
+  }
+
+  /** Cassandra 2.x 的表与列布局（没有 views，kind 用 type，类型用 validator）。 */
+  private async legacyDescribe(client: Client, keyspace: string): Promise<TableInfo[]> {
+    const [tables, columns] = await Promise.all([
+      client.execute('SELECT columnfamily_name FROM system.schema_columnfamilies WHERE keyspace_name = ?', [keyspace]),
+      client.execute('SELECT columnfamily_name, column_name, type, component_index, validator FROM system.schema_columns WHERE keyspace_name = ?', [keyspace]),
+    ]);
+    const columnsByTable = new Map<string, Array<ColumnInfo & { position: number; kind: string }>>();
+    for (const row of columns.rows as unknown as Array<{ columnfamily_name: string; column_name: string; type: string; component_index: number | null; validator: string }>) {
+      const list = columnsByTable.get(String(row.columnfamily_name)) ?? [];
+      const kind = String(row.type ?? '');
+      list.push({
+        name: String(row.column_name),
+        type: legacyColumnType(row.validator),
+        nullable: kind !== 'partition_key' && kind !== 'clustering',
+        defaultValue: null,
+        primaryKey: kind === 'partition_key' || kind === 'clustering',
+        autoIncrement: false,
+        position: Number(row.component_index ?? 0),
+        kind,
+      });
+      columnsByTable.set(String(row.columnfamily_name), list);
+    }
+    return (tables.rows as unknown as Array<{ columnfamily_name: string }>).map((row) => {
+      const name = String(row.columnfamily_name);
+      const list = (columnsByTable.get(name) ?? []).sort((a, b) => a.position - b.position);
+      return {
+        name,
+        type: 'table',
+        schema: keyspace,
+        columns: list.map(({ position, kind, ...column }) => column),
+      } satisfies TableInfo;
+    });
   }
 
   async describe(database?: string): Promise<TableInfo[]> {
     const keyspace = database || this.opts.database || 'system';
+    let client: Client;
     try {
-      const client = await this.ready();
+      client = await this.ready();
+    } catch (err: any) {
+      throw new DbError(err?.message ?? `无法读取 keyspace ${keyspace}`, { code: 'CASSANDRA_ERROR' });
+    }
+    try {
       const [tables, views, columns] = await Promise.all([
         client.execute('SELECT table_name FROM system_schema.tables WHERE keyspace_name = ?', [keyspace], { prepare: true }),
         client.execute('SELECT view_name FROM system_schema.views WHERE keyspace_name = ?', [keyspace], { prepare: true }),
@@ -120,7 +198,12 @@ export class CassandraDriver implements Driver {
         } satisfies TableInfo;
       });
     } catch (err: any) {
-      throw new DbError(err?.message ?? `无法读取 keyspace ${keyspace}`, { code: 'CASSANDRA_ERROR' });
+      // 2.x 没有 system_schema.*：退回 system.schema_columnfamilies / schema_columns
+      try {
+        return await this.legacyDescribe(client, keyspace);
+      } catch {
+        throw new DbError(err?.message ?? `无法读取 keyspace ${keyspace}`, { code: 'CASSANDRA_ERROR' });
+      }
     }
   }
 

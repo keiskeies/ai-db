@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { OracleDriver } from '../src/drivers/oracle';
+import { OracleDriver, oracleVersionHint } from '../src/drivers/oracle';
 
 function fakePool(handler: (sql: string) => any) {
   return {
@@ -67,4 +67,11 @@ test('Oracle 11g falls back when ORACLE_MAINTAINED and IDENTITY_COLUMN are missi
   assert.equal(tables[0].columns?.[0].autoIncrement, false);
   assert.deepEqual(tables[0].indexes, []);
   assert.deepEqual(tables[0].foreignKeys?.map((fk) => fk.name), ['FK_T1']);
+});
+
+test('Oracle 11g thin-mode rejection gets an actionable hint', () => {
+  const hint = oracleVersionHint(new Error('connections to this database server version are not supported by node-oracledb in Thin mode'));
+  assert.match(String(hint), /Instant Client/);
+  assert.match(String(hint), /AIDB_ORACLE_CLIENT_DIR/);
+  assert.equal(oracleVersionHint(new Error('ORA-12541: TNS:no listener')), undefined);
 });

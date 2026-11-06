@@ -38,7 +38,7 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 | 关系型 | PostgreSQL / CockroachDB | postgres | postgres | 全功能 |
 | 关系型 | TimescaleDB | postgres | postgres | 全功能；对象树标注超表与 chunk 数 |
 | 关系型 | SQL Server | tds | mssql | 无自动 EXPLAIN |
-| 关系型 | Oracle | oracle | oracle | thin 模式；无 SSL |
+| 关系型 | Oracle | oracle | oracle | thin 模式；无 SSL；11g 需设置 `AIDB_ORACLE_CLIENT_DIR` 指向 Instant Client |
 | 关系型 | 达梦 DM8 | dm | dm | 浏览 + 查询 + DDL；DES-CFB 登录加密需 legacy OpenSSL |
 | 关系型 | DuckDB | duckdb-file | sqlite | 浏览 + SQL + 数据编辑；DDL 设计器关闭 |
 | 分析型 | ClickHouse | clickhouse-http | clickhouse | 无结构同步/数据对比 |

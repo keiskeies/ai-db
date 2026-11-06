@@ -105,7 +105,7 @@ export class PostgresDriver implements Driver {
       // 列、索引、外键都只是补充信息：Greenplum/Redshift 等 PG 分支可能缺某个系统视图，
       // 不能因为一个查询失败就把整棵对象树判空。
       const empty = { rows: [] as any[] };
-      const [tablesRes, columnsRes, indexesRes, attrsRes, fksRes, estRes] = await Promise.all([
+      const [tablesRes, columnsRes, indexesRes, attrsRes, fksRes, estRes, genRes] = await Promise.all([
         pool.query(
           `SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema NOT IN ${SYSTEM_SCHEMAS} ORDER BY table_schema, table_name`,
         ),
@@ -151,6 +151,18 @@ export class PostgresDriver implements Driver {
         SELECT n.nspname AS schema, c.relname AS table, c.reltuples AS estimate
         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE c.relkind IN ('r','p') AND n.nspname NOT IN ${SYSTEM_SCHEMAS}`)
+          .catch(() => empty),
+        // attidentity 是 PG 10+、attgenerated 是 PG 12+；旧版本会报缺列，
+        // 所以单独一条查询，失败只丢自增/生成列标记，不连普通列信息一起丢。
+        pool
+          .query(`
+        SELECT n.nspname AS schema, c.relname AS table, a.attname AS column, a.attidentity, a.attgenerated
+        FROM pg_attribute a
+        JOIN pg_class c ON c.oid = a.attrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE a.attnum > 0 AND NOT a.attisdropped
+          AND (a.attidentity <> '' OR a.attgenerated <> '')
+          AND n.nspname NOT IN ${SYSTEM_SCHEMAS}`)
           .catch(() => empty),
       ]);
       let hypertables: Array<Record<string, any>> = [];
@@ -215,16 +227,30 @@ export class PostgresDriver implements Driver {
           }
         }
       }
+      // PG 10+ 的 identity 列与 PG 12+ 的生成列：结构树与 Agent 需要知道谁是自增。
+      const generated = new Map<string, { autoIncrement: boolean; generated?: 'virtual' | 'stored' }>();
+      for (const r of genRes.rows as Array<Record<string, any>>) {
+        const identity = String(r.attidentity ?? '');
+        const expression = String(r.attgenerated ?? '');
+        if (!identity && !expression) continue;
+        generated.set(`${r.schema}.${r.table}.${r.column}`, {
+          autoIncrement: identity === 'a' || identity === 'd',
+          generated: expression === 'v' ? 'virtual' : expression === 's' ? 'stored' : undefined,
+        });
+      }
       for (const r of columnsRes.rows as Array<Record<string, any>>) {
         const t = tables.get(`${r.table_schema}.${r.table_name}`);
         if (!t) continue;
         const pkSet = primaryCols.get(`${r.table_schema}.${r.table_name}`);
+        const flag = generated.get(`${r.table_schema}.${r.table_name}.${r.column_name}`);
         (t.columns as ColumnInfo[]).push({
           name: r.column_name,
           type: r.data_type === 'USER-DEFINED' ? r.udt_name : r.data_type,
           nullable: r.is_nullable === 'YES',
           defaultValue: r.column_default ?? null,
           primaryKey: Boolean(pkSet?.has(r.column_name)),
+          autoIncrement: flag?.autoIncrement,
+          generated: flag?.generated,
         });
       }
       for (const [key, idx] of indexMap) {
