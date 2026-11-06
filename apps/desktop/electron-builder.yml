@@ -28,6 +28,11 @@ extraResources:
   - from: ../../node_modules/@duckdb
     to: gateway/node_modules/@duckdb
 asar: true
+# 工作区里 node_modules 被提升到仓库根目录，CI 中 appDir 下没有 node_modules，
+# electron-builder 会误判为“未安装依赖”并在工作区内执行 npm install --production，
+# 这次安装会把 devDependency 的 app-builder-bin 剪掉，随后打包自己就起不来。
+# 本项目没有需要 rebuild 的原生生产依赖，直接跳过依赖重建更稳。
+npmRebuild: false
 win:
   target:
     - nsis
