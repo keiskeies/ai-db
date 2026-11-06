@@ -64,7 +64,7 @@ class McpClient {
       await this.request('initialize', {
         protocolVersion: '2024-11-05',
         capabilities: {},
-        clientInfo: { name: 'AiDB Studio', version: '0.1.0' },
+        clientInfo: { name: 'AiDB Studio', version: '0.0.1' },
       }, 30_000);
       this.notify('notifications/initialized', {});
       this.initialized = true;

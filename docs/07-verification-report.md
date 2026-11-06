@@ -122,9 +122,9 @@
 | 37 | 查询窗口连接 / 数据库下拉 | ✅ |
 | + | 桌面 / 移动浏览器控制台错误 | **0** |
 
-### 4.4 截图（docs/screenshots/）
+### 4.4 截图（docs/screenshots/showcase/）
 
-`desktop-welcome` `desktop-data` `desktop-query` `desktop-query-chart` `desktop-toolbox` `desktop-table-menu` `desktop-agent` `desktop-agent-model-menu` `desktop-agent-model-tiers` `desktop-agent-model-tiers-light` `desktop-chart` `desktop-audit` `desktop-approval` `desktop-agent-ddl` `desktop-settings` `desktop-search-settings` `desktop-agent-tools` `desktop-light` `desktop-memory` `desktop-relations` `desktop-connection-engines` `mobile-pairing` `mobile-chat` `mobile-agent` `mobile-data` `mobile-memory` `mobile-settings` `electron-desktop` `packaged-windows`。
+`01-welcome` `02-engines` `03-data` `03b-data-grid` `04-query` `05-chart` `06-relations` `07-dashboard` `08-toolbox` `09-settings` `09b-settings-model` `10-agent-working` `11-agent-answer` `12-agent-panel` `13-agent-forecast` `14-agent-approval` `15-light` `16-mobile-pairing` `17-mobile-chat` `18-mobile-agent` `19-mobile-tools` `20-mobile-data` `21-agent-chart` `22-agent-chart-panel` `agent-workflow.gif`。
 
 ## 5. 关键缺陷与修复（真实发生）
 

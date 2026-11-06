@@ -24,6 +24,7 @@
   <img alt="53 个 Agent 工具" src="https://img.shields.io/badge/Agent%20Tools-53-45C8C3?style=flat-square" />
   <img alt="macOS、Windows、Linux" src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-0B0E0D?style=flat-square" />
   <img alt="MIT 许可" src="https://img.shields.io/badge/License-MIT-E0AF63?style=flat-square" />
+  <a href="https://github.com/keiskeies/ai-db/releases/tag/v0.0.1"><img alt="Release v0.0.1" src="https://img.shields.io/badge/Release-v0.0.1-45C8C3?style=flat-square&logo=github" /></a>
   <a href="https://github.com/keiskeies/ai-db"><img alt="GitHub stars" src="https://img.shields.io/github/stars/keiskeies/ai-db?style=flat-square&logo=github&label=Stars&color=E0AF63" /></a>
 </p>
 
@@ -33,7 +34,27 @@ AiDB 不是把聊天框嵌进数据库客户端。它以 Agent 为第一入口�
 
 桌面端使用 Electron + React，可同时以浏览器形态运行；移动端使用 Expo / React Native，通过 Bridge 与桌面共享连接、会话、记忆和设置。支持 Windows、macOS、Linux、Android、iOS 与 Web。
 
-![AI Agent 在工作台中完成分析任务](docs/screenshots/readme/agent.png)
+<p align="center">
+  <img src="docs/screenshots/showcase/agent-workflow.gif" width="420" alt="AiDB Agent 制定计划、调用数据库工具并写出分析" />
+</p>
+
+## Agent 实战
+
+下面的截图来自真实会话，不是示意图：Agent 制定计划，对 Demo 数据库调用真实工具，渲染实时图表，并在同一个工作台里写出可逐项核对的结论。
+
+| 计划与工具调用 | 带可核对数字的回答 |
+|---|---|
+| ![Agent 按计划调用工具](docs/screenshots/showcase/10-agent-working.png) | ![Agent 用表格与真实数字写出分析](docs/screenshots/showcase/11-agent-answer.png) |
+
+| Agent 渲染的实时图表 | 完整 Agent 面板 |
+|---|---|
+| ![Agent 渲染实时图表](docs/screenshots/showcase/21-agent-chart.png) | ![包含对话、证据与 token 遥测的 Agent 面板](docs/screenshots/showcase/22-agent-chart-panel.png) |
+
+- **审批是硬门槛**：结构变更会停下等待明确决定，界面上给出工具、参数、风险与作用域。
+- **预测必须交代方法**：模型、拟合度与区间都要讲清楚，而不是往图里丢一条线。
+- **每一步都可审计**：工具名、参数、风险等级、耗时、token 用量与缓存命中率都留在回答旁边。
+
+![Agent 在创建表之前等待审批](docs/screenshots/showcase/14-agent-approval.png)
 
 ## Agent 优先
 
@@ -67,6 +88,7 @@ AiDB 的选择是把 Agent 放在任务主路径上，而不是侧边栏里。�
 
 ## 目录
 
+- [Agent 实战](#agent-实战)
 - [Agent 优先](#agent-优先)
 - [能力概览](#能力概览)
 - [快速开始](#快速开始)
@@ -125,7 +147,7 @@ npm --workspace apps/mobile run android  # 本地 Android 工程
 
 Agent 的能力不是一句“支持自然语言”。它由六件事共同决定：能看见什么、能做什么、被什么约束、记得什么、如何交付、如何扩展。一次任务在 AiDB 内走完理解、计划、执行、验证、交付、沉淀六个阶段，每一步都留下界面证据。
 
-![AI 回答中的图表、口径与可追溯数据](docs/screenshots/readme/agent-chart.png)
+![Agent 面板：计划、工具轨迹、口径与可追溯数据](docs/screenshots/showcase/12-agent-panel.png)
 
 ### 它能把什么做完
 
@@ -233,7 +255,7 @@ Agent 的主路径不止自由对话。AiDB 把高频业务动作收敛为命令
 | `/ask` | 不启动命令，直接与 Agent 对话 | 自由问答 |
 | `/init` | 扫描当前库生成 `AI_DB.md` 交接文档 | 引擎与规模、业务地图、核心表手册、Join 路径、指标口径、性能与坑、全量清单 |
 
-![报告工作区](docs/screenshots/readme/reports.png)
+![Agent 预测：方法、拟合度与区间](docs/screenshots/showcase/13-agent-forecast.png)
 
 报告与产物会被持久化：
 
@@ -249,7 +271,7 @@ Agent 的主路径不止自由对话。AiDB 把高频业务动作收敛为命令
 
 ### 欢迎页：当前库的家
 
-![欢迎页：当前库的表、体检摘要与 AI 建议](docs/screenshots/readme/welcome.png)
+![欢迎页：当前库的表、体检摘要与 AI 建议](docs/screenshots/showcase/01-welcome.png)
 
 打开应用先看到的是 **当前连接 + 当前库** 的工作台，而不是一张全局仪表盘：
 
@@ -300,7 +322,7 @@ Agent 的主路径不止自由对话。AiDB 把高频业务动作收敛为命令
 - **连接/库记忆**：每个连接记住上次使用的库和侧栏展开状态，切换连接时恢复；不会擅自展开或切换用户没选的库。
 - **无凭据下发**：移动端只读取连接配置，数据库密码和 SSH 私钥不会下发到手机。
 
-![新建连接与引擎目录](docs/screenshots/readme/engines.png)
+![新建连接与引擎目录](docs/screenshots/showcase/02-engines.png)
 
 ### 支持的 41 种引擎
 
@@ -357,7 +379,7 @@ Agent 的主路径不止自由对话。AiDB 把高频业务动作收敛为命令
 
 ## 数据网格
 
-![数据网格、筛选与行操作](docs/screenshots/readme/data.png)
+![数据网格、筛选与行操作](docs/screenshots/showcase/03-data.png)
 
 数据页是用户复核 Agent 结果的地方，也是手工修改数据的入口。二者共享同一份分页、筛选、排序和写入语义，Agent 说“改了 3 行”时，用户能在同一张网格里看见这 3 行。
 
@@ -375,7 +397,9 @@ Agent 的主路径不止自由对话。AiDB 把高频业务动作收敛为命令
 
 ## SQL 工作台
 
-![SQL 查询与图表](docs/screenshots/readme/query-chart.png)
+![SQL 查询与图表](docs/screenshots/showcase/04-query.png)
+
+![查询结果渲染出的图表](docs/screenshots/showcase/05-chart.png)
 
 SQL 仍然是数据库工作的硬通货。AiDB 不隐藏 SQL，而是把它变成 Agent 与用户共同编辑、共同验证的语言：Agent 写下的语句可以落回编辑器，用户选中的 SQL 也可以随时交给 Agent 解释或优化。
 
@@ -402,9 +426,11 @@ SQL 仍然是数据库工作的硬通货。AiDB 不隐藏 SQL，而是把它变�
 - **关系图**：基于外键的只读 ER 视图，表结构卡片 + 连线；点击表进入数据；支持导出 SVG。
 - **模型入口**：连接 / 数据库 / 表的右键都可“逆向到模型”。
 
+![基于外键生成的关系图](docs/screenshots/showcase/06-relations.png)
+
 ## 仪表板
 
-![每个数据库一块活的仪表板](docs/screenshots/readme/dashboard.png)
+![每个数据库一块活的仪表板](docs/screenshots/showcase/07-dashboard.png)
 
 仪表板把 Agent 的分析从一次回答变成可持续观察的卡片。它仍然保存 SQL，而不是截图；打开时先渲染上次快照，再后台重跑，让结论始终跟着数据库变化。
 
@@ -421,6 +447,8 @@ SQL 仍然是数据库工作的硬通货。AiDB 不隐藏 SQL，而是把它变�
 ## 工具箱
 
 工具箱位于 Ribbon 的“其它”，14 个模块共用同一套 Bridge 与权限模型。每个模块都有一份能力契约，声明字段、类型、约束与状态，同时驱动 Agent 能力目录、REST 参数校验与 UI 表单渲染。
+
+![工具箱：14 个生产力模块共用一套权限模型](docs/screenshots/showcase/08-toolbox.png)
 
 这意味着 Agent 不只是“看见有这些按钮”，而是知道每个模块需要什么参数、会返回什么状态、哪些操作必须由用户亲自完成。能力契约把“模型能不能用”和“功能是否存在”分开，避免模型编造一个不存在的接口。
 
@@ -450,9 +478,9 @@ Agent 不应该被固定在桌面。移动端通过 Bridge 把同一个 Agent �
 移动端不是桌面端的缩小版，而是一套完整的随身工作区。
 
 <p align="center">
-  <img src="docs/screenshots/readme/mobile-chat.png" width="250" alt="移动端 AI 对话" />
-  <img src="docs/screenshots/readme/mobile-tools.png" width="250" alt="移动端工具箱" />
-  <img src="docs/screenshots/readme/mobile-data.png" width="250" alt="移动端数据网格" />
+  <img src="docs/screenshots/showcase/17-mobile-chat.png" width="250" alt="移动端 AI 对话" />
+  <img src="docs/screenshots/showcase/19-mobile-tools.png" width="250" alt="移动端工具箱" />
+  <img src="docs/screenshots/showcase/20-mobile-data.png" width="250" alt="移动端数据网格" />
 </p>
 
 - **配对**：二维码、6 位配对码、`aidb://pair` 深链、mDNS 原生发现 / 同网段扫描；凭据只保存在设备安全存储。
@@ -475,7 +503,7 @@ Agent 不应该被固定在桌面。移动端通过 Bridge 把同一个 Agent �
 
 ## 设置
 
-![设置：模型服务商、模型档案与 Embedding](docs/screenshots/readme/settings.png)
+![设置：模型服务商、模型档案与 Embedding](docs/screenshots/showcase/09b-settings-model.png)
 
 设置决定 Agent 的视野、力度与边界：用哪个模型思考、能走多少步、是否自动记忆、写前是否备份、哪些 Skill 与 MCP 可用、搜索结果从哪里来。它不是偏好页，而是 Agent 行为的一部分。
 
@@ -495,7 +523,7 @@ Agent 不应该被固定在桌面。移动端通过 Bridge 把同一个 Agent �
 | 数据与备份 | 最近审计、导出审计 CSV、备份列表、恢复备份 |
 | 关于 | 版本、许可、依赖 |
 
-![浅色主题](docs/screenshots/readme/light.png)
+![浅色主题](docs/screenshots/showcase/15-light.png)
 
 ## 集成：通知、Skill、MCP、网络搜索
 

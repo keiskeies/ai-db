@@ -1195,7 +1195,7 @@ export function SettingsModal() {
                   <div className="row">
                     <img className="brand-mark" src="/logo-mark.svg" alt="" style={{ width: 34, height: 34 }} />
                     <div>
-                      <div style={{ fontWeight: 650 }}>AiDB Studio v0.1.0</div>
+                      <div style={{ fontWeight: 650 }}>AiDB Studio v0.0.1</div>
                       <div className="muted" style={{ fontSize: 11 }}>AI-native, cross-platform database studio</div>
                     </div>
                   </div>

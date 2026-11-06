@@ -24,6 +24,7 @@
   <img alt="53 agent tools" src="https://img.shields.io/badge/Agent%20Tools-53-45C8C3?style=flat-square" />
   <img alt="macOS, Windows, Linux" src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-0B0E0D?style=flat-square" />
   <img alt="MIT license" src="https://img.shields.io/badge/License-MIT-E0AF63?style=flat-square" />
+  <a href="https://github.com/keiskeies/ai-db/releases/tag/v0.0.1"><img alt="Release v0.0.1" src="https://img.shields.io/badge/Release-v0.0.1-45C8C3?style=flat-square&logo=github" /></a>
   <a href="https://github.com/keiskeies/ai-db"><img alt="GitHub stars" src="https://img.shields.io/github/stars/keiskeies/ai-db?style=flat-square&logo=github&label=Stars&color=E0AF63" /></a>
 </p>
 
@@ -33,7 +34,27 @@ From 41 database engines to 14 productivity modules, from 53 tools to 6 command 
 
 The desktop app is built with Electron + React and also runs in the browser. The mobile app uses Expo / React Native and shares connections, sessions, memory, and settings with the desktop through the Bridge. Windows, macOS, Linux, Android, iOS, and Web are supported.
 
-![AI Agent completing an analysis task in the workbench](docs/screenshots/readme/agent.png)
+<p align="center">
+  <img src="docs/screenshots/showcase/agent-workflow.gif" width="420" alt="AiDB Agent planning, calling database tools, and writing an analysis" />
+</p>
+
+## Agent in action
+
+The screenshots below are a real session, not a mockup. The Agent plans, calls real tools against the demo database, renders live charts, and writes the analysis in the same workbench where the user can inspect every step.
+
+| Planning and tool calls | Answer with auditable numbers |
+|---|---|
+| ![Agent executing a plan with tool calls](docs/screenshots/showcase/10-agent-working.png) | ![Agent writing an analysis with tables and real numbers](docs/screenshots/showcase/11-agent-answer.png) |
+
+| Live chart from the Agent | Full Agent panel |
+|---|---|
+| ![Agent rendering a live chart](docs/screenshots/showcase/21-agent-chart.png) | ![Agent panel with transcript, evidence, and token telemetry](docs/screenshots/showcase/22-agent-chart-panel.png) |
+
+- **Approval is a hard gate**: schema changes pause for an explicit decision, with the exact tool, arguments, risk, and scope on screen.
+- **Forecasts carry their method**: the Agent explains the model, fit quality, and interval instead of dropping a line on a chart.
+- **Every step is auditable**: tool name, arguments, risk class, duration, token usage, and cache hit rate stay attached to the answer.
+
+![Agent waiting for approval before creating a table](docs/screenshots/showcase/14-agent-approval.png)
 
 ## Agent first
 
@@ -67,6 +88,7 @@ AiDB puts the Agent on the main path of the task, not in a sidebar. Here, the Ag
 
 ## Contents
 
+- [Agent in action](#agent-in-action)
 - [Agent first](#agent-first)
 - [Capabilities at a glance](#capabilities-at-a-glance)
 - [Quick start](#quick-start)
@@ -125,7 +147,7 @@ Mobile pairing: on desktop, go to **Settings → Bridge → Pair a mobile device
 
 The Agent's capability is not a claim of "natural language support." It is defined by six things: what it can see, what it can do, what constrains it, what it remembers, how it delivers, and how it extends. A task moves through six phases inside AiDB — understand, plan, execute, verify, deliver, retain — and every step leaves UI evidence.
 
-![Charts, definitions, and traceable data in an AI answer](docs/screenshots/readme/agent-chart.png)
+![Agent panel: plan, tool trace, definitions, and traceable data](docs/screenshots/showcase/12-agent-panel.png)
 
 ### What it finishes end to end
 
@@ -233,7 +255,7 @@ A command is not a menu — it is a task contract that defines the risk ceiling,
 | `/ask` | Talk to the Agent directly without starting a command | Free-form Q&A |
 | `/init` | Scans the current database and generates an `AI_DB.md` handoff document | Engines and scale, business map, core table handbook, join paths, metric definitions, performance pitfalls, and a full inventory |
 
-![Report workspace](docs/screenshots/readme/reports.png)
+![Agent forecast with method, fit quality, and interval](docs/screenshots/showcase/13-agent-forecast.png)
 
 Reports and artifacts are persisted:
 
@@ -249,7 +271,7 @@ The workbench is not an accessory to the Agent — it is the reality the Agent r
 
 ### Welcome: home for the current database
 
-![Welcome page: tables, audit summary, and AI suggestions for the current database](docs/screenshots/readme/welcome.png)
+![Welcome page: tables, audit summary, and AI suggestions for the current database](docs/screenshots/showcase/01-welcome.png)
 
 The first screen is the workbench for the **current connection + current database**, not a global dashboard:
 
@@ -300,7 +322,7 @@ The connection form switches default port, database field, SSL / SSH capability,
 - **Connection / database memory**: each connection remembers its last database and sidebar expansion state and restores them on switch; the app never expands or switches to a database the user did not choose.
 - **No credential distribution**: mobile reads connection configuration only; database passwords and SSH private keys are never sent to the phone.
 
-![New connection and engine catalog](docs/screenshots/readme/engines.png)
+![New connection and engine catalog](docs/screenshots/showcase/02-engines.png)
 
 ### 41 supported engines
 
@@ -357,7 +379,7 @@ The tree is organized as **connection → database / schema → table / view**, 
 
 ## Data grid
 
-![Data grid, filters, and row operations](docs/screenshots/readme/data.png)
+![Data grid, filters, and row operations](docs/screenshots/showcase/03-data.png)
 
 The data page is where users verify Agent results and where they edit data by hand. Both share the same pagination, filtering, sorting, and write semantics: when the Agent says "3 rows changed," the user can see those 3 rows in the same grid.
 
@@ -375,7 +397,9 @@ The data page is not a read-only table but a grid for everyday data maintenance:
 
 ## SQL workbench
 
-![SQL query and chart](docs/screenshots/readme/query-chart.png)
+![SQL query and chart](docs/screenshots/showcase/04-query.png)
+
+![Chart rendered from the query result](docs/screenshots/showcase/05-chart.png)
 
 SQL remains the hard currency of database work. AiDB does not hide SQL; it makes SQL a language the Agent and the user edit and verify together. Statements written by the Agent can return to the editor, and SQL selected by the user can be handed to the Agent for explanation or optimization at any time.
 
@@ -402,9 +426,11 @@ A schema change is not a single DDL statement; it is an engineering action that 
 - **Relationship diagram**: a read-only ER view based on foreign keys, with schema cards and edges; click a table to open its data; export to SVG.
 - **Model entry points**: reverse engineer to model from a connection / database / table context menu.
 
+![Relationship diagram generated from foreign keys](docs/screenshots/showcase/06-relations.png)
+
 ## Dashboard
 
-![A live dashboard for every database](docs/screenshots/readme/dashboard.png)
+![A live dashboard for every database](docs/screenshots/showcase/07-dashboard.png)
 
 The dashboard turns the Agent's analysis from a one-off answer into cards that stay observable. It stores SQL, not screenshots; opening it renders the last snapshot first, then reruns in the background so conclusions keep pace with the database.
 
@@ -421,6 +447,8 @@ The dashboard is a **frequently asked questions panel for this database**, not a
 ## Toolbox
 
 The toolbox lives under the Ribbon's "Other" tab; all 14 modules share the same Bridge and permission model. Each module has a capability contract declaring fields, types, constraints, and states, which simultaneously drives the Agent capability catalog, REST validation, and UI form rendering.
+
+![Toolbox: 14 productivity modules behind one permission model](docs/screenshots/showcase/08-toolbox.png)
 
 This means the Agent does not merely "see that these buttons exist"; it knows which parameters each module needs, which states it returns, and which actions the user must perform personally. Capability contracts separate "can the model use it" from "does the feature exist," preventing the model from inventing a nonexistent API.
 
@@ -450,9 +478,9 @@ The Agent should not be pinned to the desktop. Mobile brings the same Agent to t
 Mobile is not a shrunken desktop — it is a complete pocket workspace.
 
 <p align="center">
-  <img src="docs/screenshots/readme/mobile-chat.png" width="250" alt="Mobile AI conversation" />
-  <img src="docs/screenshots/readme/mobile-tools.png" width="250" alt="Mobile toolbox" />
-  <img src="docs/screenshots/readme/mobile-data.png" width="250" alt="Mobile data grid" />
+  <img src="docs/screenshots/showcase/17-mobile-chat.png" width="250" alt="Mobile AI conversation" />
+  <img src="docs/screenshots/showcase/19-mobile-tools.png" width="250" alt="Mobile toolbox" />
+  <img src="docs/screenshots/showcase/20-mobile-data.png" width="250" alt="Mobile data grid" />
 </p>
 
 - **Pairing**: QR code, 6-digit pairing code, `aidb://pair` deep link, native mDNS discovery / same-network scan; credentials live only in secure device storage.
@@ -475,7 +503,7 @@ Mobile is not a shrunken desktop — it is a complete pocket workspace.
 
 ## Settings
 
-![Settings: model providers, model profiles, and embeddings](docs/screenshots/readme/settings.png)
+![Settings: model providers, model profiles, and embeddings](docs/screenshots/showcase/09b-settings-model.png)
 
 Settings determine the Agent's field of view, force, and boundaries: which model thinks, how many steps it can take, whether it remembers automatically, whether it backs up before writes, which Skills and MCP servers are available, and where search results come from. This is not a preferences page — it is part of the Agent's behavior.
 
@@ -495,7 +523,7 @@ Settings has 11 sections:
 | Data and backups | Recent audit, export audit CSV, backup list, and restore |
 | About | Version, license, and dependencies |
 
-![Light theme](docs/screenshots/readme/light.png)
+![Light theme](docs/screenshots/showcase/15-light.png)
 
 ## Integrations: notifications, Skills, MCP, web search
 

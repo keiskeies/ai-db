@@ -1,6 +1,6 @@
 {
   "name": "@aidb/mcp",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "AiDB Studio read-only MCP server for Claude Code / Claude Desktop, with one-time device pairing",
   "license": "MIT",
   "type": "module",

@@ -145,6 +145,30 @@ function toolLabel(name?: string) {
   return TOOL_LABELS[name] ?? name;
 }
 
+// 服务端把工具摘要拼成中文（例如「更新计划（5 项）」），在英文界面里要按同一套
+// 占位符模板翻译回来；静态文案走精确查表，拼装文案走模式匹配。
+const SUMMARY_PATTERNS: Array<[RegExp, string]> = [
+  [/^更新计划（(\d+) 项）$/, '更新计划（{0} 项）'],
+  [/^查看结构 (.+)$/, '查看结构 {0}'],
+  [/^执行计划：(.+)$/, '执行计划：{0}'],
+  [/^样例数据 (.+)$/, '样例数据 {0}'],
+  [/^创建表 (.+)$/, '创建表 {0}'],
+  [/^数据质量检查 (.+)$/, '数据质量检查 {0}'],
+  [/^生成 (\d+) 行测试数据 → (.+)$/, '生成 {0} 行测试数据 → {1}'],
+  [/^统计分析（(.+)…）$/, '统计分析（{0}…）'],
+  [/^预测未来 (\d+) 期$/, '预测未来 {0} 期'],
+];
+
+function localizeSummary(text?: string): string | undefined {
+  if (!text) return text;
+  if (!/[\u4e00-\u9fff]/.test(text)) return text;
+  for (const [pattern, key] of SUMMARY_PATTERNS) {
+    const match = pattern.exec(text);
+    if (match) return tr(key, match.slice(1));
+  }
+  return tr(text);
+}
+
 /** 从 SQL 里粗略取表名，仅用于状态文案，不参与任何执行逻辑。 */
 function sqlTable(sql: string): string | undefined {
   const match = /\b(?:from|join|into|update|table)\s+[`"[\]]?([\w.$-]+)/i.exec(sql);
@@ -697,7 +721,7 @@ function ToolCard({
       <div className="tool-head" onClick={() => setOpen((v) => !v)}>
         {statusIcon(status)}
         <span className="tool-name">{tool}</span>
-        <span className="tool-summary">{summary ?? (typeof sqlArg === 'string' ? sqlArg.replace(/\s+/g, ' ').slice(0, 70) : '')}</span>
+        <span className="tool-summary">{localizeSummary(summary) ?? (typeof sqlArg === 'string' ? sqlArg.replace(/\s+/g, ' ').slice(0, 70) : '')}</span>
         <RiskBadge risk={risk} />
         {result ? <span className="muted" style={{ fontSize: 10 }}>{formatDuration(result.meta.durationMs)}</span> : null}
         {status === 'awaiting' ? <span className="badge write">{tr("等待授权")}</span> : null}
@@ -2072,7 +2096,7 @@ export function AgentPanel() {
                 <div className="spacer" />
                 <span className="muted" style={{ fontSize: 10.5 }}>{t('permission')}：{agentMode}</span>
               </div>
-              <div className="approval-summary">{approval.summary}</div>
+              <div className="approval-summary">{localizeSummary(approval.summary)}</div>
               {approval.sql ? (
                 <div className="sql-block approval-sql">
                   {approval.sql}

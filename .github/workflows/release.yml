@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  desktop:
+    name: Build desktop (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: --win
+            artifact: windows
+          - os: macos-latest
+            target: --mac
+            artifact: macos
+          - os: ubuntu-latest
+            target: --linux
+            artifact: linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build core, gateway and desktop UI
+        run: |
+          npm run build:core
+          npm --workspace apps/gateway run build
+          npm --workspace apps/desktop run build
+
+      - name: Package installer
+        working-directory: apps/desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder ${{ matrix.target }} --publish never
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: aidb-${{ matrix.artifact }}
+          path: |
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.yml
+            apps/desktop/release/*.blockmap
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub release
+    needs: desktop
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-release
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: AiDB Studio v0.0.1
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+          body: |
+            AiDB Studio **v0.0.1** — the agent-first database workbench.
+
+            **Highlights**
+            - Agent as the primary entry point: 53 tools, real schema context, real SQL execution, approvals, and audit.
+            - 41 database engines, 7 chart types, 14 toolbox modules, and 7 command workflows.
+            - Charts, reports, dashboards, Excel / PPTX exports, and long-term memory that compounds.
+            - Desktop (Windows / macOS / Linux) and mobile (Android / iOS / Web) share connections and memory through the Bridge.
+
+            Installers are built by GitHub Actions from this tag.
+
+            **Verify** the UI language is English by default, and the status bar reports `v0.0.1`.
+          files: |
+            dist-release/*.exe
+            dist-release/*.dmg
+            dist-release/*.AppImage
+            dist-release/*.yml
+            dist-release/*.blockmap
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -430,7 +430,7 @@ export default function App() {
         <div className="spacer" />
         <span className="item model">{settings.agent.provider === 'local' ? 'AI: Local' : `AI: ${settings.agent.model}`}</span>
         <span className="item count">{useApp.getState().connections.length}{tr(" 连接")}</span>
-        <span className="item version">v0.1.0</span>
+        <span className="item version">v0.0.1</span>
       </div>
 
       <MemoryDrawer />
