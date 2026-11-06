@@ -4,7 +4,7 @@ import type { NotificationChannelInfo, NotificationChannelType } from '@aidb/cor
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
 import { askConfirm } from '../AskDialog';
-import { Select, Option } from '../ui';
+import { SecretInput, Select, Option } from '../ui';
 import { t as tr } from '../../i18n';
 
 const TYPE_LABEL: Record<NotificationChannelType, string> = {
@@ -190,7 +190,7 @@ export function NotificationsTool() {
             <div className="tool-row" style={{ padding: 0, border: 0, marginTop: 8 }}>
               <div className="field" style={{ flex: 1 }}>
                 <label>Bot Token</label>
-                <input className="input" type="password" value={botToken} onChange={(e) => setBotToken(e.target.value)} placeholder="123456:ABC…" />
+                <SecretInput value={botToken} onChange={(e) => setBotToken(e.target.value)} placeholder="123456:ABC…" name="aidb-telegram-bot-token" />
               </div>
               <div className="field" style={{ width: 220 }}>
                 <label>Chat ID / @channel</label>
@@ -206,7 +206,7 @@ export function NotificationsTool() {
               {type === 'feishu' || type === 'dingtalk' ? (
                 <div className="field" style={{ marginTop: 8 }}>
                   <label>{tr("签名密钥（可选）")}</label>
-                  <input className="input" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} />
+                  <SecretInput value={secret} onChange={(e) => setSecret(e.target.value)} name="aidb-notify-sign-secret" />
                 </div>
               ) : null}
               {type === 'feishu' ? (
@@ -215,15 +215,22 @@ export function NotificationsTool() {
                   <div className="tool-row" style={{ padding: 0, border: 0, marginTop: 8 }}>
                     <div className="field" style={{ flex: 1 }}>
                       <label>App ID</label>
-                      <input className="input" value={appId} onChange={(e) => setAppId(e.target.value)} />
+                      <input
+                        className="input"
+                        value={appId}
+                        onChange={(e) => setAppId(e.target.value)}
+                        autoComplete="off"
+                        name="aidb-feishu-app-id"
+                        data-form-type="other"
+                      />
                     </div>
                     <div className="field" style={{ flex: 1 }}>
                       <label>App Secret</label>
-                      <input className="input" type="password" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} />
+                      <SecretInput value={appSecret} onChange={(e) => setAppSecret(e.target.value)} name="aidb-feishu-app-secret" />
                     </div>
                     <div className="field" style={{ flex: 1 }}>
                       <label>Verification Token</label>
-                      <input className="input" value={verificationToken} onChange={(e) => setVerificationToken(e.target.value)} />
+                      <SecretInput value={verificationToken} onChange={(e) => setVerificationToken(e.target.value)} name="aidb-feishu-verification-token" />
                     </div>
                   </div>
                 </details>
@@ -238,7 +245,7 @@ export function NotificationsTool() {
               <div className="row gap-6" style={{ marginTop: 8 }}>
                 <div className="field" style={{ flex: 1 }}>
                   <label>{tr("Access Token（可选）")}</label>
-                  <input className="input" type="password" value={token} onChange={(e) => setToken(e.target.value)} />
+                  <SecretInput value={token} onChange={(e) => setToken(e.target.value)} name="aidb-onebot-token" />
                 </div>
                 <div className="field" style={{ width: 110 }}>
                   <label>{tr("目标")}</label>

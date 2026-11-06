@@ -3,7 +3,7 @@ import { KeyRound, Loader2, Plus, RefreshCw, ShieldAlert, Trash2 } from 'lucide-
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
 import { askConfirm } from '../AskDialog';
-import { Select, Option } from '../ui';
+import { SecretInput, Select, Option } from '../ui';
 import { t as tr } from '../../i18n';
 
 export function UsersTool() {
@@ -80,7 +80,15 @@ export function UsersTool() {
               </div>
               <div className="field" style={{ flex: 1, minWidth: 120 }}>
                 <label>{tr("用户名")}</label>
-                <input className="input mono" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="app_user" />
+                <input
+                  className="input mono"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  placeholder="app_user"
+                  autoComplete="off"
+                  name="aidb-db-user-name"
+                  data-form-type="other"
+                />
               </div>
               {conn?.engine === 'mysql' || conn?.engine === 'mariadb' ? (
                 <div className="field" style={{ width: 120 }}>
@@ -91,7 +99,7 @@ export function UsersTool() {
               {form.action === 'create' ? (
                 <div className="field" style={{ flex: 1, minWidth: 140 }}>
                   <label>{tr("密码")}</label>
-                  <input className="input" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+                  <SecretInput value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} name="aidb-db-user-password" />
                 </div>
               ) : (
                 <div className="field" style={{ flex: 1, minWidth: 140 }}>

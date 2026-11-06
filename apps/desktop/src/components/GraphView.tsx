@@ -311,7 +311,7 @@ export function GraphView({ graph }: { graph: GraphData }) {
           >
             <defs>
               <marker id="graph-arrow" viewBox="0 0 10 10" refX="18" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
-                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--text-muted, #8b9490)" />
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--text-muted, #9aa09d)" />
               </marker>
             </defs>
             <g transform={`translate(${view.x} ${view.y}) scale(${view.scale})`}>
@@ -330,7 +330,7 @@ export function GraphView({ graph }: { graph: GraphData }) {
                 const showLabel = showAllEdgeLabels || active;
                 return (
                   <g key={edge.id} data-testid="graph-edge" opacity={isFiltering || selectedId ? (active ? 1 : 0.35) : 1}>
-                    <path d={geometry.path} fill="none" stroke={active ? 'var(--accent, #45c8c3)' : 'var(--text-muted, #8b9490)'} strokeWidth={active ? 2 : 1.4} markerEnd="url(#graph-arrow)" />
+                    <path d={geometry.path} fill="none" stroke={active ? 'var(--accent, #45c8c3)' : 'var(--text-muted, #9aa09d)'} strokeWidth={active ? 2 : 1.4} markerEnd="url(#graph-arrow)" />
                     <path
                       d={geometry.path}
                       fill="none"
@@ -343,7 +343,7 @@ export function GraphView({ graph }: { graph: GraphData }) {
                       <title>{JSON.stringify({ type: edge.type, from: edge.source, to: edge.target, ...edge.properties }, null, 2)}</title>
                     </path>
                     {showLabel ? (
-                      <text x={geometry.midX} y={geometry.midY - 5} textAnchor="middle" fontSize={10} fill={active ? 'var(--accent, #45c8c3)' : 'var(--text-muted, #8b9490)'} style={{ pointerEvents: 'none' }}>
+                      <text x={geometry.midX} y={geometry.midY - 5} textAnchor="middle" fontSize={10} fill={active ? 'var(--accent, #45c8c3)' : 'var(--text-muted, #9aa09d)'} style={{ pointerEvents: 'none' }}>
                         {edge.type}
                       </text>
                     ) : null}
@@ -367,11 +367,11 @@ export function GraphView({ graph }: { graph: GraphData }) {
                     <title>{JSON.stringify({ id: node.id, labels: node.labels, ...node.properties }, null, 2)}</title>
                     {selectedId === node.id ? <circle cx={position.x} cy={position.y} r={radius + 5} fill="none" stroke="var(--accent, #45c8c3)" strokeWidth={2} /> : null}
                     {isFiltering && matched.has(node.id) ? <circle cx={position.x} cy={position.y} r={radius + 7} fill={color} fillOpacity={0.18} /> : null}
-                    <circle cx={position.x} cy={position.y} r={radius} fill={color} fillOpacity={0.92} stroke="var(--bg-app, #0b0d0d)" strokeWidth={2} />
-                    <text x={position.x} y={position.y + radius + 12} textAnchor="middle" fontSize={11} fill="var(--text-primary, #f1f3f1)" style={{ pointerEvents: 'none' }}>
+                    <circle cx={position.x} cy={position.y} r={radius} fill={color} fillOpacity={0.92} stroke="var(--bg-app, #090a09)" strokeWidth={2} />
+                    <text x={position.x} y={position.y + radius + 12} textAnchor="middle" fontSize={11} fill="var(--text-primary, #ffffff)" style={{ pointerEvents: 'none' }}>
                       {label}
                     </text>
-                    <text x={position.x} y={position.y + radius + 24} textAnchor="middle" fontSize={9} fill="var(--text-muted, #8b9490)" style={{ pointerEvents: 'none' }}>
+                    <text x={position.x} y={position.y + radius + 24} textAnchor="middle" fontSize={9} fill="var(--text-muted, #9aa09d)" style={{ pointerEvents: 'none' }}>
                       {String(node.properties.name ?? node.properties.title ?? node.properties._key ?? node.id).slice(0, 20)}
                     </text>
                   </g>

@@ -41,7 +41,7 @@ import { api, TOKEN } from '../lib/api';
 import { formatBytes, formatRelative } from '../lib/format';
 import { useApp, type SettingsTab } from '../store';
 import { LOCALES } from '../i18n';
-import { Option, RiskBadge, Select } from './ui';
+import { Option, RiskBadge, SecretInput, Select } from './ui';
 import { askConfirm } from './AskDialog';
 import { SkillsTool } from './tools/SkillsTool';
 import { WebSearchTool } from './tools/WebSearchTool';
@@ -505,16 +505,15 @@ export function SettingsModal() {
         <label>
           {tr(" API 密钥 ")}{apiKeyStatus[draft.id] ? <span className="badge read">{tr("已配置")}</span> : null}
         </label>
-        <input
+        <SecretInput
           className="input mono"
-          type="password"
           value={draftKey === '__CLEAR__' ? '' : draftKey}
           placeholder={apiKeyStatus[draft.id] ? t('apiKeyHint') : draftPreset?.keyRequired ? 'sk-...' : tr("本地服务可留空")}
-          autoComplete="new-password"
           onChange={(e) => {
             setDraftKey(e.target.value);
             setDraftKeyDirty(true);
           }}
+          name="aidb-model-api-key"
           data-testid="settings-api-key"
         />
         <span className="hint">{tr("密钥按服务商加密保存在 Bridge 本地，不会下发到移动端；留空保持不变。")}</span>
@@ -960,14 +959,13 @@ export function SettingsModal() {
                     </div>
                     <div className="field full">
                       <label>API Key {form.embedding.hasApiKey ? <span className="badge read">{tr("已配置")}</span> : null}</label>
-                      <input
+                      <SecretInput
                         className="input mono"
-                        type="password"
                         value={form.embedding.apiKey ?? ''}
-                        autoComplete="new-password"
                         onChange={(e) => setEmbedding({ apiKey: e.target.value })}
                         placeholder={form.embedding.hasApiKey ? tr("已保存，留空保持不变") : form.embedding.provider === 'ollama' ? tr("本地 Ollama 可留空") : 'sk-...'}
                         disabled={form.embedding.provider === 'none'}
+                        name="aidb-embedding-api-key"
                       />
                     </div>
                   </div>

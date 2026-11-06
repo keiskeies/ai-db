@@ -3,11 +3,13 @@ import {
   Children,
   isValidElement,
   useCallback,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
+  type InputHTMLAttributes,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from 'react';
@@ -49,6 +51,31 @@ export function Modal({
         {footer ? <div className="modal-foot">{footer}</div> : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * 非登录场景的密钥输入框。
+ * 浏览器会忽略密码框的 autocomplete="off"，因此统一用 new-password + 非登录语义，
+ * 并给主流密码管理器显式忽略标记；避免连接密码/机器人 Token/API Key 被网站凭据回填。
+ */
+export function SecretInput({ className = 'input', name, ...props }: InputHTMLAttributes<HTMLInputElement>) {
+  const id = useId();
+  return (
+    <input
+      {...props}
+      type="password"
+      className={className}
+      name={name ?? `aidb-secret-${id.replace(/:/g, '')}`}
+      autoComplete="new-password"
+      autoCapitalize="off"
+      autoCorrect="off"
+      data-form-type="other"
+      data-lpignore="true"
+      data-1p-ignore="true"
+      data-bwignore="true"
+      spellCheck={false}
+    />
   );
 }
 

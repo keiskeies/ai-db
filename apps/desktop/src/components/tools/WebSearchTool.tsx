@@ -3,7 +3,7 @@ import { CheckCircle2, Clock, ExternalLink, Globe2, Loader2, Play, RefreshCw, Se
 import type { SearchBackendId, SearchSettings } from '@aidb/core';
 import { api } from '../../lib/api';
 import { useApp } from '../../store';
-import { Select, Option } from '../ui';
+import { SecretInput, Select, Option } from '../ui';
 import { t as tr } from '../../i18n';
 
 interface BackendInfo {
@@ -218,13 +218,12 @@ export function WebSearchTool() {
         ) : null}
         <span className={`badge ${keyStatus[id] ? 'read' : ''}`}>{keyStatus[id] ? tr("已配置") : tr("未配置")}</span>
       </div>
-      <input
-        className="input"
-        type="password"
+      <SecretInput
         aria-label={KEY_LABEL[id]}
         placeholder={KEY_LABEL[id].toUpperCase().replace(/\s+/g, '_')}
         value={keys[id] ?? ''}
         onChange={(event) => setKeys({ ...keys, [id]: event.target.value })}
+        name={`aidb-search-key-${id}`}
       />
       <div className="search-key-hint">{tr("填入后保存到凭证库（对应环境变量引用）；留空表示不修改")}</div>
     </div>

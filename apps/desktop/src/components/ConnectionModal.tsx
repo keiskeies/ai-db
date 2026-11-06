@@ -5,7 +5,7 @@ import { ENGINES, engineMeta } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp } from '../store';
 import type { ConnectionEditorState } from '../store';
-import { Modal, OptGroup, Option, Select } from './ui';
+import { Modal, OptGroup, Option, SecretInput, Select } from './ui';
 import { t as tr } from '../i18n';
 import { groupFromLabel, groupLabel } from '../lib/groups';
 
@@ -254,11 +254,25 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
               ) : null}
               <div className="field">
                 <label>{t('username')}</label>
-                <input className="input" value={username} onChange={(e) => setUsername(e.target.value)} data-testid="connection-username" />
+                <input
+                  className="input"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  autoComplete="off"
+                  name="aidb-connection-user"
+                  data-form-type="other"
+                  data-testid="connection-username"
+                />
               </div>
               <div className="field">
                 <label>{t('password')}</label>
-                <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={editor.connection?.hasPassword ? t('apiKeyHint') : ''} data-testid="connection-password" />
+                <SecretInput
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder={editor.connection?.hasPassword ? t('apiKeyHint') : ''}
+                  name="aidb-connection-secret"
+                  data-testid="connection-password"
+                />
               </div>
               {engineMeta(engine).supportsSsl ? (
                 <div className="field" style={{ justifyContent: 'flex-end' }}>
@@ -329,7 +343,15 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
                 </div>
                 <div className="field">
                   <label>{t('username')}</label>
-                  <input className="input" value={sshUser} onChange={(e) => setSshUser(e.target.value)} data-testid="ssh-user" />
+                  <input
+                    className="input"
+                    value={sshUser}
+                    onChange={(e) => setSshUser(e.target.value)}
+                    autoComplete="off"
+                    name="aidb-ssh-user"
+                    data-form-type="other"
+                    data-testid="ssh-user"
+                  />
                 </div>
                 <div className="field">
                   <label>{tr("认证方式")}</label>
@@ -341,7 +363,12 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
                 {sshAuth === 'password' ? (
                   <div className="field full">
                     <label>SSH {t('password')}</label>
-                    <input className="input" type="password" value={sshPassword} onChange={(e) => setSshPassword(e.target.value)} data-testid="ssh-password" />
+                    <SecretInput
+                      value={sshPassword}
+                      onChange={(e) => setSshPassword(e.target.value)}
+                      name="aidb-ssh-secret"
+                      data-testid="ssh-password"
+                    />
                   </div>
                 ) : (
                   <div className="field full">

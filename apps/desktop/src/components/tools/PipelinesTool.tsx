@@ -40,7 +40,7 @@ import { api, streamPipelineRun } from '../../lib/api';
 import { useApp, type Toast } from '../../store';
 import { DatabaseSelect } from '../DatabaseSelect';
 import { askConfirm } from '../AskDialog';
-import { Option, Select } from '../ui';
+import { Option, SecretInput, Select } from '../ui';
 import { getI18nLocale, t as tr } from '../../i18n';
 
 /**
@@ -1174,18 +1174,25 @@ function CredentialsPanel({
         {kind === 'bearer' ? (
           <div className="field">
             <label>Token</label>
-            <input className="input" type="password" value={token} onChange={(e) => setToken(e.target.value)} />
+            <SecretInput value={token} onChange={(e) => setToken(e.target.value)} name="aidb-pipeline-credential-token" />
           </div>
         ) : null}
         {kind === 'basic' ? (
           <>
             <div className="field">
               <label>{tr('用户名')}</label>
-              <input className="input" value={username} onChange={(e) => setUsername(e.target.value)} />
+              <input
+                className="input"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="off"
+                name="aidb-pipeline-credential-user"
+                data-form-type="other"
+              />
             </div>
             <div className="field">
               <label>{tr('密码')}</label>
-              <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+              <SecretInput value={password} onChange={(e) => setPassword(e.target.value)} name="aidb-pipeline-credential-password" />
             </div>
           </>
         ) : null}
@@ -1197,7 +1204,7 @@ function CredentialsPanel({
             </div>
             <div className="field">
               <label>{tr('密钥值')}</label>
-              <input className="input" type="password" value={value} onChange={(e) => setValue(e.target.value)} />
+              <SecretInput value={value} onChange={(e) => setValue(e.target.value)} name="aidb-pipeline-credential-value" />
             </div>
           </>
         ) : null}

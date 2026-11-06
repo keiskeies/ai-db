@@ -252,7 +252,7 @@ async function createWindow() {
     height: 920,
     minWidth: 1024,
     minHeight: 640,
-    backgroundColor: '#0b0d0d',
+    backgroundColor: '#090a09',
     title: 'AiDB Studio',
     autoHideMenuBar: true,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',

@@ -5,6 +5,7 @@ import { api, streamSkillRun, type SkillWorkerEvent, type SkillWorkerRun } from 
 import { deliverExportedFile } from '../../lib/desktop';
 import { useApp } from '../../store';
 import { askConfirm } from '../AskDialog';
+import { SecretInput } from '../ui';
 import { t as tr } from '../../i18n';
 
 interface PendingQuestion {
@@ -496,9 +497,7 @@ export function SkillsTool() {
                 {secrets.declared.map((name) => (
                   <div key={name} className="tool-row" style={{ padding: '3px 0', border: 0 }}>
                     <span className="mono" style={{ width: 190, fontSize: 10 }}>{name}{secrets.set.includes(name) ? ' ●' : ''}</span>
-                    <input
-                      className="input"
-                      type="password"
+                    <SecretInput
                       value={secretDraft[name] ?? ''}
                       onChange={(e) => setSecretDraft((current) => ({ ...current, [name]: e.target.value }))}
                       placeholder={secrets.set.includes(name) ? tr("已设置，留空保持不变") : tr("未设置")}
