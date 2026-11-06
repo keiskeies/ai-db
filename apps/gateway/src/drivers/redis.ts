@@ -1,4 +1,4 @@
-import { Redis } from 'ioredis';
+import { Cluster, Redis } from 'ioredis';
 import { parseRedisCommandLine } from '@aidb/core';
 import type { Engine, QueryResult, RedisKeyDetail, RedisQuery, StructuredQuery, TableInfo } from '@aidb/core';
 import { DbError, type CreateRedisKeyInput, type Driver, type DriverTestResult, type RedisKeyDriver, type RunOptions, type StructuredQueryDriver } from './types';
@@ -22,6 +22,8 @@ export interface RedisOptions {
   password?: string;
   database?: string;
   ssl?: boolean;
+  /** Redis Cluster：只有一个逻辑库，键与游标分散在多个主节点上。 */
+  cluster?: boolean;
 }
 
 function serialize(value: unknown): unknown {
@@ -264,32 +266,69 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
   constructor(private opts: RedisOptions) {}
 
   private dbIndex(database?: string): number {
+    // Cluster 只有一个逻辑库，SELECT 也被服务端拒绝。
+    if (this.opts.cluster) return 0;
     const raw = database ?? this.opts.database ?? '0';
     const index = Number(raw);
     return Number.isInteger(index) && index >= 0 ? index : 0;
   }
 
+  /** Cluster 对象与单实例客户端的命令面一致，这里按主节点列表暴露给元数据与 SCAN 合并。 */
+  private masters(client: Redis): Redis[] {
+    const nodes = (client as unknown as { nodes?: (role: string) => Redis[] }).nodes;
+    if (typeof nodes !== 'function') return [client];
+    const masters = nodes.call(client, 'master');
+    return masters.length ? masters : [client];
+  }
+
   private client(database?: string): Redis {
     const index = this.dbIndex(database);
     let client = this.clients.get(index);
-    if (!client) {
-      client = new Redis({
-        host: this.opts.host || '127.0.0.1',
-        port: this.opts.port || 6379,
-        username: this.opts.username || undefined,
-        password: this.opts.password || undefined,
-        db: index,
-        lazyConnect: true,
-        connectTimeout: 8000,
-        // 安全网：普通元数据调用不会无限挂住；用户查询由更短的 queryTimeoutMs 控制
-        commandTimeout: 300_000,
-        enableReadyCheck: false,
-        maxRetriesPerRequest: 1,
-        tls: this.opts.ssl ? {} : undefined,
+    if (client) return client;
+    const seeds = (this.opts.host || '127.0.0.1')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => {
+        const [host, port] = item.includes(':') ? item.split(':') : [item, String(this.opts.port || 6379)];
+        return { host, port: Number(port) || 6379 };
       });
-      client.on('error', () => undefined);
-      this.clients.set(index, client);
+    if (this.opts.cluster) {
+      // ioredis 的 Cluster 与 Redis 命令面兼容，按 Redis 类型复用全部既有命令路径。
+      const cluster = new Cluster(seeds, {
+        scaleReads: 'master',
+        enableReadyCheck: false,
+        lazyConnect: true,
+        clusterRetryStrategy: () => 200,
+        redisOptions: {
+          username: this.opts.username || undefined,
+          password: this.opts.password || undefined,
+          connectTimeout: 8000,
+          commandTimeout: 300_000,
+          maxRetriesPerRequest: 1,
+          tls: this.opts.ssl ? {} : undefined,
+        },
+      }) as unknown as Redis;
+      cluster.on('error', () => undefined);
+      this.clients.set(0, cluster);
+      return cluster;
     }
+    client = new Redis({
+      host: seeds[0]?.host ?? '127.0.0.1',
+      port: seeds[0]?.port ?? this.opts.port ?? 6379,
+      username: this.opts.username || undefined,
+      password: this.opts.password || undefined,
+      db: index,
+      lazyConnect: true,
+      connectTimeout: 8000,
+      // 安全网：普通元数据调用不会无限挂住；用户查询由更短的 queryTimeoutMs 控制
+      commandTimeout: 300_000,
+      enableReadyCheck: false,
+      maxRetriesPerRequest: 1,
+      tls: this.opts.ssl ? {} : undefined,
+    });
+    client.on('error', () => undefined);
+    this.clients.set(index, client);
     return client;
   }
 
@@ -333,9 +372,10 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
       const version = /redis_version:([^\r\n]+)/.exec(String(info))?.[1];
       const modules = await this.modules(client);
       const tags = modules.map((name) => MODULE_LABEL[name] ?? name).filter((name) => name !== 'compat');
+      const masters = this.opts.cluster ? this.masters(client).length : 0;
       return {
         ok: true,
-        version: `Redis ${version ?? ''}${tags.length ? ` · ${tags.join('/')}` : ''}`.trim(),
+        version: `Redis ${version ?? ''}${tags.length ? ` · ${tags.join('/')}` : ''}${masters ? ` · Cluster ${masters} masters` : ''}`.trim(),
         latencyMs: Date.now() - started,
       };
     } catch (err: any) {
@@ -344,6 +384,8 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
   }
 
   async listDatabases(): Promise<string[]> {
+    // Cluster 拒绝 SELECT，服务端只有 db0；列出 16 个库只会制造连不上的空节点。
+    if (this.opts.cluster) return ['0'];
     const client = await this.ready();
     let count = 1;
     try {
@@ -364,7 +406,9 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
   async describe(database?: string): Promise<TableInfo[]> {
     try {
       const client = await this.ready(database);
-      const size = Number(await client.dbsize()) || 0;
+      // Cluster 的 DBSIZE 是每节点独立值，必须汇总，否则键总数只反映被路由到的那一个节点。
+      const sizes = await Promise.all(this.masters(client).map(async (node) => Number(await node.dbsize().catch(() => 0)) || 0));
+      const size = sizes.reduce((total, value) => total + value, 0);
       const tables: TableInfo[] = [
         {
           name: 'keys',
@@ -789,19 +833,49 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
     if (command === 'SELECT') throw new DbError('请在连接或工具栏切换 Redis DB，而不是执行 SELECT', { code: 'REDIS_SELECT' });
     const started = Date.now();
     const statement = [command, ...args].join(' ');
+    const maxRows = Math.max(1, Math.min(opts.maxRows && opts.maxRows > 0 ? opts.maxRows : 500, 5000));
     try {
       const client = await this.ready(opts.database);
+      if (this.opts.cluster && command === 'SCAN') {
+        // Cluster 的 SCAN 游标是每节点独立的：只问一个节点会漏掉其余分片的数据。
+        const merged = await withQueryTimeout(this.clusterScan(this.masters(client), args), opts.timeoutMs, {
+          code: 'REDIS_TIMEOUT',
+          label: 'Redis 命令 SCAN',
+          onTimeout: () => this.drop(opts.database),
+        });
+        return resultFromRedis('SCAN', args, merged, started, statement, maxRows);
+      }
       const raw = await withQueryTimeout(client.call(command, ...args), opts.timeoutMs, {
         code: 'REDIS_TIMEOUT',
         label: `Redis 命令 ${command}`,
         onTimeout: () => this.drop(opts.database),
       });
-      const maxRows = Math.max(1, Math.min(opts.maxRows && opts.maxRows > 0 ? opts.maxRows : 500, 5000));
       return resultFromRedis(command, args, raw, started, statement, maxRows);
     } catch (err: any) {
       if (err instanceof DbError) throw err;
       throw new DbError(err?.message ?? `Redis 命令执行失败：${command}`, { code: err?.code ?? 'REDIS_ERROR' });
     }
+  }
+
+  /**
+   * 并发扫所有主节点并合并键。
+   * 只要有节点没扫完就返回它的游标：已完成的节点用同一游标再扫会安全地返回空集，
+   * 因此翻页直到游标为 0 不会漏键。
+   */
+  private async clusterScan(nodes: Redis[], args: string[]): Promise<[string, string[]]> {
+    const settled = await Promise.all(
+      nodes.map(async (node) => {
+        try {
+          const [cursor, keys] = (await node.call('SCAN', ...args)) as [string | number, string[]];
+          return { cursor: String(cursor), keys: (keys ?? []).map(String), error: undefined as unknown };
+        } catch (err) {
+          return { cursor: '0', keys: [] as string[], error: err };
+        }
+      }),
+    );
+    if (settled.every((part) => part.error)) throw settled[0]?.error;
+    const next = settled.find((part) => !part.error && part.cursor !== '0')?.cursor ?? '0';
+    return [next, settled.flatMap((part) => part.keys)];
   }
 
   async run(sql: string, opts: RunOptions = {}): Promise<QueryResult> {

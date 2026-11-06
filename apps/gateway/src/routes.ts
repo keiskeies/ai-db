@@ -163,6 +163,7 @@ function connectionOptions(value: unknown): ConnectionConfig['options'] | undefi
   if (typeof raw.replicaSet === 'string' && raw.replicaSet.trim()) out.replicaSet = raw.replicaSet.trim();
   if (typeof raw.authSource === 'string' && raw.authSource.trim()) out.authSource = raw.authSource.trim();
   if (typeof raw.directConnection === 'boolean') out.directConnection = raw.directConnection;
+  if (raw.redisMode === 'cluster' || raw.redisMode === 'standalone') out.redisMode = raw.redisMode;
   return out;
 }
 

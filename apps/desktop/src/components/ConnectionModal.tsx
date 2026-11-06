@@ -86,6 +86,7 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
   const [replicaSet, setReplicaSet] = useState(c?.options?.replicaSet ?? '');
   const [authSource, setAuthSource] = useState(c?.options?.authSource ?? '');
   const [directConnection, setDirectConnection] = useState(Boolean(c?.options?.directConnection));
+  const [redisMode, setRedisMode] = useState<'standalone' | 'cluster'>(c?.options?.redisMode ?? 'standalone');
   const [readonly, setReadonly] = useState(Boolean(c?.readonly));
   const [sshEnabled, setSshEnabled] = useState(Boolean(c?.ssh?.enabled));
   const [sshHost, setSshHost] = useState(c?.ssh?.host ?? '');
@@ -131,7 +132,9 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
               authSource: authSource.trim() || undefined,
               directConnection: directConnection || undefined,
             }
-          : undefined,
+          : engine === 'redis'
+            ? { redisMode }
+            : undefined,
       readonly,
       ssh:
         !meta.fileBased && sshEnabled
@@ -361,6 +364,20 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
                     </label>
                   </div>
                 </>
+              ) : null}
+              {engine === 'redis' ? (
+                <div className="field">
+                  <label>{tr("部署形态")}</label>
+                  <select
+                    className="input"
+                    value={redisMode}
+                    onChange={(e) => setRedisMode(e.target.value as 'standalone' | 'cluster')}
+                    data-testid="connection-redis-mode"
+                  >
+                    <option value="standalone">{tr("单机 / 主从（16 个库）")}</option>
+                    <option value="cluster">{tr("Redis Cluster（只有 db0）")}</option>
+                  </select>
+                </div>
               ) : null}
               {engine === 'oracle' || engineMeta(engine).model !== 'relational' ? null : (
                 <div className="field full">

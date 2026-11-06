@@ -124,6 +124,8 @@ export interface ConnectionOptions {
   authSource?: string;
   /** MongoDB 单节点直连，跳过拓扑发现。 */
   directConnection?: boolean;
+  /** Redis 部署形态：Cluster 下只有一个逻辑库，键分散在多个主节点。 */
+  redisMode?: 'standalone' | 'cluster';
 }
 
 export interface ConnectionSecret {

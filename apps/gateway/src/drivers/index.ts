@@ -170,6 +170,7 @@ export async function createDriver(config: ConnectionConfig, secret: ConnectionS
         password: secret.password,
         database: config.database,
         ssl: config.ssl,
+        cluster: config.options?.redisMode === 'cluster',
       });
       return { driver, close: () => closeWithTunnel(driver) };
     }

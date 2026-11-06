@@ -3543,5 +3543,8 @@
   "认证库": "Authentication database",
   "副本集名称，可留空": "Replica set name — leave blank when unused",
   "直连该节点，跳过副本集发现": "Connect straight to this node and skip replica set discovery",
+  "部署形态": "Deployment mode",
+  "单机 / 主从（16 个库）": "Standalone / replica (16 databases)",
+  "Redis Cluster（只有 db0）": "Redis Cluster (db0 only)",
   "保存当前 SQL": "Save current SQL"
 }
