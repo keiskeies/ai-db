@@ -523,7 +523,16 @@ export const useApp = create<AppStore>((set, get) => ({
           schemas: { ...s.schemas, [connectionId]: list },
           loadedDatabases: { ...s.loadedDatabases, [connectionId]: keep },
         }));
-        const targets = refresh ? previouslyLoaded : conn.database && databases.includes(conn.database) ? [conn.database] : [];
+        // 单库引擎（ES/Redis/Mongo 等）没有可匹配的默认库时，直接预取唯一的库，
+        // 否则用户从查询页选中连接只会看到一个未加载的空壳库节点。
+        const single = databases.length === 1 ? databases : [];
+        const targets = refresh
+          ? previouslyLoaded.length
+            ? previouslyLoaded
+            : single
+          : conn.database && databases.includes(conn.database)
+            ? [conn.database]
+            : single;
         // 只预取默认库的表，不再自动展开它；展开状态由用户的点击决定并持久化
         for (const name of targets) void get().loadSchema(connectionId, refresh, name);
         return;

@@ -151,6 +151,13 @@ export function Sidebar() {
     });
   }, [filtered, groupOrder, connectionOrder]);
 
+  useEffect(() => {
+    // 重启后只恢复了展开状态，schema 是内存态；不给展开的连接补一次加载会一直停在 Loading…
+    for (const conn of connections) {
+      if (expanded[conn.id] && !schemas[conn.id]) void loadSchema(conn.id);
+    }
+  }, [connections, expanded, schemas, loadSchema]);
+
   const openMenu = (e: React.MouseEvent, items: ContextMenuItem[]) => {
     e.preventDefault();
     e.stopPropagation();
@@ -715,12 +722,16 @@ export function Sidebar() {
                               className={`tree-node db-node${conn.id === activeConnectionId && schema.name === homeDatabase ? ' current' : ''}`}
                               style={{ paddingLeft: INDENT.database }}
                               onClick={() => {
-                                const willOpen = !schemaOpen;
                                 // 点库 = 只把首页切到这个库；Agent 的目标库不动（已解耦）
                                 if (conn.id !== activeConnectionId) selectConnection(conn.id);
                                 setHomeDatabase(schema.name);
+                                // 未加载时第一次点击就加载，不再要求“先收起再展开”点两次。
+                                if (!loaded && !loading) {
+                                  if (!schemaOpen) toggleSchema(schemaKey);
+                                  void loadSchema(conn.id, false, schema.name);
+                                  return;
+                                }
                                 toggleSchema(schemaKey);
-                                if (willOpen && !loaded && !loading) void loadSchema(conn.id, false, schema.name);
                               }}
                               onContextMenu={(e) =>
                                 !engineMeta(conn.engine).languages.includes('sql')
