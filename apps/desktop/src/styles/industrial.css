@@ -355,6 +355,17 @@ body {
 .chart-toolbar .spacer { flex: 1; }
 .chart-toolbar .icon-btn { width: 24px; height: 24px; padding: 0; border-radius: 6px; color: var(--text-muted); }
 .chart-toolbar .icon-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+/* 导出按钮带格式文字：CSV / PNG 一眼可分，不再靠猜两个相同的下载图标 */
+.chart-toolbar .chart-export {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 24px; padding: 0 7px;
+  border: none; border-radius: 6px;
+  background: transparent; color: var(--text-muted);
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: .04em;
+  cursor: pointer; transition: color .12s ease, background .12s ease;
+}
+.chart-toolbar .chart-export:hover { color: var(--text-primary); background: var(--bg-hover); }
+.chart-toolbar .chart-export:disabled { opacity: .5; cursor: default; background: transparent; }
 .chart-toolbar .btn.small { width: 22px; height: 22px; min-width: 0; padding: 0; border: none; background: transparent; color: var(--text-muted); }
 .chart-toolbar .btn.small:hover { color: var(--text-primary); background: var(--bg-hover); }
 .chart-types { display: inline-flex; gap: 1px; padding: 2px; border: 1px solid var(--border-subtle); border-radius: 8px; background: color-mix(in srgb, var(--bg-app) 65%, transparent); }

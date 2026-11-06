@@ -91,13 +91,13 @@ export function ChartToolbar({ type, onType, columns, x, y, onX, onY, sql, onExp
 
       {sql ? <CopyButton text={sql} /> : null}
       {onExportCsv && sql ? (
-        <button type="button" className="icon-btn" title={tr("导出 CSV")} data-testid="chart-export-csv" onClick={onExportCsv}>
-          <Download size={12} />
+        <button type="button" className="chart-export" title={tr("导出 CSV")} data-testid="chart-export-csv" onClick={onExportCsv}>
+          <Download size={12} /> CSV
         </button>
       ) : null}
       {onExportPng ? (
-        <button type="button" className="icon-btn" title={tr("导出 PNG")} data-testid="chart-export-png" disabled={exporting} onClick={onExportPng}>
-          <Download size={12} />
+        <button type="button" className="chart-export" title={tr("导出 PNG")} data-testid="chart-export-png" disabled={exporting} onClick={onExportPng}>
+          <Download size={12} /> PNG
         </button>
       ) : null}
       {onZoom ? (

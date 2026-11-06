@@ -84,9 +84,11 @@ export interface ChartViewProps {
   height?: number;
   /** AI 生成的图表按数据结构限制可选类型；QueryView 等探索场景不传 */
   enforceSuitability?: boolean;
+  /** 铺满父容器剩余高度：QueryView 图表页用，绘图区随结果区高度伸缩 */
+  fill?: boolean;
 }
 
-export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, zoomed = false, onExportCsv, onTypeChange, columns, x, y, onX, onY, maxHeight, height, enforceSuitability = false }: ChartViewProps) {
+export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, zoomed = false, onExportCsv, onTypeChange, columns, x, y, onX, onY, maxHeight, height, enforceSuitability = false, fill = false }: ChartViewProps) {
   const suitability = useMemo(() => (enforceSuitability ? chartSuitability(chart) : undefined), [chart, enforceSuitability]);
   const correctedFrom = enforceSuitability && suitability && !suitability[chart.type]?.ok ? chart.type : undefined;
   const correctedType = correctedFrom && suitability ? recommendChartType(suitability) : undefined;
@@ -101,7 +103,37 @@ export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, z
   const [hover, setHover] = useState<{ x: number; y: number; text: string } | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [fillHeight, setFillHeight] = useState<number | undefined>(undefined);
   const dark = useDocumentDark();
+
+  // 铺满模式：绘图区高度 = 图表卡剩余高度（结果区高度 - 对比列/加入仪表板横条 - 卡片自身工具条）。
+  // 量的是 body 容器而不是窗口，分栏、切 tab、改窗口尺寸都会重新贴合。
+  useEffect(() => {
+    if (!fill || zoomed) {
+      setFillHeight(undefined);
+      return;
+    }
+    const element = bodyRef.current;
+    if (!element) return;
+    const measure = () => {
+      const next = Math.round(element.getBoundingClientRect().height);
+      if (next > 0) setFillHeight(next);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [fill, zoomed]);
+
+  // 多系列会在绘图区下方补一行图例，铺满时先把它从可用高度里扣掉，图例才不会被裁掉。
+  const type = typeOverride ?? localType;
+  const showsLegend =
+    Boolean(chart.extraSeries?.length) &&
+    (type === 'bar' || type === 'stacked' || type === 'line' || type === 'radar');
+  const bodyHeight = fill && !zoomed && fillHeight !== undefined
+    ? Math.max(80, fillHeight - (showsLegend ? 28 : 0))
+    : undefined;
 
   /** 所有图形都用 data-tip 标注悬停内容，这里统一做事件委托并跟随鼠标定位。 */
   const onHoverMove = (event: ReactMouseEvent<HTMLDivElement>) => {
@@ -118,7 +150,6 @@ export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, z
     setHover({ x, y: event.clientY - rect.top, text });
   };
 
-  const type = typeOverride ?? localType;
   const setType = (next: ChartType) => {
     if (enforceSuitability && suitability && !suitability[next].ok) return;
     setLocalType(next);
@@ -145,20 +176,20 @@ export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, z
 
   const body =
     type === 'pie' ? (
-      <PieBody chart={chart} maxPoints={maxPoints} height={height} maxHeight={maxHeight} zoomed={zoomed} svgRef={svgRef} />
+      <PieBody chart={chart} maxPoints={maxPoints} height={bodyHeight ?? height} maxHeight={maxHeight} zoomed={zoomed} svgRef={svgRef} />
     ) : type === 'scatter' ? (
-      <ScatterBody chart={chart} maxPoints={maxPoints} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} height={height} />
+      <ScatterBody chart={chart} maxPoints={maxPoints} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} height={bodyHeight ?? height} />
     ) : type === 'heatmap' ? (
-      <HeatmapBody chart={chart} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} height={height} dark={dark} />
+      <HeatmapBody chart={chart} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} height={bodyHeight ?? height} dark={dark} />
     ) : type === 'radar' ? (
-      <RadarBody chart={chart} maxPoints={maxPoints} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} height={height} />
+      <RadarBody chart={chart} maxPoints={maxPoints} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} height={bodyHeight ?? height} />
     ) : (
-      <AxisBody chart={chart} type={type} maxPoints={maxPoints} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} height={height} />
+      <AxisBody chart={chart} type={type} maxPoints={maxPoints} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} height={bodyHeight ?? height} />
     );
 
   return (
     <div
-      className="chart-card"
+      className={`chart-card${fill ? ' fill' : ''}`}
       data-testid="chart-card"
       ref={cardRef}
       onMouseMove={onHoverMove}
@@ -181,7 +212,9 @@ export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, z
         </div>
       ) : null}
       {toolbar}
-      {body}
+      <div className="chart-body" ref={bodyRef}>
+        {body}
+      </div>
       {hover ? (
         <div className="chart-hover-tip" data-testid="chart-hover-tip" style={{ left: hover.x, top: hover.y }}>
           {hover.text}
@@ -1025,7 +1058,9 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight, height: t
       {all.map((point, index) => {
         if (index % labelStep !== 0) return null;
         const x = cx(index);
-        const y = height - (rotateLabels ? 12 : 9);
+        // 倾斜标签贴着绘图区底边放：旋转后的文字是向左下方延伸的，锚点若固定在图底
+        // 会在轴线和第一个字之间留出一大段空白，还会把长标签挤到画布外面。
+        const y = rotateLabels ? pad.top + innerH + 11 : height - 9;
         const label = labels[index];
         return (
           <text

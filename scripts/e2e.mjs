@@ -2355,15 +2355,34 @@ const scatterPoints = await page.locator('.query-chart-panel [data-testid="chart
 check('scatter plot auto-picks numeric x/y and draws points', scatterPoints >= 2, `${scatterPoints} points`);
 await page.click('[data-testid="chart-type-bar"]');
 await page.waitForSelector('.query-chart-panel [data-testid="chart-svg"] rect', { timeout: 5000 });
+const exportLabels = await page.$$eval('[data-testid="chart-export-csv"], [data-testid="chart-export-png"]', (els) => els.map((el) => el.innerText.trim()));
+check('chart export buttons name their formats', exportLabels.join(',') === 'CSV,PNG', exportLabels.join(','));
 const chartCsvPromise = page.waitForResponse((res) => res.url().includes('/api/export') && (res.request().postData() ?? '').includes('"format":"csv"'), { timeout: 20000 }).catch(() => null);
 await page.click('[data-testid="chart-export-csv"]');
 const chartCsvResponse = await chartCsvPromise;
 check('query chart exports CSV from the toolbar', Boolean(chartCsvResponse && chartCsvResponse.status() === 200), chartCsvResponse ? String(chartCsvResponse.status()) : 'no response');
-// 宽窗口下图表要收缩到 400px 以内，不能把窗口撑出滚动条
+// 宽窗口下图表要铺满结果区剩余高度（可视高度 - 对比列/加入仪表板横条），不能把面板撑出滚动
 await page.setViewportSize({ width: 1920, height: 900 });
 await page.waitForTimeout(500);
+const chartPanelBox = await page.locator('.query-chart-panel').boundingBox();
 const wideChart = await page.locator('.query-chart-panel [data-testid="chart-svg"]').boundingBox();
-check('chart height caps at 400px on a wide window', Boolean(wideChart) && wideChart.height <= 400.5 && wideChart.height <= 900 * 0.6, wideChart ? `${Math.round(wideChart.width)}x${Math.round(wideChart.height)}` : 'no chart');
+const wideCard = await page.locator('.query-chart-panel .chart-card').boundingBox();
+const chartPanelScroll = await page.locator('.query-chart-panel').evaluate((el) => el.scrollHeight - el.clientHeight);
+check(
+  'query chart fills the result pane without overflow',
+  Boolean(chartPanelBox && wideChart && wideCard) &&
+    wideChart.height > 180 &&
+    wideCard.y + wideCard.height <= chartPanelBox.y + chartPanelBox.height + 1 &&
+    chartPanelScroll <= 1,
+  wideChart ? `${Math.round(wideChart.width)}x${Math.round(wideChart.height)}, scroll ${chartPanelScroll}` : 'no chart',
+);
+const pinBox = await page.locator('[data-testid="chart-pin-dashboard"]').boundingBox();
+const extraBox = await page.locator('[data-testid="chart-extra-total"]').boundingBox();
+check(
+  '对比列 left and 加入仪表板 right share one bar',
+  Boolean(pinBox && extraBox) && extraBox.x < pinBox.x && Math.abs(extraBox.y + extraBox.height / 2 - (pinBox.y + pinBox.height / 2)) < 8,
+  pinBox && extraBox ? `extra ${Math.round(extraBox.x)}, pin ${Math.round(pinBox.x)}` : 'no bar',
+);
 await page.setViewportSize({ width: 1440, height: 900 });
 await page.waitForTimeout(400);
 await page.screenshot({ path: join(shots, 'desktop-query-chart.png') });

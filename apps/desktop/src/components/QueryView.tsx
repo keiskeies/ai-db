@@ -6,7 +6,7 @@ import { Compartment, EditorState, Prec } from '@codemirror/state';
 import { tags as t } from '@lezer/highlight';
 import { keymap } from '@codemirror/view';
 import { MSSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql as sqlLang, type SQLNamespace } from '@codemirror/lang-sql';
-import { AlignLeft, BarChart3, Bookmark, Database, Download, FileDown, FilePlus, FileUp, History, ListChecks, Network, Play, Plus, Pin, Sparkles, Star, Table2, TerminalSquare, Trash2, WandSparkles, Wrench } from 'lucide-react';
+import { AlignLeft, BarChart3, Bookmark, Check, Database, Download, FileDown, FilePlus, FileUp, Gauge, History, ListChecks, Network, Play, PlayCircle, Plus, Pin, Sparkles, Star, Table2, TerminalSquare, Trash2, Undo2, WandSparkles, Wrench } from 'lucide-react';
 import type { ConnectionConfig, DashboardChartType, DatabaseSchema, QueryBatchResult } from '@aidb/core';
 import { engineMeta, editsRecords, supportsTransactions, writesDocuments, writesLineProtocol } from '@aidb/core';
 import { api } from '../lib/api';
@@ -586,9 +586,6 @@ export function QueryView({ tab }: { tab: QueryTab }) {
         <span className="title">
           <TerminalSquare size={14} style={{ color: 'var(--accent)' }} />
           {tab.title}
-          <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>
-            {conn?.name}
-          </span>
         </span>
         <Database size={12} className="muted" />
         <Select
@@ -623,30 +620,30 @@ export function QueryView({ tab }: { tab: QueryTab }) {
         >
           {limitOptions.map((value) => <Option key={value} value={value}>{value}{tr(" 行")}</Option>)}
         </Select>
-        <button className="btn primary small" onClick={() => void run()} disabled={running} data-testid="query-run">
-          {running ? <Spinner /> : <Play size={12} />} {t('run')}
+        <button className="btn primary small" onClick={() => void run()} disabled={running} title={t('run')} data-testid="query-run">
+          {running ? <Spinner /> : <Play size={12} />} <span className="btn-text">{t('run')}</span>
         </button>
       </div>
 
       <div className="toolbar query-actions">
         {isSql ? (
           <>
-            <button className="btn small" onClick={saveSqlFile}>
-              <FileDown size={12} /> {tr(" 保存 ")}</button>
+            <button className="btn small" onClick={saveSqlFile} title={tr("保存当前 SQL")}>
+              <FileDown size={12} /> <span className="btn-text">{tr(" 保存 ")}</span></button>
             <button className="btn small" onClick={() => openTools('builder')} title={tr("打开可视化查询构建器")}>
-              <Wrench size={12} /> {tr(" 查询创建工具 ")}</button>
-            <button className="btn small" onClick={format}>
-              <AlignLeft size={12} /> {tr(" 美化 SQL ")}</button>
+              <Wrench size={12} /> <span className="btn-text">{tr(" 查询创建工具 ")}</span></button>
+            <button className="btn small" onClick={format} title={tr("格式化")}>
+              <AlignLeft size={12} /> <span className="btn-text">{tr(" 美化 SQL ")}</span></button>
             <button className="btn small" onClick={() => setResultTab('snippets')} title={tr("SQL 代码段")}>
-              <Bookmark size={12} /> {tr(" 代码段 ")}</button>
+              <Bookmark size={12} /> <span className="btn-text">{tr(" 代码段 ")}</span></button>
             <div className="sep" />
-            <button className="btn small" onClick={() => void explain()} disabled={running}>
-              <WandSparkles size={12} /> {t('explain')}
+            <button className="btn small" onClick={() => void explain()} disabled={running} title={t('explain')}>
+              <WandSparkles size={12} /> <span className="btn-text">{t('explain')}</span>
             </button>
             <button className="btn small ai" onClick={() => askCopilot('explain')} title={tr("AI 解释执行计划")}>
-              <Sparkles size={12} /> {tr(" AI 解释 ")}</button>
+              <Sparkles size={12} /> <span className="btn-text">{tr(" AI 解释 ")}</span></button>
             <button className="btn small ai" onClick={() => askCopilot('optimize')} title={tr("AI 优化 SQL 与索引")}>
-              <Sparkles size={12} /> {tr(" AI 优化 ")}</button>
+              <Gauge size={12} /> <span className="btn-text">{tr(" AI 优化 ")}</span></button>
           </>
         ) : (
           <span className="muted" style={{ fontSize: 11 }}>
@@ -667,35 +664,38 @@ export function QueryView({ tab }: { tab: QueryTab }) {
         )}
         <div className="spacer" />
         {canWriteDocuments ? (
-          <button className="btn small ai" onClick={() => setWriteOpen(true)} data-testid="open-document-write">
-            <FilePlus size={12} /> {tr(" 写入 JSON ")}</button>
+          <button className="btn small ai" onClick={() => setWriteOpen(true)} title={tr(" 写入 JSON ")} data-testid="open-document-write">
+            <FilePlus size={12} /> <span className="btn-text">{tr(" 写入 JSON ")}</span></button>
         ) : null}
         {canVector ? (
-          <button className="btn small ai" onClick={() => setVectorOpen(true)} data-testid="open-vector-search">
-            <Sparkles size={12} /> {tr(" 向量检索 ")}</button>
+          <button className="btn small ai" onClick={() => setVectorOpen(true)} title={tr("向量检索")} data-testid="open-vector-search">
+            <Sparkles size={12} /> <span className="btn-text">{tr(" 向量检索 ")}</span></button>
         ) : null}
         {conn && conn.engine === 'redis' && !conn.readonly ? (
-          <button className="btn small ai" onClick={() => setKeyCreateOpen(true)} data-testid="open-key-create">
-            <Plus size={12} /> {tr(" 新建键 ")}</button>
+          <button className="btn small ai" onClick={() => setKeyCreateOpen(true)} title={tr("新建键")} data-testid="open-key-create">
+            <Plus size={12} /> <span className="btn-text">{tr(" 新建键 ")}</span></button>
         ) : null}
         {canLineProtocol && conn && !conn.readonly ? (
-          <button className="btn small ai" onClick={() => setLineOpen(true)} data-testid="open-line-protocol">
-            <FilePlus size={12} /> {tr(" 写入行协议 ")}</button>
+          <button className="btn small ai" onClick={() => setLineOpen(true)} title={tr("写入行协议")} data-testid="open-line-protocol">
+            <FilePlus size={12} /> <span className="btn-text">{tr(" 写入行协议 ")}</span></button>
         ) : null}
         {canTransaction && conn && !conn.readonly ? (
           txSession ? (
             <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }} data-testid="tx-active">
               <span className="badge">{tr("事务中")}</span>
-              <button className="btn small" onClick={() => void finishTx('commit')} data-testid="tx-commit">{tr("提交")}</button>
-              <button className="btn small danger" onClick={() => void finishTx('rollback')} data-testid="tx-rollback">{tr("回滚")}</button>
+              <button className="btn small" onClick={() => void finishTx('commit')} title={tr("提交事务")} data-testid="tx-commit">
+                <Check size={12} /> <span className="btn-text">{tr("提交")}</span></button>
+              <button className="btn small danger" onClick={() => void finishTx('rollback')} title={tr("回滚事务")} data-testid="tx-rollback">
+                <Undo2 size={12} /> <span className="btn-text">{tr("回滚")}</span></button>
             </span>
           ) : (
-            <button className="btn small" onClick={() => void startTx()} data-testid="tx-begin">{tr("开始事务")}</button>
+            <button className="btn small" onClick={() => void startTx()} title={tr("开始事务")} data-testid="tx-begin">
+              <PlayCircle size={12} /> <span className="btn-text">{tr("开始事务")}</span></button>
           )
         ) : null}
         <Select
-          className="select"
-          style={{ height: 23, width: 72, fontSize: 10 }}
+          className="select query-export-select"
+          style={{ height: 23, fontSize: 10 }}
           value={queryExportFormat}
           onChange={(event) => setQueryExportFormat(event.target.value as typeof queryExportFormat)}
           title={tr("导出当前语句结果的格式")}
@@ -731,7 +731,6 @@ export function QueryView({ tab }: { tab: QueryTab }) {
             />
           </>
         ) : null}
-        <span className="kbd">Ctrl/⌘ + Enter</span>
       </div>
 
       <div className="query-layout">
@@ -855,40 +854,42 @@ export function QueryView({ tab }: { tab: QueryTab }) {
             <div className="query-chart-panel">
               {chartSpec ? (
                 <>
-                {numericColumns.length > 1 ? (
-                  <div className="row gap-4" style={{ padding: '6px 10px', flexWrap: 'wrap' }} data-testid="chart-extra-columns">
-                    <span className="muted" style={{ fontSize: 11 }}>{tr("对比列")}</span>
-                    {numericColumns
-                      .filter((name) => name !== chartSpec.yLabel)
-                      .map((name) => (
+                <div className="query-chart-bar" data-testid="chart-extra-columns">
+                  {numericColumns.length > 1 ? (
+                    <>
+                      <span className="muted" style={{ fontSize: 11 }}>{tr("对比列")}</span>
+                      {numericColumns
+                        .filter((name) => name !== chartSpec.yLabel)
+                        .map((name) => (
+                          <button
+                            key={name}
+                            className={`btn small ${extraY.includes(name) ? 'active' : ''}`}
+                            onClick={() => setExtraY((prev) => (prev.includes(name) ? prev.filter((item) => item !== name) : [...prev, name]))}
+                            data-testid={`chart-extra-${name}`}
+                          >
+                            {name}
+                          </button>
+                        ))}
+                      {extraY.filter((name) => name !== chartSpec.yLabel).length === 1 && (chartType === 'bar' || chartType === 'stacked') ? (
                         <button
-                          key={name}
-                          className={`btn small ${extraY.includes(name) ? 'active' : ''}`}
-                          onClick={() => setExtraY((prev) => (prev.includes(name) ? prev.filter((item) => item !== name) : [...prev, name]))}
-                          data-testid={`chart-extra-${name}`}
+                          className={`btn small ${chartDual ? 'active' : ''}`}
+                          onClick={() => {
+                            setChartDual((value) => !value);
+                            if (chartType === 'stacked') setChartType('bar');
+                          }}
+                          title={tr("附加列使用右侧独立刻度")}
+                          data-testid="chart-dual"
                         >
-                          {name}
-                        </button>
-                      ))}
-                    {extraY.filter((name) => name !== chartSpec.yLabel).length === 1 && (chartType === 'bar' || chartType === 'stacked') ? (
-                      <button
-                        className={`btn small ${chartDual ? 'active' : ''}`}
-                        onClick={() => {
-                          setChartDual((value) => !value);
-                          if (chartType === 'stacked') setChartType('bar');
-                        }}
-                        title={tr("附加列使用右侧独立刻度")}
-                        data-testid="chart-dual"
-                      >
-                        {tr(" 双轴 ")}</button>
-                    ) : null}
-                  </div>
-                ) : null}
-                <div className="row gap-4" style={{ padding: '6px 10px 0' }}>
+                          {tr(" 双轴 ")}</button>
+                      ) : null}
+                    </>
+                  ) : null}
+                  <div className="spacer" />
                   <button className="btn small" onClick={() => void pinToDashboard()} title={tr("把这张图钉到当前库的仪表板")} data-testid="chart-pin-dashboard">
                     <Pin size={12} /> {tr(" 加入仪表板 ")}</button>
                 </div>
                 <ChartView
+                  fill
                   chart={chartSpec}
                   typeOverride={chartType}
                   onTypeChange={changeChartType}

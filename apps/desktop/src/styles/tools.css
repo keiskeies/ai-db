@@ -168,8 +168,30 @@
   flex: 1; min-height: 0; padding: 10px 12px; overflow: hidden;
 }
 .users-grid .panel { min-height: 0; display: flex; flex-direction: column; }
-.query-chart-panel { flex: 1; min-height: 0; overflow: auto; padding: 8px 10px; }
-.query-chart-panel .chart-card { margin-top: 6px; }
+/* 查询图表页：顶部一条「对比列 / 加入仪表板」横条固定，图表卡占满剩余可视高度，不再滚动 */
+.query-chart-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding: 8px 10px; }
+.query-chart-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding-bottom: 6px; }
+.query-chart-bar .spacer { flex: 1; }
+.query-chart-panel .chart-card { margin-top: 0; }
+.query-chart-panel .chart-card.fill { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* 主图背景：比卡片再退一层的浅槽面，让绘图区从卡片装饰里独立出来 */
+.query-chart-panel .chart-card.fill .chart-body {
+  flex: 1; min-height: 0; overflow: hidden;
+  margin-top: 2px;
+  border-radius: 8px;
+  background:
+    radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--accent) 4%, transparent), transparent 62%),
+    color-mix(in srgb, var(--bg-app) 58%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border-subtle) 85%, transparent);
+}
+/* 浅色下主图保持纯白底：灰绿底会让图表看起来发蒙，清晰度不如留白 */
+[data-theme='light'] .query-chart-panel .chart-card.fill .chart-body {
+  background:
+    radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--accent) 3%, transparent), transparent 55%),
+    var(--bg-panel);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
+}
+.query-chart-panel .chart-card.fill .chart-svg { max-height: none; margin-top: 0; }
 
 @media (max-width: 1100px) {
   .tools-nav { width: 156px; flex-basis: 156px; }
