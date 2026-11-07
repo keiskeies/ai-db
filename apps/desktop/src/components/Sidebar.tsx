@@ -425,7 +425,7 @@ export function Sidebar() {
                   {
                     label: t('newQuery'),
                     icon: <TerminalSquare size={13} />,
-                    onClick: () => openQuery(conn.id, `SELECT * FROM ${quoteName(table.name, conn.engine)} LIMIT 100;`),
+                    onClick: () => openQuery(conn.id, `SELECT * FROM ${quoteName(table.name, conn.engine)} LIMIT 100;`, undefined, schema.name),
                   },
                   { label: '', icon: null, sep: true, onClick: () => undefined },
                   { label: tr("查看 DDL"), icon: <FileCode2 size={13} />, onClick: () => setTableDialog({ kind: 'ddl', conn, schema, table }) },
@@ -448,7 +448,7 @@ export function Sidebar() {
                   {
                     label: t('newQuery'),
                     icon: <TerminalSquare size={13} />,
-                    onClick: () => openQuery(conn.id, `SELECT * FROM ${quoteName(table.name, conn.engine)} LIMIT 100;`),
+                    onClick: () => openQuery(conn.id, `SELECT * FROM ${quoteName(table.name, conn.engine)} LIMIT 100;`, undefined, schema.name),
                   },
                   {
                     label: t('design'),
@@ -507,7 +507,7 @@ export function Sidebar() {
               title={t('newQuery')}
               onClick={(e) => {
                 e.stopPropagation();
-                openQuery(conn.id, `SELECT * FROM ${quoteName(table.name, conn.engine)} LIMIT 100;`);
+                openQuery(conn.id, `SELECT * FROM ${quoteName(table.name, conn.engine)} LIMIT 100;`, undefined, schema.name);
               }}
             >
               <TerminalSquare size={12} />
@@ -791,9 +791,9 @@ export function Sidebar() {
                                   { label: tr("删除数据库…"), icon: <Trash2 size={13} />, danger: true, onClick: () => setDbDialog({ kind: 'drop', conn, database: schema.name }) },
                                   { label: '', icon: null, sep: true, onClick: () => undefined },
                                   { label: tr("新建表"), icon: <Table2 size={13} />, onClick: () => openDesign(conn.id, undefined, schema.name) },
-                                  { label: tr("新建查询"), icon: <TerminalSquare size={13} />, onClick: () => openQuery(conn.id) },
-                                  { label: tr("命令列界面…"), icon: <FileCode2 size={13} />, onClick: () => openQuery(conn.id) },
-                                  { label: tr("运行 SQL 文件…"), icon: <FileCode2 size={13} />, onClick: () => openQuery(conn.id) },
+                                  { label: tr("新建查询"), icon: <TerminalSquare size={13} />, onClick: () => openQuery(conn.id, undefined, undefined, schema.name) },
+                                  { label: tr("命令列界面…"), icon: <FileCode2 size={13} />, onClick: () => openQuery(conn.id, undefined, undefined, schema.name) },
+                                  { label: tr("运行 SQL 文件…"), icon: <FileCode2 size={13} />, onClick: () => openQuery(conn.id, undefined, undefined, schema.name) },
                                   { label: tr("转储 SQL 文件…"), icon: <Archive size={13} />, onClick: () => setDbDialog({ kind: 'dump', conn, database: schema.name }) },
                                   { label: '', icon: null, sep: true, onClick: () => undefined },
                                   { label: tr("逆向数据库到模型…"), icon: <Network size={13} />, onClick: () => openRelations(conn.id, schema.name) },
@@ -891,6 +891,8 @@ export function Sidebar() {
                                                           : model === 'widecolumn'
                                                             ? `SELECT * FROM "${schema.name}"."<table>" LIMIT 100;`
                                                             : 'SCAN 0 COUNT 100',
+                                                  undefined,
+                                                  schema.name,
                                                 )
                                               }
                                             >
@@ -920,7 +922,7 @@ export function Sidebar() {
                                             <Code2 size={13} style={{ color: 'var(--text-muted)' }} />
                                             <span className="node-label">{tr("函数 / 存储过程")}</span>
                                           </div>
-                                          <div className="tree-node obj-node" style={{ paddingLeft: INDENT.folderLeaf }} onClick={() => openQuery(conn.id)}>
+                                          <div className="tree-node obj-node" style={{ paddingLeft: INDENT.folderLeaf }} onClick={() => openQuery(conn.id, undefined, undefined, schema.name)}>
                                             <TerminalSquare size={13} style={{ color: 'var(--text-muted)' }} />
                                             <span className="node-label">{tr("查询")}</span>
                                           </div>

@@ -635,6 +635,10 @@ export const useApp = create<AppStore>((set, get) => ({
       get().openConnectionEditor('new');
       return;
     }
+    const conn = get().connections.find((c) => c.id === connId);
+    // 库跟随左侧树选中：当前连接用实时 homeDatabase，其它连接用按连接记忆的首页库，再退到连接默认库
+    const selectedDatabase =
+      connId === get().activeConnectionId ? get().homeDatabase : readUiPrefs().homeDatabaseByConnection?.[connId];
     const id = tabId('query');
     const count = get().tabs.filter((t) => t.kind === 'query').length + 1;
     const tab: Tab = {
@@ -642,7 +646,7 @@ export const useApp = create<AppStore>((set, get) => ({
       kind: 'query',
       title: title ?? tr("查询 {0}", [count]),
       connectionId: connId,
-      database: database ?? get().connections.find((c) => c.id === connId)?.database,
+      database: database ?? (selectedDatabase || conn?.database),
       sql: sql ?? '',
     };
     set((s) => ({ tabs: [...s.tabs.filter((t) => t.id !== 'welcome'), tab], activeTabId: id, activeConnectionId: connId }));
