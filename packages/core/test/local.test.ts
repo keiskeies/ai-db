@@ -341,3 +341,97 @@ test('offline planner stays out of the way for engines without SQL', async () =>
   const events = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: '按 status 统计 orders 的金额合计' }], tools: [], context }));
   assert.equal(events.some((e) => e.type === 'tool_call' && e.call.name === 'profile_column'), false);
 });
+
+// ---- 业务上下文可执行化：示例 SQL 定口径，反例硬挡 ----
+
+const iso = '2026-11-01T00:00:00.000Z';
+
+function memory(kind: 'glossary' | 'sql_example', title: string, content: string) {
+  return { id: title, scopeType: 'global' as const, scopeKey: '*', kind, title, content, tags: [], importance: 0.8, confidence: 0.9, pinned: false, archived: false, useCount: 0, createdAt: iso, updatedAt: iso };
+}
+
+const exampleSql = `SELECT status AS label, SUM(amount_cents) AS value FROM orders WHERE status = '已支付' GROUP BY status`;
+
+test('a registered example SQL runs verbatim instead of the planner caliber', async () => {
+  const provider = new LocalProvider();
+  const context: AgentContextData = { ...richContext, sqlExamples: [memory('sql_example', '订单金额合计口径', exampleSql)] };
+  const events = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: '按 status 统计订单金额合计' }], tools: [], context }));
+  const call = events.find((e) => e.type === 'tool_call');
+  assert.ok(call && call.type === 'tool_call');
+  if (call?.type !== 'tool_call') return;
+  assert.equal(call.call.name, 'analyze_chart');
+  assert.equal(call.call.args.sql, exampleSql);
+  assert.match(textOf(events), /示例 SQL/);
+
+  const final = await collect(
+    provider.stream({
+      system: '',
+      messages: [
+        { role: 'user', content: '按 status 统计订单金额合计' },
+        toolMessage('analyze_chart', { x: 'label', y: 'value', rowCount: 1, sum: 98000, avg: 98000, min: 98000, max: 98000, argmin: '已支付', argmax: '已支付' }),
+      ],
+      tools: [],
+      context,
+    }),
+  );
+  const answer = textOf(final);
+  // 收尾必须把用户自己的口径原样亮出来，不然数字无法复核。
+  assert.match(answer, /```sql\nSELECT status AS label/);
+  assert.match(answer, /98,000/);
+});
+
+test('an example for a chart question drives render_chart, not the planner SQL', async () => {
+  const provider = new LocalProvider();
+  const context: AgentContextData = { ...richContext, sqlExamples: [memory('sql_example', '订单金额合计口径', exampleSql)] };
+  const events = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: '按 status 统计订单金额并画柱状图' }], tools: [], context }));
+  const call = events.find((e) => e.type === 'tool_call');
+  assert.ok(call && call.type === 'tool_call');
+  if (call?.type !== 'tool_call') return;
+  assert.equal(call.call.name, 'render_chart');
+  assert.equal(call.call.args.sql, exampleSql);
+  assert.equal(call.call.args.type, 'bar');
+});
+
+test('an unrelated question keeps the planner even when an example exists', async () => {
+  const provider = new LocalProvider();
+  const context: AgentContextData = { ...richContext, sqlExamples: [memory('sql_example', '每月下单用户数走势', 'SELECT created_at, COUNT(DISTINCT user_id) AS users FROM orders GROUP BY created_at')] };
+  const events = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: '按用户的城市统计订单金额合计' }], tools: [], context }));
+  const call = events.find((e) => e.type === 'tool_call');
+  assert.ok(call && call.type === 'tool_call');
+  if (call?.type !== 'tool_call') return;
+  assert.match(String(call.call.args.sql), /INNER JOIN "users"/);
+  assert.equal(textOf(events).includes('示例 SQL'), false);
+});
+
+test('an anti-pattern stops the offline planner from querying the forbidden table', async () => {
+  const provider = new LocalProvider();
+  const context: AgentContextData = { ...richContext, glossary: [memory('glossary', '反例：订单数不要用支付流水', '统计订单笔数必须用 orders；pay_flow 是支付流水，一行不等于一笔订单。'), ] };
+  const withFlow: AgentContextData = {
+    ...context,
+    databases: [{ name: 'main', tables: [...rich, { name: 'pay_flow', comment: '支付流水', type: 'table', columns: [{ name: 'id', type: 'INTEGER', nullable: false, primaryKey: true }, { name: 'amount', type: 'INTEGER', nullable: true, primaryKey: false, comment: '金额' }] }] }],
+  };
+  const events = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: '按 status 统计 pay_flow 的金额合计' }], tools: [], context: withFlow }));
+  assert.equal(events.some((e) => e.type === 'tool_call'), false);
+  const answer = textOf(events);
+  assert.match(answer, /pay_flow/);
+  assert.match(answer, /一行不等于一笔订单/);
+});
+
+test('an anti-pattern also blocks the templates that skip the planner', async () => {
+  const provider = new LocalProvider();
+  // 预测走自己的外推模板，不经过 planQuery：这一层漏了就是「反例对数字无效」。
+  const context: AgentContextData = {
+    ...richContext,
+    glossary: [memory('glossary', '反例：金额不要用 pay_flow', '统计金额一律用 orders.amount_cents；pay_flow 金额含税，不要用。')],
+    databases: [{ name: 'main', tables: [...rich, { name: 'pay_flow', comment: '支付流水', type: 'table', columns: [{ name: 'id', type: 'INTEGER', nullable: false, primaryKey: true }, { name: 'amount', type: 'INTEGER', nullable: true, primaryKey: false, comment: '金额' }, { name: 'created_at', type: 'TEXT', nullable: true, primaryKey: false }] }] }],
+  };
+  const events = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: '预测 pay_flow 未来 3 个月的金额走势' }], tools: [], context }));
+  assert.equal(events.some((e) => e.type === 'tool_call'), false);
+  assert.match(textOf(events), /pay_flow/);
+
+  // 但看结构这种库操作不算用错口径，不能被业务反例一起挡掉。
+  const described = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: 'pay_flow 表结构' }], tools: [], context }));
+  assert.match(textOf(described), /^(?!.*我不该用)/s);
+  assert.ok(described.some((e) => e.type === 'tool_call'));
+});
+

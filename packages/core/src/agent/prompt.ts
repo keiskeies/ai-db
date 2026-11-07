@@ -290,7 +290,8 @@ export function formatMemoriesForPrompt(memories: Memory[] | undefined): string 
     .join('\n');
 }
 
-const ANTI_PATTERN_TITLE = /^(反例|不要|避免|禁止|avoid\b|do not\b)/i;
+/** 判定「反例」的唯一口径：术语标题以这些词开头即负向硬约束。离线推理器据此收敛可用表列。 */
+export const ANTI_PATTERN_TITLE = /^(反例|不要|避免|禁止|avoid\b|do not\b)/i;
 
 export function formatGlossary(memories: Memory[] | undefined): string {
   const terms = (memories ?? [])

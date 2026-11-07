@@ -107,7 +107,17 @@ for (step = 0; step < maxSteps; step++) {
 ```
 
 并在 Rules 里声明这是硬约束。它复用现有“术语”编辑入口，不需要新增表结构或迁移。
-注意：反例本身是 **prompt 级约束**。需要真正隔离时，在上下文面板禁用对应表：Bridge 会在
+注意：对云端模型而言反例仍是 **prompt 级约束**（模型多半会听，但不保证）。
+
+离线推理器（内置模型）不看 prompt，所以这里额外做一层**可执行化**（`agent/local/business.ts`）：
+标题命中 `ANTI_PATTERN_TITLE` 的术语，正文里**含否定词的分句**所点名的表/列会编译成禁用集合，
+传给规划器后从表池与列定义里摘掉；被点名的表直接返回一句话说明「为什么不查」以及去哪儿改。
+否定作用域按逗号切小句，并在谓语小句缺主语时回指前一个小句（`t_trade_pay_flow 是支付流水，
+一行不等于一笔订单` 禁的是 t_trade_pay_flow）；裸列名只有全库唯一命中才禁，宁可不禁也不误伤。
+同一层还负责 `sql_example`：问题与某条已登记示例足够像时，离线直接原样执行那条 SQL，
+不再自己拼口径——保证同一句话在离线与在线模式给出同一个数字。
+
+需要真正隔离时，在上下文面板禁用对应表：Bridge 会在
 执行层拦截——`run_sql` 只要出现被禁用表名（含 `FROM a, b`、`db.table` 等写法）就直接返回
 `TABLE_DISABLED`，不会到达数据库；`sample_rows` / `inspect_schema` / `profile_column` /
 `manage_index` 等对象级工具同样按 `table` / `tables` / `collection` / `index` 参数拦截

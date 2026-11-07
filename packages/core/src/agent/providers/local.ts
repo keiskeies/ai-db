@@ -8,6 +8,8 @@ import { groundedColumns, groundedTables, hiddenTableMention, matchColumn, match
 import type { GroundingOptions } from '../local/schema';
 import type { PlanOutcome } from '../local/parse';
 import { planQuery } from '../local/parse';
+import type { Forbidden } from '../local/business';
+import { forbiddenFromGlossary, forbiddenTableReason, matchSqlExample } from '../local/business';
 import { estimateTokens } from '../prompt';
 import { columnLabel, tableLabel } from '../suggest';
 import type {
@@ -101,8 +103,10 @@ export function detectIntent(prompt: string): LocalIntent {
   if (/(空值|null值|重复|数据质量|quality|一致性|异常值|脏数据|duplicate)/.test(p)) return 'quality';
   // 必须排在 chart 之前：「预测未来三个月的趋势」既要趋势更要外推，走 analyze 才有权威数字
   if (/(预测|forecast|外推|接下来.*(多少|会)|未来)/.test(p)) return 'analyze';
+  // 点名要图就按图走：「统计金额合计并画柱状图」里「合计」也命中 analyze，
+  // 但用户要的是那几根柱子，回一张统计表等于没回答。
+  if (/(画图|画个|画张|画一|绘|图表|可视化|趋势|折线|柱状|饼图|chart|plot)/.test(p)) return 'chart';
   if (/(合计|总和|求和|平均值|均值|环比|占比多少|最大.*最小|\bsum\b|\bavg\b)/.test(p)) return 'analyze';
-  if (/(画图|图表|可视化|趋势|折线|柱状|饼图|chart|plot)/.test(p)) return 'chart';
   if (/(备份|backup)/.test(p)) return 'backup';
   if (/(导出|export)/.test(p)) return 'export';
   if (/(创建|新建|建立|建)\s*(一个|一张)?\s*(表|table)|create\s+table/.test(p)) return 'create';
@@ -272,6 +276,7 @@ function groundingOf(ctx: AgentContextData, database?: string): GroundingOptions
   return {
     bundle: ctx.agentContext,
     glossary: ctx.glossary,
+    sqlExamples: ctx.sqlExamples,
     memories: ctx.memories,
     database,
     attachments: ctx.attachmentTables,
@@ -309,12 +314,40 @@ function profiledValues(outcomes: ToolOutcome[]): { table: string; column: strin
   return { table: data.table ?? '', column: data.column, values };
 }
 
-function planOf(input: { question: string; engine: Engine; tables: TableInfo[]; grounding: GroundingOptions; outcomes: ToolOutcome[] }): PlanOutcome {
+/**
+ * 已登记的示例 SQL 走的是用户自己的口径：列名是他写的、聚合是他定的，
+ * 这里只负责把它跑起来并念出数字，不再套规划器的结论模板（模板按固定别名取数，会念空）。
+ */
+function examplePreamble(title: string): string {
+  return `你在「Agent 上下文 → 术语与示例 → 示例 SQL」里登记过这类问题，我按那条口径查：**${title.trim()}**。`;
+}
+
+function exampleAnswer(intent: LocalIntent, action: ToolOutcome): string {
+  if (!action.result.ok) return errText(action.result);
+  if (intent === 'chart') {
+    const chart = (action.result.data as { chart?: { title?: string; series?: Array<{ label: string; value: number }> } } | undefined)?.chart;
+    const top = [...(chart?.series ?? [])].sort((a, b) => b.value - a.value).slice(0, 3);
+    return `图表已生成：**${chart?.title ?? '分析图'}**。\n\n${top.length ? top.map((point) => `- ${point.label}：${formatNumber(point.value)}`).join('\n') : '没有可绘制的数据。'}`;
+  }
+  if (intent === 'analyze') {
+    const d = action.result.data as { x?: string; y?: string; rowCount?: number; sum?: number; avg?: number; max?: number; min?: number; argmax?: string; argmin?: string } | undefined;
+    if (d?.rowCount === undefined) return `统计结果：\n\n${renderRows(action.result.data, 12) || '（没有行）'}`;
+    return (
+      `按 \`${d.x ?? '标签'}\` 统计 \`${d.y ?? '数值'}\`：共 ${d.rowCount} 组，合计 **${formatNumber(d.sum)}**，均值 ${formatNumber(d.avg)}，` +
+      `最高 ${d.argmax ?? '—'}（${formatNumber(d.max)}），最低 ${d.argmin ?? '—'}（${formatNumber(d.min)}）。数字由 Bridge 计算，不是估算。`
+    );
+  }
+  const rows = renderRows(action.result.data, 12);
+  return rows ? `查询结果：\n\n${rows}` : '查询返回 0 行：条件可能过紧，或这段时间确实没有数据。';
+}
+
+function planOf(input: { question: string; engine: Engine; tables: TableInfo[]; grounding: GroundingOptions; outcomes: ToolOutcome[]; forbidden: Forbidden }): PlanOutcome {
   return planQuery({
     question: input.question,
     engine: input.engine,
     tables: input.tables,
     grounding: input.grounding,
+    forbidden: input.forbidden,
     probe: profiledValues(input.outcomes),
     probeDone: Boolean(getOutcome(input.outcomes, 'profile_column')),
   });
@@ -587,6 +620,18 @@ export class LocalProvider implements LlmProvider {
       return;
     }
 
+    // 反例是硬约束，不是建议：云端有模型兜底，离线只有真的不查才算生效。
+    // 走规划器的那几条路径由 planQuery 自己拦；这里补的是预测/高级图——它们出的是同一个口径的数字，
+    // 只是绕开了规划器。看结构、备份这类库操作不算「用错口径」，不该被业务反例挡住。
+    const forbidden = forbiddenFromGlossary(ctx.glossary, allTables, grounding);
+    if (PLANNED_INTENTS.includes(intent) && !usePlanner(intent, prompt, engine) && table) {
+      const blockedTable = forbiddenTableReason(forbidden, table.name);
+      if (blockedTable) {
+        yield* finish(`按你登记的业务口径，我不该用 \`${table.name}\` 回答这个问题。\n\n> ${blockedTable}\n\n要我换一张表直接说名字；这条反例本身可以在 工具箱 → Agent 上下文 → 术语与示例 里改。`);
+        return;
+      }
+    }
+
     if (intent === 'list_tables') {
       if (!tables.length) {
         yield* finish('当前库没有表。可以让我创建一个，例如：“创建表 tasks，包含 id 自增主键, title 文本”。');
@@ -723,7 +768,24 @@ export class LocalProvider implements LlmProvider {
     }
 
     if (usePlanner(intent, prompt, engine)) {
-      const plan = planOf({ question, engine, tables: allTables, grounding, outcomes });
+      // 用户登记过标准问答 SQL 时口径以它为准：同一句话在离线与在线模式下必须给出同一个数字。
+      const example = matchSqlExample(question, allTables, grounding, forbidden);
+      if (example) {
+        const toolName = intent === 'count' || intent === 'group' ? 'run_sql' : intent === 'chart' ? 'render_chart' : 'analyze_chart';
+        const action = getOutcome(outcomes, toolName);
+        if (action) {
+          // 发起调用那句话已经说过口径来自哪里，收尾不再重复一遍。
+          yield* finish(`${exampleAnswer(intent, action)}\n\n\`\`\`sql\n${example.sql}\n\`\`\``);
+          return;
+        }
+        const args: Record<string, unknown> = { connectionId, database, sql: example.sql };
+        if (toolName === 'run_sql') args.maxRows = 200;
+        if (toolName === 'render_chart') args.type = /(饼|占比|pie)/i.test(prompt) ? 'pie' : /(折线|趋势|line)/i.test(prompt) ? 'line' : 'bar';
+        yield* callTool(mkCall(toolName, args), `${examplePreamble(example.title)}列名与聚合都沿用这条 SQL，我不另拼口径。`);
+        return;
+      }
+
+      const plan = planOf({ question, engine, tables: allTables, grounding, outcomes, forbidden });
       if (plan.status === 'gap') {
         yield* finish(plan.gap ?? clarifier(intent, question, tables, grounding));
         return;

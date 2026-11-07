@@ -4,6 +4,8 @@ import type { CompiledQuery, ColumnRef, FilterSpec, JoinSpec, MeasureSpec, Query
 import { compileQuery, findJoinPath, joinEdges } from './query';
 import type { GroundingOptions } from './schema';
 import { groundedColumns, groundedTables, matchColumn, matchTable, pickDimension, pickMeasure, pickTimeColumn, rankTables } from './schema';
+import type { Forbidden } from './business';
+import { NO_FORBIDDEN, forbiddenTableReason, isColumnForbidden, isTableForbidden } from './business';
 import type { TimeGrain } from '../../commands/timeWindow';
 import { resolvePeriod } from '../../commands/timeWindow';
 import { columnLabel, foreignKeyColumnsOf, isNumericColumn, isTimeColumn, tableLabel } from '../suggest';
@@ -51,6 +53,8 @@ export interface PlanInput {
   probe?: { table: string; column: string; values: Array<string | number> };
   /** 本轮已经探测过一次：不再换列追探测，一句话最多一条探测查询。 */
   probeDone?: boolean;
+  /** 反例推出的禁用集合，缺省表示没有配置反例。 */
+  forbidden?: Forbidden;
 }
 
 /** 候选表池：FROM 起点在前，JOIN 进来的表追加在后，选列时按这个顺序优先。 */
@@ -506,19 +510,37 @@ function valueFilters(question: string, pool: Pool, main: TableInfo, input: Plan
 }
 
 /**
+ * 反例禁用的列直接从表定义里摘掉：下游每个选列函数（matchColumn / pickMeasure /
+ * pickDimension / detailRefs）都只看得见允许的列，不必各自加判断。
+ */
+function allowedColumns(tables: TableInfo[], forbidden: Forbidden): TableInfo[] {
+  if (!forbidden.columns.size) return tables;
+  return tables.map((table) => {
+    if (isTableForbidden(forbidden, table.name)) return table;
+    const kept = (table.columns ?? []).filter((column) => !isColumnForbidden(forbidden, table.name, column.name));
+    return kept.length === (table.columns?.length ?? 0) ? table : { ...table, columns: kept };
+  });
+}
+
+/**
  * 解析 + 编译。status 为 gap 时不执行任何查询，只把 gap 这句话问回去；
  * 为 probe 时需要上层先发一次有界只读探测，再带着取值重新规划。
  */
 export function planQuery(input: PlanInput): PlanOutcome {
   const { question, engine, grounding } = input;
-  const visible = groundedTables(input.tables, grounding);
+  const forbidden = input.forbidden ?? NO_FORBIDDEN;
+  const usable = allowedColumns(input.tables, forbidden);
+  const visible = groundedTables(usable, grounding).filter((table) => !isTableForbidden(forbidden, table.name));
   if (!visible.length) return { status: 'gap', gap: '当前库没有可用的表，或全部被「Agent 上下文」隐藏了。' };
 
-  const main = matchTable(question, input.tables, grounding);
+  const main = matchTable(question, usable, grounding);
   if (!main) {
     const near = rankTables(question, visible, grounding).slice(0, 6).map((table) => `\`${table.name}\``);
     return { status: 'gap', gap: `我不确定你要查哪张表。${near.length ? `和这个问题最接近的是 ${near.join('、')}，` : ''}说清表名即可。` };
   }
+  // 用户维护的反例是硬约束：离线没有模型兜底，只有真的不查才算生效。
+  const blocked = forbiddenTableReason(forbidden, main.name);
+  if (blocked) return { status: 'gap', gap: `你的业务上下文里登记了这条反例，所以我不查 \`${main.name}\`。\n\n> ${blocked}\n\n要改这张表本身，请到 工具箱 → Agent 上下文 → 术语与示例 调整这条反例；或者告诉我换用哪张表。` };
 
   const pool: Pool = { tables: [main], joins: [], grounding };
   const joinGap = connect(question, main, visible, pool);

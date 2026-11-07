@@ -102,6 +102,8 @@ export interface AgentContextData {
   agentContext?: AgentContextBundle;
   /** 术语词典，供离线推理器把简称展开成业务全称。 */
   glossary?: Memory[];
+  /** 用户登记的标准问答 SQL：离线推理器命中时直接沿用它的口径。 */
+  sqlExamples?: Memory[];
   attachmentTables?: string[];
 }
 

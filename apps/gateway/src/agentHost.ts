@@ -608,7 +608,7 @@ export class AgentHost {
         environment: conn?.environment ?? 'dev',
         connectionReadonly: conn?.readonly ?? false,
         history: compacted,
-        context: { connection: conn, databases: schemas, memories, agentContext: businessContext, glossary: recall.glossary, attachmentTables },
+        context: { connection: conn, databases: schemas, memories, agentContext: businessContext, glossary: recall.glossary, sqlExamples: recall.sqlExamples, attachmentTables },
         sessionAllowed,
         alwaysAllowed: this.alwaysAllowed,
         signal: controller.signal,
