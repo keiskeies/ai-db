@@ -1,10 +1,13 @@
 import type { ColumnDef, IndexDef } from '../../sql/ddl';
 import { buildCount, buildMonthlySeriesExpr, buildSelectTable, defaultIndexName } from '../../sql/ddl';
+import { isSqlEngine } from '../../engines';
 import { quoteIdent, quoteLiteral } from '../../sql/ident';
 import type { ColumnInfo, ConnectionConfig, DatabaseSchema, Engine, TableInfo } from '../../types';
 import { expandTerms } from '../context';
 import { groundedColumns, groundedTables, hiddenTableMention, matchColumn, matchTable, numericColumns, pickDimension, pickMeasure, pickTimeColumn, rankTables } from '../local/schema';
 import type { GroundingOptions } from '../local/schema';
+import type { PlanOutcome } from '../local/parse';
+import { planQuery } from '../local/parse';
 import { estimateTokens } from '../prompt';
 import { columnLabel, tableLabel } from '../suggest';
 import type {
@@ -287,16 +290,121 @@ function groupColumnOf(question: string, table: TableInfo, grounding: GroundingO
   return matchColumn(question, table, grounding) ?? pickDimension(table, question, grounding);
 }
 
+/** 这几个意图交给规划器：它们本质是「一句聚合查询」，规则模板覆盖不住组合。 */
+const PLANNED_INTENTS: LocalIntent[] = ['count', 'group', 'analyze', 'chart'];
+
+/** 高级图与预测有自己的取数口径（模板 / 确定性外推），不走聚合规划器。 */
+function usePlanner(intent: LocalIntent, prompt: string, engine: Engine): boolean {
+  if (!PLANNED_INTENTS.includes(intent)) return false;
+  if (!isSqlEngine(engine)) return false;
+  if (/(预测|forecast|外推)/.test(prompt)) return false;
+  return !/(散点|scatter|相关系数|correlation|热力|heatmap|雷达|radar|堆叠|stacked)/i.test(prompt);
+}
+
+function profiledValues(outcomes: ToolOutcome[]): { table: string; column: string; values: Array<string | number> } | undefined {
+  const action = getOutcome(outcomes, 'profile_column');
+  const data = action?.result.data as { table?: string; column?: string; top?: Array<{ value: unknown }> } | undefined;
+  if (!data?.column || !Array.isArray(data.top)) return undefined;
+  const values = data.top.map((item) => item.value).filter((value): value is string | number => typeof value === 'string' || typeof value === 'number');
+  return { table: data.table ?? '', column: data.column, values };
+}
+
+function planOf(input: { question: string; engine: Engine; tables: TableInfo[]; grounding: GroundingOptions; outcomes: ToolOutcome[] }): PlanOutcome {
+  return planQuery({
+    question: input.question,
+    engine: input.engine,
+    tables: input.tables,
+    grounding: input.grounding,
+    probe: profiledValues(input.outcomes),
+    probeDone: Boolean(getOutcome(input.outcomes, 'profile_column')),
+  });
+}
+
+/** 口径说明：把规划器实际做了什么摊在执行过程里，用户才知道数字是怎么来的。 */
+function planNotes(plan: PlanOutcome): string {
+  const notes = plan.compiled?.notes ?? [];
+  const filters = (plan.spec?.filters ?? []).filter((filter) => filter.source);
+  const conditions = filters.map((filter) => `${filter.source}`).filter((text, index, all) => all.indexOf(text) === index);
+  return [...notes, ...(conditions.length ? [`条件：${conditions.join('；')}`] : [])].join('；');
+}
+
+function planPreamble(intent: LocalIntent, plan: PlanOutcome, table: string, axisLabel?: string): string {
+  const notes = planNotes(plan);
+  if (intent === 'chart') return `我把 \`${table}\` 汇总后渲染图表${axisLabel ? `（横轴 ${axisLabel}）` : ''}${notes ? `：${notes}` : ''}。`;
+  if (intent === 'analyze') return `我在 Bridge 侧算好 \`${table}\` 的统计量，不自己估数${notes ? `：${notes}` : ''}。`;
+  if (plan.spec?.groupBy.length || plan.spec?.timeBucket) return `我按${axisLabel ? ` \`${axisLabel}\`` : '分组'}统计 \`${table}\`${notes ? `：${notes}` : ''}。`;
+  return `我在 \`${table}\` 上按条件计数${notes ? `：${notes}` : ''}。`;
+}
+
+/** 结论：数字直接摆在第一句，口径跟在后面，明细表格压到最后。 */
+function planConclusion(plan: PlanOutcome, data: unknown, maxRows = 12): string {
+  const d = data as { columns?: Array<{ name: string } | string>; rows?: unknown[][] } | undefined;
+  if (!d?.columns || !Array.isArray(d.rows)) return '查询没有返回行。';
+  const names = d.columns.map((c) => (typeof c === 'string' ? c : c.name));
+  const valueIndex = names.findIndex((name) => /^value$/i.test(name));
+  const axisIndex = names.findIndex((name) => /^(label|period)$/i.test(name));
+  const rows = d.rows;
+  if (!rows.length) return '查询返回 0 行：条件可能过紧，或这段时间确实没有数据。';
+
+  const single = valueIndex >= 0 && axisIndex < 0 && rows.length === 1;
+  if (single) {
+    const value = rows[0]?.[valueIndex];
+    const measure = plan.measureLabel ? `${plan.measureLabel}` : '结果';
+    return `**${formatNumber(value)}** —— 这是${measure}${windowText(plan)}。`;
+  }
+
+  const axisName = plan.axisLabel ?? (axisIndex >= 0 ? names[axisIndex] : '分组');
+  const sorted = [...rows].sort((a, b) => (valueIndex >= 0 ? Number(b[valueIndex] ?? 0) - Number(a[valueIndex] ?? 0) : 0));
+  const top = sorted[0];
+  const head = sorted.slice(0, 3).map((row) => `- ${formatValue(row[axisIndex >= 0 ? axisIndex : 0])}：**${valueIndex >= 0 ? formatNumber(row[valueIndex]) : formatValue(row[1] ?? '')}**`);
+  const total = valueIndex >= 0 ? rows.reduce((sum, row) => sum + Number(row[valueIndex] ?? 0), 0) : rows.length;
+  return (
+    `按 ${axisName} 分成 ${rows.length} 组${valueIndex >= 0 ? `，合计 **${formatNumber(total)}**` : ''}${windowText(plan)}。最高的是 ${formatValue(top?.[axisIndex >= 0 ? axisIndex : 0])}${valueIndex >= 0 ? `（${formatNumber(top?.[valueIndex])}）` : ''}。\n\n` +
+    (head.length ? `前 ${head.length}：\n${head.join('\n')}\n\n` : '') +
+    renderRows(data, maxRows, plan.labels)
+  );
+}
+
+function windowText(plan: PlanOutcome): string {
+  const period = (plan.spec?.filters ?? []).find((filter) => filter.window && filter.source);
+  return period?.source ? `（${period.source}）` : '';
+}
+
+function formatNumber(value: unknown): string {
+  const n = typeof value === 'number' ? value : Number(String(value ?? '').replace(/,/g, ''));
+  return Number.isFinite(n) ? n.toLocaleString() : formatValue(value);
+}
+
+/** 解析不出来时定点追问，而不是把 help 清单甩回去。 */
+function clarifier(intent: LocalIntent, question: string, tables: TableInfo[], grounding: GroundingOptions): string {
+  const examples = {
+    count: '「orders 有多少行」「上月已支付的订单有多少」',
+    group: '「按 status 统计订单」「各城市上月的订单金额合计」',
+    analyze: '「统计 orders 按月的金额合计并分析趋势」「各渠道的客单价」',
+    chart: '「按 status 统计 orders 并画柱状图」「近 12 个月订单量趋势图」',
+    default: '「看看 orders 表结构」「数据库体检」「按 status 统计订单」',
+  } as Record<string, string>;
+  const names = tableCandidates(question, tables, grounding, 8);
+  return [
+    `这个问法我还没把握直接执行，宁可问你一句也不想猜一个数字给你。`,
+    ``,
+    `可以说得更具体些，例如：${examples[intent] ?? examples.default}。`,
+    names ? `\n当前可用的表：${names}。` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
 function formatValue(value: unknown): string {
   if (value === null || value === undefined) return 'NULL';
   if (typeof value === 'object') return JSON.stringify(value).replace(/\|/g, '\\|').slice(0, 120);
   return String(value).replace(/\|/g, '\\|').replace(/\n/g, ' ');
 }
 
-function renderRows(data: unknown, maxRows = 10): string {
+function renderRows(data: unknown, maxRows = 10, labels?: string[]): string {
   const d = data as { columns?: Array<{ name: string } | string>; rows?: unknown[][] } | undefined;
   if (!d?.columns || !Array.isArray(d.rows)) return '';
-  const names = d.columns.map((c) => (typeof c === 'string' ? c : c.name));
+  const names = d.columns.map((c, index) => labels?.[index] || (typeof c === 'string' ? c : c.name));
   const rows = d.rows.slice(0, maxRows);
   const header = `| ${names.join(' | ')} |`;
   const sep = `| ${names.map(() => '---').join(' | ')} |`;
@@ -603,6 +711,96 @@ export class LocalProvider implements LlmProvider {
     if (!table && ['sample', 'count', 'group', 'index', 'insert', 'drop', 'export', 'quality', 'chart'].includes(intent)) {
       const names = tableCandidates(question, tables, grounding);
       yield* finish(`请指定表名。当前可用：${names || '（无表）'}。`);
+      return;
+    }
+
+    // 这几条路径在本地拼 SQL：非 SQL 引擎（Mongo/Redis/图/向量…）连方言都没有，
+    // 交给原生 run_* 工具之前先把话说清楚，别抛「不使用 SQL 方言」这种内部错误。
+    const SQL_BUILT_INTENTS = ['count', 'group', 'analyze', 'chart'];
+    if (!isSqlEngine(engine) && SQL_BUILT_INTENTS.includes(intent)) {
+      yield* finish(`\`${engine}\` 不走 SQL，本地模式还没有为它准备原生查询模板。可以让我列出集合/键（“有哪些表”）、看结构（“xxx 表结构”），或者配置模型后用原生查询语言执行。`);
+      return;
+    }
+
+    if (usePlanner(intent, prompt, engine)) {
+      const plan = planOf({ question, engine, tables: allTables, grounding, outcomes });
+      if (plan.status === 'gap') {
+        yield* finish(plan.gap ?? clarifier(intent, question, tables, grounding));
+        return;
+      }
+      if (plan.status === 'probe' && plan.probe) {
+        yield { type: 'thinking', text: `本地模式：先确认 \`${plan.probe.table}.${plan.probe.column}\` 的实际取值` };
+        yield* callTool(
+          mkCall('profile_column', { connectionId, database, table: plan.probe.table, column: plan.probe.column }),
+          `「${plan.probe.raw}」我还没在这张表里见过对应的取值，先读一次 \`${plan.probe.column}\` 最常见的几个值（只读），再按真实取值统计。`,
+        );
+        return;
+      }
+
+      const compiled = plan.compiled!;
+      const sql = compiled.sql;
+      const preamble = planPreamble(intent, plan, plan.spec!.table, plan.axisLabel);
+      const probeNote = plan.dropped?.length ? `\n\n> ${plan.dropped.join('；')}。` : '';
+
+      if (intent === 'chart' || intent === 'analyze') {
+        const toolName = intent === 'chart' ? 'render_chart' : 'analyze_chart';
+        const action = getOutcome(outcomes, toolName);
+        const xField = compiled.axisAlias;
+        const yField = compiled.valueAliases[0];
+        if (action) {
+          if (!action.result.ok) {
+            yield* finish(errText(action.result));
+            return;
+          }
+          if (intent === 'chart') {
+            const data = action.result.data as { chart?: { title?: string; series?: Array<{ label: string; value: number }> } } | undefined;
+            const series = data?.chart?.series ?? [];
+            const top = [...series].sort((a, b) => b.value - a.value).slice(0, 3);
+            yield* finish(
+              `图表已生成并显示在上方工具卡中：**${data?.chart?.title ?? '分析图'}**。\n\n` +
+                (top.length ? top.map((point) => `- ${point.label}: ${formatNumber(point.value)}`).join('\n') : '没有可绘制的数据。') +
+                probeNote,
+            );
+            return;
+          }
+          const d = action.result.data as {
+            x: string; y: string; rowCount: number; sum: number; avg: number; min: number; max: number; argmin: string; argmax: string;
+            topShare?: Array<{ label: string; value: number; share: number }>;
+            deltas?: Array<{ label: string; delta: number; ratio: number | null }>;
+          };
+          const what = plan.measureLabel ? `**${plan.measureLabel}**` : '结果';
+          const top = (d.topShare ?? []).map((s) => `- ${s.label}：${formatNumber(s.value)}（${(s.share * 100).toFixed(1)}%）`);
+          const recent = (d.deltas ?? []).slice(-3).map((item) => `- ${item.label}：${item.delta >= 0 ? '+' : ''}${formatNumber(item.delta)}${item.ratio === null ? '' : `（${(item.ratio * 100).toFixed(1)}%）`}`);
+          yield* finish(
+            `${what}按 \`${plan.axisLabel ?? d.x}\` 统计：合计 **${formatNumber(d.sum)}**，均值 ${formatNumber(d.avg)}，最高 ${d.argmax}（${formatNumber(d.max)}），最低 ${d.argmin}（${formatNumber(d.min)}）。数字由 Bridge 计算，不是估算。\n\n` +
+            (top.length ? `占比前 ${top.length}：\n${top.join('\n')}\n\n` : '') +
+            (recent.length ? `最近环比：\n${recent.join('\n')}\n\n` : '') +
+            `\`\`\`sql\n${sql}\n\`\`\`${probeNote}`,
+          );
+          return;
+        }
+        if (!yField) {
+          yield* finish(clarifier(intent, question, tables, grounding));
+          return;
+        }
+        const chartType: 'bar' | 'line' | 'pie' = /(饼|占比|pie|构成)/i.test(prompt) ? 'pie' : plan.spec?.timeBucket || /(折线|趋势|line)/i.test(prompt) ? 'line' : 'bar';
+        const args: Record<string, unknown> = { connectionId, database, sql, x: xField, y: yField };
+        if (intent === 'chart') args.type = chartType;
+        if (intent === 'chart' && table) args.title = `${tableLabel(ctx.agentContext, table)} · ${plan.axisLabel ?? plan.measureLabel ?? '统计'}`;
+        yield* callTool(mkCall(toolName, args), preamble);
+        return;
+      }
+
+      const action = getOutcome(outcomes, 'run_sql');
+      if (action) {
+        if (!action.result.ok) {
+          yield* finish(errText(action.result));
+          return;
+        }
+        yield* finish(`${planConclusion(plan, action.result.data)}${probeNote}\n\n\`\`\`sql\n${sql}\n\`\`\``);
+        return;
+      }
+      yield* callTool(mkCall('run_sql', { connectionId, database, sql, maxRows: 200 }), preamble);
       return;
     }
 

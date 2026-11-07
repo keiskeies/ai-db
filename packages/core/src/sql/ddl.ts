@@ -458,10 +458,11 @@ export type TimeBucketGrain = 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'y
 /**
  * 各方言的时间分桶表达式。返回一个可分组、可排序的字符串标签（如 `2026-11`）。
  * 周用 `%Y-W%V` / ISO 周，保证跨年时排序仍然正确。
+ * `table` 是限定用的表名：JOIN 之后两张表都叫 created_at，不加限定就是歧义列。
  */
-export function buildTimeBucketExpr(engine: Engine, column: string, grain: TimeBucketGrain = 'month'): string {
+export function buildTimeBucketExpr(engine: Engine, column: string, grain: TimeBucketGrain = 'month', table?: string): string {
   const d = dialectOf(engine);
-  const col = quoteIdent(column, engine);
+  const col = table ? quoteQualified([table, column], engine) : quoteIdent(column, engine);
   if (d === 'sqlite') {
     if (grain === 'hour') return `strftime('%Y-%m-%d %H:00', ${col})`;
     if (grain === 'day') return `strftime('%Y-%m-%d', ${col})`;

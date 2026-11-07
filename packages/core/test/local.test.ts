@@ -152,3 +152,192 @@ test('offline measure selection skips foreign keys and identifier columns', asyn
   assert.match(String(call.call.args.sql), /SUM\("amount_cents"\)/);
   assert.equal(/SUM\("user_id"\)/.test(String(call.call.args.sql)), false);
 });
+
+// ---- 规划器接线：探测往返、图表入参、结论口径 ----
+
+const rich: TableInfo[] = [
+  {
+    name: 'users',
+    type: 'table',
+    columns: [
+      { name: 'id', type: 'INTEGER', nullable: false, primaryKey: true },
+      { name: 'city', type: 'TEXT', nullable: true, primaryKey: false, comment: '城市' },
+    ],
+  },
+  {
+    name: 'orders',
+    type: 'table',
+    columns: [
+      { name: 'id', type: 'INTEGER', nullable: false, primaryKey: true },
+      { name: 'user_id', type: 'INTEGER', nullable: true, primaryKey: false },
+      { name: 'status', type: 'TEXT', nullable: true, primaryKey: false, comment: '状态' },
+      { name: 'amount_cents', type: 'INTEGER', nullable: true, primaryKey: false, comment: '金额' },
+      { name: 'created_at', type: 'TEXT', nullable: true, primaryKey: false },
+    ],
+    foreignKeys: [{ name: 'fk_user', columns: ['user_id'], refTable: 'users', refColumns: ['id'] }],
+  },
+];
+
+const richContext: AgentContextData = { connection, databases: [{ name: 'main', tables: rich }] };
+
+function toolMessage(name: string, data: unknown, toolCallId = 'x'): ProviderMessage {
+  return { role: 'tool', toolCallId, name, content: JSON.stringify({ ok: true, summary: `${name} done`, data, meta: { durationMs: 1 } }) };
+}
+
+test('offline planner spends one bounded probe, then filters on a real value', async () => {
+  const provider = new LocalProvider();
+  const question = '统计已支付订单的金额合计';
+  const first = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: question }], tools: [], context: richContext }));
+  const probeCall = first.find((e) => e.type === 'tool_call');
+  assert.ok(probeCall && probeCall.type === 'tool_call');
+  if (probeCall?.type !== 'tool_call') return;
+  assert.equal(probeCall.call.name, 'profile_column');
+  assert.equal(probeCall.call.args.table, 'orders');
+  assert.equal(probeCall.call.args.column, 'status');
+  assert.match(textOf(first), /只读/);
+
+  const second = await collect(
+    provider.stream({
+      system: '',
+      messages: [
+        { role: 'user', content: question },
+        toolMessage('profile_column', { table: 'orders', column: 'status', distinct: 2, total: 14, top: [{ value: '已支付', count: 12 }, { value: '已退款', count: 2 }] }),
+      ],
+      tools: [],
+      context: richContext,
+    }),
+  );
+  const runCall = second.find((e) => e.type === 'tool_call');
+  assert.ok(runCall && runCall.type === 'tool_call');
+  if (runCall?.type !== 'tool_call') return;
+  assert.match(String(runCall.call.args.sql), /"status" = '已支付'/);
+  assert.match(String(runCall.call.args.sql), /SUM\("amount_cents"\)/);
+});
+
+test('offline planner stops probing and asks when the value matches nothing', async () => {
+  const provider = new LocalProvider();
+  const question = '统计已支付订单的金额合计';
+  const events = await collect(
+    provider.stream({
+      system: '',
+      messages: [
+        { role: 'user', content: question },
+        toolMessage('profile_column', { table: 'orders', column: 'status', distinct: 2, total: 9, top: [{ value: 'shipped', count: 5 }, { value: 'refunded', count: 4 }] }),
+      ],
+      tools: [],
+      context: richContext,
+    }),
+  );
+  assert.equal(events.some((e) => e.type === 'tool_call'), false);
+  assert.match(textOf(events), /shipped/);
+  assert.match(textOf(events), /已支付/);
+});
+
+test('offline planner hands the chart tool stable result aliases', async () => {
+  const provider = new LocalProvider();
+  const question = '按 status 统计 orders 并画柱状图';
+  const events = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: question }], tools: [], context: richContext }));
+  const call = events.find((e) => e.type === 'tool_call');
+  assert.ok(call && call.type === 'tool_call');
+  if (call?.type !== 'tool_call') return;
+  assert.equal(call.call.name, 'render_chart');
+  assert.equal(call.call.args.type, 'bar');
+  assert.equal(call.call.args.x, 'label');
+  assert.equal(call.call.args.y, 'value');
+  assert.match(String(call.call.args.sql), /GROUP BY "status"/);
+});
+
+test('offline planner states the numbers it read before showing the table', async () => {
+  const provider = new LocalProvider();
+  const question = '按 status 统计 orders 的金额合计';
+  const events = await collect(
+    provider.stream({
+      system: '',
+      messages: [
+        { role: 'user', content: question },
+        toolMessage('analyze_chart', {
+          x: 'label',
+          y: 'value',
+          rowCount: 2,
+          sum: 12300,
+          avg: 6150,
+          min: 300,
+          max: 12000,
+          argmin: 'refunded',
+          argmax: 'paid',
+          topShare: [{ label: 'paid', value: 12000, share: 0.9756 }],
+        }),
+      ],
+      tools: [],
+      context: richContext,
+    }),
+  );
+  const text = textOf(events);
+  assert.match(text, /12,300/);
+  assert.match(text, /金额/);
+  assert.match(text, /```sql/);
+  assert.match(text, /Bridge 计算/);
+});
+
+test('offline planner reports the window it applied for a time phrase', async () => {
+  const provider = new LocalProvider();
+  const question = '按 status 统计近 3 个月订单的金额';
+  const sent = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: question }], tools: [], context: richContext }));
+  const call = sent.find((e) => e.type === 'tool_call');
+  assert.ok(call && call.type === 'tool_call');
+  if (call?.type !== 'tool_call') return;
+  assert.match(String(call.call.args.sql), /"created_at" >= '/);
+
+  const events = await collect(
+    provider.stream({
+      system: '',
+      messages: [
+        { role: 'user', content: question },
+        toolMessage('run_sql', {
+          columns: [{ name: 'label' }, { name: 'value' }],
+          rows: [['paid', 12000], ['refunded', 300]],
+        }),
+      ],
+      tools: [],
+      context: richContext,
+    }),
+  );
+  const text = textOf(events);
+  assert.match(text, /12,300/);
+  assert.match(text, /近 3 个月/);
+});
+
+test('offline planner asks for join keys instead of inventing them', async () => {
+  const provider = new LocalProvider();
+  const withOrphan: AgentContextData = {
+    connection,
+    databases: [
+      {
+        name: 'main',
+        tables: [...rich, { name: 'tickets', type: 'table', comment: '工单', columns: [{ name: 'id', type: 'INTEGER', nullable: false, primaryKey: true }] }],
+      },
+    ],
+  };
+  const events = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: '按工单统计订单金额合计' }], tools: [], context: withOrphan }));
+  assert.equal(events.some((e) => e.type === 'tool_call'), false);
+  assert.match(textOf(events), /tickets/);
+  assert.match(textOf(events), /外键/);
+});
+
+test('offline planner joins via the foreign key and keeps every column qualified', async () => {
+  const provider = new LocalProvider();
+  const events = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: '按用户的城市统计订单金额合计' }], tools: [], context: richContext }));
+  const call = events.find((e) => e.type === 'tool_call');
+  assert.ok(call && call.type === 'tool_call');
+  if (call?.type !== 'tool_call') return;
+  assert.match(String(call.call.args.sql), /INNER JOIN "users" ON "orders"\."user_id" = "users"\."id"/);
+  assert.match(String(call.call.args.sql), /GROUP BY "users"\."city"/);
+});
+
+test('offline planner stays out of the way for engines without SQL', async () => {
+  const provider = new LocalProvider();
+  const mongo: ConnectionConfig = { ...connection, id: 'c2', name: 'Mongo', engine: 'mongodb' };
+  const context: AgentContextData = { connection: mongo, databases: [{ name: 'main', tables: rich }] };
+  const events = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: '按 status 统计 orders 的金额合计' }], tools: [], context }));
+  assert.equal(events.some((e) => e.type === 'tool_call' && e.call.name === 'profile_column'), false);
+});
