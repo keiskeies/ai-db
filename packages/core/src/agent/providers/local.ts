@@ -1,9 +1,12 @@
 import type { ColumnDef, IndexDef } from '../../sql/ddl';
 import { buildCount, buildMonthlySeriesExpr, buildSelectTable, defaultIndexName } from '../../sql/ddl';
 import { quoteIdent, quoteLiteral } from '../../sql/ident';
-import type { ConnectionConfig, DatabaseSchema, Engine, TableInfo } from '../../types';
-import { applyTableVisibility, expandTerms, findTableByAlias } from '../context';
+import type { ColumnInfo, ConnectionConfig, DatabaseSchema, Engine, TableInfo } from '../../types';
+import { expandTerms } from '../context';
+import { groundedColumns, groundedTables, hiddenTableMention, matchColumn, matchTable, numericColumns, pickDimension, pickMeasure, pickTimeColumn, rankTables } from '../local/schema';
+import type { GroundingOptions } from '../local/schema';
 import { estimateTokens } from '../prompt';
+import { columnLabel, tableLabel } from '../suggest';
 import type {
   AgentContextData,
   LlmProvider,
@@ -175,31 +178,6 @@ function pickConnection(prompt: string, conns: ConnectionConfig[]): ConnectionCo
   return conns.find((c) => p.includes(c.name.toLowerCase())) ?? conns[0];
 }
 
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function findTable(prompt: string, tables: TableInfo[], ctx?: AgentContextData): TableInfo | undefined {
-  // 先用术语词典展开简称，让「JS 的资产数」也能对上 sys_asset
-  const expanded = expandTerms(prompt, ctx?.glossary).toLowerCase();
-  const byName = tables
-    .filter((t) => new RegExp(`(^|[^a-z0-9_])${escapeRegex(t.name.toLowerCase())}([^a-z0-9_]|$)`).test(expanded))
-    .sort((a, b) => b.name.length - a.name.length)[0];
-  if (byName) return byName;
-  const byAlias = findTableByAlias(expanded, tables, ctx?.agentContext);
-  if (byAlias) {
-    const found = tables.find((t) => t.name === byAlias);
-    if (found) return found;
-  }
-  const m = prompt.match(/(?:表|table)\s*[`"']?([A-Za-z_][A-Za-z0-9_]*)/i);
-  if (m) {
-    const found = tables.find((t) => t.name.toLowerCase() === m[1].toLowerCase());
-    if (found) return found;
-  }
-  if (tables.length === 1) return tables[0];
-  return undefined;
-}
-
 function mkCall(name: string, args: Record<string, unknown>): ToolCall {
   return { id: `local_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`, name, args };
 }
@@ -287,16 +265,26 @@ function mapDefault(raw: string): string {
   return cleaned.replace(/^["']|["']$/g, '');
 }
 
-function findMentionedColumn(prompt: string, table: TableInfo | undefined): string | undefined {
-  if (!table?.columns?.length) return undefined;
-  const p = prompt.toLowerCase();
-  return table.columns.map((c) => c.name).find((n) => new RegExp(`(^|[^a-z0-9_])${escapeRegex(n.toLowerCase())}([^a-z0-9_]|$)`).test(p));
+function groundingOf(ctx: AgentContextData, database?: string): GroundingOptions {
+  return {
+    bundle: ctx.agentContext,
+    glossary: ctx.glossary,
+    memories: ctx.memories,
+    database,
+    attachments: ctx.attachmentTables,
+  };
 }
 
-function defaultGroupColumn(table: TableInfo | undefined): string | undefined {
-  if (!table?.columns?.length) return undefined;
-  const preferred = ['status', 'type', 'category', 'state', 'channel', 'kind'];
-  return table.columns.map((c) => c.name).find((n) => preferred.includes(n.toLowerCase())) ?? table.columns.find((c) => !c.primaryKey)?.name;
+/** 追问时列候选表：与当前问题相关的排前面，而不是按字母序甩一堆无关表名。 */
+function tableCandidates(question: string, tables: TableInfo[], grounding: GroundingOptions, limit = 20): string {
+  const ranked = rankTables(question, tables, grounding);
+  const rest = tables.filter((table) => !ranked.some((item) => item.name === table.name));
+  return [...ranked, ...rest].slice(0, limit).map((table) => `\`${table.name}\``).join('、');
+}
+
+/** 用户点名的列优先（哪怕是时间列），没点名才退回最合适的维度列。 */
+function groupColumnOf(question: string, table: TableInfo, grounding: GroundingOptions): ColumnInfo | undefined {
+  return matchColumn(question, table, grounding) ?? pickDimension(table, question, grounding);
 }
 
 function formatValue(value: unknown): string {
@@ -359,6 +347,8 @@ export class LocalProvider implements LlmProvider {
     const { prompt, outcomes } = analyzeMessages(req.messages);
     const ctx = req.context ?? {};
     const intent = detectIntent(prompt);
+    // 术语词典先把简称展开成业务全称，「JS 的资产数」才对得上 sys_asset。
+    const question = expandTerms(prompt, ctx.glossary);
     const tokensIn = estimateTokens(prompt + req.system);
     let out = '';
 
@@ -450,14 +440,15 @@ export class LocalProvider implements LlmProvider {
       return;
     }
 
-    let tables = tablesFromContext(ctx, conn);
+    let allTables = tablesFromContext(ctx, conn);
     if (inspectOutcome) {
       const fromInspect = tablesFromInspect(inspectOutcome);
-      if (fromInspect.length) tables = fromInspect;
+      if (fromInspect.length) allTables = fromInspect;
     }
+    const grounding = groundingOf(ctx, database);
     // 用户禁用的表对离线推理器同样不可见，否则「表管理」在本地模式下形同虚设。
     // 必须在两个来源合并之后过滤：inspect_schema 的返回里带着完整表清单。
-    tables = applyTableVisibility(tables, ctx.agentContext);
+    const tables = groundedTables(allTables, grounding);
 
     // Fresh schema for listing / describe so the trace shows a real tool call.
     if (!inspectOutcome && ['list_tables', 'describe'].includes(intent)) {
@@ -471,13 +462,22 @@ export class LocalProvider implements LlmProvider {
         yield* callTool(mkCall('inspect_schema', { connectionId, database }), '我先读取表结构，确认可用对象。');
         return;
       }
+      if (allTables.length) {
+        yield* finish(`当前库的 ${allTables.length} 张表都被「Agent 上下文」设置隐藏了，我看不到任何可用对象。请到 工具箱 → Agent 上下文 启用需要的表。`);
+        return;
+      }
       if (intent === 'list_tables') {
         yield* finish('当前库没有表。可以让我创建一个，例如：“创建表 tasks，包含 id 自增主键, title 文本”。');
         return;
       }
     }
 
-    const table = findTable(prompt, tables, ctx);
+    const table = matchTable(question, allTables, grounding);
+    const hiddenTable = table ? undefined : hiddenTableMention(question, allTables, grounding);
+    if (hiddenTable) {
+      yield* finish(`\`${hiddenTable.name}\` 被「Agent 上下文」设置隐藏了，我不会绕过它去查别的表。请到 工具箱 → Agent 上下文 启用这张表，或换一张已启用的表提问。`);
+      return;
+    }
 
     if (intent === 'list_tables') {
       if (!tables.length) {
@@ -486,7 +486,11 @@ export class LocalProvider implements LlmProvider {
       }
       const list = tables
         .slice(0, 40)
-        .map((t) => `- \`${t.name}\`${t.type === 'view' ? '（视图）' : ''}${t.columns?.length ? ` · ${t.columns.length} 列` : ''}${t.rowEstimate !== undefined ? ` · ~${t.rowEstimate} 行` : ''}`)
+        .map((t) => {
+          const alias = ctx.agentContext?.tableMeta[t.name.toLowerCase()]?.alias?.trim();
+          const columns = groundedColumns(t, grounding).length;
+          return `- \`${t.name}\`${alias ? `（${alias}）` : ''}${t.type === 'view' ? '（视图）' : ''}${columns ? ` · ${columns} 列` : ''}${t.rowEstimate !== undefined ? ` · ~${t.rowEstimate} 行` : ''}`;
+        })
         .join('\n');
       yield* finish(`当前库（${database ?? conn?.name ?? ''}）共有 **${tables.length}** 张表：\n\n${list}${tables.length > 40 ? '\n- …（其余省略）' : ''}\n\n需要看哪张表的结构或数据，直接说表名即可。`);
       return;
@@ -494,15 +498,26 @@ export class LocalProvider implements LlmProvider {
 
     if (intent === 'describe') {
       if (!table) {
-        const names = tables.slice(0, 20).map((t) => `\`${t.name}\``).join('、');
+        const names = tableCandidates(question, tables, grounding);
         yield* finish(`请指定要查看的表名。当前可用：${names || '（无）'}。`);
         return;
       }
-      const cols = (table.columns ?? []).map((c) => `| \`${c.name}\` | ${c.type} | ${c.primaryKey ? 'PK' : ''} | ${c.nullable ? 'YES' : 'NO'} | ${c.defaultValue ?? ''} |`).join('\n');
+      const columns = groundedColumns(table, grounding);
+      const hidden = (table.columns?.length ?? 0) - columns.length;
+      const meta = ctx.agentContext?.columnMeta[table.name.toLowerCase()] ?? {};
+      const cols = columns
+        .map((c) => {
+          const label = meta[c.name]?.alias?.trim() || meta[c.name.toLowerCase()]?.alias?.trim() || c.comment?.trim() || '';
+          return `| \`${c.name}\` | ${label} | ${c.type} | ${c.primaryKey ? 'PK' : ''} | ${c.nullable ? 'YES' : 'NO'} | ${c.defaultValue ?? ''} |`;
+        })
+        .join('\n');
       const idx = (table.indexes ?? []).map((i) => `- ${i.name}（${i.unique ? 'UNIQUE ' : ''}${i.columns.join(', ')}）`).join('\n');
       const fks = (table.foreignKeys ?? []).map((f) => `- ${f.columns.join(',')} → ${f.refTable}(${f.refColumns.join(',')})`).join('\n');
+      const alias = ctx.agentContext?.tableMeta[table.name.toLowerCase()]?.alias?.trim();
+      const note = ctx.agentContext?.tableMeta[table.name.toLowerCase()]?.description?.trim() || table.comment;
       yield* finish(
-        `**${table.name}**${table.comment ? ` — ${table.comment}` : ''}\n\n| 列 | 类型 | 键 | 可空 | 默认值 |\n| --- | --- | --- | --- | --- |\n${cols || '| （未读取到列） |  |  |  |  |'}` +
+        `**${table.name}**${alias ? `（${alias}）` : ''}${note ? ` — ${note}` : ''}\n\n| 列 | 业务名 | 类型 | 键 | 可空 | 默认值 |\n| --- | --- | --- | --- | --- | --- |\n${cols || '| （未读取到列） |  |  |  |  |  |'}` +
+          `${hidden > 0 ? `\n\n_另有 ${hidden} 列被「Agent 上下文」设置隐藏。_` : ''}` +
           `${idx ? `\n\n**索引**\n${idx}` : ''}${fks ? `\n\n**外键**\n${fks}` : ''}`,
       );
       return;
@@ -586,7 +601,7 @@ export class LocalProvider implements LlmProvider {
 
     // Remaining intents need a table.
     if (!table && ['sample', 'count', 'group', 'index', 'insert', 'drop', 'export', 'quality', 'chart'].includes(intent)) {
-      const names = tables.slice(0, 20).map((t) => `\`${t.name}\``).join('、');
+      const names = tableCandidates(question, tables, grounding);
       yield* finish(`请指定表名。当前可用：${names || '（无表）'}。`);
       return;
     }
@@ -635,7 +650,7 @@ export class LocalProvider implements LlmProvider {
         return;
       }
       // group
-      const col = findMentionedColumn(prompt, table) ?? defaultGroupColumn(table);
+      const col = groupColumnOf(question, table, grounding)?.name;
       if (!col) {
         yield* finish(`\`${table.name}\` 没有可用分组列。请指定列名，例如：“按 status 分组统计”。`);
         return;
@@ -720,7 +735,7 @@ export class LocalProvider implements LlmProvider {
       let sql: string;
       let xField: string;
       if (wantForecast) {
-        const timeColumn = (table.columns ?? []).find((c) => /(date|time)/i.test(c.type) || /(_at|date|time)/i.test(c.name));
+        const timeColumn = pickTimeColumn(table, question, grounding);
         if (!timeColumn) {
           yield* finish(`\`${table.name}\` 没有时间列，无法做趋势预测。请换一张带时间字段的表。`);
           return;
@@ -729,12 +744,12 @@ export class LocalProvider implements LlmProvider {
         sql = `SELECT ${expr} AS ${q('period')}, COUNT(*) AS ${q('value')} FROM ${q(table.name)} GROUP BY ${expr} ORDER BY ${q('period')} LIMIT 24`;
         xField = 'period';
       } else {
-        const groupColumn = findMentionedColumn(prompt, table) ?? defaultGroupColumn(table);
+        const groupColumn = groupColumnOf(question, table, grounding)?.name;
         if (!groupColumn) {
           yield* finish(`\`${table.name}\` 没有适合分组的列，请指定列名。`);
           return;
         }
-        const metric = (table.columns ?? []).find((c) => /(cents|amount|total|price|qty)/i.test(c.name));
+        const metric = pickMeasure(table, question, grounding);
         sql = `SELECT ${q(groupColumn)} AS ${q('label')}, ${metric ? `SUM(${q(metric.name)})` : 'COUNT(*)'} AS ${q('value')} FROM ${q(table.name)} GROUP BY ${q(groupColumn)} ORDER BY ${q('value')} DESC LIMIT 50`;
         xField = 'label';
       }
@@ -766,20 +781,20 @@ export class LocalProvider implements LlmProvider {
         return;
       }
       const q = (name: string) => quoteIdent(name, engine);
-      const numericColumns = (table.columns ?? []).filter((c) => /(int|real|float|double|decimal|numeric|number)/i.test(c.type));
+      const numerics = numericColumns(table, grounding);
       const advanced = /(热力|heatmap|雷达|radar|堆叠|stacked)/i.exec(prompt);
       if (advanced) {
         yield* finish(`离线规则模式还没有「${advanced[0]}」的取数模板；配置模型后可以直接生成，或先在编辑器里写好聚合 SQL 再用图表页。`);
         return;
       }
-      if (/(散点|相关|scatter|correlation)/i.test(prompt) && numericColumns.length < 2) {
-        yield* finish(`\`${table.name}\` 需要至少两个数值列才能画散点图（当前：${numericColumns.map((c) => c.name).join('、') || '无'}）。`);
+      if (/(散点|相关|scatter|correlation)/i.test(prompt) && numerics.length < 2) {
+        yield* finish(`\`${table.name}\` 需要至少两个数值列才能画散点图（当前：${numerics.map((c) => c.name).join('、') || '无'}）。`);
         return;
       }
-      if (/(散点|相关|scatter|correlation)/i.test(prompt) && numericColumns.length >= 2) {
-        const mentioned = numericColumns.filter((c) => prompt.toLowerCase().includes(c.name.toLowerCase()));
-        const xColumn = mentioned[0] ?? numericColumns[0];
-        const yColumn = mentioned[1] ?? numericColumns.find((c) => c.name !== xColumn.name)!;
+      if (/(散点|相关|scatter|correlation)/i.test(prompt) && numerics.length >= 2) {
+        const mentioned = numerics.filter((c) => prompt.toLowerCase().includes(c.name.toLowerCase()));
+        const xColumn = mentioned[0] ?? numerics[0];
+        const yColumn = mentioned[1] ?? numerics.find((c) => c.name !== xColumn.name)!;
         yield* callTool(
           mkCall('render_chart', {
             connectionId,
@@ -798,21 +813,20 @@ export class LocalProvider implements LlmProvider {
       let sql: string;
       let xField: string;
       let chartTitle: string;
-      const timeColumn = (table.columns ?? []).find((c) => /(date|time)/i.test(c.type) || /(_at|date|time)/i.test(c.name));
-      const groupColumn = findMentionedColumn(prompt, table) ?? defaultGroupColumn(table) ?? table.columns?.find((c) => !c.primaryKey)?.name;
+      const timeColumn = pickTimeColumn(table, question, grounding);
+      const groupCol = groupColumnOf(question, table, grounding) ?? groundedColumns(table, grounding).find((c) => !c.primaryKey);
+      const groupColumn = groupCol?.name;
       if (type === 'line' && timeColumn) {
         const expr = buildMonthlySeriesExpr(engine, timeColumn.name);
         sql = `SELECT ${expr} AS ${q('period')}, COUNT(*) AS ${q('value')} FROM ${q(table.name)} GROUP BY ${expr} ORDER BY ${q('period')} LIMIT 24`;
         xField = 'period';
-        chartTitle = `${table.name} 月度趋势`;
+        chartTitle = `${tableLabel(ctx.agentContext, table)} 月度趋势`;
       } else if (groupColumn) {
-        const metric = /(金额|gmv|销售|收入|amount|total|price)/i.test(prompt)
-          ? (table.columns ?? []).find((c) => /(cents|amount|total|price)/i.test(c.name))
-          : undefined;
+        const metric = /(金额|gmv|销售|收入|amount|total|price)/i.test(prompt) ? pickMeasure(table, question, grounding) : undefined;
         const aggregate = metric ? `SUM(${q(metric.name)})` : 'COUNT(*)';
         sql = `SELECT ${q(groupColumn)} AS ${q('label')}, ${aggregate} AS ${q('value')} FROM ${q(table.name)} GROUP BY ${q(groupColumn)} ORDER BY ${q('value')} DESC LIMIT 16`;
         xField = 'label';
-        chartTitle = `${table.name} · ${groupColumn} 分布`;
+        chartTitle = `${tableLabel(ctx.agentContext, table)} · ${groupCol ? columnLabel(ctx.agentContext, table, groupCol) : groupColumn} 分布`;
       } else {
         yield* finish(`\`${table.name}\` 没有适合分组的列，请指定列名或提供 SQL。`);
         return;
@@ -851,9 +865,9 @@ export class LocalProvider implements LlmProvider {
         yield* callTool(mkCall('manage_index', { connectionId, database, table: table.name, action: 'drop', name: idxName }), `我删除索引 \`${idxName}\`。`);
         return;
       }
-      const col = findMentionedColumn(prompt, table) ?? table.columns?.find((c) => !c.primaryKey)?.name;
+      const col = matchColumn(question, table, grounding)?.name ?? groundedColumns(table, grounding).find((c) => !c.primaryKey)?.name;
       if (!col) {
-        yield* finish('请指定要建索引的列。');
+        yield* finish(`请指定要建索引的列。\`${table.name}\` 可用列：${groundedColumns(table, grounding).map((c) => `\`${c.name}\``).join('、') || '（无）'}。`);
         return;
       }
       const unique = /(唯一|unique)/.test(prompt);

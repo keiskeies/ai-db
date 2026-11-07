@@ -48,6 +48,11 @@ export function isMeasureColumn(column: ColumnInfo, foreignKeyColumns: Set<strin
   if (foreignKeyColumns.has(lower(column.name))) return false;
   if (IDENTIFIER_NAME.test(column.name)) return false;
   if (isTimeColumn(column)) return false;
+  return isNumericColumn(column);
+}
+
+/** 纯类型判定：散点轴等场景要的是「是不是数值」，不排除标识列。 */
+export function isNumericColumn(column: ColumnInfo): boolean {
   return NUMERIC_TYPE.test(column.type);
 }
 
@@ -57,24 +62,24 @@ export function isDimensionColumn(column: ColumnInfo): boolean {
   return TEXT_TYPE.test(column.type) || DIMENSION_NAME.test(column.name);
 }
 
-function foreignKeyColumnsOf(table: TableInfo): Set<string> {
+export function foreignKeyColumnsOf(table: TableInfo): Set<string> {
   const set = new Set<string>();
   for (const fk of table.foreignKeys ?? []) for (const c of fk.columns) set.add(lower(c));
   return set;
 }
 
-function visibleColumns(table: TableInfo, bundle?: AgentContextBundle): ColumnInfo[] {
+export function visibleColumns(table: TableInfo, bundle?: AgentContextBundle): ColumnInfo[] {
   const columns = table.columns ?? [];
   return bundle ? columns.filter((c) => !isColumnDisabled(bundle, table.name, c.name)) : columns;
 }
 
 /** 业务别名优先，退回物理名——推荐语直接说人话。 */
-function tableLabel(bundle: AgentContextBundle | undefined, table: TableInfo): string {
+export function tableLabel(bundle: AgentContextBundle | undefined, table: TableInfo): string {
   const alias = bundle?.tableMeta[lower(table.name)]?.alias?.trim();
   return alias || table.comment?.trim() || table.name;
 }
 
-function columnLabel(bundle: AgentContextBundle | undefined, table: TableInfo, column: ColumnInfo): string {
+export function columnLabel(bundle: AgentContextBundle | undefined, table: TableInfo, column: ColumnInfo): string {
   const meta = bundle?.columnMeta[lower(table.name)]?.[column.name] ?? bundle?.columnMeta[lower(table.name)]?.[lower(column.name)];
   return meta?.alias?.trim() || column.comment?.trim() || column.name;
 }
