@@ -24,7 +24,7 @@
   <img alt="53 agent tools" src="https://img.shields.io/badge/Agent%20Tools-53-45C8C3?style=flat-square" />
   <img alt="macOS, Windows, Linux" src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-0B0E0D?style=flat-square" />
   <img alt="MIT license" src="https://img.shields.io/badge/License-MIT-E0AF63?style=flat-square" />
-  <a href="https://github.com/keiskeies/ai-db/releases/tag/v0.0.1"><img alt="Release v0.0.1" src="https://img.shields.io/badge/Release-v0.0.1-45C8C3?style=flat-square&logo=github" /></a>
+  <a href="https://github.com/keiskeies/ai-db/releases/tag/v0.0.2"><img alt="Release v0.0.2" src="https://img.shields.io/badge/Release-v0.0.2-45C8C3?style=flat-square&logo=github" /></a>
   <a href="https://github.com/keiskeies/ai-db"><img alt="GitHub stars" src="https://img.shields.io/github/stars/keiskeies/ai-db?style=flat-square&logo=github&label=Stars&color=E0AF63" /></a>
 </p>
 

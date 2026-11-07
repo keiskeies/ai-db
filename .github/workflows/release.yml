@@ -104,7 +104,7 @@ jobs:
     name: Publish GitHub release
     needs: desktop
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/tags/v0.0.1'
+    if: github.ref == 'refs/tags/v0.0.2'
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -114,19 +114,36 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          name: AiDB Studio v0.0.1
+          name: AiDB Studio v0.0.2
           tag_name: ${{ github.ref_name }}
           draft: false
           prerelease: false
           generate_release_notes: false
           body: |
-            AiDB Studio **v0.0.1** — the agent-first database workbench.
+            AiDB Studio **v0.0.2** — the agent-first database workbench.
 
-            **Highlights**
-            - Agent as the primary entry point: 53 tools, real schema context, real SQL execution, approvals, and audit.
-            - 41 database engines, 7 chart types, 14 toolbox modules, and 7 command workflows.
-            - Charts, reports, dashboards, Excel / PPTX exports, and long-term memory that compounds.
-            - Desktop (Windows / macOS / Linux) and mobile (Android / iOS / Web) share connections and memory through the Bridge.
+            This release is about engines that refuse to behave the same way and about waiting less.
+
+            **Engine compatibility**
+            - Metadata is now read per probe and degrades one section at a time, so a server that denies one catalog still shows every table, column, index and key it permits — an empty tree no longer means "no data".
+            - Elasticsearch / OpenSearch 6, 7 and 8: typed mappings, numeric vs object `hits.total`, `track_total_hits` only where it exists, and an `_all/_mapping` fallback when a role lacks the cluster-monitor privilege that `_cat/indices` needs.
+            - Oracle 11g reads structure without `ORACLE_MAINTAINED` / `IDENTITY_COLUMN`; thin mode stays for 12.1+, thick mode is available through `AIDB_ORACLE_CLIENT_DIR`.
+            - PostgreSQL 9.x and Greenplum get index parsing that does not need `array_position`; identity and generated columns are reported when the catalog exposes them.
+            - MySQL-family servers with partial `information_schema` (Doris, StarRocks, GBase 8a) fall back to `SHOW DATABASES`.
+            - By generation: InfluxDB 1.x is served over `/query` + `/write` with InfluxQL while 3.x keeps DataFusion SQL, Milvus reports the 2.4 REST requirement instead of looking offline, Neo4j 3.x sessions drop the database parameter. Cassandra 2.x, MongoDB and DM legacy OpenSSL are handled the same way.
+            - New connection options: encrypt-but-do-not-verify TLS, Elasticsearch / OpenSearch API key auth, MongoDB replica set · auth source · direct connection, and Redis Cluster as a deployment mode.
+
+            **Performance**
+            - Backups stream to disk and page by primary key instead of materialising the whole database in memory; restore replays the dump in ~4 MB script batches.
+            - Metadata collection runs with bounded concurrency, row-count estimates push `LIMIT` into the query, and first-paint schema loading is throttled.
+            - Desktop first load shrinks from 7.09 MB to 0.71 MB of JavaScript (0.82 MB raw / 0.26 MB gzipped including CSS): 19 of 20 language catalogs, the SQL editor, the Markdown renderer, every toolbox panel and every context-menu dialog now arrive on demand.
+
+            **Runtime and interface**
+            - Node 22.13+ is required for `node:sqlite`; exported SQL writes boolean, date and binary literals in the target dialect.
+            - Single-database connections load their object tree automatically, and native dropdowns were replaced by the themed control everywhere.
+
+            **Verification**
+            - 294 end-to-end checks (v0.0.1 shipped 263), 476 unit and integration tests, 391 documentation-contract checks, and a chunk-level probe that proves the lazy loading and per-language catalogs.
 
             Installers are built by GitHub Actions from this tag.
           files: |
