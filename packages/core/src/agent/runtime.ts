@@ -386,6 +386,10 @@ export class AgentRuntime {
             deps.emit({ type: 'text_delta', text: ev.text });
           } else if (ev.type === 'thinking') {
             deps.emit({ type: 'thinking_delta', text: ev.text });
+          } else if (ev.type === 'plan') {
+            // 离线推理器没有模型可以调 update_plan，计划由规划器直接给出。
+            plan = ev.items.slice(0, 20);
+            deps.emit({ type: 'plan', items: plan });
           } else if (ev.type === 'tool_call') {
             calls.push(ev.call);
           } else if (ev.type === 'usage') {

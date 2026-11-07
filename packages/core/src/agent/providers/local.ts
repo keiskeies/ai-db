@@ -6,8 +6,9 @@ import type { ColumnInfo, ConnectionConfig, DatabaseSchema, Engine, TableInfo } 
 import { expandTerms } from '../context';
 import { groundedColumns, groundedTables, hiddenTableMention, matchColumn, matchTable, numericColumns, pickDimension, pickMeasure, pickTimeColumn, rankTables } from '../local/schema';
 import type { GroundingOptions } from '../local/schema';
-import type { PlanOutcome } from '../local/parse';
-import { planQuery } from '../local/parse';
+import type { PlanOutcome, PlanProbe } from '../local/parse';
+import { isFollowUp, planQuery, splitClauses } from '../local/parse';
+import type { QuerySpec } from '../local/query';
 import type { Forbidden } from '../local/business';
 import { forbiddenFromGlossary, forbiddenTableReason, matchSqlExample } from '../local/business';
 import { estimateTokens } from '../prompt';
@@ -47,11 +48,18 @@ export type LocalIntent =
 interface ToolOutcome {
   name: string;
   result: ToolResult;
+  /**
+   * 发起这次调用时的参数。多问一句要按调用回看结果（三步查询返回三份数据，
+   * 只按工具名取「最后一个」会把答案配错行），所以这里带上原始 args。
+   */
+  args?: Record<string, unknown>;
 }
 
 interface Analysis {
   prompt: string;
   outcomes: ToolOutcome[];
+  /** 本轮之前的用户原话（旧→新）：追问的口径从这里继承。 */
+  priorUser: string[];
 }
 
 const CN_COLUMNS: Record<string, string> = {
@@ -105,8 +113,11 @@ export function detectIntent(prompt: string): LocalIntent {
   if (/(预测|forecast|外推|接下来.*(多少|会)|未来)/.test(p)) return 'analyze';
   // 点名要图就按图走：「统计金额合计并画柱状图」里「合计」也命中 analyze，
   // 但用户要的是那几根柱子，回一张统计表等于没回答。
-  if (/(画图|画个|画张|画一|绘|图表|可视化|趋势|折线|柱状|饼图|chart|plot)/.test(p)) return 'chart';
+  if (/(画图|画个|画张|画一|绘|图表|可视化|趋势|走势|折线|柱状|饼图|chart|plot)/.test(p)) return 'chart';
   if (/(合计|总和|求和|平均值|均值|环比|占比多少|最大.*最小|\bsum\b|\bavg\b)/.test(p)) return 'analyze';
+  // 「金额最高的 10 笔订单」「订单明细前 5 条」要的是行不是分组数字：以前没人认领，落到 help 甩清单。
+  // 量词紧跟数字才算行数，否则「前 3 个月」会被当成条数。
+  if (/(明细|清单|逐条|详情|detail)|(?:最(?:高|大|多|低|小|便宜|贵)的|前)\s*\d{1,3}\s*(?:笔|条|行|单)/.test(p)) return 'group';
   if (/(备份|backup)/.test(p)) return 'backup';
   if (/(导出|export)/.test(p)) return 'export';
   if (/(创建|新建|建立|建)\s*(一个|一张)?\s*(表|table)|create\s+table/.test(p)) return 'create';
@@ -138,17 +149,29 @@ function analyzeMessages(messages: ProviderMessage[]): Analysis {
     }
   }
   const prompt = userIndex >= 0 ? (messages[userIndex] as { content: string }).content : '';
+  // toolCallId → args：工具结果消息只带名字和数据，多问一句要按调用回看它查的是哪条 SQL。
+  const argsById = new Map<string, Record<string, unknown>>();
+  for (const m of messages) {
+    if (m.role !== 'assistant' || !m.toolCalls) continue;
+    for (const call of m.toolCalls) argsById.set(call.id, call.args);
+  }
   const outcomes: ToolOutcome[] = [];
   for (let i = userIndex + 1; i < messages.length; i++) {
     const m = messages[i];
     if (m.role !== 'tool') continue;
     try {
-      outcomes.push({ name: m.name, result: JSON.parse(m.content) as ToolResult });
+      outcomes.push({ name: m.name, result: JSON.parse(m.content) as ToolResult, ...(argsById.get(m.toolCallId) ? { args: argsById.get(m.toolCallId) } : {}) });
     } catch {
       /* ignore malformed */
     }
   }
-  return { prompt, outcomes };
+  // 上一问的原话：追问（「那按城市呢」「只看已支付的」）不带主语，口径只能从这里继承。
+  const priorUser: string[] = [];
+  for (let i = 0; i < userIndex; i++) {
+    const m = messages[i];
+    if (m.role === 'user') priorUser.push(m.content);
+  }
+  return { prompt, outcomes, priorUser };
 }
 
 function getOutcome(outcomes: ToolOutcome[], name: string): ToolOutcome | undefined {
@@ -341,16 +364,147 @@ function exampleAnswer(intent: LocalIntent, action: ToolOutcome): string {
   return rows ? `查询结果：\n\n${rows}` : '查询返回 0 行：条件可能过紧，或这段时间确实没有数据。';
 }
 
-function planOf(input: { question: string; engine: Engine; tables: TableInfo[]; grounding: GroundingOptions; outcomes: ToolOutcome[]; forbidden: Forbidden }): PlanOutcome {
+function planOf(input: { question: string; engine: Engine; tables: TableInfo[]; grounding: GroundingOptions; outcomes: ToolOutcome[]; forbidden: Forbidden; focus?: QuerySpec }): PlanOutcome {
   return planQuery({
     question: input.question,
     engine: input.engine,
     tables: input.tables,
     grounding: input.grounding,
     forbidden: input.forbidden,
+    focus: input.focus,
     probe: profiledValues(input.outcomes),
     probeDone: Boolean(getOutcome(input.outcomes, 'profile_column')),
   });
+}
+
+/** 一句话里的每一问：要么给出待发的查询，要么给出已经跑完的答案，要么说清为什么没查。 */
+interface CompoundStep {
+  text: string;
+  call?: ToolCall;
+  answer?: string;
+  gap?: string;
+  probe?: PlanProbe;
+  done: boolean;
+}
+
+/**
+ * 多问一句逐步规划。
+ *
+ * 每一问单独走一遍规划器，所以「先算总数再按城市拆分」的第二半句和直接问同一句话给出同一条 SQL、
+ * 同一张图。结果按工具名顺序回看而不是取「最后一个」：三步里有两步都用 run_sql 时，
+ * 取最后一个会把同一个数字念两遍。
+ */
+function compoundSteps(input: {
+  question: string;
+  engine: Engine;
+  tables: TableInfo[];
+  grounding: GroundingOptions;
+  forbidden: Forbidden;
+  outcomes: ToolOutcome[];
+  connectionId: string;
+  database?: string;
+  bundle?: AgentContextData['agentContext'];
+}): CompoundStep[] {
+  const clauses = splitClauses(input.question);
+  if (clauses.length < 2) return [];
+  const steps: CompoundStep[] = [];
+  const next = takeOutcome(input.outcomes);
+  for (const clause of clauses) {
+    // 半句常常只有「再算金额合计」这种动词短语：识别不出聚合意图时按统计处理，
+    // 落到 help 会让计划卡冒出一句「这一问我没听懂」。
+    const detected = detectIntent(clause);
+    const kind: LocalIntent = PLANNED_INTENTS.includes(detected) ? detected : 'analyze';
+    const plan = planOf({ question: clause, engine: input.engine, tables: input.tables, grounding: input.grounding, outcomes: input.outcomes, forbidden: input.forbidden });
+    const label = clause.length > 26 ? `${clause.slice(0, 26)}…` : clause;
+    if (plan.status === 'probe' && plan.probe) {
+      steps.push({ text: label, probe: plan.probe, done: false });
+      continue;
+    }
+    if (plan.status !== 'ready' || !plan.compiled) {
+      steps.push({ text: label, gap: plan.gap ?? '这一问的口径我没能解析出来，请换个说法或拆开问。', done: false });
+      continue;
+    }
+    const step = planStepCall({ intent: kind, plan, prompt: clause, connectionId: input.connectionId, database: input.database, bundle: input.bundle, titleTable: matchTable(clause, input.tables, input.grounding) });
+    if (!step) {
+      steps.push({ text: label, gap: '这一问缺一个可统计的数值列，请说明要统计哪一列。', done: false });
+      continue;
+    }
+    // 跑过就念结果，没跑过才发调用。带得上调用参数时核对 SQL，换过口径的旧结果不复用；
+    // 参数缺失（更早留下的上下文）退回按工具名顺序对齐——宁可少核对一层，
+    // 也不能认不出自己的上一轮，把同样的查询再发一遍。
+    const prior = next(step.tool, plan.compiled.sql);
+    if (prior) {
+      const probeNote = plan.dropped?.length ? `\n\n> ${plan.dropped.join('；')}。` : '';
+      steps.push({ text: label, answer: planStepAnswer({ intent: kind, plan, result: prior.result, probeNote }), done: true });
+      continue;
+    }
+    steps.push({ text: label, call: mkCall(step.tool, step.args), done: false });
+  }
+  return steps;
+}
+
+/**
+ * 按工具名把已有结果依次分给各步：返回的游标每调用一次消费该工具的下一次结果，
+ * 用过的不会再给后面的步骤。
+ */
+function takeOutcome(outcomes: ToolOutcome[]): (tool: string, sql: string) => ToolOutcome | undefined {
+  const queues = new Map<string, ToolOutcome[]>();
+  for (const outcome of outcomes) {
+    const queue = queues.get(outcome.name) ?? [];
+    queue.push(outcome);
+    queues.set(outcome.name, queue);
+  }
+  return (tool, sql) => {
+    const queue = queues.get(tool);
+    if (!queue?.length) return undefined;
+    const index = queue.findIndex((outcome) => outcome.args?.sql === undefined || String(outcome.args.sql) === sql);
+    if (index < 0) return undefined;
+    const [hit] = queue.splice(index, 1);
+    return hit;
+  };
+}
+
+/**
+ * 追问的口径从上一问来。
+ *
+ * 依据是上一问的原话，不是它留下的 SQL：规划器是确定性的，重跑一次就拿到同一份 spec，
+ * 而去解析历史里那段 SQL 等于再写一个解析器，只会比真的解析器更差。
+ *
+ * 按时间顺序把历史问题依次重放，每句都带着上一句的结果当焦点：连续追问（先「按城市」再
+ * 「只看已退款的」）时口径是层层叠加的，只看最近一句会把中间那次修改丢掉。
+ */
+function focusOf(input: { priorUser: string[]; engine: Engine; tables: TableInfo[]; grounding: GroundingOptions; forbidden: Forbidden }): QuerySpec | undefined {
+  let spec: QuerySpec | undefined;
+  for (const text of input.priorUser.slice(-6)) {
+    const prior = text.trim();
+    if (!prior) continue;
+    const question = expandTerms(prior, input.grounding.glossary);
+    const kind = detectIntent(prior);
+    // 上一问是「表结构」「备份」这种库操作时没有口径可留；但它之前那句的焦点还得带着走。
+    if (!usePlanner(kind, prior, input.engine) && !isFollowUp(prior)) continue;
+    const plan = planQuery({ question, engine: input.engine, tables: input.tables, grounding: input.grounding, forbidden: input.forbidden, focus: spec, replay: true });
+    if (plan.spec) spec = plan.spec;
+  }
+  return spec;
+}
+
+/**
+ * 追问句没有聚合动词时继承上一问的意图。
+ *
+ * 「那按城市呢」「只看已退款的」既不含「统计」也不含「合计」，detectIntent 只能给 help，
+ * 于是离线模式在追问处直接甩清单——话题还在，只是换了个说法。
+ * 意图必须从**最近一句能识别的话**继承，不能从紧邻的那句继承：连续追问时紧邻那句自己也是 help。
+ */
+function followUpIntent(intent: LocalIntent, prompt: string, priorUser: string[]): LocalIntent {
+  if (intent !== 'help' || !isFollowUp(prompt) || !priorUser.length) return intent;
+  for (let i = priorUser.length - 1; i >= 0; i--) {
+    const prior = priorUser[i].trim();
+    if (!prior) continue;
+    const detected = detectIntent(prior);
+    // 只继承聚合类意图：上一问是「表结构」「备份」这种库操作时，接话也没法当统计来做。
+    return PLANNED_INTENTS.includes(detected) ? detected : intent;
+  }
+  return intent;
 }
 
 /** 口径说明：把规划器实际做了什么摊在执行过程里，用户才知道数字是怎么来的。 */
@@ -401,6 +555,70 @@ function planConclusion(plan: PlanOutcome, data: unknown, maxRows = 12): string 
 function windowText(plan: PlanOutcome): string {
   const period = (plan.spec?.filters ?? []).find((filter) => filter.window && filter.source);
   return period?.source ? `（${period.source}）` : '';
+}
+
+/**
+ * 规划器就绪之后要发的那条只读调用。
+ *
+ * 单问和多问共用它：一句话拆成几按时，每一步的口径、别名和图表类型都得跟单独问时一模一样，
+ * 否则「先算总额再按城市拆分」的第二半句会比直接问同一句话给出不同的图。
+ * 返回 undefined 表示这张图/这份统计缺一个可用的数值列，调用方该定点追问。
+ */
+function planStepCall(input: {
+  intent: LocalIntent;
+  plan: PlanOutcome;
+  prompt: string;
+  connectionId: string;
+  database?: string;
+  bundle?: AgentContextData['agentContext'];
+  titleTable?: TableInfo;
+}): { tool: string; args: Record<string, unknown> } | undefined {
+  const compiled = input.plan.compiled!;
+  if (input.intent !== 'chart' && input.intent !== 'analyze') {
+    return { tool: 'run_sql', args: { connectionId: input.connectionId, database: input.database, sql: compiled.sql, maxRows: 200 } };
+  }
+  const yField = compiled.valueAliases[0];
+  if (!yField) return undefined;
+  const args: Record<string, unknown> = { connectionId: input.connectionId, database: input.database, sql: compiled.sql, x: compiled.axisAlias, y: yField };
+  if (input.intent === 'chart') {
+    args.type = /(饼|占比|pie|构成)/i.test(input.prompt) ? 'pie' : input.plan.spec?.timeBucket || /(折线|趋势|line)/i.test(input.prompt) ? 'line' : 'bar';
+    if (input.titleTable) args.title = `${tableLabel(input.bundle, input.titleTable)} · ${input.plan.axisLabel ?? input.plan.measureLabel ?? '统计'}`;
+  }
+  return { tool: input.intent === 'chart' ? 'render_chart' : 'analyze_chart', args };
+}
+
+/** 把一条已经跑完的查询念成结论：数字在前，SQL 在后，抽取不了的口径另起一行交代。 */
+function planStepAnswer(input: { intent: LocalIntent; plan: PlanOutcome; result: ToolResult; probeNote: string }): string {
+  if (!input.result.ok) return errText(input.result);
+  const { intent, plan } = input;
+  const sql = plan.compiled!.sql;
+  if (intent === 'chart') {
+    const data = input.result.data as { chart?: { title?: string; series?: Array<{ label: string; value: number }> } } | undefined;
+    const series = data?.chart?.series ?? [];
+    const top = [...series].sort((a, b) => b.value - a.value).slice(0, 3);
+    return (
+      `图表已生成并显示在上方工具卡中：**${data?.chart?.title ?? '分析图'}**。\n\n` +
+      (top.length ? top.map((point) => `- ${point.label}: ${formatNumber(point.value)}`).join('\n') : '没有可绘制的数据。') +
+      input.probeNote
+    );
+  }
+  if (intent === 'analyze') {
+    const d = input.result.data as {
+      x: string; y: string; rowCount: number; sum: number; avg: number; min: number; max: number; argmin: string; argmax: string;
+      topShare?: Array<{ label: string; value: number; share: number }>;
+      deltas?: Array<{ label: string; delta: number; ratio: number | null }>;
+    };
+    const what = plan.measureLabel ? `**${plan.measureLabel}**` : '结果';
+    const top = (d.topShare ?? []).map((s) => `- ${s.label}：${formatNumber(s.value)}（${(s.share * 100).toFixed(1)}%）`);
+    const recent = (d.deltas ?? []).slice(-3).map((item) => `- ${item.label}：${item.delta >= 0 ? '+' : ''}${formatNumber(item.delta)}${item.ratio === null ? '' : `（${(item.ratio * 100).toFixed(1)}%）`}`);
+    return (
+      `${what}按 \`${plan.axisLabel ?? d.x}\` 统计：合计 **${formatNumber(d.sum)}**，均值 ${formatNumber(d.avg)}，最高 ${d.argmax}（${formatNumber(d.max)}），最低 ${d.argmin}（${formatNumber(d.min)}）。数字由 Bridge 计算，不是估算。\n\n` +
+      (top.length ? `占比前 ${top.length}：\n${top.join('\n')}\n\n` : '') +
+      (recent.length ? `最近环比：\n${recent.join('\n')}\n\n` : '') +
+      `\`\`\`sql\n${sql}\n\`\`\`${input.probeNote}`
+    );
+  }
+  return `${planConclusion(plan, input.result.data)}${input.probeNote}\n\n\`\`\`sql\n${sql}\n\`\`\``;
 }
 
 function formatNumber(value: unknown): string {
@@ -485,9 +703,11 @@ export class LocalProvider implements LlmProvider {
 
   async *stream(req: ProviderRequest, signal?: AbortSignal): AsyncGenerator<ProviderEvent> {
     if (signal?.aborted) return;
-    const { prompt, outcomes } = analyzeMessages(req.messages);
+    const { prompt, outcomes, priorUser } = analyzeMessages(req.messages);
     const ctx = req.context ?? {};
-    const intent = detectIntent(prompt);
+    // 追问不带聚合动词：「那按城市呢」既不是统计也不是画图，但它接的是上一问那句话。
+    // 没有这一层，离线模式收到「只看已退款的」只会甩 help 清单。
+    const intent = followUpIntent(detectIntent(prompt), prompt, priorUser);
     // 术语词典先把简称展开成业务全称，「JS 的资产数」才对得上 sys_asset。
     const question = expandTerms(prompt, ctx.glossary);
     const tokensIn = estimateTokens(prompt + req.system);
@@ -507,6 +727,21 @@ export class LocalProvider implements LlmProvider {
         yield { type: 'text', text: preamble };
       }
       yield { type: 'tool_call', call };
+      yield { type: 'usage', tokensIn, tokensOut: Math.max(8, Math.ceil(out.length / 4)) };
+      yield { type: 'done', stopReason: 'tool_use' };
+    };
+    /**
+     * 一次发多条只读查询。
+     *
+     * 合在一起发而不是逐个回合发，是因为 runtime 会把这一回合产出的调用全部执行完再回到这里：
+     * 「先算总数再算合计」因此只需两次模型往返（发问、收数）而不是 2×N 次。
+     */
+    const callMany = async function* (calls: ToolCall[], preamble: string): AsyncGenerator<ProviderEvent> {
+      if (preamble) {
+        out += preamble;
+        yield { type: 'text', text: preamble };
+      }
+      for (const call of calls) yield { type: 'tool_call', call };
       yield { type: 'usage', tokensIn, tokensOut: Math.max(8, Math.ceil(out.length / 4)) };
       yield { type: 'done', stopReason: 'tool_use' };
     };
@@ -752,8 +987,45 @@ export class LocalProvider implements LlmProvider {
       return;
     }
 
+    // 追问不点名表也不含统计动词（「那按城市呢」）：意图、表、口径都来自上一问。
+    // 焦点只给规划器路径用——非 SQL 引擎走不到 planQuery，那里连方言都没有。
+    const isFollowUpTurn = !table || isFollowUp(prompt);
+    const planned = usePlanner(intent, prompt, engine);
+    const focus = planned && isFollowUpTurn ? focusOf({ priorUser, engine, tables: allTables, grounding, forbidden }) : undefined;
+
+    // 「先算订单总数，再算金额合计」：一句话里的几个问题各规划一次，一次全部发出。
+    const compound = isSqlEngine(engine) && !focus ? compoundSteps({ question, engine, tables: allTables, grounding, forbidden, outcomes, connectionId, database, bundle: ctx.agentContext }) : [];
+    if (compound.length > 1) {
+      const pending = compound.filter((step) => !step.done);
+      const gaps = compound.filter((step) => step.gap);
+      if (pending.length) {
+        yield { type: 'plan', items: compound.map((step, index) => ({ id: `s${index + 1}`, text: step.text, status: step.done ? ('done' as const) : step.gap ? ('todo' as const) : ('doing' as const) })) };
+        if (pending.some((step) => step.probe)) {
+          const probe = pending.find((step) => step.probe)!.probe!;
+          yield { type: 'thinking', text: `本地模式：先确认 \`${probe.table}.${probe.column}\` 的实际取值` };
+          yield* callTool(
+            mkCall('profile_column', { connectionId, database, table: probe.table, column: probe.column }),
+            `「${probe.raw}」我还没在这张表里见过对应的取值，先读一次 \`${probe.column}\` 最常见的几个值（只读），再把这几问一起统计。`,
+          );
+          return;
+        }
+        yield* callMany(
+          pending.filter((step) => step.call).map((step) => step.call!),
+          `这句话里有 ${compound.length} 个问题，我按顺序逐个查（每问一条只读查询）。`,
+        );
+        return;
+      }
+      const answers = compound.map((step, index) => {
+        if (step.gap) return `${index + 1}. ${step.text} — ${step.gap}`;
+        return `${index + 1}. ${step.text}\n\n${step.answer!}`;
+      });
+      yield { type: 'plan', items: compound.map((step, index) => ({ id: `s${index + 1}`, text: step.text, status: gaps.length && !step.answer ? ('todo' as const) : ('done' as const) })) };
+      yield* finish(answers.join('\n\n') + (gaps.length ? `\n\n> ${gaps.length} 问没有查成：口径没说明白的我宁可问，也不猜一个看起来合理的数字。` : ''));
+      return;
+    }
+
     // Remaining intents need a table.
-    if (!table && ['sample', 'count', 'group', 'index', 'insert', 'drop', 'export', 'quality', 'chart'].includes(intent)) {
+    if (!table && !focus && ['sample', 'count', 'group', 'index', 'insert', 'drop', 'export', 'quality', 'chart'].includes(intent)) {
       const names = tableCandidates(question, tables, grounding);
       yield* finish(`请指定表名。当前可用：${names || '（无表）'}。`);
       return;
@@ -767,9 +1039,10 @@ export class LocalProvider implements LlmProvider {
       return;
     }
 
-    if (usePlanner(intent, prompt, engine)) {
+    if (planned) {
       // 用户登记过标准问答 SQL 时口径以它为准：同一句话在离线与在线模式下必须给出同一个数字。
-      const example = matchSqlExample(question, allTables, grounding, forbidden);
+      // 追问是在改上一问的口径，不是重新问了一遍标准问题：这时套示例 SQL 会把用户刚改的条件冲掉。
+      const example = focus ? undefined : matchSqlExample(question, allTables, grounding, forbidden);
       if (example) {
         const toolName = intent === 'count' || intent === 'group' ? 'run_sql' : intent === 'chart' ? 'render_chart' : 'analyze_chart';
         const action = getOutcome(outcomes, toolName);
@@ -785,7 +1058,7 @@ export class LocalProvider implements LlmProvider {
         return;
       }
 
-      const plan = planOf({ question, engine, tables: allTables, grounding, outcomes, forbidden });
+      const plan = planOf({ question, engine, tables: allTables, grounding, outcomes, forbidden, focus });
       if (plan.status === 'gap') {
         yield* finish(plan.gap ?? clarifier(intent, question, tables, grounding));
         return;
@@ -799,70 +1072,21 @@ export class LocalProvider implements LlmProvider {
         return;
       }
 
-      const compiled = plan.compiled!;
-      const sql = compiled.sql;
       const preamble = planPreamble(intent, plan, plan.spec!.table, plan.axisLabel);
       const probeNote = plan.dropped?.length ? `\n\n> ${plan.dropped.join('；')}。` : '';
-
-      if (intent === 'chart' || intent === 'analyze') {
-        const toolName = intent === 'chart' ? 'render_chart' : 'analyze_chart';
-        const action = getOutcome(outcomes, toolName);
-        const xField = compiled.axisAlias;
-        const yField = compiled.valueAliases[0];
-        if (action) {
-          if (!action.result.ok) {
-            yield* finish(errText(action.result));
-            return;
-          }
-          if (intent === 'chart') {
-            const data = action.result.data as { chart?: { title?: string; series?: Array<{ label: string; value: number }> } } | undefined;
-            const series = data?.chart?.series ?? [];
-            const top = [...series].sort((a, b) => b.value - a.value).slice(0, 3);
-            yield* finish(
-              `图表已生成并显示在上方工具卡中：**${data?.chart?.title ?? '分析图'}**。\n\n` +
-                (top.length ? top.map((point) => `- ${point.label}: ${formatNumber(point.value)}`).join('\n') : '没有可绘制的数据。') +
-                probeNote,
-            );
-            return;
-          }
-          const d = action.result.data as {
-            x: string; y: string; rowCount: number; sum: number; avg: number; min: number; max: number; argmin: string; argmax: string;
-            topShare?: Array<{ label: string; value: number; share: number }>;
-            deltas?: Array<{ label: string; delta: number; ratio: number | null }>;
-          };
-          const what = plan.measureLabel ? `**${plan.measureLabel}**` : '结果';
-          const top = (d.topShare ?? []).map((s) => `- ${s.label}：${formatNumber(s.value)}（${(s.share * 100).toFixed(1)}%）`);
-          const recent = (d.deltas ?? []).slice(-3).map((item) => `- ${item.label}：${item.delta >= 0 ? '+' : ''}${formatNumber(item.delta)}${item.ratio === null ? '' : `（${(item.ratio * 100).toFixed(1)}%）`}`);
-          yield* finish(
-            `${what}按 \`${plan.axisLabel ?? d.x}\` 统计：合计 **${formatNumber(d.sum)}**，均值 ${formatNumber(d.avg)}，最高 ${d.argmax}（${formatNumber(d.max)}），最低 ${d.argmin}（${formatNumber(d.min)}）。数字由 Bridge 计算，不是估算。\n\n` +
-            (top.length ? `占比前 ${top.length}：\n${top.join('\n')}\n\n` : '') +
-            (recent.length ? `最近环比：\n${recent.join('\n')}\n\n` : '') +
-            `\`\`\`sql\n${sql}\n\`\`\`${probeNote}`,
-          );
-          return;
-        }
-        if (!yField) {
-          yield* finish(clarifier(intent, question, tables, grounding));
-          return;
-        }
-        const chartType: 'bar' | 'line' | 'pie' = /(饼|占比|pie|构成)/i.test(prompt) ? 'pie' : plan.spec?.timeBucket || /(折线|趋势|line)/i.test(prompt) ? 'line' : 'bar';
-        const args: Record<string, unknown> = { connectionId, database, sql, x: xField, y: yField };
-        if (intent === 'chart') args.type = chartType;
-        if (intent === 'chart' && table) args.title = `${tableLabel(ctx.agentContext, table)} · ${plan.axisLabel ?? plan.measureLabel ?? '统计'}`;
-        yield* callTool(mkCall(toolName, args), preamble);
-        return;
-      }
-
-      const action = getOutcome(outcomes, 'run_sql');
+      const toolName = intent === 'chart' ? 'render_chart' : intent === 'analyze' ? 'analyze_chart' : 'run_sql';
+      const action = getOutcome(outcomes, toolName);
       if (action) {
-        if (!action.result.ok) {
-          yield* finish(errText(action.result));
-          return;
-        }
-        yield* finish(`${planConclusion(plan, action.result.data)}${probeNote}\n\n\`\`\`sql\n${sql}\n\`\`\``);
+        // 结果已经在上下文里（图表卡或 Bridge 统计量），照旧念数字；缺数值列的图早就发不出调用，这里不会空转。
+        yield* finish(planStepAnswer({ intent, plan, result: action.result, probeNote }));
         return;
       }
-      yield* callTool(mkCall('run_sql', { connectionId, database, sql, maxRows: 200 }), preamble);
+      const step = planStepCall({ intent, plan, prompt, connectionId, database, bundle: ctx.agentContext, titleTable: table });
+      if (!step) {
+        yield* finish(clarifier(intent, question, tables, grounding));
+        return;
+      }
+      yield* callTool(mkCall(step.tool, step.args), preamble);
       return;
     }
 

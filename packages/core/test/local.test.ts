@@ -435,3 +435,94 @@ test('an anti-pattern also blocks the templates that skip the planner', async ()
   assert.ok(described.some((e) => e.type === 'tool_call'));
 });
 
+
+test('a compound question issues one read-only query per clause', async () => {
+  const provider = new LocalProvider();
+  const enumRich: TableInfo[] = rich.map((table) => (table.name === 'orders' ? { ...table, columns: (table.columns ?? []).map((column) => (column.name === 'status' ? { ...column, comment: '状态：已支付, 已退款, 待支付' } : column)) } : table));
+  const context: AgentContextData = { connection, databases: [{ name: 'main', tables: enumRich }] };
+  const events = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: '统计订单总数，以及已支付订单的金额合计' }], tools: [], context }));
+  const calls = events.filter((e) => e.type === 'tool_call').map((e: any) => e.call);
+  assert.equal(calls.length, 2);
+  assert.match(String(calls[0].args.sql), /COUNT\(\*\)/);
+  assert.match(String(calls[1].args.sql), /SUM\("amount_cents"\)/);
+  assert.match(String(calls[1].args.sql), /"status" = '已支付'/);
+  const plan = events.find((e) => e.type === 'plan') as any;
+  assert.ok(plan, '计划卡应由规划器直接给出');
+  assert.equal(plan.items.length, 2);
+});
+
+test('a compound question reads each clause out of its own result', async () => {
+  const provider = new LocalProvider();
+  const question = '统计订单总数，以及近 3 个月的金额合计';
+  const sent = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: question }], tools: [], context: richContext }));
+  const calls = sent.filter((e) => e.type === 'tool_call').map((e: any) => e.call);
+  assert.equal(calls.length, 2);
+  const dataFor = (name: string, value: number) =>
+    name === 'analyze_chart'
+      ? { x: 'label', y: 'value', rowCount: 1, sum: value, avg: value, min: value, max: value, argmin: '全部', argmax: '全部' }
+      : { columns: [{ name: 'label' }, { name: 'value' }], rows: [['全部', value]] };
+  const events = await collect(
+    provider.stream({
+      system: '',
+      messages: [
+        { role: 'user', content: question },
+        { role: 'assistant', content: '', toolCalls: calls.map((call: any) => ({ id: call.id, name: call.name, args: call.args })) },
+        ...calls.map((call: any, index: number) => ({
+          role: 'tool' as const,
+          toolCallId: call.id,
+          name: call.name,
+          content: JSON.stringify({ ok: true, summary: 'ok', data: dataFor(call.name, [42, 8800][index]), meta: { durationMs: 1 } }),
+        })),
+      ],
+      tools: [],
+      context: richContext,
+    }),
+  );
+  const answer = textOf(events);
+  assert.match(answer, /\*\*42\*\*/);
+  assert.match(answer, /8,800/);
+  assert.equal(events.some((e) => e.type === 'tool_call'), false);
+});
+
+test('a follow-up inherits the earlier question instead of restarting it', async () => {
+  const provider = new LocalProvider();
+  const events = await collect(
+    provider.stream({
+      system: '',
+      messages: [
+        { role: 'user', content: '统计近 3 个月已支付订单的金额合计' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'p1', name: 'run_sql', args: { sql: 'SELECT 1' } }] },
+        { role: 'tool', toolCallId: 'p1', name: 'run_sql', content: JSON.stringify({ ok: true, summary: 'ok', data: { columns: [{ name: 'label' }, { name: 'value' }], rows: [['全部', 1]] }, meta: { durationMs: 1 } }) },
+        { role: 'user', content: '那按城市拆分呢' },
+      ],
+      tools: [],
+      context: richContext,
+    }),
+  );
+  const call = events.find((e) => e.type === 'tool_call');
+  assert.ok(call && call.type === 'tool_call');
+  if (call?.type !== 'tool_call') return;
+  assert.match(String(call.call.args.sql), /GROUP BY "users"\."city"/);
+  assert.match(String(call.call.args.sql), /INNER JOIN "users"/);
+});
+
+test('a follow-up that says 全部 drops the inherited window and filter', async () => {
+  const provider = new LocalProvider();
+  const events = await collect(
+    provider.stream({
+      system: '',
+      messages: [
+        { role: 'user', content: '统计近 3 个月已支付订单的金额合计' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'p1', name: 'run_sql', args: { sql: 'SELECT 1' } }] },
+        { role: 'tool', toolCallId: 'p1', name: 'run_sql', content: JSON.stringify({ ok: true, summary: 'ok', data: { columns: [{ name: 'label' }, { name: 'value' }], rows: [['全部', 1]] }, meta: { durationMs: 1 } }) },
+        { role: 'user', content: '全部订单的金额合计' },
+      ],
+      tools: [],
+      context: richContext,
+    }),
+  );
+  const call = events.find((e) => e.type === 'tool_call');
+  assert.ok(call && call.type === 'tool_call');
+  if (call?.type !== 'tool_call') return;
+  assert.equal(/WHERE/.test(String(call.call.args.sql)), false);
+});

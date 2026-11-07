@@ -79,6 +79,14 @@ export function matchTable(prompt: string, tables: TableInfo[], opts: GroundingO
   return tables.length === 1 ? visible[0] : undefined;
 }
 
+/** 这句话是不是字面写了这张表：名字或登记过的别名。追问（「那按城市呢」）不写，此时该沿用上一问的表。 */
+export function namesTable(prompt: string, table: TableInfo, opts: GroundingOptions = {}): boolean {
+  if (!prompt.trim()) return false;
+  if (mentionsName(prompt, table.name)) return true;
+  const alias = opts.bundle?.tableMeta[lower(table.name)]?.alias?.trim();
+  return Boolean(alias && alias.length >= 2 && lower(prompt).includes(lower(alias)));
+}
+
 /** 问题明确指向一张被禁用的表时返回它，让调用方说清楚而不是猜一张替代表。 */
 export function hiddenTableMention(prompt: string, tables: TableInfo[], opts: GroundingOptions = {}): TableInfo | undefined {
   const bundle = opts.bundle;

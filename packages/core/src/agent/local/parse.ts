@@ -3,7 +3,7 @@ import type { TimeBucketGrain } from '../../sql/ddl';
 import type { CompiledQuery, ColumnRef, FilterSpec, JoinSpec, MeasureSpec, QuerySpec } from './query';
 import { compileQuery, findJoinPath, joinEdges } from './query';
 import type { GroundingOptions } from './schema';
-import { groundedColumns, groundedTables, matchColumn, matchTable, pickDimension, pickMeasure, pickTimeColumn, rankTables } from './schema';
+import { groundedColumns, groundedTables, matchColumn, matchTable, namesTable, pickDimension, pickMeasure, pickTimeColumn, rankTables } from './schema';
 import type { Forbidden } from './business';
 import { NO_FORBIDDEN, forbiddenTableReason, isColumnForbidden, isTableForbidden } from './business';
 import type { TimeGrain } from '../../commands/timeWindow';
@@ -55,6 +55,16 @@ export interface PlanInput {
   probeDone?: boolean;
   /** 反例推出的禁用集合，缺省表示没有配置反例。 */
   forbidden?: Forbidden;
+  /**
+   * 上一问已经问清楚的口径。追问（「那按城市呢」「只看已支付的」）不会重复点名表和度量，
+   * 没点名的槽位沿用它，点名的以本轮为准——没有这一层，离线模式每一句都是新会话。
+   */
+  focus?: QuerySpec;
+  /**
+   * 只为算 focus 而重放历史问题时置位：重放发不出探测查询，所以对不上真实取值的条件直接放弃，
+   * 宁可让追问少继承一个条件，也不能把「已支付」当成字面量查出一个空答案。
+   */
+  replay?: boolean;
 }
 
 /** 候选表池：FROM 起点在前，JOIN 进来的表追加在后，选列时按这个顺序优先。 */
@@ -65,12 +75,12 @@ interface Pool {
 }
 
 const GRAIN_PHRASES: Array<[RegExp, TimeBucketGrain]> = [
-  [/(每小时|按小时|逐小时|hourly|by hour)/i, 'hour'],
+  [/(每小时|每\s*个?\s*小时|按小时|逐小时|hourly|by hour)/i, 'hour'],
   [/(每天|每日|按天|逐日|日趋势|daily|by day|per day)/i, 'day'],
-  [/(每周|按周|逐周|周趋势|weekly|by week)/i, 'week'],
-  [/(每月|按月|逐月|月度|月趋势|monthly|by month)/i, 'month'],
+  [/(每周|每\s*个?\s*周|按周|逐周|周趋势|weekly|by week)/i, 'week'],
+  [/(每月|每\s*个?\s*月|按月|逐月|月度|月趋势|monthly|by month)/i, 'month'],
   [/(每季|每季度|按季|逐季|季度趋势|quarterly|by quarter)/i, 'quarter'],
-  [/(每年|按年|逐年|年度|yearly|by year)/i, 'year'],
+  [/(每年|每\s*个?\s*年|按年|逐年|年度|yearly|by year)/i, 'year'],
 ];
 
 const TREND_WORDS = /(趋势|走势|变化|波动|trend|over time|history)/i;
@@ -87,8 +97,40 @@ const ROW_LIMIT = /(?:前\s*(\d{1,3})\s*(?:笔|条|个|名|行|单)|(?:最(?:高
 
 /** 这些词长得像「X 为 Y」的右值，其实是疑问或聚合话术，不能当取值。 */
 const NOT_A_VALUE = /^(什么|哪些|多少|如何|怎么|为什么|情况|数据|结果|时候|时间|平均|总计|合计|分布|占比|样子?|the|what|which|how|many|much|data|table|total|sum|avg)$/i;
-/** 「个月 / 3 天」这种时间残片，是滚动窗口的尾巴不是取值。 */
-const TIME_FRAGMENT = /^\d*[个]?(?:月|周|天|日|年|小时|分钟|季度)$/i;
+/** 「个月 / 3 天 / 半年」这种时间残片，是滚动窗口的尾巴或粒度说法，不是任何一列的取值。 */
+const TIME_FRAGMENT = /^(?:\d+|半|几|[上下这本整])?[个]?(?:月|周|天|日|年|小时|分钟|季度)$/i;
+
+/**
+ * 明确承接上一问的说法。
+ *
+ * 本轮没点名表时一定按追问处理；点了表名还得靠这几个词区分——
+ * 「orders 的金额合计」是重新起一句话，「orders 那只看已支付的」才是接着上一句改条件。
+ */
+const FOLLOW_UP = /^(那|则|再|换|只|同样|其中|去掉|不限|全部|所有)|呢[？?]?\s*$/i;
+
+/** 这句话是在接上一问，还是重新起了一句话。 */
+export function isFollowUp(text: string): boolean {
+  return FOLLOW_UP.test(text.trim());
+}
+
+/**
+ * 一句话里的多个问题：「先算总数，再算金额合计」。
+ *
+ * 只认显式的承接连接词，不按逗号切：「近 3 个月，按城市统计」是一句话两个槽位，
+ * 切开就把一个查询拆成两个查不出的半句。切完还要求每段自己像个问题（有聚合动词或点名表），
+ * 否则「统计金额合计，以及占比」的尾巴会变成一条独立的空查询。
+ */
+const CLAUSE_CONNECTOR = /(?:，|,|；|;)?\s*(?:以及|并且|同时|然后再|再|然后|接着|最后)\s*/;
+const QUERY_LIKE = /(统计|汇总|合计|总和|求和|平均|均值|多少|行数|条数|趋势|走势|占比|分布|排名|明细|清单|前\s*\d+|最高|最低|最大|最小|查|看|算|total|sum|avg|count|how many|trend|top|detail)/i;
+
+export function splitClauses(text: string): string[] {
+  const parts = text
+    .split(CLAUSE_CONNECTOR)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length < 2 || parts.length > 4) return [];
+  return parts.every((part) => QUERY_LIKE.test(part)) ? parts : [];
+}
 
 const GRAIN_FROM_TIME: Record<TimeGrain, TimeBucketGrain> = { day: 'day', week: 'week', month: 'month', quarter: 'quarter', year: 'year' };
 
@@ -208,28 +250,55 @@ function findByPhrase(phrase: string, pool: Pool, main: TableInfo): ColumnRef | 
   return undefined;
 }
 
+/**
+ * 「各城市的已支付订单」残片是「城市已支付」：整段去比列名会先命中 city，
+ * 于是「已支付」这个条件被静默丢掉，数字看着合理其实少了一半。
+ * 剥掉最短的那段列名前缀，剩下的才是取值；剥不出一个仍然像取值的残片就原样返回，交给后面的守卫。
+ */
+function stripColumnPrefix(raw: string, pool: Pool, main: TableInfo): string {
+  for (let end = 2; end <= raw.length - 2; end++) {
+    const head = raw.slice(0, end);
+    if (!findByPhrase(head, pool, main)) continue;
+    const rest = raw.slice(end);
+    if (rest.length >= 2 && !findByPhrase(rest, pool, main)) return rest;
+  }
+  return raw;
+}
+
 function dimensionPhrase(question: string): string | undefined {
   const raw = DIMENSION_CN.exec(question)?.[1] ?? DIMENSION_EN.exec(question)?.[1];
   if (!raw) return undefined;
+  // 「按月看金额走势」的「按」是粒度，不是维度：这里开头就是时间单位说明这句话在说分桶，
+  // 继续解析会把「看订单金额」当成列名，凭空多出一个 GROUP BY。
+  if (grainPhrase(question) && /^(?:每|各)?(?:小时|天|日|周|月|季|季度|年)/.test(raw)) return undefined;
   // 「按状态统计订单的金额合计」里，维度词到第一个聚合动词就结束；留着尾巴会匹配到别的列。
-  const cut = raw.split(/(?:统计|汇总|分布|占比|合计|平均|排名|排序|趋势|多少|求和|明细)/)[0] ?? '';
-  const text = cut.replace(/[\s的]+$/g, '');
+  const cut = raw.split(/(?:统计|汇总|分布|占比|合计|平均|排名|排序|趋势|走势|多少|求和|明细)/)[0] ?? '';
+  // 「按城市的金额合计」要的是城市：尾巴上那段「的金额」是度量说法，留着会让整段先去比
+  // 列注释，结果命中 amount_cents 而不是 city。只在带「的」时剥掉，「按金额统计」本身仍以金额分组。
+  // 「各城市的订单金额合计」同理：度量前可以带限定词（订单/交易/消费），「的」已经说明尾巴不是维度。
+  const head = cut.replace(/的[^的]{0,8}(?:金额|数量|总额|总金额|销售额|销量|收入|支出|成本|利润|价格|笔数|单量)$/, '');
+  const text = head.replace(/[呢吧啊嘛了]+$/, '').replace(/[\s的]+$/g, '');
   return text.length >= 1 ? text : undefined;
 }
 
-function dimensionRef(question: string, pool: Pool, main: TableInfo, dropped: string[]): ColumnRef | undefined {
+function dimensionRef(question: string, pool: Pool, main: TableInfo, visible: TableInfo[], dropped: string[]): { ref?: ColumnRef; gap?: string } {
   const word = dimensionPhrase(question);
   if (word) {
     const found = findByPhrase(word, pool, main);
-    if (found) return found;
+    if (found) return { ref: found };
+    // 维度列常常属于关联表（订单按「用户的城市」分组）。这一列只在一张表里、
+    // 而且外键/登记关联真的连得上时才 JOIN；否则照旧说「没有这一列」。
+    const bridged = bridgeDimension(word, pool, main, visible);
+    if (bridged.gap) return bridged;
+    if (bridged.ref) return { ref: bridged.ref };
     dropped.push(`没有「${word}」这一列`);
-    return undefined;
+    return {};
   }
   if (GROUP_WORDS.test(question)) {
     const picked = pickDimension(main, question, pool.grounding);
-    if (picked) return { table: main.name, column: picked.name };
+    if (picked) return { ref: { table: main.name, column: picked.name } };
   }
-  return undefined;
+  return {};
 }
 
 const VALUE_EQ_CN = /([^，,。；;\s]{0,12})(?:为|是|等于)\s*([^，,。；;]{1,20})/;
@@ -282,7 +351,13 @@ function valueSlots(question: string, pool: Pool, main: TableInfo): ValueSlot[] 
     // 允许空格：「统计 paid 订单」里的取值前后是有空格的，只允许中文连续字符会漏掉英文取值。
     const before = new RegExp(`([^，,。；;]{1,20})(?:的)?${noun}`).exec(question)?.[1];
     if (!before) continue;
-    const raw = (before.split(LEAD_STOP).filter(Boolean).pop() ?? '').replace(/[\s的]+/g, '');
+    // 「近 3 个月已支付订单」的取值前面还挂着时间窗：不先摘掉，剩下的「3个月已支付」
+    // 会因为开头那个数字被当成数量话术整段丢掉。
+    const cleaned = (before.split(LEAD_STOP).filter(Boolean).pop() ?? '').replace(/[\s的]+/g, '').replace(SEQUENCE_PREFIX, '').replace(/^\d*[个]?(?:月|周|天|日|年|小时|分钟|季度)/, '');
+    // 「各城市的已支付订单」里维度词和取值是粘在一起的：维度已经由 dimensionRef 解析（必要时 JOIN），
+    // 残片「城市已支付」留着会先命中 city 这一列，整条取值被当成列名丢掉——数字就少了「已支付」这个条件。
+    // 只在本轮真的点了维度时才剥，且剥最短的那段列名：「城市已支付」剥成「已支付」，而不是整段当列名。
+    const raw = dimension ? stripColumnPrefix(cleaned, pool, main) : cleaned;
     if (raw.length < 2 || raw.length > 12) continue;
     if (NOT_A_VALUE.test(raw) || TIME_FRAGMENT.test(raw) || grainPhrase(raw) || numeric(raw) !== undefined) continue;
     if (raw === dimension || findByPhrase(raw, pool, main)) continue;
@@ -292,8 +367,35 @@ function valueSlots(question: string, pool: Pool, main: TableInfo): ValueSlot[] 
     if (out.some((slot) => slot.raw === raw)) continue;
     out.push({ raw, like: false });
   }
+
+  // 「只看已退款的」这种追问里没有表名可挂，取值只能整句摘。
+  // 先排掉换粒度/换分组的做法（「那换成按月呢」「那按城市呢」）：那些句子该走
+  // 继承 + 维度解析，硬摘残片会凭空造出一个查不到东西的条件。
+  if (!out.length && FOLLOW_UP.test(question) && !grainPhrase(question) && !dimensionPhrase(question)) {
+    const residue = question
+      .replace(/^(?:那就|那|则|再|同样|其中)?(?:就?只?看|只要|换成|改为)?/, '')
+      .replace(/[呢吧啊嘛]?[？?。！]?$/, '')
+      .trim();
+    const raw = (residue.split(LEAD_STOP).filter(Boolean).pop() ?? '').replace(/[\s的]+/g, '');
+    if (raw.length >= 2 && raw.length <= 12 && !NOT_A_VALUE.test(raw) && !TIME_FRAGMENT.test(raw) && !grainPhrase(raw) && numeric(raw) === undefined && !findByPhrase(raw, pool, main) && !namesAnyTable(raw, pool)) {
+      out.push({ raw, like: false });
+    }
+  }
   return out;
 }
+
+/** 残片其实是在说一张表（「全部订单的金额合计」的「订单」）：那是主语，不是任何一列的取值。 */
+function namesAnyTable(raw: string, pool: Pool): boolean {
+  const p = raw.toLowerCase();
+  for (const table of pool.tables) {
+    if (table.name.toLowerCase() === p) return true;
+    if (tableNouns(table, pool.grounding).some((noun) => noun.toLowerCase() === p)) return true;
+  }
+  return Object.values(DEFAULT_NOUNS).some((noun) => noun.toLowerCase() === p);
+}
+
+/** 「先算总额，再按城市拆分」这类承接词：挂在句首是指令，不是任何一列的取值。 */
+const SEQUENCE_PREFIX = /^(?:首先|先|再来?|再|然后|接着|最后|以及|并且|同时|并)/;
 
 function otherTableNoun(raw: string, main: TableInfo, pool: Pool): boolean {
   return pool.tables.some(
@@ -448,12 +550,40 @@ function mentions(table: TableInfo, question: string, grounding: GroundingOption
   return tableNouns(table, grounding).some((noun) => noun.length >= 2 && p.includes(noun.toLowerCase()));
 }
 
+/**
+ * 维度列不在主表时，沿外键或登记过的关联找一张确实有这一列的表连过来。
+ * 只认「恰好一张表有这一列」且「连接路径真实存在」两个条件同时成立：
+ * 多张表都有同名列就还有歧义，路径靠猜会静默放大行数，两者都宁可照旧说没有这一列。
+ */
+function bridgeDimension(word: string, pool: Pool, main: TableInfo, visible: TableInfo[]): { ref?: ColumnRef; gap?: string } {
+  const phrases = [word, ...prefixes(word)];
+  const owners = visible.filter((table) => table.name !== main.name && phrases.some((phrase) => matchColumn(phrase, table, pool.grounding)));
+  if (owners.length !== 1) return {};
+  const edges = joinEdges(visible, pool.grounding.bundle?.relations ?? []);
+  const path = findJoinPath(main.name, owners[0].name, edges);
+  if (!path) {
+    return { gap: `「${word}」在 \`${owners[0].name}\` 里，但 \`${main.name}\` 和它之间既没有外键，也没在「Agent 上下文 → 表关联」里登记。告诉我用哪两个字段连，例如 \`${main.name}.xxx_id = ${owners[0].name}.id\`。` };
+  }
+  for (const join of path) {
+    if (pool.joins.some((item) => item.right === join.right)) continue;
+    pool.joins.push(join);
+    const added = visible.find((item) => item.name.toLowerCase() === join.right.toLowerCase());
+    if (added) pool.tables.push(added);
+  }
+  return { ref: findByPhrase(word, pool, main) };
+}
+
 /** 注释/别名里写了候选值时先直接用它，省掉一次探测。 */
 function knownValues(ref: ColumnRef, pool: Pool, input: PlanInput): Array<string | number> {
   if (input.probe && input.probe.table === ref.table && input.probe.column === ref.column) return input.probe.values;
   const meta = pool.grounding.bundle?.columnMeta[ref.table.toLowerCase()]?.[ref.column];
-  const hint = meta?.description ?? meta?.alias ?? '';
+  const table = pool.tables.find((item) => item.name.toLowerCase() === ref.table.toLowerCase());
+  const column = table ? groundedColumns(table, pool.grounding).find((item) => item.name === ref.column) : undefined;
+  // 库里自带的列注释常常就写着取值枚举（「状态：已支付, 已退款」），不必为它发一条探测查询。
+  const hint = (meta?.description ?? meta?.alias ?? column?.comment ?? '').replace(/^[^：:]{1,12}[：:]\s*/, '');
   const parts = hint.split(/[、,，/|]/).map((part) => part.trim()).filter((part) => part.length >= 1 && part.length <= 20);
+  // 写着 `PAID=已支付` 这类编码对照时，存的到底是码还是中文注释猜不准：让上层发一次探测拿真实值。
+  if (parts.some((part) => /[=＝]/.test(part))) return [];
   return parts.length >= 2 ? parts.slice(0, 12) : [];
 }
 
@@ -495,6 +625,9 @@ function valueFilters(question: string, pool: Pool, main: TableInfo, input: Plan
       filters.push({ col: ref, op: slot.like ? 'like' : 'eq', values: [resolved], source: slot.raw });
       continue;
     }
+    // 重放只是给追问算焦点，发不出探测查询：对不上真实取值就放弃这个条件。
+    // 少继承一个条件只是口径宽一点，硬猜字面量会查出一个看起来合理的空答案。
+    if (input.replay) continue;
     const column = columnOf(pool, ref);
     const mayProbe = !slot.like && !alreadyProbed && !input.probeDone && candidates.length < 2 && column && !isNumericColumn(column) && !isTimeColumn(column);
     if (mayProbe) return { filters, probe: { table: ref.table, column: ref.column, raw: slot.raw } };
@@ -523,6 +656,18 @@ function allowedColumns(tables: TableInfo[], forbidden: Forbidden): TableInfo[] 
 }
 
 /**
+ * 追问沿用的口径：本轮没说的槽位继承上一问，说了的以本轮为准。
+ *
+ * 只在「本轮没点到任何表」或「点到的还是同一张表」时继承——换表就是换了话题，
+ * 把上一问的时间窗和度量带过去会给出一个看起来合理其实无关的数字。
+ */
+function inheritFrom(focus: QuerySpec | undefined, main: TableInfo): QuerySpec | undefined {
+  if (!focus) return undefined;
+  if (focus.table.toLowerCase() !== main.name.toLowerCase()) return undefined;
+  return focus;
+}
+
+/**
  * 解析 + 编译。status 为 gap 时不执行任何查询，只把 gap 这句话问回去；
  * 为 probe 时需要上层先发一次有界只读探测，再带着取值重新规划。
  */
@@ -533,7 +678,11 @@ export function planQuery(input: PlanInput): PlanOutcome {
   const visible = groundedTables(usable, grounding).filter((table) => !isTableForbidden(forbidden, table.name));
   if (!visible.length) return { status: 'gap', gap: '当前库没有可用的表，或全部被「Agent 上下文」隐藏了。' };
 
-  const main = matchTable(question, usable, grounding);
+  const spelled = visible.find((table) => namesTable(question, table, grounding));
+  const carried = visible.find((table) => table.name.toLowerCase() === (input.focus?.table ?? '').toLowerCase());
+  // 追问没点名表时用上一问的表：让打分去猜会挑中碰巧有同名列的另一张表，
+  // 「那按城市呢」就答成了 users 的城市分布而不是上一问那份订单口径。
+  const main = spelled ?? carried ?? matchTable(question, usable, grounding);
   if (!main) {
     const near = rankTables(question, visible, grounding).slice(0, 6).map((table) => `\`${table.name}\``);
     return { status: 'gap', gap: `我不确定你要查哪张表。${near.length ? `和这个问题最接近的是 ${near.join('、')}，` : ''}说清表名即可。` };
@@ -542,23 +691,36 @@ export function planQuery(input: PlanInput): PlanOutcome {
   const blocked = forbiddenTableReason(forbidden, main.name);
   if (blocked) return { status: 'gap', gap: `你的业务上下文里登记了这条反例，所以我不查 \`${main.name}\`。\n\n> ${blocked}\n\n要改这张表本身，请到 工具箱 → Agent 上下文 → 术语与示例 调整这条反例；或者告诉我换用哪张表。` };
 
+  // 只有「这句确实是在追问」时才继承：本轮点名了另一张表就是换了话题，
+  // 把上一问的条件带过去会给出一个看起来合理其实无关的数字。
+  const followUp = !spelled || FOLLOW_UP.test(question);
+  const focus = followUp ? inheritFrom(input.focus, main) : undefined;
   const pool: Pool = { tables: [main], joins: [], grounding };
+  if (focus) {
+    for (const join of focus.joins) {
+      const added = visible.find((table) => table.name.toLowerCase() === join.right.toLowerCase());
+      if (!added) continue;
+      pool.joins.push(join);
+      pool.tables.push(added);
+    }
+  }
   const joinGap = connect(question, main, visible, pool);
   if (joinGap) return { status: 'gap', gap: joinGap };
 
   const dropped: string[] = [];
   const filters: FilterSpec[] = [];
   const period = resolvePeriod({ topic: question, now: input.now });
-  const windowed = period.source !== 'default';
   const bucketGrain = grainPhrase(question);
+  const windowed = period.source !== 'default';
 
   const time = bucketGrain || windowed || TREND_WORDS.test(question) ? timeRef(question, pool, main) : undefined;
   if (windowed && time) {
     filters.push({ col: time, op: 'between', window: { from: period.current.from, to: period.current.to }, source: period.current.label });
   }
 
-  const dimension = dimensionRef(question, pool, main, dropped);
-  const measure = measureOf(question, pool, main, dimension, dropped);
+  const dimension = dimensionRef(question, pool, main, visible, dropped);
+  if (dimension.gap) return { status: 'gap', gap: dimension.gap };
+  const measure = measureOf(question, pool, main, dimension.ref, dropped);
 
   const values = valueFilters(question, pool, main, input, dropped);
   if (values.probe) return { status: 'probe', probe: values.probe };
@@ -579,23 +741,50 @@ export function planQuery(input: PlanInput): PlanOutcome {
     if (nulls) filters.push(nulls);
   }
 
+  // 追问继承：本轮没说的才继承，说了的以本轮为准。继承列必须本轮仍然可见，
+  // 否则（表被隐藏、列被反例禁掉）宁可不继承，也不能编译出一条查不到的 SQL。
+  const seen = new Set(pool.tables.map((item) => item.name.toLowerCase()));
+  const alive = (ref: ColumnRef | undefined): boolean => Boolean(ref && seen.has(ref.table.toLowerCase()) && columnOf(pool, ref));
+  if (focus && !/^(全部|所有|不限)|去掉(上面|刚才)?的?(?:条件|筛选)/.test(question)) {
+    const touched = new Set(filters.map((filter) => `${filter.col.table.toLowerCase()}.${filter.col.column.toLowerCase()}`));
+    for (const filter of focus.filters) {
+      if (!alive(filter.col)) continue;
+      const key = `${filter.col.table.toLowerCase()}.${filter.col.column.toLowerCase()}`;
+      // 本轮又点了同一列就以本轮为准；时间窗只在本轮也给了窗口时才让位。
+      if (touched.has(key) && (!filter.window || filters.some((item) => item.window))) continue;
+      filters.push(filter);
+    }
+  }
+
   const limit = limitOf(question);
   const rowLimit = ROW_LIMIT.exec(question);
   const detailLimit = rowLimit ? Number(rowLimit[1] ?? rowLimit[2]) : undefined;
   const isDetail = Boolean(DETAIL_WORDS.test(question) || detailLimit);
+  // 「全部订单的金额合计」「去掉刚才的条件」是在清空上一问的口径，不是接着它往下说。
+  const reset = /^(全部|所有|不限)|去掉(上面|刚才)?的?(?:条件|筛选|限制)/.test(question);
+  // 本轮要了一根新轴（点名维度、或「看分布」这种兜底维度）就不再把上一问的时间桶拖上，
+  // 否则「那按城市呢」会答成「每月每城市」这张谁都没要的二维表。
+  const ownAxis = Boolean(dimension.ref);
   const spec: QuerySpec = { table: main.name, joins: pool.joins, filters, groupBy: [], measures: [] };
 
   if (isDetail) {
     const detail = detailRefs(pool, main, measure);
-    spec.detail = detail.refs;
-    spec.orderByRef = detail.orderRef;
+    // 「换成前 20 笔」这类追问没点名新列：沿用上一问的投影和排序列，别换一套列。
+    const carried = !dimension.ref && !measure ? (focus?.detail ?? []).filter(alive) : [];
+    spec.detail = carried.length ? carried : detail.refs;
+    spec.orderByRef = focus?.orderByRef && alive(focus.orderByRef) && carried.length ? focus.orderByRef : detail.orderRef;
     spec.orderBy = { alias: 'value', desc: !MIN_WORDS.test(question) };
     spec.limit = detailLimit ?? limit ?? 10;
   } else {
     if (time && bucketGrain) spec.timeBucket = { col: time, grain: bucketGrain };
     else if (time && windowed) spec.timeBucket = { col: time, grain: GRAIN_FROM_TIME[period.grain] };
-    if (dimension && !(spec.timeBucket && !dimensionPhrase(question))) spec.groupBy = [dimension];
-    spec.measures = measure ? [measure] : [{ fn: 'count' }];
+    // 「那按城市呢」是要换一根轴：本轮点了维度就别再把上一问的时间桶拖上，否则答成「每月每城市」。
+    else if (focus?.timeBucket && !bucketGrain && !windowed && !ownAxis && !reset && !TREND_WORDS.test(question) && alive(focus.timeBucket.col)) spec.timeBucket = focus.timeBucket;
+    if (dimension.ref) spec.groupBy = [dimension.ref];
+    // 「只看已支付的」这类追问只改条件，分组跟着上一问走；上一问同时有时间和维度时两个都留，
+    // 「每月每城市」是它原本的口径。纯计数不继承分组，否则「有多少行」会变成一张分组表。
+    else if (focus?.groupBy.length && !reset && aggregateFn(question) !== 'count' && focus.groupBy.every(alive)) spec.groupBy = focus.groupBy;
+    spec.measures = measure ? [measure] : !reset && focus?.measures.length && focus.measures.every((item) => !item.col || alive(item.col)) ? focus.measures : [{ fn: 'count' }];
     spec.limit = limit ?? (spec.timeBucket ? 40 : spec.groupBy.length ? 20 : 1);
     // 降序是编译器给的默认；只有「最低/最少」这类问法需要反过来。
     if (MIN_WORDS.test(question)) spec.orderBy = { alias: 'value', desc: false };

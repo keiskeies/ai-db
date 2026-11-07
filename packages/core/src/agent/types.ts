@@ -136,6 +136,13 @@ export type ProviderEvent =
   | { type: 'text'; text: string }
   | { type: 'thinking'; text: string }
   | { type: 'tool_call'; call: ToolCall }
+  /**
+   * 直接给出可见的任务计划。
+   *
+   * 只有离线推理器会发：云端模型靠 update_plan 工具维护计划，规则规划器没有模型可以调工具，
+   * 而发一次 update_plan 要多绕一个回合。
+   */
+  | { type: 'plan'; items: AgentPlanItem[] }
   | ({ type: 'usage' } & ProviderUsage)
   | { type: 'done'; stopReason: string };
 

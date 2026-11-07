@@ -47,6 +47,10 @@ const payments: TableInfo = {
 const tables = [users, orders, payments];
 const grounding: GroundingOptions = { bundle: EMPTY_AGENT_CONTEXT_BUNDLE };
 
+/** 列注释里写了取值枚举的版本：追问要连着好几问，每问都探测一次就没法在测试里一次跑完。 */
+const enumOrders: TableInfo = { ...orders, columns: (orders.columns ?? []).map((c) => (c.name === 'status' ? { ...c, comment: '状态：已支付, 已退款, 待支付' } : c)) };
+const enumTables = [users, enumOrders, payments];
+
 function plan(question: string, input: Partial<Parameters<typeof planQuery>[0]> = {}) {
   return planQuery({ question, engine: sqlite, tables, grounding, now: '2026-11-07', ...input });
 }
@@ -214,4 +218,116 @@ test('plan matches English phrasing too', () => {
   assert.equal(result.status, 'ready');
   assert.match(result.compiled!.sql, /GROUP BY "status"/);
   assert.match(result.compiled!.sql, /SUM\("amount_cents"\)/);
+});
+
+test('plan reads value enums out of the column comment without probing', () => {
+  const commented: TableInfo = {
+    name: 'orders',
+    type: 'table',
+    columns: [
+      { name: 'id', type: 'INTEGER', nullable: false, primaryKey: true },
+      { name: 'status', type: 'TEXT', nullable: true, primaryKey: false, comment: '状态：已支付, 已退款, 待支付' },
+      { name: 'amount_cents', type: 'INTEGER', nullable: true, primaryKey: false, comment: '金额' },
+      { name: 'created_at', type: 'TEXT', nullable: true, primaryKey: false },
+    ],
+  };
+  const result = planQuery({ question: '统计已支付订单的金额合计', engine: sqlite, tables: [commented], grounding, now: '2026-11-07' });
+  assert.equal(result.status, 'ready');
+  assert.match(result.compiled!.sql, /"status" = '已支付'/, '注释里的枚举直接落地，不带冒号前缀');
+});
+
+test('plan keeps a code/label comment as a probe instead of guessing which is stored', () => {
+  const coded: TableInfo = { ...orders, columns: (orders.columns ?? []).map((c) => (c.name === 'status' ? { ...c, comment: '状态：PAID=已支付, REFUNDED=已退款' } : c)) };
+  const result = planQuery({ question: '统计已支付订单的金额合计', engine: sqlite, tables: [coded], grounding, now: '2026-11-07' });
+  assert.equal(result.status, 'probe');
+});
+
+test('a subject noun is never turned into a filter value', () => {
+  const result = plan('全部订单的金额合计');
+  assert.equal(result.status, 'ready');
+  assert.equal(result.compiled!.sql.includes('WHERE'), false, '「订单」是主语不是 status 的取值');
+  assert.match(result.compiled!.sql, /SUM\("amount_cents"\)/);
+});
+
+test('a grain word alone is a bucket, not a dimension column', () => {
+  const result = plan('按月看订单金额走势');
+  assert.equal(result.status, 'ready');
+  assert.match(result.compiled!.sql, /GROUP BY strftime\('%Y-%m', "created_at"\) ORDER BY/, '只按月份分桶，不该多出 amount_cents 分组');
+  assert.equal(result.compiled!.sql.includes('"amount_cents" AS "label"'), false);
+});
+
+test('follow-ups inherit the previous question\'s table, window and measure', () => {
+  const focus = plan('近 3 个月已支付订单的金额合计', { tables: enumTables }).spec!;
+  const city = plan('那按城市呢', { focus, tables: enumTables });
+  assert.equal(city.status, 'ready');
+  assert.equal(city.compiled!.sql.includes('FROM "users"'), false, '追问不点名表时沿用上一问的 orders');
+  assert.match(city.compiled!.sql, /INNER JOIN "users"/);
+  assert.match(city.compiled!.sql, /GROUP BY "users"\."city"/);
+  assert.match(city.compiled!.sql, /SUM\("orders"\."amount_cents"\)/, '度量也跟着上一问走');
+  assert.match(city.compiled!.sql, /"orders"\."status" = '已支付'/);
+  assert.match(city.compiled!.sql, /"orders"\."created_at" >= '2026-09-01'/);
+
+  const refunded = plan('只看已退款的', { focus, tables: enumTables });
+  assert.equal(refunded.status, 'ready');
+  assert.match(refunded.compiled!.sql, /"status" = '已退款'/);
+  assert.match(refunded.compiled!.sql, /"created_at" >= '2026-09-01'/, '换取值不该丢掉时间窗');
+
+  const fresh = plan('全部订单的金额合计', { focus, tables: enumTables });
+  assert.equal(fresh.status, 'ready');
+  assert.equal(fresh.compiled!.sql.includes('WHERE'), false, '「全部」是在清空上一问的口径');
+});
+
+test('follow-ups chain: a second refinement keeps the first one\'s axes', () => {
+  const first = plan('近 3 个月已支付订单按城市的金额合计', { tables: enumTables });
+  assert.equal(first.status, 'ready');
+  const second = plan('只看已退款的', { focus: first.spec!, tables: enumTables });
+  assert.equal(second.status, 'ready');
+  // 上一问要的是「每月每城市」两张轴，换条件不该把其中一张抹掉
+  assert.match(second.compiled!.sql, /GROUP BY strftime\('%Y-%m', "orders"\."created_at"\), "users"\."city"/);
+  assert.match(second.compiled!.sql, /"orders"\."status" = '已退款'/);
+  assert.match(second.compiled!.sql, /"orders"\."created_at" >= '2026-09-01'/);
+});
+
+test('replay drops an unresolvable value instead of asking for a probe', () => {
+  // 重放历史问题只是给追问算焦点，发不出探测查询：这里必须给出一句话而不是 probe。
+  const replayed = plan('统计已支付订单的金额合计', { replay: true });
+  assert.equal(replayed.status, 'ready');
+  assert.equal(replayed.compiled!.sql.includes('status'), false);
+  const live = plan('统计已支付订单的金额合计');
+  assert.equal(live.status, 'probe', '同一句话在当轮是可以探测的');
+});
+
+test('detail follow-ups keep the previous projection and only change the count', () => {
+  const focus = plan('金额最高的 10 笔订单').spec!;
+  const result = plan('换成前 20 笔', { focus });
+  assert.equal(result.status, 'ready');
+  assert.match(result.compiled!.sql, /LIMIT 20/);
+  assert.match(result.compiled!.sql, /ORDER BY "amount_cents" DESC/);
+  assert.equal(result.compiled!.sql.includes('"amount_cents" AS "label2"'), true, '沿用上一问的列，不换一套投影');
+});
+
+test('a follow-up whose join is unregistered asks instead of inventing a key', () => {
+  const orphan: TableInfo = { name: 'tickets', type: 'table', comment: '工单', columns: [{ name: 'id', type: 'INTEGER', nullable: false, primaryKey: true }, { name: 'level', type: 'TEXT', nullable: true, primaryKey: false, comment: '等级' }] };
+  const focus = plan('近 3 个月已支付订单的金额合计', { tables: enumTables }).spec!;
+  const result = planQuery({ question: '那按等级呢', engine: sqlite, tables: [...enumTables, orphan], grounding, now: '2026-11-07', focus });
+  assert.equal(result.status, 'gap');
+  assert.match(result.gap!, /tickets/);
+});
+
+test('a dimension glued to a measure phrase still groups by the dimension', () => {
+  const result = plan('统计各城市的订单金额合计', { tables: enumTables });
+  assert.equal(result.status, 'ready');
+  assert.match(result.compiled!.sql, /GROUP BY "users"\."city"/);
+  assert.match(result.compiled!.sql, /SUM\("orders"\."amount_cents"\)/);
+  // 「城市」是维度，不是 status 的取值：凭空多一个 WHERE 会把数字查空。
+  assert.equal(result.compiled!.sql.includes('WHERE'), false);
+});
+
+test('a dimension glued to a value keeps both the group and the filter', () => {
+  for (const question of ['统计各城市的已支付订单金额合计', '统计各城市的已支付订单的金额合计', '各城市已支付订单的金额合计']) {
+    const result = plan(question, { tables: enumTables });
+    assert.equal(result.status, 'ready', question);
+    assert.match(result.compiled!.sql, /GROUP BY "users"\."city"/, question);
+    assert.match(result.compiled!.sql, /"orders"\."status" = '已支付'/, question);
+  }
 });
