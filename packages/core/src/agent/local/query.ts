@@ -34,6 +34,10 @@ export interface MeasureSpec {
   fn: AggregateFn;
   /** count 时可省略，表示 COUNT(*)。 */
   col?: ColumnRef;
+  /** 条件度量（堆叠图的分项）：只统计这一列等于这些取值的行。 */
+  where?: { col: ColumnRef; values: Array<string | number> };
+  /** 结果列别名。堆叠图每一段要有自己的名字，否则图例只能显示 value2、value3。 */
+  alias?: string;
 }
 
 export interface TimeBucketSpec {
@@ -214,7 +218,7 @@ export function compileQuery(engine: Engine, spec: QuerySpec): CompiledQuery {
       groupBy.push(ref(column));
     }
     for (const [index, measure] of spec.measures.entries()) {
-      const alias = index === 0 ? 'value' : `value${index + 1}`;
+      const alias = measure.alias && !valueAliases.includes(measure.alias) ? measure.alias : index === 0 ? 'value' : `value${index + 1}`;
       valueAliases.push(alias);
       select.push(`${measureExpr(engine, measure, ref)} AS ${quoteIdent(alias, engine)}`);
     }
@@ -250,6 +254,14 @@ export function compileQuery(engine: Engine, spec: QuerySpec): CompiledQuery {
 const GRAIN_CN: Record<TimeBucketGrain, string> = { hour: '小时', day: '天', week: '周', month: '月', quarter: '季度', year: '年' };
 
 function measureExpr(engine: Engine, measure: MeasureSpec, ref: (column: ColumnRef) => string): string {
+  if (measure.where) {
+    // 堆叠图的分项：一条查询出多列，「各状态金额」不必拆成 N 次往返。
+    // 缺这一段的行是 NULL，绘图端会把整行丢掉（x 轴少一个类别），所以补成 0。
+    const cond = `${ref(measure.where.col)} IN (${measure.where.values.map(literal).join(', ')})`;
+    if (measure.fn === 'count') return `COUNT(CASE WHEN ${cond} THEN 1 END)`;
+    if (measure.fn === 'count_distinct') return `COUNT(DISTINCT CASE WHEN ${cond} THEN ${ref(measure.col!)} END)`;
+    return `COALESCE(${measure.fn.toUpperCase()}(CASE WHEN ${cond} THEN ${ref(measure.col!)} ELSE NULL END), 0)`;
+  }
   if (measure.fn === 'count') return measure.col ? `COUNT(${ref(measure.col)})` : 'COUNT(*)';
   if (measure.fn === 'count_distinct') return `COUNT(DISTINCT ${ref(measure.col!)})`;
   return `${measure.fn.toUpperCase()}(${ref(measure.col!)})`;

@@ -1,6 +1,7 @@
 import type { ColumnInfo, Engine, TableInfo } from '../../types';
+import type { ChartKind } from '../../analysis/chartFit';
 import type { TimeBucketGrain } from '../../sql/ddl';
-import type { CompiledQuery, ColumnRef, FilterSpec, JoinSpec, MeasureSpec, QuerySpec } from './query';
+import type { CompiledQuery, ColumnRef, FilterSpec, JoinSpec, MeasureSpec, QuerySpec, TimeBucketSpec } from './query';
 import { compileQuery, findJoinPath, joinEdges } from './query';
 import type { GroundingOptions } from './schema';
 import { groundedColumns, groundedTables, matchColumn, matchTable, namesTable, pickDimension, pickMeasure, pickTimeColumn, rankTables } from './schema';
@@ -39,6 +40,8 @@ export interface PlanOutcome {
   gap?: string;
   /** 抽取到但没能落地的条件，结论里要交代。 */
   dropped?: string[];
+  /** 用户点名的图种（热力/雷达/堆叠…）；没点名时不设，由上层按数据形态选。 */
+  chart?: ChartKind;
 }
 
 export interface PlanInput {
@@ -255,30 +258,175 @@ function findByPhrase(phrase: string, pool: Pool, main: TableInfo): ColumnRef | 
  * 于是「已支付」这个条件被静默丢掉，数字看着合理其实少了一半。
  * 剥掉最短的那段列名前缀，剩下的才是取值；剥不出一个仍然像取值的残片就原样返回，交给后面的守卫。
  */
+/** 这一段说法是不是正好就是某列的名字/别名/注释：剥前缀只能用精确匹配，模糊前缀会把「城市和月」也当成列。 */
+function exactColumnWord(word: string, pool: Pool): boolean {
+  return pool.tables.some((table) =>
+    groundedColumns(table, pool.grounding).some((column) => {
+      const meta = pool.grounding.bundle?.columnMeta[table.name.toLowerCase()]?.[column.name];
+      return [column.name, meta?.alias?.trim(), column.comment?.trim()].some((surface) => Boolean(surface && surface.length >= 2 && surface.toLowerCase() === word.toLowerCase()));
+    }),
+  );
+}
+
 function stripColumnPrefix(raw: string, pool: Pool, main: TableInfo): string {
   for (let end = 2; end <= raw.length - 2; end++) {
     const head = raw.slice(0, end);
-    if (!findByPhrase(head, pool, main)) continue;
+    if (!exactColumnWord(head, pool)) continue;
     const rest = raw.slice(end);
+    // 残片里还挂着另一根轴、时间粒度或聚合动词（「城市和月份看」）时不是在说取值：两轴说法交给维度解析。
+    if (/[和与跟、×]|(?:月份?|周|天|日|年|季度)|(?:看|画|绘|统计|汇总|合计|金额|数量)/.test(rest)) continue;
     if (rest.length >= 2 && !findByPhrase(rest, pool, main)) return rest;
   }
   return raw;
 }
 
-function dimensionPhrase(question: string): string | undefined {
-  const raw = DIMENSION_CN.exec(question)?.[1] ?? DIMENSION_EN.exec(question)?.[1];
-  if (!raw) return undefined;
+/**
+ * 用户点名的图种。没点名时返回 undefined，由上层按数据形态选（chartSuitability 是唯一口径）。
+ * 散点走自己的逐行取数模板，不在聚合规划器里。
+ */
+export function chartKindOf(question: string): ChartKind | undefined {
+  if (/(热力|heatmap)/i.test(question)) return 'heatmap';
+  if (/(雷达|radar)/i.test(question)) return 'radar';
+  if (/(堆叠|堆积|stacked)/i.test(question)) return 'stacked';
+  if (/(散点|scatter|相关性|correlation)/i.test(question)) return 'scatter';
+  if (/(饼|占比|构成|pie)/i.test(question)) return 'pie';
+  if (/(折线|趋势|走势|line|trend)/i.test(question)) return 'line';
+  if (/(柱状|条形|bar)/i.test(question)) return 'bar';
+  return undefined;
+}
+
+/** 两根轴之间的连接词：「按城市和渠道」「城市 × 渠道」。 */
+const AXIS_CONNECTOR = /(?:×|\b[xX]\b|和|与|跟|以及|、|,|，)/;
+const DIMENSION_PAIR = /(?:按照?|依照|每个|各个|各|分别按?|不同|分组(?:按|为)?|统计按)\s*([^，,。；;问]{1,30})/;
+
+function cleanDimension(raw: string, question: string): string | undefined {
   // 「按月看金额走势」的「按」是粒度，不是维度：这里开头就是时间单位说明这句话在说分桶，
   // 继续解析会把「看订单金额」当成列名，凭空多出一个 GROUP BY。
   if (grainPhrase(question) && /^(?:每|各)?(?:小时|天|日|周|月|季|季度|年)/.test(raw)) return undefined;
   // 「按状态统计订单的金额合计」里，维度词到第一个聚合动词就结束；留着尾巴会匹配到别的列。
-  const cut = raw.split(/(?:统计|汇总|分布|占比|合计|平均|排名|排序|趋势|走势|多少|求和|明细)/)[0] ?? '';
+  const cut = raw.split(/(?:统计|汇总|分布|占比|合计|平均|排名|排序|趋势|走势|多少|求和|明细|看|画|绘|热力|heatmap|雷达|radar|堆叠|stacked)/i)[0] ?? '';
   // 「按城市的金额合计」要的是城市：尾巴上那段「的金额」是度量说法，留着会让整段先去比
   // 列注释，结果命中 amount_cents 而不是 city。只在带「的」时剥掉，「按金额统计」本身仍以金额分组。
   // 「各城市的订单金额合计」同理：度量前可以带限定词（订单/交易/消费），「的」已经说明尾巴不是维度。
   const head = cut.replace(/的[^的]{0,8}(?:金额|数量|总额|总金额|销售额|销量|收入|支出|成本|利润|价格|笔数|单量)$/, '');
   const text = head.replace(/[呢吧啊嘛了]+$/, '').replace(/[\s的]+$/g, '');
   return text.length >= 1 ? text : undefined;
+}
+
+function dimensionPhrase(question: string): string | undefined {
+  const raw = DIMENSION_CN.exec(question)?.[1] ?? DIMENSION_EN.exec(question)?.[1];
+  return raw ? cleanDimension(raw, question) : undefined;
+}
+
+/**
+ * 热力图的两根分类轴：「按城市和渠道」「城市 × 月份」。
+ * 只返回说法，落列由 dimensionRef 那套（含跨表 JOIN）负责；凑不出两根就交给上层追问，
+ * 不拿同一根轴充数——那会画出一条对角线，看着像图其实没有信息。
+ */
+function dimensionPair(question: string): [string, string] | undefined {
+  const raw = DIMENSION_PAIR.exec(question)?.[1];
+  if (!raw || !AXIS_CONNECTOR.test(raw)) return undefined;
+  const parts = raw.split(AXIS_CONNECTOR).map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 2) return undefined;
+  const first = cleanDimension(parts[0]!, question);
+  const second = parts.slice(1).map((part) => cleanDimension(part, question)).find(Boolean);
+  return first && second && first !== second ? [first, second] : undefined;
+}
+
+/**
+ * 问题里点到的数值列，按出现先后排。堆叠/雷达要多个同单位度量（「金额和数量」），
+ * 逐个 split 再找列会被前缀里的维度词截胡（「按城市看金额」先命中 city），所以直接扫列名/别名/注释。
+ */
+function mentionedMeasures(question: string, pool: Pool, main: TableInfo): ColumnRef[] {
+  const p = question.toLowerCase();
+  const hits: Array<{ ref: ColumnRef; at: number }> = [];
+  for (const table of [main, ...pool.tables.filter((item) => item.name !== main.name)]) {
+    const fk = foreignKeyColumnsOf(table);
+    for (const column of groundedColumns(table, pool.grounding)) {
+      if (column.primaryKey || fk.has(column.name.toLowerCase()) || !isNumericColumn(column)) continue;
+      const meta = pool.grounding.bundle?.columnMeta[table.name.toLowerCase()]?.[column.name];
+      const words = [column.name, meta?.alias?.trim(), column.comment?.trim()].filter((word): word is string => Boolean(word && word.length >= 2));
+      const at = Math.min(...words.map((word) => p.indexOf(word.toLowerCase())).filter((index) => index >= 0));
+      if (Number.isFinite(at)) hits.push({ ref: { table: table.name, column: column.name }, at });
+    }
+  }
+  return hits.sort((a, b) => a.at - b.at).map((hit) => hit.ref);
+}
+
+/** 「按城市堆叠各状态的金额」：堆叠的分项来自另一个分类列（各状态→status）。 */
+function stackSplitPhrase(question: string): string | undefined {
+  const raw = /各\s*([^，,。；;\s]{1,12})/.exec(question)?.[1];
+  if (!raw) return undefined;
+  return cleanDimension(raw, question);
+}
+
+/** 时间粒度词单独当一根轴（「按城市和月份看热力图」）。 */
+const GRAIN_CN: Record<TimeBucketGrain, string> = { hour: '小时', day: '天', week: '周', month: '月', quarter: '季度', year: '年' };
+const AXIS_GRAIN: Record<string, TimeBucketGrain> = { 小时: 'hour', 天: 'day', 日: 'day', 周: 'week', 星期: 'week', 月: 'month', 月份: 'month', 季度: 'quarter', 年: 'year', 年份: 'year' };
+
+function axisGrain(word: string): TimeBucketGrain | undefined {
+  return AXIS_GRAIN[word] ?? grainPhrase(word);
+}
+
+/**
+ * 堆叠的每一段落成一条条件聚合。
+ *
+ * 「各状态的金额」→ 每个状态一列（status IN (...) 的 SUM），一条 SQL 出全部段；
+ * 「金额和数量」→ 用户直接点了多个度量，按列排开。
+ * 状态取值只能来自列注释枚举或有界探测，取不到就问，不硬造字面量。
+ */
+function stackedMeasures(input: {
+  question: string;
+  pool: Pool;
+  main: TableInfo;
+  input: PlanInput;
+  dimension: ColumnRef | undefined;
+  measure: MeasureSpec | undefined;
+  dropped: string[];
+}): { measures?: MeasureSpec[]; probe?: PlanProbe; gap?: string } {
+  const splitWord = stackSplitPhrase(input.question);
+  if (splitWord) {
+    const split = findByPhrase(splitWord, input.pool, input.main);
+    if (split && !sameRef(split, input.dimension)) {
+      const values = knownValues(split, input.pool, input.input);
+      if (values.length >= 2) {
+        const fn = input.measure?.fn === 'count' ? 'count' : input.measure?.fn ?? 'count';
+        return {
+          measures: values.slice(0, 6).map((value) => ({
+            fn,
+            col: input.measure?.col,
+            where: { col: split, values: [value] },
+            alias: String(value),
+          })),
+        };
+      }
+      // 注释里没有枚举：发一次有界探测拿真实取值，再按真实取值拆段。
+      if (!input.input.replay && !input.input.probeDone) {
+        return { probe: { table: split.table, column: split.column, raw: splitWord } };
+      }
+      return { gap: `堆叠图要按 \`${split.table}.${split.column}\` 的取值拆段，但我没读到它的实际取值。先把取值说明白（例如「已支付、已退款」），或者换用另一个分类列。` };
+    }
+  }
+  const named = mentionedMeasures(input.question, input.pool, input.main).filter((ref) => !sameRef(ref, input.dimension));
+  if (named.length >= 2) {
+    const fn = aggregateFn(input.question) ?? 'sum';
+    return { measures: named.slice(0, 5).map((col) => ({ fn, col })) };
+  }
+  return { gap: '堆叠图要按一个分类列拆段（例如「各状态的金额」），或者直接点两个及以上的度量列（例如「金额和数量」）。这一问我没认出第二段。' };
+}
+
+function sameRef(a: ColumnRef | undefined, b: ColumnRef | undefined): boolean {
+  return Boolean(a && b && a.table.toLowerCase() === b.table.toLowerCase() && a.column.toLowerCase() === b.column.toLowerCase());
+}
+
+/** 把一句维度说法落成一列：先按列名/别名/注释找，主表没有再看恰好一张关联表并有真实连接路径。 */
+function resolveDimensionWord(word: string, pool: Pool, main: TableInfo, visible: TableInfo[], dropped: string[]): ColumnRef | undefined {
+  const found = findByPhrase(word, pool, main);
+  if (found) return found;
+  const bridged = bridgeDimension(word, pool, main, visible);
+  if (bridged.ref) return bridged.ref;
+  dropped.push(bridged.gap ?? `没有「${word}」这一列`);
+  return undefined;
 }
 
 function dimensionRef(question: string, pool: Pool, main: TableInfo, visible: TableInfo[], dropped: string[]): { ref?: ColumnRef; gap?: string } {
@@ -709,6 +857,7 @@ export function planQuery(input: PlanInput): PlanOutcome {
 
   const dropped: string[] = [];
   const filters: FilterSpec[] = [];
+  const chart = chartKindOf(question);
   const period = resolvePeriod({ topic: question, now: input.now });
   const bucketGrain = grainPhrase(question);
   const windowed = period.source !== 'default';
@@ -767,7 +916,34 @@ export function planQuery(input: PlanInput): PlanOutcome {
   const ownAxis = Boolean(dimension.ref);
   const spec: QuerySpec = { table: main.name, joins: pool.joins, filters, groupBy: [], measures: [] };
 
-  if (isDetail) {
+  if (chart === 'heatmap') {
+    // 热力图不是 (x, y) 序列：两根分类轴 + 一个度量。缺一根就定点追问，
+    // 拿同一根轴凑两遍会画出一条对角线，看着像图其实没有信息。
+    const pair = dimensionPair(question);
+    if (!pair) return { status: 'gap', gap: '热力图需要两根分类轴，例如「按城市和渠道统计金额热力图」。' };
+    const dims: ColumnRef[] = [];
+    let bucket: TimeBucketSpec | undefined;
+    for (const word of pair) {
+      const grain = axisGrain(word);
+      if (grain && !bucket) {
+        // 「按城市和月份」的时间轴不一定挂时间窗：这时 timeRef 还没算过，就地取一次。
+        const bucketCol = time ?? timeRef(question, pool, main);
+        if (bucketCol) {
+          bucket = { col: bucketCol, grain };
+          continue;
+        }
+      }
+      const ref = resolveDimensionWord(word, pool, main, visible, dropped);
+      if (ref && !dims.some((item) => sameRef(item, ref))) dims.push(ref);
+    }
+    if (dims.length + (bucket ? 1 : 0) < 2) {
+      return { status: 'gap', gap: `热力图要两根不同的分类轴，这一问我只认出 ${dims.map((ref) => `\`${ref.column}\``).join('、') || '零根'}${bucket ? `，外加按${GRAIN_CN[bucket.grain]}分桶` : ''}。另一根按哪一列分组？` };
+    }
+    if (bucket) spec.timeBucket = bucket;
+    spec.groupBy = dims.slice(0, bucket ? 1 : 2);
+    spec.measures = [measure ?? { fn: 'count' }];
+    spec.limit = 200;
+  } else if (isDetail) {
     const detail = detailRefs(pool, main, measure);
     // 「换成前 20 笔」这类追问没点名新列：沿用上一问的投影和排序列，别换一套列。
     const carried = !dimension.ref && !measure ? (focus?.detail ?? []).filter(alive) : [];
@@ -790,6 +966,22 @@ export function planQuery(input: PlanInput): PlanOutcome {
     if (MIN_WORDS.test(question)) spec.orderBy = { alias: 'value', desc: false };
   }
 
+  // 堆叠要「每一段一列」：要么按一个分类列拆（各状态的金额），要么用户直接点了两个同单位度量。
+  if (chart === 'stacked' && !isDetail) {
+    const stack = stackedMeasures({ question, pool, main, input, dimension: dimension.ref, measure, dropped });
+    if (stack.gap) return { status: 'gap', gap: stack.gap };
+    if (stack.probe) return { status: 'probe', probe: stack.probe };
+    spec.measures = stack.measures!;
+    spec.limit = 24;
+  }
+  // 雷达图 3–8 根轴：超了会被 chartSuitability 降级，不如先截到上限。
+  // 「金额和数量」这种多点名的度量按 ys 一并传，和云端模型的用法一致。
+  if (chart === 'radar' && !isDetail) {
+    const named = mentionedMeasures(question, pool, main).filter((ref) => !sameRef(ref, dimension.ref));
+    if (named.length >= 2) spec.measures = named.slice(0, 5).map((col) => ({ fn: aggregateFn(question) ?? 'sum', col }));
+    if (spec.groupBy.length && spec.measures.length === 1) spec.limit = 8;
+  }
+
   const compiled = compileQuery(engine, spec);
   const tableText = tableLabel(grounding.bundle, main);
   const axisRefs = spec.detail ?? [...(spec.timeBucket ? [spec.timeBucket.col] : []), ...spec.groupBy];
@@ -803,5 +995,6 @@ export function planQuery(input: PlanInput): PlanOutcome {
     axisLabel: axisRefs[0] ? refLabel(pool, axisRefs[0]) : undefined,
     measureLabel: spec.measures[0] ? valueLabel(spec.measures[0]) : undefined,
     dropped: dropped.length ? dropped : undefined,
+    ...(chart ? { chart } : {}),
   };
 }

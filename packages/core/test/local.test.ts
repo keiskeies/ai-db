@@ -526,3 +526,40 @@ test('a follow-up that says 全部 drops the inherited window and filter', async
   if (call?.type !== 'tool_call') return;
   assert.equal(/WHERE/.test(String(call.call.args.sql)), false);
 });
+
+test('offline chart picks the type the user named, not a fallback', async () => {
+  const provider = new LocalProvider();
+  const enumOrders: TableInfo = {
+    ...rich[1],
+    columns: [...(rich[1].columns ?? []).map((column) => (column.name === 'status' ? { ...column, comment: '状态：已支付, 已退款, 待支付' } : column)), { name: 'channel', type: 'TEXT', nullable: true, primaryKey: false, comment: '渠道' }],
+  };
+  const chartContext: AgentContextData = {
+    connection,
+    databases: [{ name: 'main', tables: [enumOrders, rich[0]] }],
+  };
+  const heat = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: '按城市和渠道统计订单金额热力图' }], tools: [], context: chartContext }));
+  const heatCall = heat.find((e) => e.type === 'tool_call') as any;
+  assert.equal(heatCall.call.args.type, 'heatmap');
+  assert.equal(heatCall.call.args.x, 'label');
+  assert.equal(heatCall.call.args.y, 'label2');
+  assert.equal(heatCall.call.args.value, 'value');
+
+  const stacked = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: '按城市堆叠各状态的订单金额' }], tools: [], context: chartContext }));
+  const stackCall = stacked.find((e) => e.type === 'tool_call') as any;
+  assert.equal(stackCall.call.args.type, 'stacked');
+  assert.equal(stackCall.call.args.y, '已支付');
+  assert.ok(Array.isArray(stackCall.call.args.ys) && stackCall.call.args.ys.length >= 1);
+
+  const radar = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: '按城市统计订单金额雷达图' }], tools: [], context: richContext }));
+  const radarCall = radar.find((e) => e.type === 'tool_call') as any;
+  assert.equal(radarCall.call.args.type, 'radar');
+});
+
+test('offline heatmap asks for the missing axis instead of refusing', async () => {
+  const provider = new LocalProvider();
+  const events = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: '按城市统计订单金额热力图' }], tools: [], context: richContext }));
+  assert.equal(events.some((e) => e.type === 'tool_call'), false);
+  const answer = textOf(events);
+  assert.match(answer, /两根/);
+  assert.equal(answer.includes('还没有'), false);
+});

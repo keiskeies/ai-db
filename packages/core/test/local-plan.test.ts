@@ -331,3 +331,51 @@ test('a dimension glued to a value keeps both the group and the filter', () => {
     assert.match(result.compiled!.sql, /"orders"\."status" = '已支付'/, question);
   }
 });
+
+test('heatmap plans two category axes and one measure', () => {
+  const plan2 = planQuery({ question: '按城市和渠道统计订单金额热力图', engine: sqlite, tables: [...tables, { name: 'channel' } as any], grounding, now: '2026-11-07' });
+  // channel 不存在时是 gap 而不是画一条对角线。
+  assert.equal(plan2.status, 'gap');
+
+  const withChannel: TableInfo = { ...orders, columns: [...(orders.columns ?? []), { name: 'channel', type: 'TEXT', nullable: true, primaryKey: false, comment: '渠道' }] };
+  const result = planQuery({ question: '按城市和渠道统计订单金额热力图', engine: sqlite, tables: [users, withChannel, payments], grounding, now: '2026-11-07' });
+  assert.equal(result.status, 'ready');
+  assert.equal(result.chart, 'heatmap');
+  assert.match(result.compiled!.sql, /"users"\."city" AS "label"/);
+  assert.match(result.compiled!.sql, /"orders"\."channel" AS "label2"/);
+  assert.match(result.compiled!.sql, /GROUP BY "users"\."city", "orders"\."channel"/);
+});
+
+test('heatmap accepts a time grain as one of its axes', () => {
+  const result = planQuery({ question: '按城市和月份看订单金额热力图', engine: sqlite, tables, grounding, now: '2026-11-07' });
+  assert.equal(result.status, 'ready');
+  assert.match(result.compiled!.sql, /strftime\(/, );
+  assert.match(result.compiled!.sql, /GROUP BY strftime\([^)]*\), "users"\."city"/);
+});
+
+test('stacked splits one measure by a categorical column', () => {
+  const result = planQuery({ question: '按城市堆叠各状态的订单金额', engine: sqlite, tables: enumTables, grounding, now: '2026-11-07' });
+  assert.equal(result.status, 'ready');
+  assert.equal(result.chart, 'stacked');
+  const sql = result.compiled!.sql;
+  // 每一段一列：CASE WHEN 把状态拆开，别名就是段名。
+  assert.match(sql, /COALESCE\(SUM\(CASE WHEN "orders"\."status" IN \('已支付'\) THEN "orders"\."amount_cents" ELSE NULL END\), 0\) AS "已支付"/);
+  assert.match(sql, /AS "已退款"/);
+  assert.equal(result.compiled!.valueAliases.length >= 2, true);
+});
+
+test('stacked accepts several named measures', () => {
+  const withQuantity: TableInfo = { ...orders, columns: [...(orders.columns ?? []), { name: 'quantity', type: 'INTEGER', nullable: true, primaryKey: false, comment: '数量' }] };
+  const result = planQuery({ question: '按城市堆叠金额和数量', engine: sqlite, tables: [users, withQuantity, payments], grounding, now: '2026-11-07' });
+  assert.equal(result.status, 'ready');
+  assert.match(result.compiled!.sql, /SUM\("orders"\."amount_cents"\) AS "value"/);
+  assert.match(result.compiled!.sql, /SUM\("orders"\."quantity"\) AS "value2"/);
+  assert.equal(result.compiled!.valueAliases.length, 2);
+});
+
+test('radar caps the axis count so the executor does not downgrade it', () => {
+  const result = planQuery({ question: '按城市统计订单金额雷达图', engine: sqlite, tables, grounding, now: '2026-11-07' });
+  assert.equal(result.status, 'ready');
+  assert.equal(result.chart, 'radar');
+  assert.equal(result.spec?.limit, 8);
+});

@@ -7,7 +7,7 @@ import { expandTerms } from '../context';
 import { groundedColumns, groundedTables, hiddenTableMention, matchColumn, matchTable, numericColumns, pickDimension, pickMeasure, pickTimeColumn, rankTables } from '../local/schema';
 import type { GroundingOptions } from '../local/schema';
 import type { PlanOutcome, PlanProbe } from '../local/parse';
-import { isFollowUp, planQuery, splitClauses } from '../local/parse';
+import { chartKindOf, isFollowUp, planQuery, splitClauses } from '../local/parse';
 import type { QuerySpec } from '../local/query';
 import type { Forbidden } from '../local/business';
 import { forbiddenFromGlossary, forbiddenTableReason, matchSqlExample } from '../local/business';
@@ -113,7 +113,7 @@ export function detectIntent(prompt: string): LocalIntent {
   if (/(预测|forecast|外推|接下来.*(多少|会)|未来)/.test(p)) return 'analyze';
   // 点名要图就按图走：「统计金额合计并画柱状图」里「合计」也命中 analyze，
   // 但用户要的是那几根柱子，回一张统计表等于没回答。
-  if (/(画图|画个|画张|画一|绘|图表|可视化|趋势|走势|折线|柱状|饼图|chart|plot)/.test(p)) return 'chart';
+  if (/(画图|画个|画张|画一|绘|图表|可视化|趋势|走势|折线|柱状|饼图|热力|雷达|堆叠|chart|plot|heatmap|radar|stacked)/.test(p)) return 'chart';
   if (/(合计|总和|求和|平均值|均值|环比|占比多少|最大.*最小|\bsum\b|\bavg\b)/.test(p)) return 'analyze';
   // 「金额最高的 10 笔订单」「订单明细前 5 条」要的是行不是分组数字：以前没人认领，落到 help 甩清单。
   // 量词紧跟数字才算行数，否则「前 3 个月」会被当成条数。
@@ -326,7 +326,8 @@ function usePlanner(intent: LocalIntent, prompt: string, engine: Engine): boolea
   if (!PLANNED_INTENTS.includes(intent)) return false;
   if (!isSqlEngine(engine)) return false;
   if (/(预测|forecast|外推)/.test(prompt)) return false;
-  return !/(散点|scatter|相关系数|correlation|热力|heatmap|雷达|radar|堆叠|stacked)/i.test(prompt);
+  // 散点要逐行数值对，不是聚合；热力/雷达/堆叠都由规划器取数（两根轴 / 多列度量）。
+  return !/(散点|scatter|相关系数|correlation)/i.test(prompt);
 }
 
 function profiledValues(outcomes: ToolOutcome[]): { table: string; column: string; values: Array<string | number> } | undefined {
@@ -581,7 +582,30 @@ function planStepCall(input: {
   if (!yField) return undefined;
   const args: Record<string, unknown> = { connectionId: input.connectionId, database: input.database, sql: compiled.sql, x: compiled.axisAlias, y: yField };
   if (input.intent === 'chart') {
-    args.type = /(饼|占比|pie|构成)/i.test(input.prompt) ? 'pie' : input.plan.spec?.timeBucket || /(折线|趋势|line)/i.test(input.prompt) ? 'line' : 'bar';
+    const spec = input.plan.spec;
+    const kind = input.plan.chart ?? chartKindOf(input.prompt);
+    if (kind === 'heatmap') {
+      // 热力图的两根轴都是分类列：x 是横轴，y 是纵轴，数值列走 value 而不是 y。
+      // 有一根是时间桶时编译结果依次是 period / label，否则是 label / label2。
+      if (spec?.timeBucket) {
+        args.x = 'period';
+        args.y = 'label';
+      } else if (spec?.groupBy.length === 2) {
+        args.x = 'label';
+        args.y = 'label2';
+      } else {
+        return undefined;
+      }
+      args.type = 'heatmap';
+      args.value = yField;
+    } else {
+      args.type = kind ?? (spec?.timeBucket ? 'line' : /(饼|占比|pie|构成)/i.test(input.prompt) ? 'pie' : 'bar');
+      if (kind === 'stacked' || kind === 'radar') {
+        // 堆叠/雷达的其余度量列按 value2… 依次传入。
+        const extra = compiled.valueAliases.slice(1);
+        if (extra.length) args.ys = extra;
+      }
+    }
     if (input.titleTable) args.title = `${tableLabel(input.bundle, input.titleTable)} · ${input.plan.axisLabel ?? input.plan.measureLabel ?? '统计'}`;
   }
   return { tool: input.intent === 'chart' ? 'render_chart' : 'analyze_chart', args };
@@ -593,12 +617,33 @@ function planStepAnswer(input: { intent: LocalIntent; plan: PlanOutcome; result:
   const { intent, plan } = input;
   const sql = plan.compiled!.sql;
   if (intent === 'chart') {
-    const data = input.result.data as { chart?: { title?: string; series?: Array<{ label: string; value: number }> } } | undefined;
-    const series = data?.chart?.series ?? [];
+    const data = input.result.data as {
+      chart?: {
+        title?: string;
+        note?: string;
+        series?: Array<{ label: string; value: number }>;
+        heatmap?: { xLabels: string[]; yLabels: string[]; values: number[][]; valueLabel?: string };
+      };
+    } | undefined;
+    const chart = data?.chart;
+    const note = chart?.note ? `\n\n> ${chart.note}` : '';
+    if (chart?.heatmap) {
+      const grid = chart.heatmap;
+      const flat = grid.values.flat().filter((value) => Number.isFinite(value));
+      const max = flat.length ? Math.max(...flat) : 0;
+      return (
+        `热力图已生成并显示在上方工具卡中：**${chart.title ?? '热力图'}**（${grid.xLabels.length} × ${grid.yLabels.length} 个格子）。\n\n` +
+        (flat.length ? `最高一格 **${formatNumber(max)}**（${grid.valueLabel ?? '数值'}）。` : '没有可绘制的数据。') +
+        note +
+        input.probeNote
+      );
+    }
+    const series = chart?.series ?? [];
     const top = [...series].sort((a, b) => b.value - a.value).slice(0, 3);
     return (
-      `图表已生成并显示在上方工具卡中：**${data?.chart?.title ?? '分析图'}**。\n\n` +
+      `图表已生成并显示在上方工具卡中：**${chart?.title ?? '分析图'}**。\n\n` +
       (top.length ? top.map((point) => `- ${point.label}: ${formatNumber(point.value)}`).join('\n') : '没有可绘制的数据。') +
+      note +
       input.probeNote
     );
   }
@@ -1266,11 +1311,6 @@ export class LocalProvider implements LlmProvider {
       }
       const q = (name: string) => quoteIdent(name, engine);
       const numerics = numericColumns(table, grounding);
-      const advanced = /(热力|heatmap|雷达|radar|堆叠|stacked)/i.exec(prompt);
-      if (advanced) {
-        yield* finish(`离线规则模式还没有「${advanced[0]}」的取数模板；配置模型后可以直接生成，或先在编辑器里写好聚合 SQL 再用图表页。`);
-        return;
-      }
       if (/(散点|相关|scatter|correlation)/i.test(prompt) && numerics.length < 2) {
         yield* finish(`\`${table.name}\` 需要至少两个数值列才能画散点图（当前：${numerics.map((c) => c.name).join('、') || '无'}）。`);
         return;
