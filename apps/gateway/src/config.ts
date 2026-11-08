@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const VERSION = '0.0.2';
+export const VERSION = '0.0.3';
 
 export interface GatewayConfig {
   version: string;

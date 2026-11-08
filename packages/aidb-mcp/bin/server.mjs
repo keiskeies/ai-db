@@ -81,7 +81,7 @@ input.on('line', (line) => {
         reply(message.id, {
           protocolVersion: '2024-11-05',
           capabilities: { tools: {} },
-          serverInfo: { name: 'aidb-studio', version: '0.0.2' },
+          serverInfo: { name: 'aidb-studio', version: '0.0.3' },
         });
         return;
       }
