@@ -18,13 +18,13 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            target: --win --x64 --arm64
+            target: --win
             artifact: windows
           - os: macos-latest
-            target: --mac --x64 --arm64
+            target: --mac
             artifact: macos
           - os: ubuntu-latest
-            target: --linux --x64 --arm64
+            target: --linux
             artifact: linux
     steps:
       - uses: actions/checkout@v4
@@ -96,13 +96,19 @@ jobs:
           npx --no-install electron-builder --version || true
 
       - name: Package installer
+        # 每个架构单独跑一次：NSIS 在一次传入多个架构时会额外产出一个合并安装器
+        # （约 284 MB，内容与两个单架构包重复），分开跑才只留 x64 / arm64 各自的安装器。
         shell: bash
         working-directory: apps/desktop
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
           set -o pipefail
-          npx electron-builder ${{ matrix.target }} --publish never 2>&1 | tee electron-builder.log
+          : > electron-builder.log
+          for arch in x64 arm64; do
+            echo "=== ${{ matrix.target }} --${arch}"
+            npx electron-builder ${{ matrix.target }} --${arch} --publish never 2>&1 | tee -a electron-builder.log
+          done
 
       - name: Verify mac architectures
         # 交叉架构打包最容易出的错是「dmg 名字对了、里面的原生二进制错了」，
@@ -198,10 +204,11 @@ jobs:
               echo "::error::missing output dir $dir"
               exit 1
             fi
-            bin=$(ls "$dir" | head -n 1)
+            bin="$dir/AiDB Studio"
+            [ -f "$bin" ] || { echo "::error::missing executable $bin"; exit 1; }
             echo "--- $dir (binary: $bin)"
-            file "$dir/$bin"
-            if ! file "$dir/$bin" | grep -q "$expect"; then
+            file "$bin"
+            if ! file "$bin" | grep -q "$expect"; then
               echo "::error::$dir main binary is not $expect"
               exit 1
             fi
@@ -337,8 +344,8 @@ jobs:
             | Windows | arm64 | `AiDB.Studio-0.0.4-arm64-setup.exe` |
             | macOS | Apple Silicon | `AiDB.Studio-0.0.4-arm64.dmg` |
             | macOS | Intel | `AiDB.Studio-0.0.4-x64.dmg` |
-            | Linux | x64 | `AiDB.Studio-0.0.4-x64.AppImage` · `.deb` · `.rpm` |
-            | Linux | arm64 | `AiDB.Studio-0.0.4-arm64.AppImage` · `.deb` · `.rpm` |
+            | Linux | x64 | `AiDB.Studio-0.0.4-x86_64.AppImage` · `-amd64.deb` · `-x86_64.rpm` |
+            | Linux | arm64 | `AiDB.Studio-0.0.4-arm64.AppImage` · `-arm64.deb` · `-aarch64.rpm` |
 
             **Platform notes**
             - Oracle needs a prebuilt node-oracledb binding, and upstream ships none for macOS Intel or Windows arm64. On those two installers the engine is greyed out in the new-connection dialog with the reason; every other engine behaves the same everywhere. Linux arm64 does ship the binding.

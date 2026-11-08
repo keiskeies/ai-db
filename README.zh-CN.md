@@ -575,11 +575,11 @@ release 页按「系统 + 架构」出包，六个桌面组合：
 | Windows | arm64 | `AiDB Studio-<版本>-arm64-setup.exe`（NSIS） |
 | macOS | Apple Silicon | `AiDB Studio-<版本>-arm64.dmg` |
 | macOS | Intel | `AiDB Studio-<版本>-x64.dmg` |
-| Linux | x64 | `AiDB Studio-<版本>-x64.AppImage` / `.deb` / `.rpm` |
-| Linux | arm64 | `AiDB Studio-<版本>-arm64.AppImage` / `.deb` / `.rpm` |
+| Linux | x64 | `AiDB Studio-<版本>-x86_64.AppImage` / `-amd64.deb` / `-x86_64.rpm` |
+| Linux | arm64 | `AiDB Studio-<版本>-arm64.AppImage` / `-arm64.deb` / `-aarch64.rpm` |
 
 - Windows on ARM 也能直接跑 x64 安装包（系统模拟），而那份保留 Oracle 驱动。
-- Linux 的 deb / rpm 走发行版包管理器；AppImage 免安装但需要 FUSE 2，没有就 `--appimage-extract-and-run`。两者都需要图形会话，WSL2 需要 WSLg。
+- Linux 的文件名按发行版惯例带架构后缀（x64 是 `amd64` / `x86_64`，arm64 是 `aarch64`）。deb / rpm 走发行版包管理器；AppImage 免安装但需要 FUSE 2，没有就 `--appimage-extract-and-run`。两者都需要图形会话，WSL2 需要 WSLg。
 - 每个安装包只带自身架构的原生绑定（DuckDB、node-oracledb），CI 在发布前逐个断言；两个例外见上文引擎说明。
 - Android / iOS 走 EAS 构建，不在 release 里。
 

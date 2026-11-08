@@ -42,5 +42,7 @@
     "wait-on": "^8.0.2"
   },
   "description": "AI-native cross-platform database studio with an autonomous agent",
-  "author": "AiDB"
+  "author": "AiDB",
+  "homepage": "https://github.com/keiskeies/ai-db",
+  "license": "MIT"
 }

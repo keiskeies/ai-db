@@ -575,11 +575,11 @@ Releases are published per operating system and architecture — six desktop com
 | Windows | arm64 | `AiDB Studio-<version>-arm64-setup.exe` (NSIS) |
 | macOS | Apple Silicon | `AiDB Studio-<version>-arm64.dmg` |
 | macOS | Intel | `AiDB Studio-<version>-x64.dmg` |
-| Linux | x64 | `AiDB Studio-<version>-x64.AppImage` / `.deb` / `.rpm` |
-| Linux | arm64 | `AiDB Studio-<version>-arm64.AppImage` / `.deb` / `.rpm` |
+| Linux | x64 | `AiDB Studio-<version>-x86_64.AppImage` / `-amd64.deb` / `-x86_64.rpm` |
+| Linux | arm64 | `AiDB Studio-<version>-arm64.AppImage` / `-arm64.deb` / `-aarch64.rpm` |
 
 - Windows on ARM can also run the x64 installer through the system emulator, and that build keeps the Oracle driver.
-- On Linux, deb and rpm install through the distribution package manager; the AppImage is portable but needs FUSE 2 — otherwise run it with `--appimage-extract-and-run`. A graphical session is required either way; WSL2 needs WSLg.
+- Linux filenames follow distribution conventions (x64 shows up as `amd64` or `x86_64`, arm64 as `aarch64`). deb and rpm install through the package manager; the AppImage is portable but needs FUSE 2 — otherwise run it with `--appimage-extract-and-run`. A graphical session is required either way; WSL2 needs WSLg.
 - Each installer carries only its own architecture's native bindings (DuckDB, node-oracledb), asserted per build in CI; the two exceptions are described in the engine section above.
 - Android and iOS are built through EAS and are not part of the release page.
 
