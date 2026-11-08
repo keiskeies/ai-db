@@ -3546,5 +3546,8 @@
   "部署形态": "Deployment mode",
   "单机 / 主从（16 个库）": "Standalone / replica (16 databases)",
   "Redis Cluster（只有 db0）": "Redis Cluster (db0 only)",
-  "保存当前 SQL": "Save current SQL"
+  "保存当前 SQL": "Save current SQL",
+  "本机不可用": "Unavailable here",
+  "可改用 Apple Silicon 版安装包。": "Use the Apple Silicon build instead.",
+  "当前平台（{platform}）缺少 {engine} 驱动所需的原生绑定，该引擎在本机不可用。": "This platform ({platform}) has no native binding for the {engine} driver, so the engine is unavailable on this machine."
 }

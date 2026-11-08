@@ -16,7 +16,7 @@ import type {
   ToolResult,
 } from '@aidb/core';
 import { DEFAULT_SETTINGS, engineMeta, normalizeLocale } from '@aidb/core';
-import { ApiError, api, streamTurn, type BootstrapData } from './lib/api';
+import { ApiError, api, streamTurn, type BootstrapData, type UnavailableEngine } from './lib/api';
 import { startSchemaEvents } from './lib/schemaEvents';
 import { getI18nLocale, setI18nLocale, translate, type I18nKey, type I18nVars } from './i18n';
 import { t as tr } from './i18n';
@@ -152,6 +152,8 @@ interface AppStore {
   booted: boolean;
   bootError?: string;
   connections: ConnectionConfig[];
+  /** 本机缺原生绑定、不可能连通的引擎；用于在建连接时置灰。 */
+  unavailableEngines: UnavailableEngine[];
   settings: AppSettings;
   tools: BootstrapData['tools'];
   sessions: AgentSessionMeta[];
@@ -380,6 +382,7 @@ function tabId(prefix: string): string {
 export const useApp = create<AppStore>((set, get) => ({
   booted: false,
   connections: [],
+  unavailableEngines: [],
   settings: { ...DEFAULT_SETTINGS, agent: { ...DEFAULT_SETTINGS.agent, hasApiKey: false } },
   tools: [],
   sessions: [],
@@ -448,6 +451,7 @@ export const useApp = create<AppStore>((set, get) => ({
         booted: true,
         bootError: undefined,
         connections: data.connections,
+        unavailableEngines: data.unavailableEngines ?? [],
         settings,
         sessions: data.sessions,
         tools: data.tools,

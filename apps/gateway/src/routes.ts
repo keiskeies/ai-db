@@ -47,6 +47,7 @@ import {
   type ReportSpec,
 } from '@aidb/core';
 import { pairingCode, hashToken, randomToken, safeEqual } from './crypto';
+import { unavailableEngines } from './engineAvailability';
 import { validateBuiltinMcpArgs } from './builtinMcp';
 import { readAttachment, saveAttachment } from './attachments';
 import type { GatewayConfig } from './config';
@@ -302,7 +303,9 @@ export function createApiRouter(deps: ApiDeps): Router {
       ok: true,
       version: config.version,
       platform: process.platform,
+      arch: process.arch,
       demoReady: store.listConnections().some((c) => c.engine === 'sqlite'),
+      unavailableEngines: unavailableEngines(),
       uptimeMs: Date.now() - deps.startedAt,
     });
   });
@@ -311,12 +314,16 @@ export function createApiRouter(deps: ApiDeps): Router {
     res.json({
       version: config.version,
       platform: process.platform,
+      arch: process.arch,
       bridgeHost: config.host,
       bridgePort: config.port,
       connections: store.listConnections(),
       settings: store.publicSettings(),
       sessions: store.listSessions(),
       tools: TOOLS.map((t) => ({ name: t.name, description: t.description, risk: t.risk })),
+      // 依赖预编译原生绑定、而本机恰好没有的引擎（当前是 macOS Intel 的 Oracle）：
+      // 客户端据此把该引擎置灰，避免用户配完连接才发现连不上。
+      unavailableEngines: unavailableEngines(),
       startedAt: deps.startedAt,
     });
   });

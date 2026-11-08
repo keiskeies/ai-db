@@ -65,6 +65,7 @@ export function ConnectionModal() {
 function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
   const close = useApp((s) => s.closeConnectionEditor);
   const save = useApp((s) => s.saveConnection);
+  const unavailableEngines = useApp((s) => s.unavailableEngines);
   const t = useApp((s) => s.t);
 
   const c = editor.connection;
@@ -98,6 +99,16 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; version?: string; latencyMs: number; message?: string } | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // 本机缺预编译原生绑定的引擎（当前只有 macOS Intel 的 Oracle）：选项置灰，测试与保存一并禁用。
+  const blocked = new Map(unavailableEngines.map((item) => [item.engine, item]));
+  const blockedEngine = blocked.get(engine);
+  const blockedHint = blockedEngine
+    ? tr('当前平台（{platform}）缺少 {engine} 驱动所需的原生绑定，该引擎在本机不可用。', {
+        platform: blockedEngine.platform,
+        engine: engineMeta(engine).label,
+      })
+    : '';
 
   const changeEngine = (next: Engine) => {
     const meta = engineMeta(next);
@@ -152,6 +163,10 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
   };
 
   const test = async () => {
+    if (blockedEngine) {
+      setTestResult({ ok: false, latencyMs: 0, message: blockedHint });
+      return;
+    }
     setTesting(true);
     setTestResult(null);
     try {
@@ -165,7 +180,7 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
   };
 
   const submit = async () => {
-    if (!name.trim()) return;
+    if (!name.trim() || blockedEngine) return;
     if (engineMeta(engine).fileBased && !database.trim()) return;
     setSaving(true);
     const result = await save(buildBody());
@@ -180,7 +195,7 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
       icon={<PlugZap size={15} />}
       footer={
         <>
-          <button className="btn" onClick={() => void test()} disabled={testing} data-testid="connection-test">
+          <button className="btn" onClick={() => void test()} disabled={testing || Boolean(blockedEngine)} data-testid="connection-test">
             {testing ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : <Cable size={12} />} {testing ? t('testing') : t('test')}
           </button>
           {testResult ? (
@@ -190,7 +205,7 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
           ) : null}
           <div className="spacer" />
           <button className="btn" onClick={close}>{t('cancel')}</button>
-          <button className="btn primary" onClick={() => void submit()} disabled={saving || !name.trim()} data-testid="connection-save">
+          <button className="btn primary" onClick={() => void submit()} disabled={saving || !name.trim() || Boolean(blockedEngine)} data-testid="connection-save">
             {saving ? <Loader2 size={12} className="spin" style={{ animation: 'spin .8s linear infinite' }} /> : null} {t('save')}
           </button>
         </>
@@ -208,11 +223,22 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
               {GROUPED_ENGINES.map(([label, items]) => (
                 <OptGroup key={label} label={label}>
                   {items.map((item) => (
-                    <Option key={item.id} value={item.id}>{item.label}</Option>
+                    <Option key={item.id} value={item.id} disabled={blocked.has(item.id)}>
+                      {item.label}
+                      {blocked.has(item.id) ? ` · ${tr('本机不可用')}` : ''}
+                    </Option>
                   ))}
                 </OptGroup>
               ))}
             </Select>
+            {blockedHint ? (
+              <span className="hint" style={{ color: 'var(--warning, #e0a155)' }} data-testid="engine-unavailable-hint">
+                {blockedHint}
+                {blockedEngine?.platform.startsWith('darwin') && engine === 'oracle'
+                  ? ` ${tr('可改用 Apple Silicon 版安装包。')}`
+                  : ''}
+              </span>
+            ) : null}
           </div>
           <div className="field">
             <label>{t('environment')}</label>

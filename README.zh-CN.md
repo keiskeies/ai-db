@@ -342,6 +342,8 @@ Agent 的主路径不止自由对话。AiDB 把高频业务动作收敛为命令
 
 协议别名复用同一驱动，但保留自己的默认端口与能力边界：例如达梦走官方 `dmdb`，DuckDB 走文件驱动，OceanBase 当前只接 MySQL 模式。对象树、查询语言、DDL、备份、用户管理、事务等能力按引擎裁剪；不支持的功能会明确禁用，而不是给出一个会失败的按钮。
 
+> **macOS Intel（x64）安装包不含 Oracle 驱动。** 上游 `node-oracledb` 26 只发布 `darwin-arm64` / `linux-arm64` / `linux-x64` / `win32-x64` 四种预编译绑定，没有 `darwin-x64`；thick 模式同样要加载这份绑定，所以装 Oracle Instant Client 也绕不过去。Bridge 在 `/health` 与 `/bootstrap` 的 `unavailableEngines` 里上报本机缺绑定的引擎，桌面端据此在新建连接时把 Oracle 置灰并写明原因，而不是让用户配完才发现连不上。其余 40 种引擎在 arm64 与 x64 两个安装包上行为一致。
+
 ### 非关系型工作台
 
 - **MongoDB**：集合浏览、采样字段推断、`collection / op / filter / pipeline` JSON 查询、文档写入、单文档编辑、CSV 导入、集合与索引建删、TTL / unique / sparse 索引。
@@ -643,7 +645,7 @@ location / {
 - 移动端是随身工作区：连接凭据不下发、复杂布局编辑和部分管理能力仍在桌面端。
 - 图数据库、向量库、搜索、时序、宽列等引擎按各自查询语言工作，不强行套用 SQL 语义；不支持的 DDL、备份、用户管理等能力会禁用。
 - 数据编辑当前即时提交；跨请求事务在支持的 SQL 引擎上通过 `BEGIN / COMMIT / ROLLBACK` 完成。
-- macOS 安装包与 iOS IPA 需要对应宿主 / EAS 构建；Windows / Linux 打包配置已提供。
+- macOS 安装包按架构分别产出（Apple Silicon `arm64` / Intel `x64`）；Intel 包不含 Oracle 驱动，原因与替代方案见上文引擎说明。Windows / Linux 打包配置同样已提供，iOS IPA 需要 EAS 构建。
 
 ## 设计文档
 

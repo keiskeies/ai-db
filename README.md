@@ -342,6 +342,8 @@ The connection form switches default port, database field, SSL / SSH capability,
 
 Protocol aliases reuse the same driver but keep their own default ports and capability boundaries: DM8 uses the official `dmdb`, DuckDB uses a file driver, and OceanBase currently connects in MySQL mode only. Object tree, query language, DDL, backup, user management, and transactions are trimmed per engine; unsupported features are explicitly disabled instead of offering a button that will fail.
 
+> **The macOS Intel (x64) installer ships without the Oracle driver.** Upstream `node-oracledb` 26 publishes prebuilt bindings for `darwin-arm64` / `linux-arm64` / `linux-x64` / `win32-x64` only — there is no `darwin-x64`. Thick mode loads the same binding, so installing Oracle Instant Client does not work around it. The Bridge reports engines that lack a binding for the current machine in `unavailableEngines` on `/health` and `/bootstrap`; the desktop app greys Oracle out in the new-connection dialog and states the reason instead of letting the connection fail later. The other 40 engines behave identically on the arm64 and x64 installers.
+
 ### Non-relational workbenches
 
 - **MongoDB**: collection browsing, sampled field inference, `collection / op / filter / pipeline` JSON queries, document writes, single-document editing, CSV import, collection and index creation/deletion, and TTL / unique / sparse indexes.
@@ -643,7 +645,7 @@ When starting the Bridge, set `AIDB_PUBLIC_URL=https://db.example.com` so pairin
 - Mobile is a pocket workspace: connection credentials are never distributed, and complex layout editing and some administration capabilities remain on desktop.
 - Graph, vector, search, time-series, and wide-column engines work in their own query languages rather than forcing SQL semantics; unsupported DDL, backup, and user management are disabled.
 - Data edits currently commit immediately; cross-request transactions use `BEGIN / COMMIT / ROLLBACK` on engines that support them.
-- macOS installers and iOS IPAs require the corresponding host / EAS build; Windows / Linux packaging configuration is included.
+- macOS installers are built per architecture (Apple Silicon `arm64` / Intel `x64`); the Intel build ships without the Oracle driver, see the engine section above for the reason and the workaround. Windows / Linux packaging configuration is included as well, and iOS IPAs require an EAS build.
 
 ## Design documents
 

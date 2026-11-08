@@ -121,13 +121,24 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export interface BootstrapData {
   version: string;
   platform: string;
+  arch?: string;
   bridgeHost: string;
   bridgePort: number;
   connections: ConnectionConfig[];
   settings: AppSettings;
   sessions: AgentSessionMeta[];
   tools: Array<{ name: string; description: string; risk: string }>;
+  /** 本机缺少原生绑定、因而不可能连通的引擎（当前是 macOS Intel 的 Oracle）。 */
+  unavailableEngines?: UnavailableEngine[];
   startedAt: number;
+}
+
+export interface UnavailableEngine {
+  engine: string;
+  code: string;
+  /** 形如 darwin-x64 */
+  platform: string;
+  detail: string;
 }
 
 export interface SessionDetail {
@@ -456,7 +467,10 @@ export type SkillWorkerEvent =
   | { type: 'skill_artifact'; workspace: string; files: SkillRunFile[] };
 
 export const api = {
-  health: () => request<{ ok: boolean; version: string; demoReady: boolean }>('/health'),
+  health: () =>
+    request<{ ok: boolean; version: string; platform?: string; arch?: string; demoReady: boolean; unavailableEngines?: UnavailableEngine[] }>(
+      '/health',
+    ),
   bootstrap: () => request<BootstrapData>('/bootstrap'),
   tools: () => request<{ tools: any[] }>('/agent/tools'),
   capabilities: () => request<{ capabilities: Capability[] }>('/capabilities'),
