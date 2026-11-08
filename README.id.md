@@ -59,4 +59,4 @@ Di Windows on ARM, pemasang x64 berjalan lewat emulasi sistem. Di Linux, deb / r
 
 ## Lisensi
 
-MIT
+[MIT](./LICENSE)

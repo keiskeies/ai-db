@@ -59,4 +59,4 @@ Su Windows on ARM anche l'installer x64 funziona tramite emulazione di sistema. 
 
 ## Licenza
 
-MIT
+[MIT](./LICENSE)

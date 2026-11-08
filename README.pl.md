@@ -59,4 +59,4 @@ W Windows on ARM instalator x64 działa przez emulację systemową. W Linuxie de
 
 ## Licencja
 
-MIT
+[MIT](./LICENSE)

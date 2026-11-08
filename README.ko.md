@@ -59,4 +59,4 @@ Windows on ARM에서는 x64 설치 파일도 시스템 에뮬레이션으로 실
 
 ## 라이선스
 
-MIT
+[MIT](./LICENSE)

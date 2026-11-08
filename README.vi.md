@@ -59,4 +59,4 @@ Trên Windows on ARM, bộ cài x64 chạy qua giả lập hệ thống. Trên L
 
 ## Giấy phép
 
-MIT
+[MIT](./LICENSE)

@@ -722,4 +722,4 @@ location / {
 
 ## License
 
-MIT
+[MIT](./LICENSE) © 2026 AiDB

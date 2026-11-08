@@ -722,4 +722,4 @@ When starting the Bridge, set `AIDB_PUBLIC_URL=https://db.example.com` so pairin
 
 ## License
 
-MIT
+[MIT](./LICENSE) © 2026 AiDB

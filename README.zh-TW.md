@@ -59,4 +59,4 @@ Windows on ARM 也能靠系統模擬執行 x64 安裝檔；Linux 的 deb / rpm �
 
 ## 授權
 
-MIT
+[MIT](./LICENSE)

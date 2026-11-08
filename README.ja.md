@@ -59,4 +59,4 @@ Windows on ARM では x64 インストーラーもシステムのエミュレー
 
 ## ライセンス
 
-MIT
+[MIT](./LICENSE)

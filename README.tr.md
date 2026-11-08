@@ -59,4 +59,4 @@ Windows on ARM'de x64 kurulum dosyası sistem öykünmesiyle çalışır. Linux'
 
 ## Lisans
 
-MIT
+[MIT](./LICENSE)

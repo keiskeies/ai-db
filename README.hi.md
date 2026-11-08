@@ -59,4 +59,4 @@ Windows on ARM पर x64 इंस्टॉलर सिस्टम एमु�
 
 ## लाइसेंस
 
-MIT
+[MIT](./LICENSE)

@@ -59,4 +59,4 @@ Op Windows on ARM werkt de x64-installer via systeememulatie. Op Linux installer
 
 ## Licentie
 
-MIT
+[MIT](./LICENSE)

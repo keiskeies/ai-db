@@ -59,4 +59,4 @@ No Windows on ARM, o instalador x64 roda pela emulação do sistema. No Linux, d
 
 ## Licença
 
-MIT
+[MIT](./LICENSE)

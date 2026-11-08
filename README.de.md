@@ -59,4 +59,4 @@ Unter Windows on ARM läuft auch der x64-Installer über die Systememulation. Un
 
 ## Lizenz
 
-MIT
+[MIT](./LICENSE)
