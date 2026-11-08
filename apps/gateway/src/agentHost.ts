@@ -608,7 +608,7 @@ export class AgentHost {
         environment: conn?.environment ?? 'dev',
         connectionReadonly: conn?.readonly ?? false,
         history: compacted,
-        context: { connection: conn, databases: schemas, memories, agentContext: businessContext, glossary: recall.glossary, sqlExamples: recall.sqlExamples, attachmentTables },
+        context: { connection: conn, databases: schemas, memories, agentContext: businessContext, glossary: recall.glossary, sqlExamples: recall.sqlExamples, attachmentTables, locale: /^zh/i.test(this.opts.store.getSettings().locale) ? 'zh' : 'en' },
         sessionAllowed,
         alwaysAllowed: this.alwaysAllowed,
         signal: controller.signal,

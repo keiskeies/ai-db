@@ -68,6 +68,8 @@ export interface PlanInput {
    * 宁可让追问少继承一个条件，也不能把「已支付」当成字面量查出一个空答案。
    */
   replay?: boolean;
+  /** 结果列业务名的语言；缺省中文。 */
+  locale?: 'zh' | 'en';
 }
 
 /** 候选表池：FROM 起点在前，JOIN 进来的表追加在后，选列时按这个顺序优先。 */
@@ -985,7 +987,7 @@ export function planQuery(input: PlanInput): PlanOutcome {
   const compiled = compileQuery(engine, spec);
   const tableText = tableLabel(grounding.bundle, main);
   const axisRefs = spec.detail ?? [...(spec.timeBucket ? [spec.timeBucket.col] : []), ...spec.groupBy];
-  const valueLabel = (m: MeasureSpec): string => (m.col ? refLabel(pool, m.col) : `${tableText}数`);
+  const valueLabel = (m: MeasureSpec): string => (m.col ? refLabel(pool, m.col) : input.locale === 'en' ? `${tableText} count` : `${tableText}数`);
   const labels = [...axisRefs.map((ref) => refLabel(pool, ref)), ...spec.measures.map(valueLabel)];
   return {
     status: 'ready',

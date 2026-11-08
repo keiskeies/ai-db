@@ -32,7 +32,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     models: ['local'],
     defaultModel: 'local',
     color: '#8B5CF6',
-    note: '无需任何外部服务，支持建表/查询/备份等 22 个工具，复杂推理建议接云端模型。',
+    note: '无需任何外部服务，连上就能用：查询、统计、多轮追问、全部图表类型、建表改表、备份导出、结构对比、非 SQL 引擎原生查询等 37 个工具。开放式分析请接云端模型。',
   },
   {
     id: 'ollama',

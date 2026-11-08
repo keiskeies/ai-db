@@ -656,3 +656,88 @@ test('offline refuses open-ended pipeline authoring and gates skills', async () 
   const call = enabled.find((e) => e.type === 'tool_call') as any;
   assert.equal(call.call.name, 'skill_list');
 });
+
+// ---- 答案质量：SQL 可见、语言切换、预测注记 ----
+
+test('offline chart answers show the SQL that produced them', async () => {
+  const provider = new LocalProvider();
+  const question = '按 status 统计 orders 并画柱状图';
+  const events = await collect(
+    provider.stream({
+      system: '',
+      messages: [
+        { role: 'user', content: question },
+        toolMessage('render_chart', { chart: { type: 'bar', title: 'orders', series: [{ label: 'paid', value: 12 }], sql: 'SELECT 1' } }),
+      ],
+      tools: [],
+      context: richContext,
+    }),
+  );
+  const answer = textOf(events);
+  assert.match(answer, /```sql/);
+  assert.match(answer, /GROUP BY "status"/);
+});
+
+test('offline answer text follows the locale', async () => {
+  const provider = new LocalProvider();
+  const en: AgentContextData = { ...richContext, locale: 'en' };
+  const question = '按 status 统计 orders 的金额合计';
+  const events = await collect(
+    provider.stream({
+      system: '',
+      messages: [
+        { role: 'user', content: question },
+        toolMessage('analyze_chart', {
+          x: 'label', y: 'value', rowCount: 2, sum: 12300, avg: 6150, min: 300, max: 12000, argmin: 'refunded', argmax: 'paid',
+        }),
+      ],
+      tools: [],
+      context: en,
+    }),
+  );
+  const answer = textOf(events);
+  assert.match(answer, /Computed by the Bridge/);
+  assert.equal(/数字由 Bridge 计算/.test(answer), false);
+});
+
+test('offline forecast passes the method note through', async () => {
+  const provider = new LocalProvider();
+  const events = await collect(
+    provider.stream({
+      system: '',
+      messages: [
+        { role: 'user', content: '预测 orders 未来 3 个月的金额' },
+        toolMessage('forecast_chart', {
+          method: 'linear',
+          note: '基于近 12 个月做线性回归，仅供参考。',
+          forecast: [{ label: '2026-12', value: 1200, lower: 900, upper: 1500 }],
+        }),
+      ],
+      tools: [],
+      context: richContext,
+    }),
+  );
+  const answer = textOf(events);
+  assert.match(answer, /线性回归/);
+  assert.match(answer, /仅供参考/);
+});
+
+test('offline English mode lists tables in English', async () => {
+  const provider = new LocalProvider();
+  const en: AgentContextData = { ...richContext, locale: 'en' };
+  const events = await collect(
+    provider.stream({
+      system: '',
+      messages: [
+        { role: 'user', content: 'what tables exist' },
+        toolMessage('inspect_schema', { tables: rich }),
+      ],
+      tools: [],
+      context: en,
+    }),
+  );
+  const answer = textOf(events);
+  assert.match(answer, /This database has \*\*2\*\* tables/);
+  assert.match(answer, /cols/);
+  assert.equal(answer.includes('当前库'), false);
+});

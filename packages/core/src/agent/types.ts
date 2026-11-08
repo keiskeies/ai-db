@@ -105,6 +105,8 @@ export interface AgentContextData {
   /** 用户登记的标准问答 SQL：离线推理器命中时直接沿用它的口径。 */
   sqlExamples?: Memory[];
   attachmentTables?: string[];
+  /** 回复语言。离线推理器的文案按它切换；云端模型由 system prompt 决定。 */
+  locale?: 'zh' | 'en';
 }
 
 export interface ProviderRequest {

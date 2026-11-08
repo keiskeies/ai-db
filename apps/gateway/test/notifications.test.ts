@@ -251,7 +251,8 @@ test('飞书 URL 验证与 OneBot inbound 问答', async () => {
   }
   assert.ok(reply, 'OneBot reply not sent');
   assert.equal(reply.body.group_id, 123);
-  assert.match(String(reply.body.message), /表|数据库|连接/);
+  // 默认界面语言是英语，离线推理器的回复也跟着走英文；断言工具确实把库内容念出来了。
+  assert.match(String(reply.body.message), /orders|表|数据库|连接/);
 });
 
 
@@ -301,5 +302,5 @@ test('飞书 inbound 消息经只读 Agent 回复', async () => {
   }
   assert.ok(reply, 'Feishu reply not sent');
   assert.equal(reply.body.receive_id, 'chat-1');
-  assert.match(String(JSON.parse(reply.body.content).text), /表|数据库|连接/);
+  assert.match(String(JSON.parse(reply.body.content).text), /orders|表|数据库|连接/);
 });

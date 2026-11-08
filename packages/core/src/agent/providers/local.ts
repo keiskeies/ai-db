@@ -11,6 +11,8 @@ import { chartKindOf, isFollowUp, planQuery, splitClauses } from '../local/parse
 import type { QuerySpec } from '../local/query';
 import type { Forbidden } from '../local/business';
 import { forbiddenFromGlossary, forbiddenTableReason, matchSqlExample } from '../local/business';
+import type { LocalLang } from '../local/text';
+import { localLang, localText } from '../local/text';
 import { estimateTokens } from '../prompt';
 import { columnLabel, tableLabel } from '../suggest';
 import type {
@@ -153,7 +155,7 @@ export function detectIntent(prompt: string): LocalIntent {
   if (/(分组|group\s+by|按.{0,10}(统计|汇总|分布))/.test(p)) return 'group';
   if (/(看|来|show|sample|预览|检查).{0,10}(几|样例|数据|rows?)/.test(p)) return 'sample';
   if (/(结构|字段|schema|列信息|columns?)/.test(p)) return 'describe';
-  if (/(有哪些表|哪些表|所有表|列出.*表|表列表|list.*tables?|show\s+tables)/.test(p)) return 'list_tables';
+  if (/(有哪些表|哪些表|所有表|列出.*表|表列表|list.*tables?|show\s+tables|what\s+tables?|which\s+tables?|tables?\s+(exist|available))/i.test(p)) return 'list_tables';
   if (/(帮助|能做什么|help|怎么用)/.test(p)) return 'help';
   return 'help';
 }
@@ -421,8 +423,9 @@ function exampleAnswer(intent: LocalIntent, action: ToolOutcome): string {
   return rows ? `查询结果：\n\n${rows}` : '查询返回 0 行：条件可能过紧，或这段时间确实没有数据。';
 }
 
-function planOf(input: { question: string; engine: Engine; tables: TableInfo[]; grounding: GroundingOptions; outcomes: ToolOutcome[]; forbidden: Forbidden; focus?: QuerySpec }): PlanOutcome {
+function planOf(input: { question: string; engine: Engine; tables: TableInfo[]; grounding: GroundingOptions; outcomes: ToolOutcome[]; forbidden: Forbidden; focus?: QuerySpec; locale?: 'zh' | 'en' }): PlanOutcome {
   return planQuery({
+    locale: input.locale,
     question: input.question,
     engine: input.engine,
     tables: input.tables,
@@ -461,6 +464,7 @@ function compoundSteps(input: {
   connectionId: string;
   database?: string;
   bundle?: AgentContextData['agentContext'];
+  lang: LocalLang;
 }): CompoundStep[] {
   const clauses = splitClauses(input.question);
   if (clauses.length < 2) return [];
@@ -471,7 +475,7 @@ function compoundSteps(input: {
     // 落到 help 会让计划卡冒出一句「这一问我没听懂」。
     const detected = detectIntent(clause);
     const kind: LocalIntent = PLANNED_INTENTS.includes(detected) ? detected : 'analyze';
-    const plan = planOf({ question: clause, engine: input.engine, tables: input.tables, grounding: input.grounding, outcomes: input.outcomes, forbidden: input.forbidden });
+    const plan = planOf({ question: clause, engine: input.engine, tables: input.tables, grounding: input.grounding, outcomes: input.outcomes, forbidden: input.forbidden, locale: input.lang });
     const label = clause.length > 26 ? `${clause.slice(0, 26)}…` : clause;
     if (plan.status === 'probe' && plan.probe) {
       steps.push({ text: label, probe: plan.probe, done: false });
@@ -492,7 +496,7 @@ function compoundSteps(input: {
     const prior = next(step.tool, plan.compiled.sql);
     if (prior) {
       const probeNote = plan.dropped?.length ? `\n\n> ${plan.dropped.join('；')}。` : '';
-      steps.push({ text: label, answer: planStepAnswer({ intent: kind, plan, result: prior.result, probeNote }), done: true });
+      steps.push({ text: label, answer: planStepAnswer({ intent: kind, plan, result: prior.result, probeNote, lang: input.lang }), done: true });
       continue;
     }
     steps.push({ text: label, call: mkCall(step.tool, step.args), done: false });
@@ -565,53 +569,61 @@ function followUpIntent(intent: LocalIntent, prompt: string, priorUser: string[]
 }
 
 /** 口径说明：把规划器实际做了什么摊在执行过程里，用户才知道数字是怎么来的。 */
-function planNotes(plan: PlanOutcome): string {
+function planNotes(plan: PlanOutcome, lang: LocalLang): string {
   const notes = plan.compiled?.notes ?? [];
   const filters = (plan.spec?.filters ?? []).filter((filter) => filter.source);
   const conditions = filters.map((filter) => `${filter.source}`).filter((text, index, all) => all.indexOf(text) === index);
-  return [...notes, ...(conditions.length ? [`条件：${conditions.join('；')}`] : [])].join('；');
+  return [...notes, ...(conditions.length ? [localText(lang).appliedFilters(conditions.join(lang === 'en' ? '; ' : '；'))] : [])].join(lang === 'en' ? '; ' : '；');
 }
 
-function planPreamble(intent: LocalIntent, plan: PlanOutcome, table: string, axisLabel?: string): string {
-  const notes = planNotes(plan);
-  if (intent === 'chart') return `我把 \`${table}\` 汇总后渲染图表${axisLabel ? `（横轴 ${axisLabel}）` : ''}${notes ? `：${notes}` : ''}。`;
-  if (intent === 'analyze') return `我在 Bridge 侧算好 \`${table}\` 的统计量，不自己估数${notes ? `：${notes}` : ''}。`;
-  if (plan.spec?.groupBy.length || plan.spec?.timeBucket) return `我按${axisLabel ? ` \`${axisLabel}\`` : '分组'}统计 \`${table}\`${notes ? `：${notes}` : ''}。`;
-  return `我在 \`${table}\` 上按条件计数${notes ? `：${notes}` : ''}。`;
+function planPreamble(intent: LocalIntent, plan: PlanOutcome, table: string, axisLabel: string | undefined, lang: LocalLang): string {
+  const notes = planNotes(plan, lang);
+  const grouped = Boolean(plan.spec?.groupBy.length || plan.spec?.timeBucket);
+  if (intent !== 'chart' && intent !== 'analyze' && grouped) {
+    return lang === 'en' ? `I group \`${table}\` by ${axisLabel ? `\`${axisLabel}\`` : 'the dimension'}${notes ? `: ${notes}` : ''}.` : `我按${axisLabel ? ` \`${axisLabel}\`` : '分组'}统计 \`${table}\`${notes ? `：${notes}` : ''}。`;
+  }
+  if (intent !== 'chart' && intent !== 'analyze') {
+    return lang === 'en' ? `I count rows in \`${table}\` with your filters${notes ? `: ${notes}` : ''}.` : `我在 \`${table}\` 上按条件计数${notes ? `：${notes}` : ''}。`;
+  }
+  return localText(lang).preamble({ intent, table, axis: axisLabel, notes });
 }
 
 /** 结论：数字直接摆在第一句，口径跟在后面，明细表格压到最后。 */
-function planConclusion(plan: PlanOutcome, data: unknown, maxRows = 12): string {
+function planConclusion(plan: PlanOutcome, data: unknown, lang: LocalLang, maxRows = 12): string {
+  const t = localText(lang).conclusion;
   const d = data as { columns?: Array<{ name: string } | string>; rows?: unknown[][] } | undefined;
-  if (!d?.columns || !Array.isArray(d.rows)) return '查询没有返回行。';
+  if (!d?.columns || !Array.isArray(d.rows)) return t.empty;
   const names = d.columns.map((c) => (typeof c === 'string' ? c : c.name));
   const valueIndex = names.findIndex((name) => /^value$/i.test(name));
   const axisIndex = names.findIndex((name) => /^(label|period)$/i.test(name));
   const rows = d.rows;
-  if (!rows.length) return '查询返回 0 行：条件可能过紧，或这段时间确实没有数据。';
+  if (!rows.length) return t.noRows;
 
   const single = valueIndex >= 0 && axisIndex < 0 && rows.length === 1;
   if (single) {
     const value = rows[0]?.[valueIndex];
-    const measure = plan.measureLabel ? `${plan.measureLabel}` : '结果';
-    return `**${formatNumber(value)}** —— 这是${measure}${windowText(plan)}。`;
+    const measure = plan.measureLabel ? `${plan.measureLabel}` : lang === 'en' ? 'the result' : '结果';
+    return t.single(formatNumber(value), measure, windowText(plan, lang));
   }
 
-  const axisName = plan.axisLabel ?? (axisIndex >= 0 ? names[axisIndex] : '分组');
+  const axisName = plan.axisLabel ?? (axisIndex >= 0 ? names[axisIndex] : lang === 'en' ? 'group' : '分组');
   const sorted = [...rows].sort((a, b) => (valueIndex >= 0 ? Number(b[valueIndex] ?? 0) - Number(a[valueIndex] ?? 0) : 0));
   const top = sorted[0];
-  const head = sorted.slice(0, 3).map((row) => `- ${formatValue(row[axisIndex >= 0 ? axisIndex : 0])}：**${valueIndex >= 0 ? formatNumber(row[valueIndex]) : formatValue(row[1] ?? '')}**`);
+  const head = sorted
+    .slice(0, 3)
+    .map((row) => `- ${formatValue(row[axisIndex >= 0 ? axisIndex : 0])}${lang === 'en' ? ':' : '：'} **${valueIndex >= 0 ? formatNumber(row[valueIndex]) : formatValue(row[1] ?? '')}**`);
   const total = valueIndex >= 0 ? rows.reduce((sum, row) => sum + Number(row[valueIndex] ?? 0), 0) : rows.length;
+  const topValue = valueIndex >= 0 ? formatNumber(top?.[valueIndex]) : '';
   return (
-    `按 ${axisName} 分成 ${rows.length} 组${valueIndex >= 0 ? `，合计 **${formatNumber(total)}**` : ''}${windowText(plan)}。最高的是 ${formatValue(top?.[axisIndex >= 0 ? axisIndex : 0])}${valueIndex >= 0 ? `（${formatNumber(top?.[valueIndex])}）` : ''}。\n\n` +
-    (head.length ? `前 ${head.length}：\n${head.join('\n')}\n\n` : '') +
-    renderRows(data, maxRows, plan.labels)
+    `${t.grouped(axisName, rows.length, valueIndex >= 0 ? formatNumber(total) : '', windowText(plan, lang), formatValue(top?.[axisIndex >= 0 ? axisIndex : 0]), topValue)}` +
+    (head.length ? `\n${lang === 'en' ? `Top ${head.length}:` : `前 ${head.length}：`}\n${head.join('\n')}\n` : '') +
+    `\n${renderRows(data, maxRows, plan.labels)}`
   );
 }
 
-function windowText(plan: PlanOutcome): string {
+function windowText(plan: PlanOutcome, lang: LocalLang): string {
   const period = (plan.spec?.filters ?? []).find((filter) => filter.window && filter.source);
-  return period?.source ? `（${period.source}）` : '';
+  return period?.source ? localText(lang).windowOf(period.source) : '';
 }
 
 /**
@@ -668,9 +680,10 @@ function planStepCall(input: {
 }
 
 /** 把一条已经跑完的查询念成结论：数字在前，SQL 在后，抽取不了的口径另起一行交代。 */
-function planStepAnswer(input: { intent: LocalIntent; plan: PlanOutcome; result: ToolResult; probeNote: string }): string {
+function planStepAnswer(input: { intent: LocalIntent; plan: PlanOutcome; result: ToolResult; probeNote: string; lang: LocalLang }): string {
   if (!input.result.ok) return errText(input.result);
-  const { intent, plan } = input;
+  const { intent, plan, lang } = input;
+  const t = localText(lang);
   const sql = plan.compiled!.sql;
   if (intent === 'chart') {
     const data = input.result.data as {
@@ -687,21 +700,16 @@ function planStepAnswer(input: { intent: LocalIntent; plan: PlanOutcome; result:
       const grid = chart.heatmap;
       const flat = grid.values.flat().filter((value) => Number.isFinite(value));
       const max = flat.length ? Math.max(...flat) : 0;
-      return (
-        `热力图已生成并显示在上方工具卡中：**${chart.title ?? '热力图'}**（${grid.xLabels.length} × ${grid.yLabels.length} 个格子）。\n\n` +
-        (flat.length ? `最高一格 **${formatNumber(max)}**（${grid.valueLabel ?? '数值'}）。` : '没有可绘制的数据。') +
-        note +
-        input.probeNote
-      );
+      const title = chart.title ?? (lang === 'en' ? 'Heatmap' : '热力图');
+      const cells = lang === 'en' ? `${grid.xLabels.length} × ${grid.yLabels.length} cells` : `${grid.xLabels.length} × ${grid.yLabels.length} 个格子`;
+      const hottest = lang === 'en' ? `Hottest cell **${formatNumber(max)}** (${grid.valueLabel ?? 'value'}).` : `最高一格 **${formatNumber(max)}**（${grid.valueLabel ?? '数值'}）。`;
+      const empty = lang === 'en' ? 'Nothing to plot.' : '没有可绘制的数据。';
+      return `${t.chartAnswer(title, flat.length ? hottest : empty, '')}\n\n${cells}${note}${input.probeNote}\n\n\`\`\`sql\n${sql}\n\`\`\``;
     }
     const series = chart?.series ?? [];
     const top = [...series].sort((a, b) => b.value - a.value).slice(0, 3);
-    return (
-      `图表已生成并显示在上方工具卡中：**${chart?.title ?? '分析图'}**。\n\n` +
-      (top.length ? top.map((point) => `- ${point.label}: ${formatNumber(point.value)}`).join('\n') : '没有可绘制的数据。') +
-      note +
-      input.probeNote
-    );
+    const lines = top.map((point) => `- ${point.label}: ${formatNumber(point.value)}`).join('\n');
+    return `${t.chartAnswer(chart?.title ?? (lang === 'en' ? 'Chart' : '分析图'), lines, note)}${input.probeNote}\n\n\`\`\`sql\n${sql}\n\`\`\``;
   }
   if (intent === 'analyze') {
     const d = input.result.data as {
@@ -709,17 +717,27 @@ function planStepAnswer(input: { intent: LocalIntent; plan: PlanOutcome; result:
       topShare?: Array<{ label: string; value: number; share: number }>;
       deltas?: Array<{ label: string; delta: number; ratio: number | null }>;
     };
-    const what = plan.measureLabel ? `**${plan.measureLabel}**` : '结果';
-    const top = (d.topShare ?? []).map((s) => `- ${s.label}：${formatNumber(s.value)}（${(s.share * 100).toFixed(1)}%）`);
-    const recent = (d.deltas ?? []).slice(-3).map((item) => `- ${item.label}：${item.delta >= 0 ? '+' : ''}${formatNumber(item.delta)}${item.ratio === null ? '' : `（${(item.ratio * 100).toFixed(1)}%）`}`);
+    const head = t.analyzeAnswer({
+      what: plan.measureLabel ? `**${plan.measureLabel}**` : lang === 'en' ? 'Result' : '结果',
+      axis: plan.axisLabel ?? d.x,
+      sum: formatNumber(d.sum),
+      avg: formatNumber(d.avg),
+      max: formatNumber(d.max),
+      argmax: d.argmax,
+      min: formatNumber(d.min),
+      argmin: d.argmin,
+      sql,
+    });
+    const top = (d.topShare ?? []).map((s) => `- ${s.label}: ${formatNumber(s.value)}${lang === 'en' ? ` (${(s.share * 100).toFixed(1)}%)` : `（${(s.share * 100).toFixed(1)}%）`}`);
+    const recent = (d.deltas ?? []).slice(-3).map((item) => `- ${item.label}: ${item.delta >= 0 ? '+' : ''}${formatNumber(item.delta)}${item.ratio === null ? '' : lang === 'en' ? ` (${(item.ratio * 100).toFixed(1)}%)` : `（${(item.ratio * 100).toFixed(1)}%）`}`);
     return (
-      `${what}按 \`${plan.axisLabel ?? d.x}\` 统计：合计 **${formatNumber(d.sum)}**，均值 ${formatNumber(d.avg)}，最高 ${d.argmax}（${formatNumber(d.max)}），最低 ${d.argmin}（${formatNumber(d.min)}）。数字由 Bridge 计算，不是估算。\n\n` +
-      (top.length ? `占比前 ${top.length}：\n${top.join('\n')}\n\n` : '') +
-      (recent.length ? `最近环比：\n${recent.join('\n')}\n\n` : '') +
-      `\`\`\`sql\n${sql}\n\`\`\`${input.probeNote}`
+      head +
+      (top.length ? `\n\n${lang === 'en' ? `Top ${top.length} share:` : `占比前 ${top.length}：`}\n${top.join('\n')}` : '') +
+      (recent.length ? `\n\n${lang === 'en' ? 'Recent change:' : '最近环比：'}\n${recent.join('\n')}` : '') +
+      input.probeNote
     );
   }
-  return `${planConclusion(plan, input.result.data)}${input.probeNote}\n\n\`\`\`sql\n${sql}\n\`\`\``;
+  return `${planConclusion(plan, input.result.data, lang)}${input.probeNote}\n\n\`\`\`sql\n${sql}\n\`\`\``;
 }
 
 function formatNumber(value: unknown): string {
@@ -728,7 +746,7 @@ function formatNumber(value: unknown): string {
 }
 
 /** 解析不出来时定点追问，而不是把 help 清单甩回去。 */
-function clarifier(intent: LocalIntent, question: string, tables: TableInfo[], grounding: GroundingOptions): string {
+function clarifier(intent: LocalIntent, question: string, tables: TableInfo[], grounding: GroundingOptions, lang: LocalLang = 'zh'): string {
   const examples = {
     count: '「orders 有多少行」「上月已支付的订单有多少」',
     group: '「按 status 统计订单」「各城市上月的订单金额合计」',
@@ -736,7 +754,24 @@ function clarifier(intent: LocalIntent, question: string, tables: TableInfo[], g
     chart: '「按 status 统计 orders 并画柱状图」「近 12 个月订单量趋势图」',
     default: '「看看 orders 表结构」「数据库体检」「按 status 统计订单」',
   } as Record<string, string>;
+  const examplesEn = {
+    count: '"how many orders", "how many paid orders last month"',
+    group: '"orders by status", "order amount per city last month"',
+    analyze: '"monthly order amount trend", "average order value per channel"',
+    chart: '"orders by status as a bar chart", "orders per month for the last 12 months"',
+    default: '"show the orders table structure", "run a database audit", "orders by status"',
+  } as Record<string, string>;
   const names = tableCandidates(question, tables, grounding, 8);
+  if (lang === 'en') {
+    return [
+      "I'm not confident enough to run this one — I'd rather ask than hand you a guessed number.",
+      ``,
+      `Try being more specific, e.g. ${examplesEn[intent] ?? examplesEn.default}.`,
+      names ? `\nAvailable tables: ${names}.` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
   return [
     `这个问法我还没把握直接执行，宁可问你一句也不想猜一个数字给你。`,
     ``,
@@ -969,6 +1004,7 @@ export class LocalProvider implements LlmProvider {
     const intent = followUpIntent(detectIntent(prompt), prompt, priorUser);
     // 术语词典先把简称展开成业务全称，「JS 的资产数」才对得上 sys_asset。
     const question = expandTerms(prompt, ctx.glossary);
+    const lang = localLang(ctx.locale);
     const tokensIn = estimateTokens(prompt + req.system);
     let out = '';
 
@@ -1032,10 +1068,12 @@ export class LocalProvider implements LlmProvider {
 
     if (intent === 'help') {
       const tables = tablesFromContext(ctx, ctx.connection);
-      const tableHint = tables.length ? `\n\n当前库可用表：${tables.slice(0, 12).map((t) => `\`${t.name}\``).join('、')}${tables.length > 12 ? ' 等' : ''}。` : '';
-      yield* finish(
-        `我是 AiDB 的本地离线助手。无需 API Key 即可完成这些操作：\n\n- 列出表 / 查看表结构与样例数据\n- 计数、分组统计、直接执行 SELECT\n- 创建表（含列定义）、建索引、删除表（需审批）\n- 生成示例数据、备份、导出 CSV/JSON\n- 解释执行计划、记住偏好与检索记忆\n\n直接说需求即可，例如：\n- “看看 orders 表结构”\n- “按 status 统计订单”\n- “创建表 tasks，包含 id 自增主键, title 文本, done 布尔, created_at 时间”\n- “记住：订单金额单位是分”${tableHint}\n\n> 本地模式只覆盖规则明确的指令；配置 Claude / OpenAI 兼容模型可获得完整推理能力。`,
-      );
+      const tableHint = tables.length
+        ? lang === 'en'
+          ? `\n\nTables here: ${tables.slice(0, 12).map((t) => `\`${t.name}\``).join(', ')}${tables.length > 12 ? ', …' : ''}.`
+          : `\n\n当前库可用表：${tables.slice(0, 12).map((t) => `\`${t.name}\``).join('、')}${tables.length > 12 ? ' 等' : ''}。`
+        : '';
+      yield* finish(localText(lang).help(tableHint));
       return;
     }
 
@@ -1136,22 +1174,22 @@ export class LocalProvider implements LlmProvider {
 
     // Fresh schema for listing / describe so the trace shows a real tool call.
     if (!inspectOutcome && ['list_tables', 'describe'].includes(intent)) {
-      yield { type: 'thinking', text: '本地模式：读取当前库的表结构' };
-      yield* callTool(mkCall('inspect_schema', { connectionId, database }), '我先读取当前库的表结构。');
+      yield { type: 'thinking', text: lang === 'en' ? 'Local mode: loading the schema' : '本地模式：读取当前库的表结构' };
+      yield* callTool(mkCall('inspect_schema', { connectionId, database }), lang === 'en' ? 'Reading the schema first.' : '我先读取当前库的表结构。');
       return;
     }
 
     if (!tables.length && !['create', 'backup', 'memory_write', 'skills', 'mcp', 'pipeline', 'history', 'search_objects', 'schema_diff', 'transaction'].includes(intent) && intent !== 'raw_sql') {
       if (!inspectOutcome) {
-        yield* callTool(mkCall('inspect_schema', { connectionId, database }), '我先读取表结构，确认可用对象。');
+        yield* callTool(mkCall('inspect_schema', { connectionId, database }), lang === 'en' ? 'Reading the schema to see what objects are available.' : '我先读取表结构，确认可用对象。');
         return;
       }
       if (allTables.length) {
-        yield* finish(`当前库的 ${allTables.length} 张表都被「Agent 上下文」设置隐藏了，我看不到任何可用对象。请到 工具箱 → Agent 上下文 启用需要的表。`);
+        yield* finish(localText(lang).allHidden(allTables.length));
         return;
       }
       if (intent === 'list_tables') {
-        yield* finish('当前库没有表。可以让我创建一个，例如：“创建表 tasks，包含 id 自增主键, title 文本”。');
+        yield* finish(localText(lang).noTables);
         return;
       }
     }
@@ -1159,7 +1197,7 @@ export class LocalProvider implements LlmProvider {
     const table = matchTable(question, allTables, grounding);
     const hiddenTable = table ? undefined : hiddenTableMention(question, allTables, grounding);
     if (hiddenTable) {
-      yield* finish(`\`${hiddenTable.name}\` 被「Agent 上下文」设置隐藏了，我不会绕过它去查别的表。请到 工具箱 → Agent 上下文 启用这张表，或换一张已启用的表提问。`);
+      yield* finish(localText(lang).hiddenTable(hiddenTable.name));
       return;
     }
 
@@ -1177,7 +1215,7 @@ export class LocalProvider implements LlmProvider {
 
     if (intent === 'list_tables') {
       if (!tables.length) {
-        yield* finish('当前库没有表。可以让我创建一个，例如：“创建表 tasks，包含 id 自增主键, title 文本”。');
+        yield* finish(localText(lang).noTables);
         return;
       }
       const list = tables
@@ -1185,17 +1223,18 @@ export class LocalProvider implements LlmProvider {
         .map((t) => {
           const alias = ctx.agentContext?.tableMeta[t.name.toLowerCase()]?.alias?.trim();
           const columns = groundedColumns(t, grounding).length;
+          if (lang === 'en') return `- \`${t.name}\`${alias ? ` (${alias})` : ''}${t.type === 'view' ? ' (view)' : ''}${columns ? ` · ${columns} cols` : ''}${t.rowEstimate !== undefined ? ` · ~${t.rowEstimate} rows` : ''}`;
           return `- \`${t.name}\`${alias ? `（${alias}）` : ''}${t.type === 'view' ? '（视图）' : ''}${columns ? ` · ${columns} 列` : ''}${t.rowEstimate !== undefined ? ` · ~${t.rowEstimate} 行` : ''}`;
         })
         .join('\n');
-      yield* finish(`当前库（${database ?? conn?.name ?? ''}）共有 **${tables.length}** 张表：\n\n${list}${tables.length > 40 ? '\n- …（其余省略）' : ''}\n\n需要看哪张表的结构或数据，直接说表名即可。`);
+      yield* finish(localText(lang).listTables(list, tables.length) + (tables.length > 40 ? `\n- …` : '') + (lang === 'en' ? '\n\nAsk about any table for its structure or data.' : '\n\n需要看哪张表的结构或数据，直接说表名即可。'));
       return;
     }
 
     if (intent === 'describe') {
       if (!table) {
         const names = tableCandidates(question, tables, grounding);
-        yield* finish(`请指定要查看的表名。当前可用：${names || '（无）'}。`);
+        yield* finish(localText(lang).describeMissing(names));
         return;
       }
       const columns = groundedColumns(table, grounding);
@@ -1211,10 +1250,13 @@ export class LocalProvider implements LlmProvider {
       const fks = (table.foreignKeys ?? []).map((f) => `- ${f.columns.join(',')} → ${f.refTable}(${f.refColumns.join(',')})`).join('\n');
       const alias = ctx.agentContext?.tableMeta[table.name.toLowerCase()]?.alias?.trim();
       const note = ctx.agentContext?.tableMeta[table.name.toLowerCase()]?.description?.trim() || table.comment;
+      const header = lang === 'en' ? '| Column | Label | Type | Key | Nullable | Default |' : '| 列 | 业务名 | 类型 | 键 | 可空 | 默认值 |';
+      const emptyRow = lang === 'en' ? '| (no columns read) |  |  |  |  |  |' : '| （未读取到列） |  |  |  |  |  |';
+      const hiddenNote = lang === 'en' ? `_${hidden} more columns are hidden by the Agent context._` : `_另有 ${hidden} 列被「Agent 上下文」设置隐藏。_`;
       yield* finish(
-        `**${table.name}**${alias ? `（${alias}）` : ''}${note ? ` — ${note}` : ''}\n\n| 列 | 业务名 | 类型 | 键 | 可空 | 默认值 |\n| --- | --- | --- | --- | --- | --- |\n${cols || '| （未读取到列） |  |  |  |  |  |'}` +
-          `${hidden > 0 ? `\n\n_另有 ${hidden} 列被「Agent 上下文」设置隐藏。_` : ''}` +
-          `${idx ? `\n\n**索引**\n${idx}` : ''}${fks ? `\n\n**外键**\n${fks}` : ''}`,
+        `**${table.name}**${alias ? `（${alias}）` : ''}${note ? ` — ${note}` : ''}\n\n${header}\n| --- | --- | --- | --- | --- | --- |\n${cols || emptyRow}` +
+          `${hidden > 0 ? `\n\n${hiddenNote}` : ''}` +
+          `${idx ? `\n\n**${lang === 'en' ? 'Indexes' : '索引'}**\n${idx}` : ''}${fks ? `\n\n**${lang === 'en' ? 'Foreign keys' : '外键'}**\n${fks}` : ''}`,
       );
       return;
     }
@@ -1541,7 +1583,7 @@ export class LocalProvider implements LlmProvider {
     const focus = planned && isFollowUpTurn ? focusOf({ priorUser, engine, tables: allTables, grounding, forbidden }) : undefined;
 
     // 「先算订单总数，再算金额合计」：一句话里的几个问题各规划一次，一次全部发出。
-    const compound = isSqlEngine(engine) && !focus ? compoundSteps({ question, engine, tables: allTables, grounding, forbidden, outcomes, connectionId, database, bundle: ctx.agentContext }) : [];
+    const compound = isSqlEngine(engine) && !focus ? compoundSteps({ question, engine, tables: allTables, grounding, forbidden, outcomes, connectionId, database, bundle: ctx.agentContext, lang }) : [];
     if (compound.length > 1) {
       const pending = compound.filter((step) => !step.done);
       const gaps = compound.filter((step) => step.gap);
@@ -1558,7 +1600,7 @@ export class LocalProvider implements LlmProvider {
         }
         yield* callMany(
           pending.filter((step) => step.call).map((step) => step.call!),
-          `这句话里有 ${compound.length} 个问题，我按顺序逐个查（每问一条只读查询）。`,
+          lang === 'en' ? `That's ${compound.length} questions — I'll run one read-only query per question.` : `这句话里有 ${compound.length} 个问题，我按顺序逐个查（每问一条只读查询）。`,
         );
         return;
       }
@@ -1598,7 +1640,9 @@ export class LocalProvider implements LlmProvider {
         if (kind === 'count') {
           const d = action.result.data as { rows?: unknown[][]; rowCount?: number } | undefined;
           const value = d?.rows?.[0]?.[0] ?? d?.rowCount;
-          yield* finish(`当前${table ? ` \`${table.name}\`` : ''}共 **${value ?? '?'}** 条。${action.result.summary && action.result.summary !== 'ok' ? `（${action.result.summary}）` : ''}`);
+          const scope = table ? `\`${table.name}\`` : '';
+          const extra = action.result.summary && action.result.summary !== 'ok' ? (lang === 'en' ? ` (${action.result.summary})` : `（${action.result.summary}）`) : '';
+          yield* finish(lang === 'en' ? `${scope || 'This dataset'} has **${value ?? '?'}** documents.${extra}` : `当前${scope ? ` ${scope}` : ''}共 **${value ?? '?'}** 条。${extra}`);
           return;
         }
         const rows = nativeRows(action.result.data);
@@ -1636,9 +1680,9 @@ export class LocalProvider implements LlmProvider {
         return;
       }
 
-      const plan = planOf({ question, engine, tables: allTables, grounding, outcomes, forbidden, focus });
+      const plan = planOf({ question, engine, tables: allTables, grounding, outcomes, forbidden, focus, locale: lang });
       if (plan.status === 'gap') {
-        yield* finish(plan.gap ?? clarifier(intent, question, tables, grounding));
+        yield* finish(plan.gap ?? clarifier(intent, question, tables, grounding, lang));
         return;
       }
       if (plan.status === 'probe' && plan.probe) {
@@ -1650,18 +1694,18 @@ export class LocalProvider implements LlmProvider {
         return;
       }
 
-      const preamble = planPreamble(intent, plan, plan.spec!.table, plan.axisLabel);
+      const preamble = planPreamble(intent, plan, plan.spec!.table, plan.axisLabel, lang);
       const probeNote = plan.dropped?.length ? `\n\n> ${plan.dropped.join('；')}。` : '';
       const toolName = intent === 'chart' ? 'render_chart' : intent === 'analyze' ? 'analyze_chart' : 'run_sql';
       const action = getOutcome(outcomes, toolName);
       if (action) {
         // 结果已经在上下文里（图表卡或 Bridge 统计量），照旧念数字；缺数值列的图早就发不出调用，这里不会空转。
-        yield* finish(planStepAnswer({ intent, plan, result: action.result, probeNote }));
+        yield* finish(planStepAnswer({ intent, plan, result: action.result, probeNote, lang }));
         return;
       }
       const step = planStepCall({ intent, plan, prompt, connectionId, database, bundle: ctx.agentContext, titleTable: table });
       if (!step) {
-        yield* finish(clarifier(intent, question, tables, grounding));
+        yield* finish(clarifier(intent, question, tables, grounding, lang));
         return;
       }
       yield* callTool(mkCall(step.tool, step.args), preamble);
@@ -1680,7 +1724,7 @@ export class LocalProvider implements LlmProvider {
           yield* finish(`\`${table!.name}\` 的样例数据：\n\n${renderRows(action.result.data, 8) || '（没有行）'}`);
         } else if (intent === 'count') {
           const d = action.result.data as { rows?: unknown[][] } | undefined;
-          yield* finish(`\`${table!.name}\` 共 **${d?.rows?.[0]?.[0] ?? '?'}** 行。`);
+          yield* finish(localText(lang).count(table!.name, d?.rows?.[0]?.[0] ?? '?'));
         } else if (intent === 'group') {
           yield* finish(`分组统计结果：\n\n${renderRows(action.result.data, 12)}`);
         } else if (intent === 'explain') {
@@ -1769,8 +1813,13 @@ export class LocalProvider implements LlmProvider {
         }
         if (wantForecast) {
           const d = action.result.data as { method?: string; note?: string; forecast?: Array<{ label: string; value: number; lower: number; upper: number }> };
-          const lines = (d.forecast ?? []).map((p) => `- ${p.label}：**${p.value.toLocaleString()}**（区间 ${p.lower.toLocaleString()} ~ ${p.upper.toLocaleString()}）`);
-          yield* finish(`按**${d.method === 'linear' ? '线性回归' : '移动平均'}**外推：\n\n${lines.join('\n') || '（没有可外推的数据）'}\n\n> ${d.note ?? ''}`);
+          const method = d.method === 'linear' ? (lang === 'en' ? 'linear regression' : '线性回归') : lang === 'en' ? 'moving average' : '移动平均';
+          const lines = (d.forecast ?? []).map((p) =>
+            lang === 'en'
+              ? `- ${p.label}: **${p.value.toLocaleString()}** (range ${p.lower.toLocaleString()} ~ ${p.upper.toLocaleString()})`
+              : `- ${p.label}：**${p.value.toLocaleString()}**（区间 ${p.lower.toLocaleString()} ~ ${p.upper.toLocaleString()}）`,
+          );
+          yield* finish(localText(lang).forecastAnswer(method, lines.join('\n'), d.note ?? ''));
           return;
         }
         const d = action.result.data as {
