@@ -204,7 +204,7 @@ jobs:
               echo "::error::missing output dir $dir"
               exit 1
             fi
-            bin="$dir/AiDB Studio"
+            bin="$dir/aidb-studio"
             [ -f "$bin" ] || { echo "::error::missing executable $bin"; exit 1; }
             echo "--- $dir (binary: $bin)"
             file "$bin"

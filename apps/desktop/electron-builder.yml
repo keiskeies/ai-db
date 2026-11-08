@@ -64,6 +64,10 @@ linux:
   # deb / rpm 的 Maintainer 字段必填，缺了 electron-builder 直接报错退出。
   maintainer: keiskeies <right_way@foxmail.com>
   synopsis: AI-native database studio with an autonomous agent
+  # productName 里的空格会让 fpm 生成带空格的 RPM Name 和未加引号的 %files 路径，
+  # rpmbuild 因此直接退出；Linux 侧统一用无空格的包名与可执行文件名（桌面菜单名仍是 productName）。
+  packageName: aidb-studio
+  executableName: aidb-studio
   artifactName: ${productName}-${version}-${arch}.${ext}
 nsis:
   oneClick: false
