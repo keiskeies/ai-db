@@ -1608,12 +1608,14 @@ export function AgentPanel() {
 
             {!busy && followUps.length ? (
               <div className="followups" data-testid="agent-followups">
-                <span className="muted">{tr("继续问：")}</span>
-                {followUps.map((s) => (
-                  <button key={s.id} className="suggest-chip small" title={s.reason} onClick={() => setInput(s.prompt)}>
-                    <span className="truncate">{s.prompt}</span>
-                  </button>
-                ))}
+                <div className="followups-label">{tr("继续问：")}</div>
+                <div className="followups-list">
+                  {followUps.map((s) => (
+                    <button key={s.id} className="suggest-chip small" title={s.reason} onClick={() => setInput(s.prompt)}>
+                      <span className="followup-text">{s.prompt}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             ) : null}
           </div>

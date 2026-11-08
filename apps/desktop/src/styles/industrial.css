@@ -176,7 +176,10 @@ body {
   background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
 }
 .cap-card:hover { border-color: color-mix(in srgb, var(--agent) 55%, transparent); background: var(--agent-soft); }
-.msg-user { gap: 8px; }
+/* 图标列与正文基线由 app.css 的 --agent-rail / --agent-rail-gap 决定，
+   这里只收紧尺寸，不再各自写死 gap，否则提问与回答的左边距会错开。 */
+.agent-transcript-inner { --agent-rail: 17px; --agent-rail-gap: 8px; }
+.msg-user { gap: var(--agent-rail-gap); }
 .msg-user .bubble {
   padding: 8px 11px; font-size: 11.8px; line-height: 1.6;
   border: 1px solid color-mix(in srgb, var(--agent) 24%, var(--border-subtle));
@@ -189,9 +192,9 @@ body {
   border-color: color-mix(in srgb, var(--agent) 24%, rgba(8, 12, 10, .12));
   box-shadow: inset 2px 0 0 color-mix(in srgb, var(--agent) 62%, transparent), inset 0 1px 0 #ffffff, 0 2px 8px rgba(15, 20, 20, .07);
 }
-.msg-assistant { gap: 7px; }
+.msg-assistant { gap: var(--agent-rail-gap); }
 .msg-assistant .avatar {
-  width: 17px; height: 17px; flex-basis: 17px;
+  width: var(--agent-rail); height: var(--agent-rail); flex-basis: var(--agent-rail);
   background: linear-gradient(140deg, var(--agent-soft), transparent);
   color: var(--agent); border: 1px solid color-mix(in srgb, var(--agent) 22%, transparent);
 }

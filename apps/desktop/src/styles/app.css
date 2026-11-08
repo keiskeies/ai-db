@@ -523,7 +523,12 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 .agent-scope-mismatch .btn { margin-left: auto; }
 .agent-transcript-wrap { position: relative; flex: 1; min-height: 0; display: flex; }
 .agent-transcript { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 13px 6px; }
-.agent-transcript-inner { display: flex; flex-direction: column; gap: 16px; min-height: 100%; }
+/* 提问、回答、追问建议共用一条左侧基线：图标列宽度固定，正文一律从图标列右侧起排，
+   否则三块的左边距各算各的，对话读起来是散的。 */
+.agent-transcript-inner {
+  display: flex; flex-direction: column; gap: 16px; min-height: 100%;
+  --agent-rail: 19px; --agent-rail-gap: 9px;
+}
 .scroll-bottom-btn {
   position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); z-index: 2;
   display: inline-flex; align-items: center; gap: 5px;
@@ -558,16 +563,24 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 .suggest-chip .truncate { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .suggest-chip em { font-style: normal; font-size: 9px; color: var(--text-muted); flex: 0 0 auto; }
 .suggest-chip.small { padding: 4px 7px; font-size: 10.5px; width: auto; }
-.followups { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
-.followups .muted { font-size: 9.5px; }
+/* 追问建议：问题文本按面板宽度自动换行。浏览器默认让 flex 子项以 max-content 为最小宽度，
+   长问句就会把面板撑到屏幕外，所以这里放开 min-width 并用 max-width 收口。 */
+.followups {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 5px;
+  margin: -8px 0 0 calc(var(--agent-rail) + var(--agent-rail-gap));
+}
+.followups-label { font-size: 9.5px; line-height: 1.5; color: var(--text-muted); letter-spacing: .3px; }
+.followups-list { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 5px; width: 100%; }
+.followups .suggest-chip { max-width: 100%; min-width: 0; align-items: flex-start; }
+.followups .followup-text { display: block; text-align: left; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
 .recent-item { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: var(--radius-md); cursor: pointer; color: var(--text-secondary); font-size: 11.5px; text-align: left; width: 100%; border: none; background: transparent; }
 .recent-item:hover { background: var(--bg-hover); color: var(--text-primary); }
 
-.msg-user { display: flex; gap: 9px; align-items: flex-start; }
-.msg-user .prompt-mark { color: var(--agent); font-family: var(--font-mono); font-weight: 700; margin-top: 2px; }
-.msg-user .bubble { flex: 1; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; line-height: 1.65; font-size: 12.5px; }
-.msg-assistant { display: flex; gap: 9px; align-items: flex-start; }
-.msg-assistant .avatar { width: 19px; height: 19px; border-radius: 6px; background: var(--agent-soft); color: var(--agent); display: grid; place-items: center; flex: 0 0 19px; margin-top: 1px; }
+.msg-user { display: flex; gap: var(--agent-rail-gap, 9px); align-items: flex-start; }
+.msg-user .prompt-mark { flex: 0 0 var(--agent-rail, 19px); width: var(--agent-rail, 19px); text-align: center; padding-top: 8px; line-height: 1.65; color: var(--agent); font-family: var(--font-mono); font-weight: 700; }
+.msg-user .bubble { flex: 1; min-width: 0; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; font-size: 12.5px; }
+.msg-assistant { display: flex; gap: var(--agent-rail-gap, 9px); align-items: flex-start; }
+.msg-assistant .avatar { width: var(--agent-rail, 19px); height: var(--agent-rail, 19px); border-radius: 6px; background: var(--agent-soft); color: var(--agent); display: grid; place-items: center; flex: 0 0 var(--agent-rail, 19px); margin-top: 1px; }
 .msg-assistant .content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
 .thinking { border: 1px dashed var(--border-strong); border-radius: var(--radius-md); background: var(--bg-app); }
 .thinking summary { cursor: pointer; padding: 6px 9px; color: var(--text-muted); font-size: 10.5px; display: flex; align-items: center; gap: 5px; }
