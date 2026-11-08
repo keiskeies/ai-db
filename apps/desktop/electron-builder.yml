@@ -27,6 +27,11 @@ extraResources:
     to: gateway/node_modules/tweetnacl
   - from: ../../node_modules/@duckdb
     to: gateway/node_modules/@duckdb
+  # node-oracledb 的原生绑定打不进 esbuild bundle，运行期按
+  # process.platform-arch 从 gateway/node_modules/oracledb/build/Release 动态 require。
+  # 缺这份目录时 Oracle 驱动会报 NJS-132（其余引擎不受影响）。
+  - from: ../../node_modules/oracledb/build/Release
+    to: gateway/node_modules/oracledb/build/Release
 asar: true
 # 工作区里 node_modules 被提升到仓库根目录，CI 中 appDir 下没有 node_modules，
 # electron-builder 会误判为“未安装依赖”并在工作区内执行 npm install --production，

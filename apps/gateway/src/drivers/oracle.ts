@@ -41,6 +41,23 @@ export function oracleVersionHint(err: any): string | undefined {
     : 'Oracle 11g 及以下需要 Oracle Instant Client（thick 模式）：设置 AIDB_ORACLE_CLIENT_DIR 指向解压目录后重启 Bridge，或升级到 12.1+';
 }
 
+/**
+ * node-oracledb 的原生绑定（build/Release/oracledb-<版本>-<平台>-<架构>.node）是运行期按
+ * process.platform-arch 动态 require 的。缺这份绑定时上游只会抛 NJS-132 之类的技术错误，
+ * 用户看不出该做什么，这里换成可执行的指引。
+ */
+export function oracleBindingHint(err: any): string | undefined {
+  const message = String(err?.message ?? '');
+  if (!/NJS-132|NJS-067|NJS-045|CANNOT-LOAD-BINARY|Cannot find module|__dirname is not defined/i.test(message)) {
+    return undefined;
+  }
+  const platform = `${process.platform}-${process.arch}`;
+  if (platform === 'darwin-x64') {
+    return 'node-oracledb 26 未提供 macOS Intel（darwin-x64）的预编译绑定，Intel Mac 上无法使用 Oracle 驱动：请改用 Apple Silicon 安装包，或从 node-oracledb 源码自行编译该绑定后替换';
+  }
+  return `当前安装包缺少 ${platform} 的 node-oracledb 原生绑定：请确认安装包完整后重试，或从源码编译该绑定`;
+}
+
 export class OracleDriver implements Driver {
   engine = 'oracle' as const;
   private pools = new Map<string, oracledb.Pool>();
@@ -84,7 +101,7 @@ export class OracleDriver implements Driver {
       const row = (result.rows?.[0] ?? {}) as { BANNER?: string };
       return { ok: true, version: row.BANNER ?? 'Oracle Database', latencyMs: Date.now() - started };
     } catch (err: any) {
-      const hint = oracleVersionHint(err);
+      const hint = oracleVersionHint(err) ?? oracleBindingHint(err);
       return { ok: false, latencyMs: Date.now() - started, message: hint ? `${err.message}（${hint}）` : err.message };
     } finally {
       await connection?.close().catch(() => undefined);
@@ -229,7 +246,7 @@ export class OracleDriver implements Driver {
       }
       return [...map.values()];
     } catch (err: any) {
-      throw new DbError(err.message, { code: 'ORACLE_METADATA_ERROR' });
+      throw new DbError(err.message, { code: 'ORACLE_METADATA_ERROR', hint: oracleBindingHint(err) });
     } finally {
       await connection.close().catch(() => undefined);
     }
@@ -252,7 +269,10 @@ export class OracleDriver implements Driver {
       });
       return this.toResult(result, started, sql, opts.maxRows);
     } catch (err: any) {
-      throw new DbError(err.message ?? 'Oracle 执行失败', { code: err.code ?? 'ORACLE_ERROR' });
+      throw new DbError(err.message ?? 'Oracle 执行失败', {
+        code: err.code ?? 'ORACLE_ERROR',
+        hint: oracleBindingHint(err),
+      });
     } finally {
       connection.callTimeout = 0;
       await connection.close().catch(() => undefined);
@@ -299,7 +319,10 @@ export class OracleDriver implements Driver {
       connection.callTimeout = 0;
       return this.toResult(result, started, sql, opts.maxRows);
     } catch (err: any) {
-      throw new DbError(err.message ?? 'Oracle 事务执行失败', { code: err.code ?? 'ORACLE_ERROR' });
+      throw new DbError(err.message ?? 'Oracle 事务执行失败', {
+        code: err.code ?? 'ORACLE_ERROR',
+        hint: oracleBindingHint(err),
+      });
     }
   }
 

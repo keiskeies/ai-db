@@ -101,8 +101,9 @@ jobs:
           npx electron-builder ${{ matrix.target }} --publish never 2>&1 | tee electron-builder.log
 
       - name: Verify both mac architectures
-        # 交叉架构打包最容易出的错是「dmg 名字对了、里面的原生绑定错了」，
-        # 所以这里同时校验主程序架构与 DuckDB 绑定，并确认多余架构已被 afterPack 裁掉。
+        # 交叉架构打包最容易出的错是「dmg 名字对了、里面的原生二进制错了」，
+        # 所以这里同时校验主程序架构、DuckDB 绑定与 node-oracledb 绑定，
+        # 并确认多余架构已被 afterPack 裁掉。
         if: runner.os == 'macOS'
         shell: bash
         working-directory: apps/desktop
@@ -119,8 +120,8 @@ jobs:
           ls -lh "${dmgs[@]}"
 
           check() {
-            local appdir="$1" keep="$2" expect="$3" drop="$4"
-            local app bin duckdb
+            local appdir="$1" archname="$2" expect="$3" other="$4"
+            local app bin duckdb oracle_bins
             if [ ! -d "$appdir" ]; then
               echo "::error::missing output dir $appdir"
               exit 1
@@ -137,20 +138,35 @@ jobs:
               echo "::error::$app main binary is not $expect"
               exit 1
             fi
+
             duckdb="$app/Contents/Resources/gateway/node_modules/@duckdb"
-            if [ ! -d "$duckdb/$keep" ]; then
-              echo "::error::$app is missing $keep"
+            if [ ! -d "$duckdb/node-bindings-darwin-$archname" ]; then
+              echo "::error::$app is missing node-bindings-darwin-$archname"
               exit 1
             fi
-            if [ -e "$duckdb/$drop" ]; then
-              echo "::error::$app still ships $drop"
+            if [ -e "$duckdb/node-bindings-darwin-$other" ]; then
+              echo "::error::$app still ships node-bindings-darwin-$other"
               exit 1
             fi
-            echo "bindings: $(ls "$duckdb" | tr '\n' ' ')"
+            echo "duckdb bindings: $(ls "$duckdb" | tr '\n' ' ')"
+
+            oracle_bins=$(ls "$app/Contents/Resources/gateway/node_modules/oracledb/build/Release" 2>/dev/null | grep '\.node$' || true)
+            echo "oracledb bindings: ${oracle_bins:-无}"
+            if [ -n "$oracle_bins" ] && printf '%s\n' "$oracle_bins" | grep -qv "darwin-$archname"; then
+              echo "::error::$app carries a node-oracledb binding for another architecture"
+              exit 1
+            fi
+            if [ "$archname" = "arm64" ] && [ -z "$oracle_bins" ]; then
+              echo "::error::$app is missing the darwin-arm64 node-oracledb binding"
+              exit 1
+            fi
+            if [ "$archname" = "x64" ]; then
+              echo "::warning::Intel 包不含 node-oracledb 绑定（上游 oracledb 26.0.0 无 darwin-x64 预编译），该包内 Oracle 驱动不可用"
+            fi
           }
 
-          check release/mac node-bindings-darwin-x64 x86_64 node-bindings-darwin-arm64
-          check release/mac-arm64 node-bindings-darwin-arm64 arm64 node-bindings-darwin-x64
+          check release/mac x64 x86_64 arm64
+          check release/mac-arm64 arm64 arm64 x64
 
       - name: Report packaging error
         if: failure()
@@ -201,6 +217,7 @@ jobs:
             **Installers**
             - macOS: `AiDB Studio-0.0.2-arm64.dmg` for Apple Silicon, `AiDB Studio-0.0.2-x64.dmg` for Intel Macs (macOS 12+).
             - Windows: NSIS setup, Linux: AppImage.
+            - The Intel dmg has no Oracle driver: node-oracledb 26 ships no `darwin-x64` prebuilt binding. Every other engine works the same on both architectures.
 
             This release is about engines that refuse to behave the same way and about waiting less.
 
