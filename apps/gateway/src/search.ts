@@ -204,16 +204,19 @@ async function assertPublicHost(url: URL): Promise<void> {
   for (const address of addresses) if (isPrivateIp(address.address)) fail(`域名解析到内网地址：${host}`, 'SEARCH_URL_DENIED');
 }
 
-/** SearXNG instances are user-configured; allow loopback only when explicitly configured. */
-async function assertSearchEndpoint(url: URL, allowLoopback: boolean): Promise<void> {
-  if (!allowLoopback) {
-    await assertPublicHost(url);
+/**
+ * SearXNG 实例由用户自建并显式配置地址（searxngBaseUrl）。这类实例常部署在
+ * 局域网 / 同机,因此信任用户配置、允许内网与回环地址,不再强制公网校验。
+ * SSRF 防护仍作用于其它走公开 API 的后端。
+ */
+async function assertSearchEndpoint(url: URL, trustUserInstance: boolean): Promise<void> {
+  if (trustUserInstance) {
+    const host = url.hostname.replace(/^\[|\]$/g, '');
+    if (!host) fail('SearXNG 实例地址缺少 host', 'SEARCH_URL_MISSING');
     return;
   }
-  const host = url.hostname.replace(/^\[|\]$/g, '');
-  if (host === '127.0.0.1' || host === 'localhost' || host === '::1') return;
   await assertPublicHost(url);
-}
+  }
 
 /* --------------------------------------------------------------- remote MCP */
 
@@ -455,7 +458,8 @@ async function searchSearxng(query: string, settings: SearchSettings, store: Sto
   if (settings.language) url.searchParams.set('language', settings.language);
   if (settings.timeRange !== 'any') url.searchParams.set('time_range', settings.timeRange);
   url.searchParams.set('safesearch', settings.safeSearch ? '1' : '0');
-  await assertSearchEndpoint(url, /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])/i.test(base));
+  // SearXNG 是用户自建实例(填了 searxngBaseUrl),信任其地址,放行内网/回环
+  await assertSearchEndpoint(url, true);
   const key = getSearchKey(store, 'searxng');
   const headers = { accept: 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) };
   const found = await searxRequest(url, headers, settings);
