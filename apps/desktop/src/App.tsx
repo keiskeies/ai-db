@@ -32,6 +32,14 @@ import { Toasts } from './components/ui';
 import { Workspace } from './components/Workspace';
 import { t as tr } from './i18n';
 
+/**
+ * 系统是否已经替我们画了窗口 chrome。
+ * 与 electron/main.cjs 的 `titleBarStyle: darwin ? 'hiddenInset' : 'default'` 同源：Windows / Linux
+ * 走默认边框，原生标题栏本身就带图标和「AiDB Studio」，应用内再画一遍 logo 加名称属于同屏重复；
+ * macOS 用 hiddenInset，应用内这条标题栏是唯一的，品牌块必须保留。网页预览没有原生 chrome，同样保留。
+ */
+const nativeWindowChrome = !!desktopBridge && desktopBridge.platform !== 'darwin';
+
 // 弹层各自成块：只在真正打开时取代码，首屏不必背设置面板和工具箱。
 const CommandPalette = lazy(() => import('./components/CommandPalette').then((m) => ({ default: m.CommandPalette })));
 const ConnectionModal = lazy(() => import('./components/ConnectionModal').then((m) => ({ default: m.ConnectionModal })));
@@ -325,15 +333,17 @@ export default function App() {
   const agentMax = Math.min(760, Math.max(320, budget - (sidebarInFlow ? effectiveSidebar : 0)));
 
   return (
-    <div className="app" data-testid="app-root">
+    <div className={`app${nativeWindowChrome ? ' native-chrome' : ''}`} data-testid="app-root">
       <div className="titlebar">
-        <div className="brand">
-          <img className="brand-mark" src="/logo-mark.svg" alt="" />
-          <div>
-            <div className="brand-name">AiDB Studio</div>
-            <div className="brand-sub">AI-native database workbench</div>
+        {nativeWindowChrome ? null : (
+          <div className="brand">
+            <img className="brand-mark" src="/logo-mark.svg" alt="" />
+            <div>
+              <div className="brand-name">AiDB Studio</div>
+              <div className="brand-sub">AI-native database workbench</div>
+            </div>
           </div>
-        </div>
+        )}
         {activeConn ? (
           <span className={`env-pill ${activeConn.environment}`}>
             <span className="conn-color" style={{ background: 'currentColor' }} />

@@ -115,6 +115,11 @@ input[type='number']::-webkit-inner-spin-button, input[type='number']::-webkit-o
 }
 .kbd { font-family: var(--font-mono); font-size: 10px; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border-strong); background: var(--bg-app); color: var(--text-secondary); }
 
+/* 有原生标题栏的平台（Windows / Linux 桌面端）不再重复品牌：这条压成工具栏，
+   并把 .spacer 的最小宽度留出来，保证窗口仍然有足够大的拖拽抓取面。 */
+.app.native-chrome .titlebar { height: 30px; flex-basis: 30px; }
+.app.native-chrome .titlebar .spacer { min-width: 60px; }
+
 .shell { flex: 1; min-height: 0; display: flex; position: relative; }
 
 .sidebar {
