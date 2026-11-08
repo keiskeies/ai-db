@@ -48,6 +48,7 @@ import { WebSearchTool } from './tools/WebSearchTool';
 import { McpTool } from './tools/McpTool';
 import { CapabilitiesTool } from './tools/CapabilitiesTool';
 import { NotificationsTool } from './tools/NotificationsTool';
+import { UpdateCard } from './UpdateCard';
 import { t as tr } from '../i18n';
 
 type TabKey = SettingsTab;
@@ -1195,11 +1196,12 @@ export function SettingsModal() {
                   <div className="row">
                     <img className="brand-mark" src="/logo-mark.svg" alt="" style={{ width: 34, height: 34 }} />
                     <div>
-                      <div style={{ fontWeight: 650 }}>AiDB Studio v0.0.4</div>
+                      <div style={{ fontWeight: 650 }}>AiDB Studio v{__APP_VERSION__}</div>
                       <div className="muted" style={{ fontSize: 11 }}>AI-native, cross-platform database studio</div>
                     </div>
                   </div>
                 </div>
+                <UpdateCard />
                 <p className="desc">
                   {tr(" 五端覆盖：Windows / macOS / Linux（Electron）与 Android / iOS（Expo React Native）。Agent 运行时、数据库驱动与元数据位于 Bridge； 桌面与移动端共享同一协议、会话与四层记忆。 ")}</p>
                 <div className="row gap-6" style={{ flexWrap: 'wrap' }}>

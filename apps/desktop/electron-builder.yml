@@ -1,4 +1,12 @@
 appId: com.aidb.studio
+# 自动更新：打包时生成 latest.yml（Windows NSIS）/ latest-linux.yml（AppImage），
+# 里面是版本号、文件名与 sha512，客户端据此判断是否有新版并做差分下载。
+# CI 用 --publish never，只把这份元数据产出到 release 目录，由发布步骤一并上传。
+publish:
+  provider: github
+  owner: keiskeies
+  repo: ai-db
+  releaseType: release
 electronVersion: 45.0.0
 productName: AiDB Studio
 copyright: Copyright © 2026 AiDB
@@ -46,14 +54,16 @@ win:
   # Windows on ARM 也能跑 x64 版，所以两版并存不影响老用户。
   target:
     - nsis
-  artifactName: ${productName}-${version}-${arch}-setup.${ext}
+  # 产物名不能带空格：electron-builder 写 latest.yml 时会把空格换成 "-"，
+  # 而 GitHub 上传时把空格换成 "."，两边对不上会让自动更新的下载地址 404。
+  artifactName: AiDB-Studio-${version}-${arch}-setup.${ext}
 mac:
   # 未指定 arch 时 electron-builder 回落到宿主架构（process.arch），只会出一个包。
   # 同时出 Apple Silicon 与 Intel 由 CI 传入 `--mac --x64 --arm64`。
   target:
     - dmg
   category: public.app-category.developer-tools
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  artifactName: AiDB-Studio-${version}-${arch}.${ext}
 linux:
   # AppImage 免安装；deb / rpm 走发行版包管理器，装完在应用菜单里出现。
   target:
@@ -66,7 +76,7 @@ linux:
   synopsis: AI-native database studio with an autonomous agent
   # 可执行名去掉空格：安装目录里的文件名、桌面入口的 Exec 都用它。
   executableName: aidb-studio
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  artifactName: AiDB-Studio-${version}-${arch}.${ext}
 deb:
   # fpm 默认拿 productName（「AiDB Studio」）当包名，含空格在 deb / rpm 里都不合法。
   packageName: aidb-studio

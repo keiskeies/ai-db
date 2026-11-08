@@ -8,7 +8,25 @@
 
 <p align="center">
   <a href="./README.md">English</a> ·
-  <a href="./README.zh-CN.md">简体中文</a>
+  <strong>简体中文</strong> ·
+  <a href="./README.zh-TW.md">繁體中文</a> ·
+  <a href="./README.ja.md">日本語</a> ·
+  <a href="./README.ko.md">한국어</a> ·
+  <a href="./README.de.md">Deutsch</a> ·
+  <a href="./README.fr.md">Français</a> ·
+  <a href="./README.es.md">Español</a> ·
+  <a href="./README.pt-BR.md">Português (BR)</a> ·
+  <a href="./README.it.md">Italiano</a> ·
+  <a href="./README.ru.md">Русский</a> ·
+  <a href="./README.ar.md">العربية</a> ·
+  <a href="./README.hi.md">हिन्दी</a> ·
+  <a href="./README.id.md">Bahasa Indonesia</a> ·
+  <a href="./README.vi.md">Tiếng Việt</a> ·
+  <a href="./README.th.md">ไทย</a> ·
+  <a href="./README.tr.md">Türkçe</a> ·
+  <a href="./README.nl.md">Nederlands</a> ·
+  <a href="./README.pl.md">Polski</a> ·
+  <a href="./README.uk.md">Українська</a>
 </p>
 
 <p align="center">
@@ -24,7 +42,7 @@
   <img alt="53 个 Agent 工具" src="https://img.shields.io/badge/Agent%20Tools-53-45C8C3?style=flat-square" />
   <img alt="macOS、Windows、Linux" src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-0B0E0D?style=flat-square" />
   <img alt="MIT 许可" src="https://img.shields.io/badge/License-MIT-E0AF63?style=flat-square" />
-  <a href="https://github.com/keiskeies/ai-db/releases/tag/v0.0.2"><img alt="Release v0.0.2" src="https://img.shields.io/badge/Release-v0.0.2-45C8C3?style=flat-square&logo=github" /></a>
+  <a href="https://github.com/keiskeies/ai-db/releases/tag/v0.0.5"><img alt="Release v0.0.5" src="https://img.shields.io/badge/Release-v0.0.5-45C8C3?style=flat-square&logo=github" /></a>
   <a href="https://github.com/keiskeies/ai-db"><img alt="GitHub stars" src="https://img.shields.io/github/stars/keiskeies/ai-db?style=flat-square&logo=github&label=Stars&color=E0AF63" /></a>
 </p>
 
@@ -571,17 +589,31 @@ release 页按「系统 + 架构」出包，六个桌面组合：
 
 | 系统 | 架构 | 安装包 |
 |---|---|---|
-| Windows | x64 | `AiDB Studio-<版本>-x64-setup.exe`（NSIS） |
-| Windows | arm64 | `AiDB Studio-<版本>-arm64-setup.exe`（NSIS） |
-| macOS | Apple Silicon | `AiDB Studio-<版本>-arm64.dmg` |
-| macOS | Intel | `AiDB Studio-<版本>-x64.dmg` |
-| Linux | x64 | `AiDB Studio-<版本>-x86_64.AppImage` / `-amd64.deb` / `-x86_64.rpm` |
-| Linux | arm64 | `AiDB Studio-<版本>-arm64.AppImage` / `-arm64.deb` / `-aarch64.rpm` |
+| Windows | x64 | `AiDB-Studio-<版本>-x64-setup.exe`（NSIS） |
+| Windows | arm64 | `AiDB-Studio-<版本>-arm64-setup.exe`（NSIS） |
+| macOS | Apple Silicon | `AiDB-Studio-<版本>-arm64.dmg` |
+| macOS | Intel | `AiDB-Studio-<版本>-x64.dmg` |
+| Linux | x64 | `AiDB-Studio-<版本>-x86_64.AppImage` / `-amd64.deb` / `-x86_64.rpm` |
+| Linux | arm64 | `AiDB-Studio-<版本>-arm64.AppImage` / `-arm64.deb` / `-aarch64.rpm` |
 
 - Windows on ARM 也能直接跑 x64 安装包（系统模拟），而那份保留 Oracle 驱动。
 - Linux 的文件名按发行版惯例带架构后缀（x64 是 `amd64` / `x86_64`，arm64 是 `aarch64`）。deb / rpm 走发行版包管理器；AppImage 免安装但需要 FUSE 2，没有就 `--appimage-extract-and-run`。两者都需要图形会话，WSL2 需要 WSLg。
 - 每个安装包只带自身架构的原生绑定（DuckDB、node-oracledb），CI 在发布前逐个断言；两个例外见上文引擎说明。
 - Android / iOS 走 EAS 构建，不在 release 里。
+
+### 检查更新
+
+「设置 → 关于」里有版本更新卡片：检查 GitHub 上是否有新版本，并按当前安装形态决定「自己下载安装」还是「跳转下载页」。
+
+| 安装形态 | 行为 | 原因 |
+|---|---|---|
+| Windows（NSIS） | 下载并静默安装，支持差分下载（`latest.yml` + blockmap，通常几十 KB 而非整包） | 安装器支持 `/S`，且当前目录可写 |
+| Linux（AppImage） | 同上，按 `latest-linux.yml` / `latest-linux-arm64.yml` 取包 | 只有 AppImage 能自我替换 |
+| Linux（deb / rpm） | 跳转下载页 | `/opt` 由包管理器接管，应用无权覆盖 |
+| macOS | 跳转下载页 | 构建未签名，Squirrel.Mac 拒绝替换未签名的 app |
+| 开发态 / 网页版 | 只检查版本，不提供安装 | 没有 `app-update.yml`，也没有安装包可换 |
+
+自动更新依赖 release 里的 `latest*.yml`（版本、文件名、sha512）。Windows 的元数据不带架构后缀，所以 arm64 走独立通道 `latest-arm64.yml`，客户端按 `process.arch` 选同名文件；Linux 的文件名由 electron-updater 自己加 `-linux-arm64` 后坠。安装包文件名统一用连字符（`AiDB-Studio-...`）：electron-builder 写元数据时会把空格换成 `-`，而 GitHub 上传时会把空格换成 `.`，两边不一致会让下载地址 404。
 
 ## 架构
 

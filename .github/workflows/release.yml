@@ -106,8 +106,15 @@ jobs:
           set -o pipefail
           : > electron-builder.log
           for arch in x64 arm64; do
-            echo "=== ${{ matrix.target }} --${arch}"
-            npx electron-builder ${{ matrix.target }} --${arch} --publish never 2>&1 | tee -a electron-builder.log
+            # Windows 的更新元数据只有一份 latest.yml（不像 Linux 会带 -linux-arm64 后缀），
+            # 两个架构分别打包会互相覆盖，所以 arm64 走独立通道 latest-arm64.yml，
+            # 客户端按 process.arch 选同名文件（见 apps/desktop/electron/updater.cjs）。
+            extra=""
+            if [ "${{ matrix.artifact }}" = "windows" ] && [ "$arch" = "arm64" ]; then
+              extra="-c.publish.channel=latest-arm64"
+            fi
+            echo "=== ${{ matrix.target }} --${arch} ${extra}"
+            npx electron-builder ${{ matrix.target }} --${arch} ${extra} --publish never 2>&1 | tee -a electron-builder.log
           done
 
       - name: Verify mac architectures
@@ -318,48 +325,92 @@ jobs:
     name: Publish GitHub release
     needs: desktop
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/tags/v0.0.4'
+    if: github.ref == 'refs/tags/v0.0.5'
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: dist-release
           merge-multiple: true
 
+      - name: Verify update metadata
+        # latest*.yml 里引用的文件名必须与实际上传的资产完全一致：electron-builder 写元数据时
+        # 把空格换成 "-"，GitHub 上传时把空格换成 "."，两边不一致时自动更新会在下载阶段 404，
+        # 而且只有用户真的点了「检查更新」才会暴露，所以在这里提前拦。
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(dist-release/latest*.yml)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::no latest*.yml in release artifacts"
+            exit 1
+          fi
+          node -e '
+            const fs = require("fs");
+            const path = require("path");
+            const dir = "dist-release";
+            let bad = 0;
+            for (const name of fs.readdirSync(dir).filter((f) => /^latest.*\.yml$/.test(f))) {
+              const text = fs.readFileSync(path.join(dir, name), "utf8");
+              const refs = [
+                ...[...text.matchAll(/^\s*-?\s*url:\s*(\S+)/gm)].map((m) => m[1]),
+                ...[...text.matchAll(/^path:\s*(\S+)/gm)].map((m) => m[1]),
+              ];
+              for (const ref of refs) {
+                if (!fs.existsSync(path.join(dir, ref))) {
+                  console.error(`::error::${name} references missing asset ${ref}`);
+                  bad += 1;
+                }
+              }
+              console.log(`${name}: ${refs.length} asset reference(s) checked`);
+            }
+            process.exit(bad ? 1 : 0);
+          '
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          name: AiDB Studio v0.0.4
+          name: AiDB Studio v0.0.5
           tag_name: ${{ github.ref_name }}
           draft: false
           prerelease: false
           generate_release_notes: false
           body: |
-            AiDB Studio **v0.0.4** — the same app, now built for every desktop platform combination.
-
+            AiDB Studio **v0.0.5** — the app can update itself now, and the readme speaks 20 languages.
+            
             **Installers**
-
+            
             | Platform | Architecture | Files |
             |---|---|---|
-            | Windows | x64 | `AiDB.Studio-0.0.4-x64-setup.exe` |
-            | Windows | arm64 | `AiDB.Studio-0.0.4-arm64-setup.exe` |
-            | macOS | Apple Silicon | `AiDB.Studio-0.0.4-arm64.dmg` |
-            | macOS | Intel | `AiDB.Studio-0.0.4-x64.dmg` |
-            | Linux | x64 | `AiDB.Studio-0.0.4-x86_64.AppImage` · `-amd64.deb` · `-x86_64.rpm` |
-            | Linux | arm64 | `AiDB.Studio-0.0.4-arm64.AppImage` · `-arm64.deb` · `-aarch64.rpm` |
-
+            | Windows | x64 | `AiDB-Studio-0.0.5-x64-setup.exe` |
+            | Windows | arm64 | `AiDB-Studio-0.0.5-arm64-setup.exe` |
+            | macOS | Apple Silicon | `AiDB-Studio-0.0.5-arm64.dmg` |
+            | macOS | Intel | `AiDB-Studio-0.0.5-x64.dmg` |
+            | Linux | x64 | `AiDB-Studio-0.0.5-x86_64.AppImage` · `-amd64.deb` · `-x86_64.rpm` |
+            | Linux | arm64 | `AiDB-Studio-0.0.5-arm64.AppImage` · `-arm64.deb` · `-aarch64.rpm` |
+            
+            **In-app updates**
+            - Settings → About has a new update card. It asks GitHub for the newest release, and on Windows (NSIS) and Linux (AppImage) it downloads and installs the update for you — differentially, so an update is usually a few hundred kilobytes instead of the full 140 MB installer.
+            - macOS, deb/rpm installs and dev builds get the version check plus a link to this page: the macOS build is unsigned (Squirrel.Mac refuses to replace an unsigned app), and `/opt` belongs to the package manager.
+            - Every release now publishes `latest.yml` (and `latest-linux.yml` / `latest-linux-arm64.yml`, `latest-arm64.yml` for Windows arm64) next to the installers. That metadata is what the updater reads.
+            
+            **Upgrading from 0.0.4**
+            - This is the last manual install: 0.0.4 shipped without the updater and its release carries no update metadata. From 0.0.5 on, Windows and AppImage builds update themselves.
+            - Installer file names lost their spaces (`AiDB.Studio-...` → `AiDB-Studio-...`) so the metadata and the uploaded asset names match exactly.
+            
+            **Docs**
+            - The README now exists in 20 languages, matching the interface languages. English and Chinese stay the full documents; the other 18 are short landing pages that link to them.
+            
             **Platform notes**
             - Oracle needs a prebuilt node-oracledb binding, and upstream ships none for macOS Intel or Windows arm64. On those two installers the engine is greyed out in the new-connection dialog with the reason; every other engine behaves the same everywhere. Linux arm64 does ship the binding.
             - Windows on ARM can also run the x64 installer through the system emulator, and that build keeps Oracle.
             - Linux: deb and rpm install through the distribution package manager; the AppImage is portable but needs FUSE 2 (or run it with `--appimage-extract-and-run`). A graphical session is required either way — WSL2 needs WSLg.
             - Android and iOS are still built through EAS and are not part of this release.
-
-            **Packaging**
-            - One CI run per platform now emits both architectures. DuckDB and node-oracledb bindings are fetched for both targets, then pruned to the target architecture in `afterPack`, so no installer carries a foreign binary.
-            - Every build is verified before upload: main binary architecture, DuckDB binding directory and the oracledb binding are asserted per installer; the Windows arm64 and macOS Intel Oracle gaps are reported as warnings instead of slipping through.
-
+            
             **Verification**
-            - 6 desktop combinations (3 operating systems x 2 architectures), 480 Bridge tests, 391 documentation-contract checks.
-
+            - 6 desktop combinations (3 operating systems x 2 architectures), 480 Bridge tests, 18 desktop unit tests, 391 documentation-contract checks.
+            - Before publishing, CI asserts that every `latest*.yml` points at an asset that actually exists in the release.
+            
             Installers are built by GitHub Actions from this tag.
           files: |
             dist-release/*.exe
@@ -367,7 +418,9 @@ jobs:
             dist-release/*.AppImage
             dist-release/*.deb
             dist-release/*.rpm
-            dist-release/*.yml
+            # 自动更新的元数据（latest.yml / latest-linux.yml）：客户端靠它判断版本与差分下载。
+            # 只取 latest 前缀，避免把 electron-builder 的 builder-debug.yml 也发上线。
+            dist-release/latest*.yml
             dist-release/*.blockmap
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

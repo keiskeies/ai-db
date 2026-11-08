@@ -38,6 +38,60 @@ export type AppMenuItem =
   | { type: 'command'; id: string; label: string; accelerator?: string }
   | { type: 'open'; label: string; url: string };
 
+/** 更新通道：auto 能自己下载安装；manual 只能提示去发布页。 */
+export type UpdateChannel = 'auto' | 'manual';
+
+/** 退化成 manual 的原因，渲染层据此给出不同说明。 */
+export type UpdateFallbackReason = 'dev' | 'unsigned' | 'package' | 'platform' | 'fallback' | null;
+
+export interface UpdateStatusInfo {
+  mode: UpdateChannel;
+  reason: UpdateFallbackReason;
+  currentVersion: string;
+  platform: string;
+  arch: string;
+}
+
+export interface UpdateCheckResult {
+  status: 'available' | 'latest' | 'error';
+  mode: UpdateChannel;
+  reason: UpdateFallbackReason;
+  currentVersion: string;
+  latestVersion?: string | null;
+  notes?: string;
+  publishedAt?: string | null;
+  downloadUrl?: string | null;
+  pageUrl?: string | null;
+  assetName?: string | null;
+  assetSize?: number | null;
+  code?: string;
+  detail?: string;
+}
+
+export interface UpdateEvent {
+  type: 'checking' | 'available' | 'latest' | 'progress' | 'downloaded' | 'error';
+  mode?: UpdateChannel;
+  reason?: UpdateFallbackReason;
+  currentVersion?: string;
+  latestVersion?: string | null;
+  notes?: string;
+  percent?: number;
+  transferred?: number;
+  total?: number;
+  bytesPerSecond?: number;
+  code?: string;
+  detail?: string;
+}
+
+export interface DesktopUpdaterBridge {
+  status: () => Promise<UpdateStatusInfo>;
+  check: () => Promise<UpdateCheckResult>;
+  download: () => Promise<{ ok: boolean; code?: string }>;
+  install: () => Promise<{ ok: boolean; code?: string }>;
+  openDownload: (url?: string | null) => Promise<{ ok: boolean; url?: string }>;
+  onEvent: (callback: (event: UpdateEvent) => void) => () => void;
+}
+
 export interface DesktopBridge {
   platform: string;
   createTableShortcut: (payload: TableShortcutPayload & { ui?: DesktopDialogUi }) => Promise<{ ok: boolean; path?: string; error?: string }>;
@@ -45,6 +99,7 @@ export interface DesktopBridge {
   exportPdf?: (payload: { html: string; name?: string; ui?: DesktopDialogUi }) => Promise<SaveExportedFileResult>;
   setApplicationMenu?: (spec: AppMenuItem[]) => Promise<boolean>;
   onMenuCommand?: (callback: (id: string) => void) => () => void;
+  updater?: DesktopUpdaterBridge;
   onOpenTable: (callback: (payload: OpenTablePayload) => void) => () => void;
 }
 

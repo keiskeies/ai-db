@@ -3,6 +3,11 @@ const { contextBridge, ipcRenderer } = require('electron');
 let pendingOpen = null;
 const listeners = new Set();
 const menuListeners = new Set();
+const updateListeners = new Set();
+
+ipcRenderer.on('update:event', (_event, payload) => {
+  for (const listener of updateListeners) listener(payload);
+});
 
 ipcRenderer.on('open-table', (_event, payload) => {
   pendingOpen = payload;
@@ -23,6 +28,18 @@ contextBridge.exposeInMainWorld('aidbDesktop', {
   onMenuCommand: (callback) => {
     menuListeners.add(callback);
     return () => menuListeners.delete(callback);
+  },
+  // 更新：渲染层只发命令、收事件，主进程负责网络与安装
+  updater: {
+    status: () => ipcRenderer.invoke('update:status'),
+    check: () => ipcRenderer.invoke('update:check'),
+    download: () => ipcRenderer.invoke('update:download'),
+    install: () => ipcRenderer.invoke('update:install'),
+    openDownload: (url) => ipcRenderer.invoke('update:open-download', url),
+    onEvent: (callback) => {
+      updateListeners.add(callback);
+      return () => updateListeners.delete(callback);
+    },
   },
   onOpenTable: (callback) => {
     listeners.add(callback);

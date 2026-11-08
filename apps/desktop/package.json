@@ -1,6 +1,6 @@
 {
   "name": "@aidb/desktop",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "private": true,
   "type": "module",
   "main": "electron/main.cjs",
@@ -11,7 +11,7 @@
     "package": "npm run build && electron-builder",
     "preview": "vite preview --port 4173 --strictPort",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/layout.test.ts"
+    "test": "node --import tsx --test test/layout.test.ts test/updater.test.ts"
   },
   "dependencies": {
     "@aidb/core": "*",
@@ -22,6 +22,7 @@
     "@codemirror/view": "^6.36.1",
     "@lezer/highlight": "^1.2.5",
     "codemirror": "^6.0.1",
+    "electron-updater": "^6.8.11",
     "lucide-react": "^0.469.0",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",

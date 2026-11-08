@@ -2771,7 +2771,7 @@ function SettingsScreen({
               <View style={[styles.statusDot, { backgroundColor: connected ? colors.success : colors.warning }]} />
               <Text style={styles.listMeta}>{connected ? 'WebSocket 已连接' : '正在重连'}</Text>
             </View>
-            <Text style={styles.listMeta}>v{boot?.version ?? '0.0.4'}</Text>
+            <Text style={styles.listMeta}>v{boot?.version ?? '0.0.5'}</Text>
           </View>
         </View>
 
@@ -4545,7 +4545,7 @@ function MeScreen({
           <Text style={[styles.settingValue, { marginTop: 4 }]}>{config.baseUrl}</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 }}>
             <View style={[styles.statusDot, { backgroundColor: connected ? colors.success : colors.warning }]} />
-            <Text style={styles.listMeta}>{connected ? 'WebSocket 已连接' : '正在重连'} · v{boot?.version ?? '0.0.4'}</Text>
+            <Text style={styles.listMeta}>{connected ? 'WebSocket 已连接' : '正在重连'} · v{boot?.version ?? '0.0.5'}</Text>
           </View>
         </View>
         {entries.map((entry) => (

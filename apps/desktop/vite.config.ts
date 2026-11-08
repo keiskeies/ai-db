@@ -1,12 +1,19 @@
 import { fileURLToPath, URL } from 'node:url';
+import { readFileSync } from 'node:fs';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 const bridgeUrl = process.env.AIDB_BRIDGE_URL ?? 'http://127.0.0.1:8787';
 const bridgeWsUrl = bridgeUrl.replace(/^http/, 'ws');
+// 版本号只有一个来源（apps/desktop/package.json），界面里不再写字面量，
+// 否则发版时容易漏改「状态栏」或「关于」里的那一处。
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
 
 export default defineConfig({
   plugins: [react()],
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   resolve: {
     alias: {
       '@aidb/core': fileURLToPath(new URL('../../packages/core/src/index.ts', import.meta.url)),

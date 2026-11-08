@@ -7,8 +7,26 @@
 <p align="center"><strong>A database workbench. Also a database agent.</strong></p>
 
 <p align="center">
-  <a href="./README.md">English</a> ·
-  <a href="./README.zh-CN.md">简体中文</a>
+  <strong>English</strong> ·
+  <a href="./README.zh-CN.md">简体中文</a> ·
+  <a href="./README.zh-TW.md">繁體中文</a> ·
+  <a href="./README.ja.md">日本語</a> ·
+  <a href="./README.ko.md">한국어</a> ·
+  <a href="./README.de.md">Deutsch</a> ·
+  <a href="./README.fr.md">Français</a> ·
+  <a href="./README.es.md">Español</a> ·
+  <a href="./README.pt-BR.md">Português (BR)</a> ·
+  <a href="./README.it.md">Italiano</a> ·
+  <a href="./README.ru.md">Русский</a> ·
+  <a href="./README.ar.md">العربية</a> ·
+  <a href="./README.hi.md">हिन्दी</a> ·
+  <a href="./README.id.md">Bahasa Indonesia</a> ·
+  <a href="./README.vi.md">Tiếng Việt</a> ·
+  <a href="./README.th.md">ไทย</a> ·
+  <a href="./README.tr.md">Türkçe</a> ·
+  <a href="./README.nl.md">Nederlands</a> ·
+  <a href="./README.pl.md">Polski</a> ·
+  <a href="./README.uk.md">Українська</a>
 </p>
 
 <p align="center">
@@ -24,7 +42,7 @@
   <img alt="53 agent tools" src="https://img.shields.io/badge/Agent%20Tools-53-45C8C3?style=flat-square" />
   <img alt="macOS, Windows, Linux" src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-0B0E0D?style=flat-square" />
   <img alt="MIT license" src="https://img.shields.io/badge/License-MIT-E0AF63?style=flat-square" />
-  <a href="https://github.com/keiskeies/ai-db/releases/tag/v0.0.2"><img alt="Release v0.0.2" src="https://img.shields.io/badge/Release-v0.0.2-45C8C3?style=flat-square&logo=github" /></a>
+  <a href="https://github.com/keiskeies/ai-db/releases/tag/v0.0.5"><img alt="Release v0.0.5" src="https://img.shields.io/badge/Release-v0.0.5-45C8C3?style=flat-square&logo=github" /></a>
   <a href="https://github.com/keiskeies/ai-db"><img alt="GitHub stars" src="https://img.shields.io/github/stars/keiskeies/ai-db?style=flat-square&logo=github&label=Stars&color=E0AF63" /></a>
 </p>
 
@@ -571,17 +589,31 @@ Releases are published per operating system and architecture — six desktop com
 
 | System | Architecture | Files |
 |---|---|---|
-| Windows | x64 | `AiDB Studio-<version>-x64-setup.exe` (NSIS) |
-| Windows | arm64 | `AiDB Studio-<version>-arm64-setup.exe` (NSIS) |
-| macOS | Apple Silicon | `AiDB Studio-<version>-arm64.dmg` |
-| macOS | Intel | `AiDB Studio-<version>-x64.dmg` |
-| Linux | x64 | `AiDB Studio-<version>-x86_64.AppImage` / `-amd64.deb` / `-x86_64.rpm` |
-| Linux | arm64 | `AiDB Studio-<version>-arm64.AppImage` / `-arm64.deb` / `-aarch64.rpm` |
+| Windows | x64 | `AiDB-Studio-<version>-x64-setup.exe` (NSIS) |
+| Windows | arm64 | `AiDB-Studio-<version>-arm64-setup.exe` (NSIS) |
+| macOS | Apple Silicon | `AiDB-Studio-<version>-arm64.dmg` |
+| macOS | Intel | `AiDB-Studio-<version>-x64.dmg` |
+| Linux | x64 | `AiDB-Studio-<version>-x86_64.AppImage` / `-amd64.deb` / `-x86_64.rpm` |
+| Linux | arm64 | `AiDB-Studio-<version>-arm64.AppImage` / `-arm64.deb` / `-aarch64.rpm` |
 
 - Windows on ARM can also run the x64 installer through the system emulator, and that build keeps the Oracle driver.
 - Linux filenames follow distribution conventions (x64 shows up as `amd64` or `x86_64`, arm64 as `aarch64`). deb and rpm install through the package manager; the AppImage is portable but needs FUSE 2 — otherwise run it with `--appimage-extract-and-run`. A graphical session is required either way; WSL2 needs WSLg.
 - Each installer carries only its own architecture's native bindings (DuckDB, node-oracledb), asserted per build in CI; the two exceptions are described in the engine section above.
 - Android and iOS are built through EAS and are not part of the release page.
+
+### Checking for updates
+
+Settings → About has a version card that asks GitHub for the newest release and then either installs it or points at the release page, depending on how the app was installed.
+
+| Install form | Behaviour | Why |
+|---|---|---|
+| Windows (NSIS) | Downloads and installs silently, with differential download (`latest.yml` + blockmap — usually tens of KB instead of the full installer) | The installer supports `/S` and the install directory is writable |
+| Linux (AppImage) | Same, using `latest-linux.yml` / `latest-linux-arm64.yml` | Only the AppImage can replace itself |
+| Linux (deb / rpm) | Opens the release page | `/opt` belongs to the package manager |
+| macOS | Opens the release page | The build is unsigned and Squirrel.Mac refuses to replace an unsigned app |
+| Dev mode / web | Version check only | No `app-update.yml`, and no installed bundle to swap |
+
+Auto-update relies on `latest*.yml` in the release (version, file name, sha512). Windows metadata carries no architecture suffix, so arm64 uses a separate `latest-arm64.yml` channel and the client picks the file matching `process.arch`; on Linux electron-updater appends `-linux-arm64` itself. Installer file names use hyphens throughout (`AiDB-Studio-...`): electron-builder rewrites spaces to `-` when writing the metadata, while GitHub rewrites them to `.` on upload, and the mismatch would 404 the download URL.
 
 ## Architecture
 

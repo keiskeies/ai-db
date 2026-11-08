@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
 const { backupBeforeUpgrade, markVersion } = require('./upgrade.cjs');
 const { installMenu, configureAboutPanel } = require('./menu.cjs');
+const updater = require('./updater.cjs');
 
 let gatewayProcess = null;
 let mainWindow = null;
@@ -37,6 +38,17 @@ ipcMain.handle('menu:set', (_event, spec) => {
     console.error('[desktop] install menu failed', err);
     return false;
   }
+});
+
+// 更新：检查 / 下载 / 安装都由主进程执行，进度通过 update:event 推给渲染层。
+// 通道判定（能不能自动装）在 updater.cjs 里按平台决定，渲染层只显示结果。
+ipcMain.handle('update:status', () => updater.status());
+ipcMain.handle('update:check', () => updater.check());
+ipcMain.handle('update:download', () => updater.download());
+ipcMain.handle('update:install', () => updater.install());
+ipcMain.handle('update:open-download', (_event, url) => updater.openDownload(url));
+updater.onEvent((event) => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update:event', event);
 });
 
 ipcMain.handle('create-table-shortcut', async (_event, payload) => {
