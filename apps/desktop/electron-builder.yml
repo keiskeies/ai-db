@@ -33,11 +33,16 @@ asar: true
 # 这次安装会把 devDependency 的 app-builder-bin 剪掉，随后打包自己就起不来。
 # 本项目没有需要 rebuild 的原生生产依赖，直接跳过依赖重建更稳。
 npmRebuild: false
+# 每个安装包只保留自身架构的 DuckDB 绑定（extraResources 整目录拷贝 node_modules/@duckdb，
+# 跨架构构建时另一架构的 duckdb.node 会各多出约 60 MB）。
+afterPack: build/afterPack.cjs
 win:
   target:
     - nsis
   artifactName: ${productName}-${version}-setup.${ext}
 mac:
+  # 未指定 arch 时 electron-builder 回落到宿主架构（process.arch），只会出一个包。
+  # 同时出 Apple Silicon 与 Intel 由 CI 传入 `--mac --x64 --arm64`。
   target:
     - dmg
   category: public.app-category.developer-tools

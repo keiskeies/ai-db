@@ -21,7 +21,7 @@ jobs:
             target: --win
             artifact: windows
           - os: macos-latest
-            target: --mac
+            target: --mac --x64 --arm64
             artifact: macos
           - os: ubuntu-latest
             target: --linux
@@ -56,6 +56,30 @@ jobs:
           chmod +x node_modules/app-builder-bin/linux/*/app-builder node_modules/app-builder-bin/mac/app-builder_* 2>/dev/null || true
           ls -la node_modules/app-builder-bin/linux/x64/app-builder node_modules/app-builder-bin/mac/app-builder_arm64
 
+      - name: Ensure both darwin DuckDB bindings
+        # 一次跑出 x64 + arm64 两个 dmg，但 @duckdb/node-bindings 只会安装宿主架构那一个
+        # optionalDependency。把另一架构的预编译绑定补进 node_modules，duckdb.js 会在运行时
+        # 按 process.platform-process.arch 自行挑选。
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver=$(node -p "require('./node_modules/@duckdb/node-bindings/package.json').version")
+          for arch in x64 arm64; do
+            pkg="node-bindings-darwin-${arch}"
+            if [ -f "node_modules/@duckdb/${pkg}/duckdb.node" ]; then
+              echo "already present: ${pkg}"
+            else
+              tmp=$(mktemp -d)
+              curl -fsSL "https://registry.npmjs.org/@duckdb/${pkg}/-/${pkg}-${ver}.tgz" -o "$tmp/pkg.tgz" || { echo "::error::download ${pkg} failed"; exit 1; }
+              tar xzf "$tmp/pkg.tgz" -C "$tmp"
+              rm -rf "node_modules/@duckdb/${pkg}"
+              mv "$tmp/package" "node_modules/@duckdb/${pkg}"
+              echo "fetched: ${pkg}"
+            fi
+            file "node_modules/@duckdb/${pkg}/duckdb.node"
+          done
+
       - name: Diagnose toolchain
         shell: bash
         working-directory: apps/desktop
@@ -75,6 +99,58 @@ jobs:
         run: |
           set -o pipefail
           npx electron-builder ${{ matrix.target }} --publish never 2>&1 | tee electron-builder.log
+
+      - name: Verify both mac architectures
+        # 交叉架构打包最容易出的错是「dmg 名字对了、里面的原生绑定错了」，
+        # 所以这里同时校验主程序架构与 DuckDB 绑定，并确认多余架构已被 afterPack 裁掉。
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: apps/desktop
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          dmgs=(release/*.dmg)
+          if [ ${#dmgs[@]} -ne 2 ]; then
+            echo "::error::expected 2 dmg (x64 + arm64), got ${#dmgs[@]}"
+            ls -l release || true
+            exit 1
+          fi
+          ls -lh "${dmgs[@]}"
+
+          check() {
+            local appdir="$1" keep="$2" expect="$3" drop="$4"
+            local app bin duckdb
+            if [ ! -d "$appdir" ]; then
+              echo "::error::missing output dir $appdir"
+              exit 1
+            fi
+            app=$(ls -d "$appdir"/*.app 2>/dev/null | head -n 1)
+            if [ -z "$app" ] || [ ! -d "$app" ]; then
+              echo "::error::no .app bundle inside $appdir"
+              exit 1
+            fi
+            bin=$(ls "$app/Contents/MacOS/" | head -n 1)
+            echo "--- $appdir -> $app (binary: $bin)"
+            file "$app/Contents/MacOS/$bin"
+            if ! file "$app/Contents/MacOS/$bin" | grep -q "$expect"; then
+              echo "::error::$app main binary is not $expect"
+              exit 1
+            fi
+            duckdb="$app/Contents/Resources/gateway/node_modules/@duckdb"
+            if [ ! -d "$duckdb/$keep" ]; then
+              echo "::error::$app is missing $keep"
+              exit 1
+            fi
+            if [ -e "$duckdb/$drop" ]; then
+              echo "::error::$app still ships $drop"
+              exit 1
+            fi
+            echo "bindings: $(ls "$duckdb" | tr '\n' ' ')"
+          }
+
+          check release/mac node-bindings-darwin-x64 x86_64 node-bindings-darwin-arm64
+          check release/mac-arm64 node-bindings-darwin-arm64 arm64 node-bindings-darwin-x64
 
       - name: Report packaging error
         if: failure()
@@ -121,6 +197,10 @@ jobs:
           generate_release_notes: false
           body: |
             AiDB Studio **v0.0.2** — the agent-first database workbench.
+
+            **Installers**
+            - macOS: `AiDB Studio-0.0.2-arm64.dmg` for Apple Silicon, `AiDB Studio-0.0.2-x64.dmg` for Intel Macs (macOS 12+).
+            - Windows: NSIS setup, Linux: AppImage.
 
             This release is about engines that refuse to behave the same way and about waiting less.
 
