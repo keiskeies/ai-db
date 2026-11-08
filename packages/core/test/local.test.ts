@@ -5,10 +5,7 @@ import type { AgentContextData, ProviderEvent, ProviderMessage } from '../src/ag
 import { EMPTY_AGENT_CONTEXT_BUNDLE } from '../src/types';
 import type { AgentContextBundle, ConnectionConfig, TableInfo } from '../src/types';
 
-const connection: ConnectionConfig = {
-  id: 'c1',
-  name: 'Demo',
-  engine: 'sqlite',
+const connectionBase: Omit<ConnectionConfig, 'id' | 'name' | 'engine'> = {
   color: 'green',
   environment: 'dev',
   groupName: 'demo',
@@ -17,6 +14,8 @@ const connection: ConnectionConfig = {
   createdAt: '',
   updatedAt: '',
 };
+
+const connection: ConnectionConfig = { ...connectionBase, id: 'c1', name: 'Demo', engine: 'sqlite' };
 
 const tables: TableInfo[] = [
   { name: 'users', type: 'table', columns: [{ name: 'id', type: 'INTEGER', nullable: false, primaryKey: true }, { name: 'name', type: 'TEXT', nullable: false, primaryKey: false }] },
@@ -562,4 +561,98 @@ test('offline heatmap asks for the missing axis instead of refusing', async () =
   const answer = textOf(events);
   assert.match(answer, /两根/);
   assert.equal(answer.includes('还没有'), false);
+});
+
+// ---- 工具广度与引擎感知路由 ----
+
+test('offline intent detection covers the wider tool surface', () => {
+  assert.equal(detectIntent('给 orders 加一列 note 文本'), 'alter');
+  assert.equal(detectIntent('最近的查询'), 'history');
+  assert.equal(detectIntent('找一下名字含 order 的表'), 'search_objects');
+  assert.equal(detectIntent('对比 A 和 B 的表结构'), 'schema_diff');
+  assert.equal(detectIntent('有哪些技能'), 'skills');
+  assert.equal(detectIntent('创建集合 logs'), 'collection');
+  assert.equal(detectIntent('提交事务'), 'transaction');
+  assert.equal(detectIntent('让管道跑起来'), 'pipeline');
+  assert.equal(detectIntent('把 /data/users.csv 导入 users'), 'import_csv');
+});
+
+test('offline alter parses add/drop/rename column', async () => {
+  const provider = new LocalProvider();
+  const add = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: '给 orders 加一列 note 文本' }], tools: [], context: richContext }));
+  const addCall = add.find((e) => e.type === 'tool_call') as any;
+  assert.equal(addCall.call.name, 'alter_table');
+  assert.equal(addCall.call.args.table, 'orders');
+  assert.deepEqual(addCall.call.args.operations, [{ op: 'add_column', column: { name: 'note', type: 'TEXT', nullable: true } }]);
+
+  const drop = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: '删除 orders 的 note 列' }], tools: [], context: richContext }));
+  const dropCall = drop.find((e) => e.type === 'tool_call') as any;
+  assert.equal(dropCall.call.args.operations[0].op, 'drop_column');
+});
+
+test('offline routes non-SQL engines to their native query tools', async () => {
+  const provider = new LocalProvider();
+  const localTables: TableInfo[] = [{ name: 'orders', type: 'table', columns: [{ name: 'id', type: 'INTEGER', nullable: false, primaryKey: true }, { name: 'status', type: 'TEXT', nullable: true, primaryKey: false, comment: '状态' }] }];
+  const run = async (engine: ConnectionConfig['engine'], question: string) => {
+    const connection: ConnectionConfig = { ...connectionBase, id: `c-${engine}`, name: engine, engine };
+    const context: AgentContextData = { connection, databases: [{ name: 'main', tables: localTables }] };
+    const events = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: question }], tools: [], context }));
+    return (events.find((e) => e.type === 'tool_call') as any)?.call;
+  };
+  const mongoCount = await run('mongodb', 'orders 有多少条');
+  assert.equal(mongoCount.name, 'run_mql');
+  assert.equal(mongoCount.args.collection, 'orders');
+  assert.equal(mongoCount.args.op, 'count');
+  assert.equal(mongoCount.args.connectionId, 'c-mongodb');
+
+  const mongoGroup = await run('mongodb', '按 status 统计 orders');
+  assert.equal(mongoGroup.args.op, 'aggregate');
+  assert.match(JSON.stringify(mongoGroup.args.pipeline), /"\$group"/);
+
+  const redisCount = await run('redis', '有多少个键');
+  assert.equal(redisCount.name, 'run_redis');
+  assert.equal(redisCount.args.command, 'DBSIZE');
+
+  const cypherCount = await run('neo4j', '有多少行');
+  assert.equal(cypherCount.name, 'run_cypher');
+  assert.match(cypherCount.args.query, /MATCH \(n(?::`orders`)?\) RETURN count\(n\)/);
+
+  const cqlSample = await run('cassandra', '看几条 orders 的数据');
+  assert.equal(cqlSample.name, 'run_cql');
+  assert.match(cqlSample.args.query, /SELECT \* FROM "orders" LIMIT/);
+});
+
+test('offline passes a pasted native statement to the right tool', async () => {
+  const provider = new LocalProvider();
+  const graph: ConnectionConfig = { ...connectionBase, id: 'c-graph', name: 'Graph', engine: 'neo4j' };
+  const context: AgentContextData = { connection: graph, databases: [] };
+  const events = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: 'MATCH (n:Person) RETURN n LIMIT 5' }], tools: [], context }));
+  const call = events.find((e) => e.type === 'tool_call') as any;
+  assert.equal(call.call.name, 'run_cypher');
+  assert.equal(call.call.args.query, 'MATCH (n:Person) RETURN n LIMIT 5');
+  assert.equal(call.call.args.connectionId, 'c-graph');
+});
+
+test('offline refuses open-ended pipeline authoring and gates skills', async () => {
+  const provider = new LocalProvider();
+  const pipeline = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: '帮我创建一个数据同步管道' }], tools: [], context: richContext }));
+  assert.equal(pipeline.some((e) => e.type === 'tool_call'), false);
+  assert.match(textOf(pipeline), /离线/);
+
+  // skills 不在可用工具清单里（设置未开启）时不发调用。
+  const skills = await collect(provider.stream({ system: '', messages: [{ role: 'user', content: '有哪些技能' }], tools: [], context: richContext }));
+  assert.equal(skills.some((e) => e.type === 'tool_call'), false);
+  assert.match(textOf(skills), /未启用/);
+
+  // 开启后（工具清单里有 skill_list）才发调用。
+  const enabled = await collect(
+    provider.stream({
+      system: '',
+      messages: [{ role: 'user', content: '有哪些技能' }],
+      tools: [{ name: 'skill_list', description: '', inputSchema: { type: 'object', properties: {} } }],
+      context: richContext,
+    }),
+  );
+  const call = enabled.find((e) => e.type === 'tool_call') as any;
+  assert.equal(call.call.name, 'skill_list');
 });

@@ -1,6 +1,6 @@
 import type { ColumnDef, IndexDef } from '../../sql/ddl';
 import { buildCount, buildMonthlySeriesExpr, buildSelectTable, defaultIndexName } from '../../sql/ddl';
-import { isSqlEngine } from '../../engines';
+import { engineMeta, isSqlEngine } from '../../engines';
 import { quoteIdent, quoteLiteral } from '../../sql/ident';
 import type { ColumnInfo, ConnectionConfig, DatabaseSchema, Engine, TableInfo } from '../../types';
 import { expandTerms } from '../context';
@@ -43,6 +43,16 @@ export type LocalIntent =
   | 'raw_sql'
   | 'memory_write'
   | 'memory_search'
+  | 'search_objects'
+  | 'history'
+  | 'transaction'
+  | 'alter'
+  | 'import_csv'
+  | 'schema_diff'
+  | 'skills'
+  | 'mcp'
+  | 'collection'
+  | 'pipeline'
   | 'help';
 
 interface ToolOutcome {
@@ -105,10 +115,23 @@ export function detectIntent(prompt: string): LocalIntent {
   if (!p) return 'help';
   if (/(记住|记一下|remember)/.test(p)) return 'memory_write';
   if (/(记忆|还记得|之前.*(说|记|提)|memory|回忆)/.test(p)) return 'memory_search';
+  // 这几条必须排在其它规则之前：它们和「创建表」「导出」「哪些表」共用动词，但目标物不同。
+  if (/(管道|流水线|pipeline)/.test(p)) return 'pipeline';
+  if (/(开启|开始|begin).{0,4}事务|(提交|commit).{0,4}事务|(回滚|rollback|撤销).{0,4}事务/.test(p)) return 'transaction';
+  if (/(查询历史|执行过哪些|最近的查询|query\s*history)/.test(p)) return 'history';
+  if (/(搜索|查找|找一下|找找|检索).{0,20}(表|列|字段|对象)|(哪些|哪个|哪张).{0,4}(表|集合).{0,6}(有|包含|含有).{0,10}(列|字段)/.test(p)) return 'search_objects';
+  if (/(对比|比较|diff).{0,24}(结构|schema)|(结构|schema).{0,24}(对比|比较)/.test(p)) return 'schema_diff';
+  if (/(有哪些|列出|查看|看看).{0,6}(技能|skill)|(运行|执行|跑).{0,4}技能|技能列表/.test(p)) return 'skills';
+  if (/mcp/.test(p)) return 'mcp';
+  if (/(创建|新建).{0,4}(集合|collection)/.test(p)) return 'collection';
+  if (/(删除|drop|移除).{0,4}(集合|collection)/.test(p)) return 'collection';
+  if (/(导入|import)/.test(p) && /(csv|xlsx?|tsv|excel|表格)/.test(p)) return 'import_csv';
   if (/^\s*(select|insert|update|delete|with|alter|create|drop)\b/i.test(stripCodeFence(prompt)) && !/(创建|新建|建).{0,4}表/.test(p)) return 'raw_sql';
   if (/^(select|insert|update|delete|with)\b/i.test(stripCodeFence(prompt))) return 'raw_sql';
   if (/(巡检|体检|健康检查|数据库健康|审计数据库|audit\b)/.test(p)) return 'audit';
   if (/(空值|null值|重复|数据质量|quality|一致性|异常值|脏数据|duplicate)/.test(p)) return 'quality';
+  // 增删列这几种说法要等质量/巡检这些更具体的话题排完，否则「删除空值字段的记录」会被当成改表。
+  if (/(加|添加|新增|增加|删除|去掉).{0,24}(列|字段)|(重命名|改列名)/.test(p)) return 'alter';
   // 必须排在 chart 之前：「预测未来三个月的趋势」既要趋势更要外推，走 analyze 才有权威数字
   if (/(预测|forecast|外推|接下来.*(多少|会)|未来)/.test(p)) return 'analyze';
   // 点名要图就按图走：「统计金额合计并画柱状图」里「合计」也命中 analyze，
@@ -293,6 +316,39 @@ function mapDefault(raw: string): string {
   const cleaned = raw.replace(/[，,。；;]$/, '');
   if (/(当前时间|现在|now|current_timestamp)/i.test(cleaned)) return 'CURRENT_TIMESTAMP';
   return cleaned.replace(/^["']|["']$/g, '');
+}
+
+/**
+ * 「给 orders 加一列 note 文本」→ alter_table 的 operations。
+ * 只认增删改列这三种最确定的说法：换约束、改默认值这类停手，让用户说清或去表设计器。
+ */
+function parseAlterSpec(prompt: string, fallbackTable: string, engine: Engine): { operations: Array<Record<string, unknown>>; summary: string; destructive: boolean } | { error: string } {
+  const table = /(?:表|table)\s*[`"']?([A-Za-z_][A-Za-z0-9_]*)/i.exec(prompt)?.[1] ?? /([A-Za-z_][A-Za-z0-9_]*)\s*(?:表|table)/.exec(prompt)?.[1] ?? fallbackTable;
+  const rename = /(?:重命名|改列名)\s*(?:列|字段)?\s*[`"']?([A-Za-z_][A-Za-z0-9_]*)[`"']?\s*(?:为|成|to)\s*[`"']?([A-Za-z_][A-Za-z0-9_]*)[`"']?/i.exec(prompt);
+  if (rename) {
+    return { operations: [{ op: 'rename_column', table, from: rename[1], to: rename[2] }], summary: `把列 \`${rename[1]}\` 重命名为 \`${rename[2]}\``, destructive: false };
+  }
+  const drop = /(?:删除|去掉|drop)\s*(?:列|字段)?\s*[`"']?([A-Za-z_][A-Za-z0-9_]*)[`"']?(?:\s*(?:列|字段))?/i.exec(prompt);
+  if (drop && /(列|字段)/.test(prompt)) {
+    return { operations: [{ op: 'drop_column', column: { name: drop[1] } }], summary: `删除列 \`${drop[1]}\``, destructive: true };
+  }
+  const add = /(?:加|添加|新增|增加)\s*(?:一)?(?:列|字段)?\s*[`"']?([A-Za-z_][A-Za-z0-9_]*)[`"']?(?:\s+(.+))?$/i.exec(prompt);
+  if (add && /(列|字段)/.test(prompt)) {
+    const name = add[1];
+    const def = (add[2] ?? '').toLowerCase();
+    let kind: 'text' | 'integer' | 'boolean' | 'timestamp' | 'decimal' = 'text';
+    if (/(整数|integer|\bint\b|数字|number)/.test(def)) kind = 'integer';
+    if (/(布尔|bool|boolean)/.test(def)) kind = 'boolean';
+    if (/(时间|日期|timestamp|datetime|date)/.test(def)) kind = 'timestamp';
+    if (/(金额|价格|小数|decimal|numeric)/.test(def)) kind = 'decimal';
+    const nullable = !/(非空|not null|必填|required)/.test(def);
+    return {
+      operations: [{ op: 'add_column', column: { name, type: typeFor(kind, engine), nullable } }],
+      summary: `新增列 \`${name} ${typeFor(kind, engine)}\``,
+      destructive: false,
+    };
+  }
+  return { error: '我只认得增删改列这三类改动。例如：“给 orders 加一列 note 文本”“删除 orders 的 note 列”“把 orders 的 note 重命名为 remark”。' };
 }
 
 function groundingOf(ctx: AgentContextData, database?: string): GroundingOptions {
@@ -716,6 +772,164 @@ function errText(result: ToolResult): string {
   return `操作未完成：${result.error?.message ?? result.summary ?? '未知错误'}${result.error?.hint ? `\n\n提示：${result.error.hint}` : ''}`;
 }
 
+/* ---------------------------------------------------- 非 SQL 引擎的原生路由 */
+
+type NativeRoute = { tool: string; language: string };
+
+/** 引擎的原生查询语言 → 工具名。SQL 引擎返回 undefined（走 run_sql）。 */
+const NATIVE_TOOLS: Record<string, string> = {
+  mql: 'run_mql',
+  redis: 'run_redis',
+  cypher: 'run_cypher',
+  vector: 'vector_search',
+  search: 'search_index',
+  cql: 'run_cql',
+  aql: 'run_aql',
+};
+
+function nativeRoute(engine: Engine): NativeRoute | undefined {
+  if (isSqlEngine(engine)) return undefined;
+  const language = engineMeta(engine).languages[0];
+  const tool = language ? NATIVE_TOOLS[language] : undefined;
+  return tool ? { tool, language } : undefined;
+}
+
+function nativeIdent(name: string, language: string): string {
+  const escaped = name.replace(/([`"])/g, '$1$1');
+  if (language === 'cypher' || language === 'aql') return '`' + name.replace(/`/g, '``') + '`';
+  if (language === 'mql') return escaped;
+  return '"' + name.replace(/"/g, '""') + '"';
+}
+
+/**
+ * 各引擎的「计数 / 取样 / 分组」原生语句。
+ *
+ * 只翻译这三种最确定的形状：DBSIZE、countDocuments、MATCH … count(n)。
+ * 其余问题原样交给用户说清语句——离线模式没有模型能把中文翻成 MQL 管道，
+ * 硬凑出来的查询查空了，用户还以为库里没数据。
+ */
+function nativeCall(input: { route: NativeRoute; kind: 'count' | 'sample' | 'group'; table?: TableInfo; column?: string; limit: number; connectionId: string; database?: string }): { args: Record<string, unknown> } | undefined {
+  const { route, kind, table, column, limit, connectionId, database } = input;
+  const name = table?.name ?? '';
+  if (route.language === 'redis') {
+    // Redis 没有「表」的概念：计数就是 DBSIZE，取样用 SCAN 游标。
+    if (kind === 'count') return { args: { connectionId, database, command: 'DBSIZE', maxRows: 1 } };
+    if (kind === 'sample') return { args: { connectionId, database, command: 'SCAN', args: ['0', 'COUNT', String(limit)], maxRows: limit } };
+    return undefined;
+  }
+  if (route.language === 'mql') {
+    if (!name) return undefined;
+    if (kind === 'count') return { args: { connectionId, database, collection: name, op: 'count' } };
+    if (kind === 'sample') return { args: { connectionId, database, collection: name, op: 'find', limit } };
+    if (kind === 'group' && column) {
+      return {
+        args: {
+          connectionId,
+          database,
+          collection: name,
+          op: 'aggregate',
+          pipeline: [{ $group: { _id: `$${column}`, value: { $sum: 1 } } }, { $sort: { value: -1 } }, { $limit: 20 }],
+        },
+      };
+    }
+    return undefined;
+  }
+  if (route.language === 'cypher') {
+    if (kind === 'count') {
+      const match = name ? `MATCH (n:${nativeIdent(name, 'cypher')})` : 'MATCH (n)';
+      return { args: { connectionId, database, query: `${match} RETURN count(n) AS count` } };
+    }
+    if (kind === 'sample') {
+      const match = name ? `MATCH (n:${nativeIdent(name, 'cypher')})` : 'MATCH (n)';
+      return { args: { connectionId, database, query: `${match} RETURN n LIMIT ${limit}` } };
+    }
+    if (kind === 'group' && column && name) {
+      return {
+        args: {
+          connectionId,
+          database,
+          query: `MATCH (n:${nativeIdent(name, 'cypher')}) RETURN n.${nativeIdent(column, 'cypher')} AS label, count(n) AS value ORDER BY value DESC LIMIT 20`,
+        },
+      };
+    }
+    return undefined;
+  }
+  if (route.language === 'cql') {
+    if (!name) return undefined;
+    const ref = nativeIdent(name, 'cql');
+    if (kind === 'count') return { args: { connectionId, database, query: `SELECT COUNT(*) AS count FROM ${ref}` } };
+    if (kind === 'sample') return { args: { connectionId, database, query: `SELECT * FROM ${ref} LIMIT ${limit}` } };
+    if (kind === 'group' && column) {
+      const col = nativeIdent(column, 'cql');
+      return { args: { connectionId, database, query: `SELECT ${col} AS label, COUNT(*) AS value FROM ${ref} GROUP BY ${col} LIMIT 20` } };
+    }
+    return undefined;
+  }
+  if (route.language === 'aql') {
+    if (!name) return undefined;
+    const ref = nativeIdent(name, 'aql');
+    if (kind === 'count') return { args: { connectionId, database, query: `RETURN LENGTH(${ref})` } };
+    if (kind === 'sample') return { args: { connectionId, database, query: `FOR doc IN ${ref} LIMIT ${limit} RETURN doc` } };
+    if (kind === 'group' && column) {
+      return {
+        args: {
+          connectionId,
+          database,
+          query: `FOR doc IN ${ref} COLLECT key = doc.${nativeIdent(column, 'aql')} WITH COUNT INTO value SORT value DESC LIMIT 20 RETURN { label: key, value }`,
+        },
+      };
+    }
+    return undefined;
+  }
+  if (route.language === 'vector') {
+    if (!name) return undefined;
+    // 向量检索必须有查询向量或文本：没给就只做浏览（scroll），不编一个假向量。
+    return { args: { connectionId, database, collection: name, op: 'scroll', topK: limit } };
+  }
+  if (route.language === 'search') {
+    if (!name) return undefined;
+    return { args: { connectionId, database, index: name, query: { match_all: {} }, size: limit } };
+  }
+  return undefined;
+}
+
+/** 原生查询结果：不同引擎的返回字段不同，统一按「行 + 列」念出来。 */
+function nativeRows(data: unknown): string {
+  const d = data as { columns?: Array<{ name: string } | string>; rows?: unknown[][]; messages?: string[] } | undefined;
+  const table = renderRows(data, 12);
+  if (table) return table;
+  if (Array.isArray(d?.rows) && !d.rows.length) return '（没有数据）';
+  return d?.messages?.join('\n') ?? '';
+}
+
+/** 这句话本身是不是一条该语言的原生语句（直接贴进来执行，而不是中文意图）。 */
+function looksLikeNative(text: string, language: string): boolean {
+  if (language === 'mql') return /^[{\[]/.test(text);
+  if (language === 'cypher') return /^(MATCH|OPTIONAL MATCH|MERGE|CREATE|RETURN|WITH|UNWIND)\b/i.test(text);
+  if (language === 'aql') return /^(FOR|RETURN|LET|INSERT|UPDATE|REPLACE|REMOVE)\s/i.test(text);
+  if (language === 'cql') return /^(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|TRUNCATE)\b/i.test(text);
+  if (language === 'redis') return /^[A-Z][A-Z0-9]{1,20}(\s|$)/.test(text);
+  return false;
+}
+
+/** 把一条原生语句翻成工具参数；MQL 要 JSON 对象，Redis 拆命令与参数，其余原样传 text。 */
+function nativeStatementArgs(text: string, language: string, connectionId: string, database?: string): { args: Record<string, unknown> } | { error: string } {
+  if (language === 'mql') {
+    try {
+      const parsed = JSON.parse(text);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+      return { args: { connectionId, database, ...(parsed as Record<string, unknown>) } };
+    } catch {
+      return { error: 'MQL 需要一个 JSON 对象，例如 `{"collection":"users","op":"find","filter":{"city":"上海"}}`。' };
+    }
+  }
+  if (language === 'redis') {
+    const [command, ...rest] = text.split(/\s+/);
+    return { args: { connectionId, database, command: command.toUpperCase(), args: rest } };
+  }
+  return { args: { connectionId, database, query: text } };
+}
+
 function buildInsertSql(engine: Engine, table: TableInfo, rows = 3): string {
   const cols = (table.columns ?? []).filter((c) => !c.autoIncrement && !/(created_at|updated_at)$/i.test(c.name));
   const q = quoteIdent(table.name, engine);
@@ -791,6 +1005,31 @@ export class LocalProvider implements LlmProvider {
       yield { type: 'done', stopReason: 'tool_use' };
     };
 
+    // 直接贴原生语句时先按连接的查询语言试一次：Cypher / MQL / Redis 命令在中文规则里
+    // 会被判成 help，落到下面的清单等于把用户的语句扔了。
+    if (ctx.connection) {
+      const direct = nativeRoute(ctx.connection.engine);
+      const text = stripCodeFence(prompt).trim();
+      if (direct && looksLikeNative(text, direct.language)) {
+        const action = getOutcome(outcomes, direct.tool);
+        if (action) {
+          if (!action.result.ok) yield* finish(errText(action.result));
+          else {
+            const rows = nativeRows(action.result.data);
+            yield* finish(`执行完成。${action.result.summary}${rows ? `\n\n${rows}` : ''}`);
+          }
+          return;
+        }
+        const parsed = nativeStatementArgs(text, direct.language, ctx.connection.id, ctx.connection.database);
+        if ('error' in parsed) {
+          yield* finish(parsed.error);
+          return;
+        }
+        yield* callTool(mkCall(direct.tool, parsed.args), `我直接执行这段 ${direct.language}。`);
+        return;
+      }
+    }
+
     if (intent === 'help') {
       const tables = tablesFromContext(ctx, ctx.connection);
       const tableHint = tables.length ? `\n\n当前库可用表：${tables.slice(0, 12).map((t) => `\`${t.name}\``).join('、')}${tables.length > 12 ? ' 等' : ''}。` : '';
@@ -801,7 +1040,7 @@ export class LocalProvider implements LlmProvider {
     }
 
     // Resolve a connection for database-related intents.
-    const needsConnection = !['memory_write', 'memory_search'].includes(intent);
+    const needsConnection = !['memory_write', 'memory_search', 'skills', 'mcp', 'pipeline', 'history'].includes(intent);
     let conn: ConnectionConfig | undefined = ctx.connection;
     if (needsConnection && !conn) {
       const listOutcome = getOutcome(outcomes, 'list_connections');
@@ -822,6 +1061,30 @@ export class LocalProvider implements LlmProvider {
     const database = conn?.database;
     const connectionId = conn?.id ?? '';
     const inspectOutcome = getOutcome(outcomes, 'inspect_schema');
+
+    // 连接是这一轮才问出来的（ctx 里没有）：再按解析到的引擎试一次原生语句。
+    const native = nativeRoute(engine);
+    if (native && !ctx.connection) {
+      const text = stripCodeFence(prompt).trim();
+      if (looksLikeNative(text, native.language)) {
+        const action = getOutcome(outcomes, native.tool);
+        if (action) {
+          if (!action.result.ok) yield* finish(errText(action.result));
+          else {
+            const rows = nativeRows(action.result.data);
+            yield* finish(`执行完成。${action.result.summary}${rows ? `\n\n${rows}` : ''}`);
+          }
+          return;
+        }
+        const parsed = nativeStatementArgs(text, native.language, connectionId, database);
+        if ('error' in parsed) {
+          yield* finish(parsed.error);
+          return;
+        }
+        yield* callTool(mkCall(native.tool, parsed.args), `我直接执行这段 ${native.language}。`);
+        return;
+      }
+    }
 
     // Memory intents do not need schema.
     if (intent === 'memory_write') {
@@ -878,7 +1141,7 @@ export class LocalProvider implements LlmProvider {
       return;
     }
 
-    if (!tables.length && !['create', 'backup', 'memory_write'].includes(intent) && intent !== 'raw_sql') {
+    if (!tables.length && !['create', 'backup', 'memory_write', 'skills', 'mcp', 'pipeline', 'history', 'search_objects', 'schema_diff', 'transaction'].includes(intent) && intent !== 'raw_sql') {
       if (!inspectOutcome) {
         yield* callTool(mkCall('inspect_schema', { connectionId, database }), '我先读取表结构，确认可用对象。');
         return;
@@ -953,6 +1216,245 @@ export class LocalProvider implements LlmProvider {
           `${hidden > 0 ? `\n\n_另有 ${hidden} 列被「Agent 上下文」设置隐藏。_` : ''}` +
           `${idx ? `\n\n**索引**\n${idx}` : ''}${fks ? `\n\n**外键**\n${fks}` : ''}`,
       );
+      return;
+    }
+
+    if (intent === 'search_objects') {
+      const action = getOutcome(outcomes, 'search_objects');
+      if (action) {
+        if (!action.result.ok) {
+          yield* finish(errText(action.result));
+          return;
+        }
+        const data = action.result.data as { matches?: Array<{ table: string; column?: string; kind?: string }> } | undefined;
+        const matches = data?.matches ?? [];
+        if (!matches.length) {
+          yield* finish('没有找到匹配的表或列。换个关键词试试，或者直接说表名。');
+          return;
+        }
+        const lines = matches.slice(0, 30).map((m) => `- \`${m.table}\`${m.column ? `.${m.column}` : ''}${m.kind ? `（${m.kind}）` : ''}`);
+        yield* finish(`找到 ${matches.length} 个匹配：\n\n${lines.join('\n')}`);
+        return;
+      }
+      const term = prompt
+        .replace(/.*?(?:搜索|查找|找一下|找找|检索)\s*/, '')
+        .replace(/^(?:名字|名称|注释)?(?:里|中)?(?:含|包含|含有|叫|叫做|带有)\s*/, '')
+        .replace(/(发|的)?(表|列|字段|对象).*$/, '')
+        .replace(/[\s的]+$/, '')
+        .trim() || prompt;
+      yield* callTool(mkCall('search_objects', { connectionId, query: term, limit: 30 }), `我在库里搜一下名字或注释含「${term}」的表和列。`);
+      return;
+    }
+
+    if (intent === 'history') {
+      const action = getOutcome(outcomes, 'get_query_history');
+      if (action) {
+        if (!action.result.ok) {
+          yield* finish(errText(action.result));
+          return;
+        }
+        const data = action.result.data as { entries?: Array<{ sql?: string; text?: string; at?: string; durationMs?: number; ok?: boolean }> } | undefined;
+        const entries = data?.entries ?? [];
+        if (!entries.length) {
+          yield* finish('还没有查询历史。');
+          return;
+        }
+        const lines = entries.slice(0, 15).map((e) => `- ${e.at ? `${e.at} · ` : ''}${e.ok === false ? '❌ ' : ''}\`${(e.sql ?? e.text ?? '').replace(/\s+/g, ' ').slice(0, 120)}\`${e.durationMs !== undefined ? `（${e.durationMs}ms）` : ''}`);
+        yield* finish(`最近的 ${lines.length} 条查询：\n\n${lines.join('\n')}`);
+        return;
+      }
+      yield* callTool(mkCall('get_query_history', { connectionId, limit: 15 }), '我读一下最近的查询历史。');
+      return;
+    }
+
+    if (intent === 'transaction') {
+      const p = prompt.toLowerCase();
+      const kind = /(提交|commit)/.test(p) ? 'commit' : /(回滚|rollback|撤销)/.test(p) ? 'rollback' : 'begin';
+      const toolName = `${kind}_transaction`;
+      const action = getOutcome(outcomes, toolName);
+      if (action) {
+        yield* finish(action.result.ok ? (kind === 'begin' ? '事务已开启。接下来的写操作会进入这个事务，完成后记得提交或回滚。' : kind === 'commit' ? '事务已提交。' : '事务已回滚。') : errText(action.result));
+        return;
+      }
+      yield* callTool(
+        mkCall(toolName, { connectionId, database }),
+        kind === 'begin' ? '我在这个连接上开启一个事务。' : kind === 'commit' ? '我提交当前事务。' : '我回滚当前事务。',
+      );
+      return;
+    }
+
+    if (intent === 'alter') {
+      const action = getOutcome(outcomes, 'alter_table');
+      if (action) {
+        yield* finish(action.result.ok ? `表结构已更新。${action.result.summary}` : errText(action.result));
+        return;
+      }
+      if (!table) {
+        yield* finish('请说明要改哪张表，例如：“给 orders 加一列 note 文本”。');
+        return;
+      }
+      const parsed = parseAlterSpec(prompt, table.name, engine);
+      if ('error' in parsed) {
+        yield* finish(parsed.error);
+        return;
+      }
+      yield* callTool(
+        mkCall('alter_table', { connectionId, database, table: table.name, operations: parsed.operations }),
+        `我准备修改 \`${table.name}\`：${parsed.summary}。${
+          parsed.destructive ? '删除列会丢数据，执行前请确认备份。' : ''
+        }`,
+      );
+      return;
+    }
+
+    if (intent === 'import_csv') {
+      const action = getOutcome(outcomes, 'import_csv');
+      if (action) {
+        yield* finish(action.result.ok ? `导入完成。${action.result.summary}` : errText(action.result));
+        return;
+      }
+      if (!table) {
+        yield* finish('请说明导入到哪张表，例如：“把 /data/users.csv 导入 users”。');
+        return;
+      }
+      const path = /(?:["'`]([^"'`]+\.(?:csv|xlsx?|tsv))["'`]|((?:[A-Za-z]:)?[^\s，,。；;]*\.(?:csv|xlsx?|tsv)))/i.exec(prompt)?.[1] ?? /(?:["'`]([^"'`]+\.(?:csv|xlsx?|tsv))["'`]|((?:[A-Za-z]:)?[^\s，,。；;]*\.(?:csv|xlsx?|tsv)))/i.exec(prompt)?.[2];
+      if (!path) {
+        yield* finish('请给出 CSV 文件路径，例如：“把 /data/users.csv 导入 users”。文件需要放在导入目录里。');
+        return;
+      }
+      yield* callTool(
+        mkCall('import_csv', { connectionId, database, table: table.name, path, hasHeader: true }),
+        `我把 \`${path}\` 导入 \`${table.name}\`（首行当表头）。`,
+      );
+      return;
+    }
+
+    if (intent === 'schema_diff') {
+      const action = getOutcome(outcomes, 'schema_diff');
+      if (action) {
+        if (!action.result.ok) {
+          yield* finish(errText(action.result));
+          return;
+        }
+        const data = action.result.data as {
+          summary?: { added?: number; removed?: number; changed?: number };
+          tables?: Array<{ name: string; status: string; detail?: string }>;
+        } | undefined;
+        const changes = data?.tables ?? [];
+        const head = `结构对比完成：新增 ${data?.summary?.added ?? 0} 张、删除 ${data?.summary?.removed ?? 0} 张、变更 ${data?.summary?.changed ?? 0} 张。`;
+        const lines = changes.slice(0, 20).map((t) => `- \`${t.name}\`：${t.status}${t.detail ? ` — ${t.detail}` : ''}`);
+        yield* finish(head + (lines.length ? `\n\n${lines.join('\n')}` : ''));
+        return;
+      }
+      const listOutcome = getOutcome(outcomes, 'list_connections');
+      if (!listOutcome) {
+        yield* callTool(mkCall('list_connections', { includeOffline: true }), '我先看一下有哪些连接可以对比。');
+        return;
+      }
+      const conns = extractConnections(listOutcome);
+      const named = conns.filter((c) => prompt.toLowerCase().includes(c.name.toLowerCase()));
+      const pair = named.length >= 2 ? named.slice(0, 2) : [];
+      if (pair.length < 2) {
+        yield* finish(`请说明要对比的两个连接。当前可用：${conns.map((c) => `\`${c.name}\``).join('、') || '（无）'}。例如：“对比 A 和 B 的表结构”。`);
+        return;
+      }
+      yield* callTool(
+        mkCall('schema_diff', { sourceConnectionId: pair[0].id, targetConnectionId: pair[1].id }),
+        `我对比 \`${pair[0].name}\` 和 \`${pair[1].name}\` 的结构，输出目标方言的 DDL。`,
+      );
+      return;
+    }
+
+    if (intent === 'skills') {
+      // 技能工具只有在设置里开启后才在工具清单里；离线推理器不能绕过这层开关。
+      const available = new Set(req.tools.map((tool) => tool.name));
+      if (!available.has('skill_list')) {
+        yield* finish('技能功能当前未启用。可以到 设置 → Agent 里打开技能，再来让我列出或运行技能。');
+        return;
+      }
+      const runName = /(?:运行|执行|跑)\s*(?:技能\s*)?[`"']?([\w-]{2,64})[`"']?/.exec(prompt)?.[1];
+      if (runName) {
+        const action = getOutcome(outcomes, 'skill_run');
+        if (action) {
+          yield* finish(action.result.ok ? `技能 \`${runName}\` 已执行。${action.result.summary}` : errText(action.result));
+          return;
+        }
+        if (!available.has('skill_run')) {
+          yield* finish('运行技能需要技能功能开启，且技能本身允许执行。可以到 设置 → Agent → 技能 里检查。');
+          return;
+        }
+        yield* callTool(mkCall('skill_run', { name: runName }), `我运行 \`${runName}\` 这个技能。`);
+        return;
+      }
+      const action = getOutcome(outcomes, 'skill_list');
+      if (action) {
+        if (!action.result.ok) {
+          yield* finish(errText(action.result));
+          return;
+        }
+        const data = action.result.data as { skills?: Array<{ name: string; description?: string }> } | undefined;
+        const skills = data?.skills ?? [];
+        yield* finish(skills.length ? `已安装 ${skills.length} 个技能：\n\n${skills.map((s) => `- \`${s.name}\`${s.description ? ` — ${s.description}` : ''}`).join('\n')}` : '还没有安装技能。可以到 工具箱 → 技能 里安装。');
+        return;
+      }
+      yield* callTool(mkCall('skill_list', {}), '我列出已安装的技能。');
+      return;
+    }
+
+    if (intent === 'mcp') {
+      const available = new Set(req.tools.map((tool) => tool.name));
+      if (!available.has('mcp_list_servers')) {
+        yield* finish('MCP 功能当前未启用。可以到 设置 → Agent 里打开 MCP，再来让我列出服务和工具。');
+        return;
+      }
+      const wantsTools = /(工具|tools?)/i.test(prompt);
+      const toolName = wantsTools ? 'mcp_list_tools' : 'mcp_list_servers';
+      const action = getOutcome(outcomes, toolName);
+      if (action) {
+        if (!action.result.ok) {
+          yield* finish(errText(action.result));
+          return;
+        }
+        const data = action.result.data as { servers?: Array<{ name: string; status?: string }>; tools?: Array<{ name: string; description?: string }> } | undefined;
+        if (!wantsTools) {
+          const servers = data?.servers ?? [];
+          yield* finish(servers.length ? `已配置 ${servers.length} 个 MCP 服务：\n\n${servers.map((s) => `- \`${s.name}\`${s.status ? `（${s.status}）` : ''}`).join('\n')}` : '还没有配置 MCP 服务。可以到 工具箱 → MCP 里添加。');
+          return;
+        }
+        const tools = data?.tools ?? [];
+        yield* finish(tools.length ? `MCP 提供 ${tools.length} 个工具：\n\n${tools.map((t) => `- \`${t.name}\`${t.description ? ` — ${t.description}` : ''}`).join('\n')}` : '当前没有可用的 MCP 工具。');
+        return;
+      }
+      yield* callTool(mkCall(toolName, {}), wantsTools ? '我列出 MCP 服务提供的工具。' : '我看一下配置了哪些 MCP 服务。');
+      return;
+    }
+
+    if (intent === 'collection') {
+      if (isSqlEngine(engine)) {
+        yield* finish(`\`${engine}\` 用表来组织数据：创建用“创建表 xxx”，删除用“删除表 xxx”。\`集合\` 是 MongoDB / 向量库 / 搜索引擎的说法。`);
+        return;
+      }
+      const name = /(?:集合|collection)\s*[`"']?([\w.-]{2,64})[`"']?/.exec(prompt)?.[1] ?? /(?:创建|新建|删除|drop|移除)\s*[`"']?([A-Za-z_][\w-]{1,63})[`"']?\s*(?:集合|collection)/.exec(prompt)?.[1];
+      if (!name) {
+        yield* finish('请说明集合名，例如：“创建集合 chat_logs”或“删除集合 chat_logs”。');
+        return;
+      }
+      const drop = /(删除|drop|移除)/.test(prompt.toLowerCase());
+      const toolName = drop ? 'delete_collection' : 'create_collection';
+      const action = getOutcome(outcomes, toolName);
+      if (action) {
+        yield* finish(action.result.ok ? `${drop ? '已删除' : '已创建'}集合 \`${name}\`。${action.result.summary}` : errText(action.result));
+        return;
+      }
+      yield* callTool(
+        mkCall(toolName, drop ? { connectionId, database, name, confirm: name } : { connectionId, database, name }),
+        drop ? `我准备删除集合 \`${name}\`，里面的文档会一起删除。` : `我创建一个集合 \`${name}\`。`,
+      );
+      return;
+    }
+
+    if (intent === 'pipeline') {
+      yield* finish('开放式管道编排需要模型来设计步骤和依赖，离线规则模式不做这个。可以在 工具箱 → 流水线 里手动创建，或者配置模型后让我生成。');
       return;
     }
 
@@ -1071,16 +1573,47 @@ export class LocalProvider implements LlmProvider {
 
     // Remaining intents need a table.
     if (!table && !focus && ['sample', 'count', 'group', 'index', 'insert', 'drop', 'export', 'quality', 'chart'].includes(intent)) {
-      const names = tableCandidates(question, tables, grounding);
-      yield* finish(`请指定表名。当前可用：${names || '（无表）'}。`);
-      return;
+      // Redis 的计数/取样是整库操作（DBSIZE / SCAN），没有「表」可选。
+      const wholeEngine = !isSqlEngine(engine) && (intent === 'count' || intent === 'sample');
+      if (!wholeEngine) {
+        const names = tableCandidates(question, tables, grounding);
+        yield* finish(`请指定表名。当前可用：${names || '（无表）'}。`);
+        return;
+      }
     }
 
-    // 这几条路径在本地拼 SQL：非 SQL 引擎（Mongo/Redis/图/向量…）连方言都没有，
-    // 交给原生 run_* 工具之前先把话说清楚，别抛「不使用 SQL 方言」这种内部错误。
-    const SQL_BUILT_INTENTS = ['count', 'group', 'analyze', 'chart'];
-    if (!isSqlEngine(engine) && SQL_BUILT_INTENTS.includes(intent)) {
-      yield* finish(`\`${engine}\` 不走 SQL，本地模式还没有为它准备原生查询模板。可以让我列出集合/键（“有哪些表”）、看结构（“xxx 表结构”），或者配置模型后用原生查询语言执行。`);
+    // 非 SQL 引擎：计数/取样/分组翻成该引擎的原生查询（DBSIZE、countDocuments、MATCH…count），
+    // 其它形状原样说清——离线没有模型能把中文翻成任意管道，硬凑查空了比不查更糟。
+    if (!isSqlEngine(engine) && ['count', 'sample', 'group', 'analyze', 'chart'].includes(intent)) {
+      const route = nativeRoute(engine);
+      const kind: 'count' | 'sample' | 'group' = intent === 'count' ? 'count' : intent === 'sample' ? 'sample' : 'group';
+      const column = kind === 'group' ? groupColumnOf(question, table ?? tables[0] ?? { name: '', type: 'table', columns: [] }, grounding)?.name : undefined;
+      const call = route ? nativeCall({ route, kind, table: table ?? undefined, column, limit: 20, connectionId, database }) : undefined;
+      const action = call ? getOutcome(outcomes, route!.tool) : undefined;
+      if (action) {
+        if (!action.result.ok) {
+          yield* finish(errText(action.result));
+          return;
+        }
+        if (kind === 'count') {
+          const d = action.result.data as { rows?: unknown[][]; rowCount?: number } | undefined;
+          const value = d?.rows?.[0]?.[0] ?? d?.rowCount;
+          yield* finish(`当前${table ? ` \`${table.name}\`` : ''}共 **${value ?? '?'}** 条。${action.result.summary && action.result.summary !== 'ok' ? `（${action.result.summary}）` : ''}`);
+          return;
+        }
+        const rows = nativeRows(action.result.data);
+        yield* finish(rows ? `\`${table?.name ?? engine}\` 的${kind === 'sample' ? '样例' : '分组统计'}：\n\n${rows}` : action.result.summary);
+        return;
+      }
+      if (!call) {
+        const hint = route
+          ? `\`${engine}\` 的原生查询是 ${route.tool}（${route.language}），这一问的口径我没法可靠地翻过去。说清集合/表名，或者直接给我一条 ${route.language} 语句。`
+          : `\`${engine}\` 没有注册原生查询工具，换成 SQL 连接才能做统计。`;
+        yield* finish(hint);
+        return;
+      }
+      const action2 = kind === 'count' ? '计数' : kind === 'sample' ? '取样' : '分组统计';
+      yield* callTool(mkCall(route!.tool, call.args), `我按 \`${engine}\` 的原生查询做${action2}${table ? ` \`${table.name}\`` : ''}。`);
       return;
     }
 
