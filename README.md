@@ -342,7 +342,7 @@ The connection form switches default port, database field, SSL / SSH capability,
 
 Protocol aliases reuse the same driver but keep their own default ports and capability boundaries: DM8 uses the official `dmdb`, DuckDB uses a file driver, and OceanBase currently connects in MySQL mode only. Object tree, query language, DDL, backup, user management, and transactions are trimmed per engine; unsupported features are explicitly disabled instead of offering a button that will fail.
 
-> **The macOS Intel (x64) installer ships without the Oracle driver.** Upstream `node-oracledb` 26 publishes prebuilt bindings for `darwin-arm64` / `linux-arm64` / `linux-x64` / `win32-x64` only — there is no `darwin-x64`. Thick mode loads the same binding, so installing Oracle Instant Client does not work around it. The Bridge reports engines that lack a binding for the current machine in `unavailableEngines` on `/health` and `/bootstrap`; the desktop app greys Oracle out in the new-connection dialog and states the reason instead of letting the connection fail later. The other 40 engines behave identically on the arm64 and x64 installers.
+> **The macOS Intel and Windows arm64 installers ship without the Oracle driver.** Upstream `node-oracledb` 26 publishes prebuilt bindings for `darwin-arm64` / `linux-arm64` / `linux-x64` / `win32-x64` only — there is no `darwin-x64` or `win32-arm64`. Thick mode loads the same binding, so installing Oracle Instant Client does not work around it. The Bridge reports engines that lack a binding for the current machine in `unavailableEngines` on `/health` and `/bootstrap`; the desktop app greys Oracle out in the new-connection dialog and states the reason instead of letting the connection fail later. The other 40 engines behave identically on those two builds.
 
 ### Non-relational workbenches
 
@@ -565,6 +565,24 @@ The Agent's value extends beyond the database. Notifications, Skills, MCP, and w
 
 Result URLs are deduplicated and relevance-reranked; failures are isolated per backend; each backend has health telemetry and a one-click probe; failure reasons distinguish DNS, timeout, proxy, and other issues. Only Exa / Parallel / Bing are enabled by default after reachability testing; the rest can be enabled as needed.
 
+## Installers
+
+Releases are published per operating system and architecture — six desktop combinations:
+
+| System | Architecture | Files |
+|---|---|---|
+| Windows | x64 | `AiDB Studio-<version>-x64-setup.exe` (NSIS) |
+| Windows | arm64 | `AiDB Studio-<version>-arm64-setup.exe` (NSIS) |
+| macOS | Apple Silicon | `AiDB Studio-<version>-arm64.dmg` |
+| macOS | Intel | `AiDB Studio-<version>-x64.dmg` |
+| Linux | x64 | `AiDB Studio-<version>-x64.AppImage` / `.deb` / `.rpm` |
+| Linux | arm64 | `AiDB Studio-<version>-arm64.AppImage` / `.deb` / `.rpm` |
+
+- Windows on ARM can also run the x64 installer through the system emulator, and that build keeps the Oracle driver.
+- On Linux, deb and rpm install through the distribution package manager; the AppImage is portable but needs FUSE 2 — otherwise run it with `--appimage-extract-and-run`. A graphical session is required either way; WSL2 needs WSLg.
+- Each installer carries only its own architecture's native bindings (DuckDB, node-oracledb), asserted per build in CI; the two exceptions are described in the engine section above.
+- Android and iOS are built through EAS and are not part of the release page.
+
 ## Architecture
 
 ```
@@ -603,7 +621,7 @@ docker run -p 8787:8787 -v aidb-data:/data \
 | `npm run typecheck` | Typecheck all four workspaces |
 | `npm test` | Core unit tests + Bridge integration tests |
 | `npm run build` | Core / Bridge bundle / desktop UI / mobile web |
-| `npm run build:desktop` | Electron installer (Windows NSIS / macOS dmg / Linux AppImage) |
+| `npm run build:desktop` | Electron installer (Windows NSIS / macOS dmg / Linux AppImage + deb + rpm, x64 and arm64 each) |
 | `npm run build:mobile` | Expo web export |
 | `npm run e2e` | Headless browser: desktop web + mobile web + Electron shell |
 | `npm run verify:docs` | Design document contracts |
@@ -645,7 +663,7 @@ When starting the Bridge, set `AIDB_PUBLIC_URL=https://db.example.com` so pairin
 - Mobile is a pocket workspace: connection credentials are never distributed, and complex layout editing and some administration capabilities remain on desktop.
 - Graph, vector, search, time-series, and wide-column engines work in their own query languages rather than forcing SQL semantics; unsupported DDL, backup, and user management are disabled.
 - Data edits currently commit immediately; cross-request transactions use `BEGIN / COMMIT / ROLLBACK` on engines that support them.
-- macOS installers are built per architecture (Apple Silicon `arm64` / Intel `x64`); the Intel build ships without the Oracle driver, see the engine section above for the reason and the workaround. Windows / Linux packaging configuration is included as well, and iOS IPAs require an EAS build.
+- Desktop installers are produced per system and architecture (Windows / macOS / Linux × x64 / arm64); the macOS Intel and Windows arm64 builds ship without the Oracle driver, see the engine section above. Mobile IPA / APK builds need EAS and stay outside the release pipeline.
 
 ## Design documents
 

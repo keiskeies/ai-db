@@ -2771,7 +2771,7 @@ function SettingsScreen({
               <View style={[styles.statusDot, { backgroundColor: connected ? colors.success : colors.warning }]} />
               <Text style={styles.listMeta}>{connected ? 'WebSocket 已连接' : '正在重连'}</Text>
             </View>
-            <Text style={styles.listMeta}>v{boot?.version ?? '0.0.3'}</Text>
+            <Text style={styles.listMeta}>v{boot?.version ?? '0.0.4'}</Text>
           </View>
         </View>
 
@@ -2918,7 +2918,7 @@ function SettingsScreen({
           <Text style={[styles.secondaryButtonText, { color: colors.danger }]}>解除配对</Text>
         </Pressable>
 
-        <Text style={[styles.hint, { textAlign: 'center', marginTop: 6 }]}>AiDB Studio v0.0.3 · Android / iOS / Web</Text>
+        <Text style={[styles.hint, { textAlign: 'center', marginTop: 6 }]}>AiDB Studio v0.0.4 · Android / iOS / Web</Text>
       </ScrollView>
     </View>
   );
@@ -4545,7 +4545,7 @@ function MeScreen({
           <Text style={[styles.settingValue, { marginTop: 4 }]}>{config.baseUrl}</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 }}>
             <View style={[styles.statusDot, { backgroundColor: connected ? colors.success : colors.warning }]} />
-            <Text style={styles.listMeta}>{connected ? 'WebSocket 已连接' : '正在重连'} · v{boot?.version ?? '0.0.3'}</Text>
+            <Text style={styles.listMeta}>{connected ? 'WebSocket 已连接' : '正在重连'} · v{boot?.version ?? '0.0.4'}</Text>
           </View>
         </View>
         {entries.map((entry) => (

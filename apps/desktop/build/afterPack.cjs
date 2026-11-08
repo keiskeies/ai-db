@@ -57,10 +57,13 @@ function pruneDuckdb(gatewayDir, platform, arch) {
     fs.rmSync(path.join(duckdbDir, entry), { recursive: true, force: true });
     removed.push(entry);
   }
-  for (const name of keep) {
-    if (!fs.existsSync(path.join(duckdbDir, name, 'duckdb.node'))) {
-      console.warn(`[afterPack] 目标架构 ${platform}-${arch} 缺少 ${name}，该安装包将无法使用 DuckDB`);
-    }
+  // linux 同时接受 glibc 与 musl 两种命名，只有全缺才算问题（arm64 通常没有 musl 产物，
+  // 而 Electron 本身也跑不了 musl，不必告警）。
+  const present = keep.filter((name) => fs.existsSync(path.join(duckdbDir, name, 'duckdb.node')));
+  if (present.length === 0) {
+    console.warn(
+      `[afterPack] 目标架构 ${platform}-${arch} 没有任何 DuckDB 绑定（期望 ${keep.join(' / ')}），该安装包将无法使用 DuckDB`,
+    );
   }
   console.log(
     `[afterPack] DuckDB ${platform}-${arch} 保留 ${keep.join(', ')}${removed.length ? `，移除 ${removed.join(', ')}` : ''}`,

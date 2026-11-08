@@ -42,9 +42,11 @@ npmRebuild: false
 # 跨架构构建时另一架构的 duckdb.node 会各多出约 60 MB）。
 afterPack: build/afterPack.cjs
 win:
+  # 两个架构都要出安装器：arm64 原生比 x64 模拟省电、启动快。
+  # Windows on ARM 也能跑 x64 版，所以两版并存不影响老用户。
   target:
     - nsis
-  artifactName: ${productName}-${version}-setup.${ext}
+  artifactName: ${productName}-${version}-${arch}-setup.${ext}
 mac:
   # 未指定 arch 时 electron-builder 回落到宿主架构（process.arch），只会出一个包。
   # 同时出 Apple Silicon 与 Intel 由 CI 传入 `--mac --x64 --arm64`。
@@ -53,9 +55,15 @@ mac:
   category: public.app-category.developer-tools
   artifactName: ${productName}-${version}-${arch}.${ext}
 linux:
+  # AppImage 免安装；deb / rpm 走发行版包管理器，装完在应用菜单里出现。
   target:
     - AppImage
+    - deb
+    - rpm
   category: Development
+  # deb / rpm 的 Maintainer 字段必填，缺了 electron-builder 直接报错退出。
+  maintainer: keiskeies <right_way@foxmail.com>
+  synopsis: AI-native database studio with an autonomous agent
   artifactName: ${productName}-${version}-${arch}.${ext}
 nsis:
   oneClick: false

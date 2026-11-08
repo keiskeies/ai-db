@@ -18,13 +18,13 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            target: --win
+            target: --win --x64 --arm64
             artifact: windows
           - os: macos-latest
             target: --mac --x64 --arm64
             artifact: macos
           - os: ubuntu-latest
-            target: --linux
+            target: --linux --x64 --arm64
             artifact: linux
     steps:
       - uses: actions/checkout@v4
@@ -56,29 +56,33 @@ jobs:
           chmod +x node_modules/app-builder-bin/linux/*/app-builder node_modules/app-builder-bin/mac/app-builder_* 2>/dev/null || true
           ls -la node_modules/app-builder-bin/linux/x64/app-builder node_modules/app-builder-bin/mac/app-builder_arm64
 
-      - name: Ensure both darwin DuckDB bindings
-        # 一次跑出 x64 + arm64 两个 dmg，但 @duckdb/node-bindings 只会安装宿主架构那一个
-        # optionalDependency。把另一架构的预编译绑定补进 node_modules，duckdb.js 会在运行时
-        # 按 process.platform-process.arch 自行挑选。
-        if: runner.os == 'macOS'
+      - name: Ensure cross-arch DuckDB bindings
+        # 每个平台一次跑出 x64 + arm64，但 @duckdb/node-bindings 只会安装宿主架构那一个
+        # optionalDependency。把另一架构的预编译绑定补进 node_modules，duckdb.js 运行时会
+        # 按 process.platform-process.arch 自行挑选，afterPack 再按架构裁掉多余那份。
         shell: bash
         run: |
           set -euo pipefail
           ver=$(node -p "require('./node_modules/@duckdb/node-bindings/package.json').version")
-          for arch in x64 arm64; do
-            pkg="node-bindings-darwin-${arch}"
+          case "$RUNNER_OS" in
+            macOS) pkgs="node-bindings-darwin-x64 node-bindings-darwin-arm64" ;;
+            Linux) pkgs="node-bindings-linux-x64 node-bindings-linux-arm64" ;;
+            Windows) pkgs="node-bindings-win32-x64 node-bindings-win32-arm64" ;;
+            *) echo "::error::unsupported runner $RUNNER_OS"; exit 1 ;;
+          esac
+          for pkg in $pkgs; do
             if [ -f "node_modules/@duckdb/${pkg}/duckdb.node" ]; then
               echo "already present: ${pkg}"
-            else
-              tmp=$(mktemp -d)
-              curl -fsSL "https://registry.npmjs.org/@duckdb/${pkg}/-/${pkg}-${ver}.tgz" -o "$tmp/pkg.tgz" || { echo "::error::download ${pkg} failed"; exit 1; }
-              tar xzf "$tmp/pkg.tgz" -C "$tmp"
-              rm -rf "node_modules/@duckdb/${pkg}"
-              mv "$tmp/package" "node_modules/@duckdb/${pkg}"
-              echo "fetched: ${pkg}"
+              continue
             fi
-            file "node_modules/@duckdb/${pkg}/duckdb.node"
+            tmp=$(mktemp -d)
+            curl -fsSL "https://registry.npmjs.org/@duckdb/${pkg}/-/${pkg}-${ver}.tgz" -o "$tmp/pkg.tgz" || { echo "::error::download ${pkg} failed"; exit 1; }
+            tar xzf "$tmp/pkg.tgz" -C "$tmp"
+            rm -rf "node_modules/@duckdb/${pkg}"
+            mv "$tmp/package" "node_modules/@duckdb/${pkg}"
+            echo "fetched: ${pkg}"
           done
+          ls -d node_modules/@duckdb/node-bindings-* | xargs -n1 basename
 
       - name: Diagnose toolchain
         shell: bash
@@ -100,7 +104,7 @@ jobs:
           set -o pipefail
           npx electron-builder ${{ matrix.target }} --publish never 2>&1 | tee electron-builder.log
 
-      - name: Verify both mac architectures
+      - name: Verify mac architectures
         # 交叉架构打包最容易出的错是「dmg 名字对了、里面的原生二进制错了」，
         # 所以这里同时校验主程序架构、DuckDB 绑定与 node-oracledb 绑定，
         # 并确认多余架构已被 afterPack 裁掉。
@@ -168,6 +172,115 @@ jobs:
           check release/mac x64 x86_64 arm64
           check release/mac-arm64 arm64 arm64 x64
 
+      - name: Verify Linux artifacts
+        # deb / rpm / AppImage 各出两份（x64 + arm64），并核对解包目录里的原生绑定。
+        if: runner.os == 'Linux'
+        shell: bash
+        working-directory: apps/desktop
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          appimages=(release/*.AppImage)
+          debs=(release/*.deb)
+          rpms=(release/*.rpm)
+          if [ ${#appimages[@]} -ne 2 ] || [ ${#debs[@]} -ne 2 ] || [ ${#rpms[@]} -ne 2 ]; then
+            echo "::error::expected 2 files per format (x64 + arm64): AppImage=${#appimages[@]} deb=${#debs[@]} rpm=${#rpms[@]}"
+            ls -l release || true
+            exit 1
+          fi
+          ls -lh "${appimages[@]}" "${debs[@]}" "${rpms[@]}"
+
+          check() {
+            local dir="$1" archname="$2" expect="$3" other="$4"
+            local bin duckdb oracle_bins
+            if [ ! -d "$dir" ]; then
+              echo "::error::missing output dir $dir"
+              exit 1
+            fi
+            bin=$(ls "$dir" | head -n 1)
+            echo "--- $dir (binary: $bin)"
+            file "$dir/$bin"
+            if ! file "$dir/$bin" | grep -q "$expect"; then
+              echo "::error::$dir main binary is not $expect"
+              exit 1
+            fi
+
+            duckdb="$dir/resources/gateway/node_modules/@duckdb"
+            if [ ! -d "$duckdb/node-bindings-linux-$archname" ]; then
+              echo "::error::$dir is missing node-bindings-linux-$archname"
+              exit 1
+            fi
+            if [ -e "$duckdb/node-bindings-linux-$other" ]; then
+              echo "::error::$dir still ships node-bindings-linux-$other"
+              exit 1
+            fi
+            echo "duckdb bindings: $(ls "$duckdb" | tr '\n' ' ')"
+
+            oracle_bins=$(ls "$dir/resources/gateway/node_modules/oracledb/build/Release" 2>/dev/null | grep '\.node$' || true)
+            echo "oracledb bindings: ${oracle_bins:-无}"
+            if ! printf '%s\n' "$oracle_bins" | grep -q "linux-$archname"; then
+              echo "::error::$dir is missing the linux-$archname node-oracledb binding"
+              exit 1
+            fi
+            if printf '%s\n' "$oracle_bins" | grep -qv "linux-$archname"; then
+              echo "::error::$dir carries a node-oracledb binding for another architecture"
+              exit 1
+            fi
+          }
+
+          check release/linux-unpacked x64 x86-64 arm64
+          check release/linux-arm64-unpacked arm64 aarch64 x64
+
+      - name: Verify Windows artifacts
+        # arm64 的 Oracle 上游没有预编译绑定（win32-arm64 缺），只告警不判失败。
+        if: runner.os == 'Windows'
+        shell: bash
+        working-directory: apps/desktop
+        run: |
+          set -euo pipefail
+          ls -lh release/*.exe
+          if [ "$(ls -1 release/*.exe | wc -l | tr -d ' ')" -ne 2 ]; then
+            echo "::error::expected 2 exe (x64 + arm64)"
+            exit 1
+          fi
+
+          check() {
+            local dir="$1" archname="$2" other="$3"
+            local duckdb oracle_bins
+            if [ ! -d "$dir" ]; then
+              echo "::error::missing output dir $dir"
+              exit 1
+            fi
+            duckdb="$dir/resources/gateway/node_modules/@duckdb"
+            if [ ! -d "$duckdb/node-bindings-win32-$archname" ]; then
+              echo "::error::$dir is missing node-bindings-win32-$archname"
+              exit 1
+            fi
+            if [ -e "$duckdb/node-bindings-win32-$other" ]; then
+              echo "::error::$dir still ships node-bindings-win32-$other"
+              exit 1
+            fi
+            echo "--- $dir duckdb: $(ls "$duckdb" | tr '\n' ' ')"
+
+            oracle_bins=$(ls "$dir/resources/gateway/node_modules/oracledb/build/Release" 2>/dev/null | grep '\.node$' || true)
+            echo "oracledb bindings: ${oracle_bins:-无}"
+            if [ -n "$oracle_bins" ] && printf '%s\n' "$oracle_bins" | grep -qv "win32-$archname"; then
+              echo "::error::$dir carries a node-oracledb binding for another architecture"
+              exit 1
+            fi
+          }
+
+          check release/win-unpacked x64 arm64
+          check release/win-arm64-unpacked arm64 x64
+
+          x64_oracle=$(ls release/win-unpacked/resources/gateway/node_modules/oracledb/build/Release 2>/dev/null | grep -c '\.node$' || true)
+          if [ "${x64_oracle:-0}" -eq 0 ]; then
+            echo "::error::win x64 build lost its node-oracledb binding"
+            exit 1
+          fi
+          echo "::warning::Windows arm64 不含 node-oracledb 绑定（上游无 win32-arm64 预编译），该包内 Oracle 驱动不可用"
+
       - name: Report packaging error
         if: failure()
         shell: bash
@@ -187,6 +300,8 @@ jobs:
             apps/desktop/release/*.exe
             apps/desktop/release/*.dmg
             apps/desktop/release/*.AppImage
+            apps/desktop/release/*.deb
+            apps/desktop/release/*.rpm
             apps/desktop/release/*.yml
             apps/desktop/release/*.blockmap
           if-no-files-found: error
@@ -196,7 +311,7 @@ jobs:
     name: Publish GitHub release
     needs: desktop
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/tags/v0.0.3'
+    if: github.ref == 'refs/tags/v0.0.4'
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -206,43 +321,45 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          name: AiDB Studio v0.0.3
+          name: AiDB Studio v0.0.4
           tag_name: ${{ github.ref_name }}
           draft: false
           prerelease: false
           generate_release_notes: false
           body: |
-            AiDB Studio **v0.0.3** — Intel Macs get their own installer, and Oracle stops being a coin flip.
+            AiDB Studio **v0.0.4** — the same app, now built for every desktop platform combination.
 
             **Installers**
-            - macOS: `AiDB Studio-0.0.3-arm64.dmg` for Apple Silicon, `AiDB Studio-0.0.3-x64.dmg` for Intel Macs (macOS 12+).
-            - Windows: NSIS setup, Linux: AppImage.
-            - The Intel dmg has no Oracle driver: node-oracledb 26 ships no `darwin-x64` prebuilt binding. Every other engine behaves the same on both architectures, and the app now greys Oracle out instead of letting the connection fail later.
+
+            | Platform | Architecture | Files |
+            |---|---|---|
+            | Windows | x64 | `AiDB.Studio-0.0.4-x64-setup.exe` |
+            | Windows | arm64 | `AiDB.Studio-0.0.4-arm64-setup.exe` |
+            | macOS | Apple Silicon | `AiDB.Studio-0.0.4-arm64.dmg` |
+            | macOS | Intel | `AiDB.Studio-0.0.4-x64.dmg` |
+            | Linux | x64 | `AiDB.Studio-0.0.4-x64.AppImage` · `.deb` · `.rpm` |
+            | Linux | arm64 | `AiDB.Studio-0.0.4-arm64.AppImage` · `.deb` · `.rpm` |
+
+            **Platform notes**
+            - Oracle needs a prebuilt node-oracledb binding, and upstream ships none for macOS Intel or Windows arm64. On those two installers the engine is greyed out in the new-connection dialog with the reason; every other engine behaves the same everywhere. Linux arm64 does ship the binding.
+            - Windows on ARM can also run the x64 installer through the system emulator, and that build keeps Oracle.
+            - Linux: deb and rpm install through the distribution package manager; the AppImage is portable but needs FUSE 2 (or run it with `--appimage-extract-and-run`). A graphical session is required either way — WSL2 needs WSLg.
+            - Android and iOS are still built through EAS and are not part of this release.
 
             **Packaging**
-            - macOS installers are built for both architectures from a single CI run; DuckDB and node-oracledb native bindings are now resolved per target instead of being copied from whatever the build host happened to install.
-            - node-oracledb's native binding now ships with the app. Before this release every packaged build — not just Intel — failed Oracle connections with NJS-132.
-            - The Bridge bundle defines `__dirname` / `__filename`, so a missing native binding reports the real cause instead of a `ReferenceError`.
-
-            **Engines and interface**
-            - Engines whose native binding is absent on the current machine are reported by the Bridge (`unavailableEngines` on `/health` and `/bootstrap`) and greyed out in the new-connection dialog with the reason; test and save are disabled for them.
-            - Windows and Linux no longer draw a second brand title bar below the native one.
-            - New query follows the database selected in the object tree.
-
-            **Agent**
-            - Offline reasoner: NL→SQL planner with bounded value probing, semantic grounding, remembered conventions, several questions in one sentence, business context treated as a hard constraint, and per-engine native routing so non-SQL engines use their own query language.
-            - Chart retrieval now covers heatmap, radar and stacked charts, and answers come back in the interface language.
-            - Self-hosted SearXNG instances on the LAN are accepted.
-            - Follow-up suggestions share the message left baseline and wrap with the panel width.
+            - One CI run per platform now emits both architectures. DuckDB and node-oracledb bindings are fetched for both targets, then pruned to the target architecture in `afterPack`, so no installer carries a foreign binary.
+            - Every build is verified before upload: main binary architecture, DuckDB binding directory and the oracledb binding are asserted per installer; the Windows arm64 and macOS Intel Oracle gaps are reported as warnings instead of slipping through.
 
             **Verification**
-            - 480 Bridge tests, 391 documentation-contract checks, plus a Playwright pass over the greyed-engine flow (option disabled, forced click rejected, edit dialog shows the reason and disables save and test).
+            - 6 desktop combinations (3 operating systems x 2 architectures), 480 Bridge tests, 391 documentation-contract checks.
 
             Installers are built by GitHub Actions from this tag.
           files: |
             dist-release/*.exe
             dist-release/*.dmg
             dist-release/*.AppImage
+            dist-release/*.deb
+            dist-release/*.rpm
             dist-release/*.yml
             dist-release/*.blockmap
         env:

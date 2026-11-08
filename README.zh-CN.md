@@ -342,7 +342,7 @@ Agent 的主路径不止自由对话。AiDB 把高频业务动作收敛为命令
 
 协议别名复用同一驱动，但保留自己的默认端口与能力边界：例如达梦走官方 `dmdb`，DuckDB 走文件驱动，OceanBase 当前只接 MySQL 模式。对象树、查询语言、DDL、备份、用户管理、事务等能力按引擎裁剪；不支持的功能会明确禁用，而不是给出一个会失败的按钮。
 
-> **macOS Intel（x64）安装包不含 Oracle 驱动。** 上游 `node-oracledb` 26 只发布 `darwin-arm64` / `linux-arm64` / `linux-x64` / `win32-x64` 四种预编译绑定，没有 `darwin-x64`；thick 模式同样要加载这份绑定，所以装 Oracle Instant Client 也绕不过去。Bridge 在 `/health` 与 `/bootstrap` 的 `unavailableEngines` 里上报本机缺绑定的引擎，桌面端据此在新建连接时把 Oracle 置灰并写明原因，而不是让用户配完才发现连不上。其余 40 种引擎在 arm64 与 x64 两个安装包上行为一致。
+> **macOS Intel 与 Windows arm64 安装包不含 Oracle 驱动。** 上游 `node-oracledb` 26 只发布 `darwin-arm64` / `linux-arm64` / `linux-x64` / `win32-x64` 四种预编译绑定，没有 `darwin-x64` 与 `win32-arm64`；thick 模式同样要加载这份绑定，所以装 Oracle Instant Client 也绕不过去。Bridge 在 `/health` 与 `/bootstrap` 的 `unavailableEngines` 里上报本机缺绑定的引擎，桌面端据此在新建连接时把 Oracle 置灰并写明原因，而不是让用户配完才发现连不上。其余 40 种引擎在这两个包上行为与其它架构一致。
 
 ### 非关系型工作台
 
@@ -565,6 +565,24 @@ Agent 的价值不止于数据库内部。通知、Skill、MCP 与网络搜索�
 
 结果 URL 去重、相关性重排；单后端失败隔离；每个后端有健康遥测和一键探测；失败原因会区分 DNS、超时、代理等问题。默认只启用实测可达的 Exa / Parallel / Bing，其余按需开启。
 
+## 安装包
+
+release 页按「系统 + 架构」出包，六个桌面组合：
+
+| 系统 | 架构 | 安装包 |
+|---|---|---|
+| Windows | x64 | `AiDB Studio-<版本>-x64-setup.exe`（NSIS） |
+| Windows | arm64 | `AiDB Studio-<版本>-arm64-setup.exe`（NSIS） |
+| macOS | Apple Silicon | `AiDB Studio-<版本>-arm64.dmg` |
+| macOS | Intel | `AiDB Studio-<版本>-x64.dmg` |
+| Linux | x64 | `AiDB Studio-<版本>-x64.AppImage` / `.deb` / `.rpm` |
+| Linux | arm64 | `AiDB Studio-<版本>-arm64.AppImage` / `.deb` / `.rpm` |
+
+- Windows on ARM 也能直接跑 x64 安装包（系统模拟），而那份保留 Oracle 驱动。
+- Linux 的 deb / rpm 走发行版包管理器；AppImage 免安装但需要 FUSE 2，没有就 `--appimage-extract-and-run`。两者都需要图形会话，WSL2 需要 WSLg。
+- 每个安装包只带自身架构的原生绑定（DuckDB、node-oracledb），CI 在发布前逐个断言；两个例外见上文引擎说明。
+- Android / iOS 走 EAS 构建，不在 release 里。
+
 ## 架构
 
 ```
@@ -603,7 +621,7 @@ docker run -p 8787:8787 -v aidb-data:/data \
 | `npm run typecheck` | 四个 workspace 全量类型检查 |
 | `npm test` | Core 单测 + Bridge 集成测试 |
 | `npm run build` | Core / Bridge bundle / 桌面 UI / 移动 Web |
-| `npm run build:desktop` | Electron 安装包（Windows NSIS / macOS dmg / Linux AppImage） |
+| `npm run build:desktop` | Electron 安装包（Windows NSIS / macOS dmg / Linux AppImage + deb + rpm，各含 x64 与 arm64） |
 | `npm run build:mobile` | Expo Web 导出 |
 | `npm run e2e` | 无头浏览器：桌面 Web + 移动 Web + Electron Shell |
 | `npm run verify:docs` | 设计文档契约 |
@@ -645,7 +663,7 @@ location / {
 - 移动端是随身工作区：连接凭据不下发、复杂布局编辑和部分管理能力仍在桌面端。
 - 图数据库、向量库、搜索、时序、宽列等引擎按各自查询语言工作，不强行套用 SQL 语义；不支持的 DDL、备份、用户管理等能力会禁用。
 - 数据编辑当前即时提交；跨请求事务在支持的 SQL 引擎上通过 `BEGIN / COMMIT / ROLLBACK` 完成。
-- macOS 安装包按架构分别产出（Apple Silicon `arm64` / Intel `x64`）；Intel 包不含 Oracle 驱动，原因与替代方案见上文引擎说明。Windows / Linux 打包配置同样已提供，iOS IPA 需要 EAS 构建。
+- 桌面端按「系统 + 架构」产出六个安装包（Windows / macOS / Linux × x64 / arm64）；macOS Intel 与 Windows arm64 不含 Oracle 驱动，原因见上文引擎说明。移动端 IPA / APK 需要 EAS 构建，不在 release 流水线内。
 
 ## 设计文档
 
