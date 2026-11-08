@@ -25,7 +25,7 @@ body {
 .brand-name { font-size: 12px; font-weight: 700; letter-spacing: 0.15px; }
 .brand-sub { font-size: 9px; letter-spacing: 0.2px; }
 .env-pill { font-size: 9px; padding: 1px 6px; letter-spacing: 0.5px; }
-.titlebar .cmd-hint {
+.titlebar .cmd-hint, .ribbon-tools .cmd-hint {
   height: 23px;
   background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
   border-color: var(--border-subtle);

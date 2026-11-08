@@ -2,6 +2,7 @@ import { FileCode2, LayoutDashboard, Network, Plus, Table2, TerminalSquare, Wren
 import { lazy, Suspense } from 'react';
 import { useApp } from '../store';
 import { PaneSplitter } from './PaneSplitter';
+import { PANE } from '../lib/layout';
 import { Welcome } from './Welcome';
 import { t as tr } from '../i18n';
 
@@ -30,20 +31,33 @@ function TabIcon({ kind }: { kind: string }) {
   return <FileCode2 size={12} />;
 }
 
-export function Workspace({ viewportWidth, sidebarFlowWidth }: { viewportWidth: number; sidebarFlowWidth: number }) {
+/**
+ * viewportWidth / sidebarFlowWidth / agentWidth / agentMax 全部来自 App 的 computePaneLayout，
+ * 这里不再自己推导宽度：之前本组件按 viewport 又算了一遍 agentMax，和 App 的预算对不上。
+ */
+export function Workspace({
+  viewportWidth,
+  sidebarFlowWidth,
+  agentWidth,
+  agentMax,
+}: {
+  viewportWidth: number;
+  sidebarFlowWidth: number;
+  agentWidth: number;
+  agentMax: number;
+}) {
   const tabs = useApp((s) => s.tabs);
   const activeTabId = useApp((s) => s.activeTabId);
   const setActiveTab = useApp((s) => s.setActiveTab);
   const closeTab = useApp((s) => s.closeTab);
   const openQuery = useApp((s) => s.openQuery);
   const agentOpen = useApp((s) => s.agentOpen);
-  const agentWidth = useApp((s) => s.agentWidth);
   const setAgentWidth = useApp((s) => s.setAgentWidth);
+  const setAgentExpanded = useApp((s) => s.setAgentExpanded);
   const openContextMenu = useApp((s) => s.openContextMenu);
   const t = useApp((s) => s.t);
 
   const active = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
-  const agentMax = Math.max(320, Math.min(760, viewportWidth - 340 - (sidebarFlowWidth > 0 ? sidebarFlowWidth + 5 : 0) - 5));
 
   return (
     <>
@@ -100,9 +114,13 @@ export function Workspace({ viewportWidth, sidebarFlowWidth }: { viewportWidth: 
           <PaneSplitter
             side="right"
             width={agentWidth}
-            min={320}
+            min={PANE.agent.min}
             max={agentMax}
-            onChange={(width) => setAgentWidth(width)}
+            // 手动拖拽即退出「展开」：否则 agentExpanded 每帧都会把宽度算回上限，拖动看起来没反应
+            onChange={(width) => {
+              setAgentExpanded(false);
+              setAgentWidth(width);
+            }}
             onCommit={(width) => setAgentWidth(width, true)}
             testId="splitter-agent"
           />

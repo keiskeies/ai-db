@@ -1,6 +1,8 @@
 import { useEffect, useState, lazy, Suspense, type ReactNode } from 'react';
 import type { ContextMenuItem } from './store';
 import { desktopBridge, type OpenTablePayload } from './lib/desktop';
+import { installAppMenu, runMenuCommand } from './lib/appMenu';
+import { PANE, computePaneLayout } from './lib/layout';
 import {
   Archive,
   Bot,
@@ -39,6 +41,12 @@ import { t as tr } from './i18n';
  * macOS 用 hiddenInset，应用内这条标题栏是唯一的，品牌块必须保留。网页预览没有原生 chrome，同样保留。
  */
 const nativeWindowChrome = !!desktopBridge && desktopBridge.platform !== 'darwin';
+
+/**
+ * macOS 用 hiddenInset：原生标题栏不可见，但三个交通灯仍浮在 web 内容之上（约 x=20–72）。
+ * 这条类的唯一作用就是让标题栏左侧让出这段宽度，见 app.css 的 .app.platform-darwin。
+ */
+const macHiddenInset = !!desktopBridge && desktopBridge.platform === 'darwin';
 
 // 弹层各自成块：只在真正打开时取代码，首屏不必背设置面板和工具箱。
 const CommandPalette = lazy(() => import('./components/CommandPalette').then((m) => ({ default: m.CommandPalette })));
@@ -185,6 +193,7 @@ export default function App() {
   const sidebarWidth = useApp((s) => s.sidebarWidth);
   const setSidebarWidth = useApp((s) => s.setSidebarWidth);
   const agentWidth = useApp((s) => s.agentWidth);
+  const agentExpanded = useApp((s) => s.agentExpanded);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const setSettingsOpen = useApp((s) => s.setSettingsOpen);
   const setPaletteOpen = useApp((s) => s.setPaletteOpen);
@@ -227,6 +236,18 @@ export default function App() {
   }, [settings.theme]);
 
   useEffect(() => {
+    // 原生菜单（macOS 走屏幕顶部，Windows / Linux 排在标题栏下方）。文案由 tr() 生成，
+    // 所以语言切换后重建一次，菜单与界面不会出现两种语言。
+    if (!booted) return;
+    void installAppMenu();
+  }, [booted, settings.locale]);
+
+  useEffect(() => {
+    // 菜单只发命令 id，动作统一走 runMenuCommand → store，与命令面板共用同一批行为。
+    return desktopBridge?.onMenuCommand?.(runMenuCommand);
+  }, []);
+
+  useEffect(() => {
     // 接管全局右键：组件自己开菜单时会 preventDefault，这里只兜底
     const onContextMenu = (event: MouseEvent) => {
       if (event.defaultPrevented) return;
@@ -239,18 +260,30 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // Windows / Linux 上菜单快捷键「只显示不注册」，按键仍然落到这里；两个平台共用同一套动作。
+    const refreshObjects = () => {
+      const id = useApp.getState().activeConnectionId;
+      if (id) void loadSchema(id, true);
+      else void useApp.getState().refreshAllSchemas();
+    };
     const handler = (event: KeyboardEvent) => {
       const mod = event.metaKey || event.ctrlKey;
+      const typing = !!(event.target as HTMLElement)?.closest?.('input,textarea,select,[contenteditable="true"]');
       if (!mod) {
-        if (event.key === 'F5' && !(event.target as HTMLElement)?.closest('input,textarea')) {
+        if (event.key === 'F5' && !typing) {
           event.preventDefault();
-          const id = useApp.getState().activeConnectionId;
-          if (id) void loadSchema(id, true);
+          refreshObjects();
         }
         return;
       }
       const key = event.key.toLowerCase();
-      if (key === 'k') {
+      if (key === 'n') {
+        event.preventDefault();
+        openConnectionEditor('new');
+      } else if (key === 'r') {
+        event.preventDefault();
+        refreshObjects();
+      } else if (key === 'k') {
         event.preventDefault();
         setPaletteOpen(true);
       } else if (key === 'a' && event.shiftKey) {
@@ -277,7 +310,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [loadSchema, openQuery, setAgentOpen, setPaletteOpen, setSettingsOpen]);
+  }, [loadSchema, openQuery, openConnectionEditor, setAgentOpen, setPaletteOpen, setSettingsOpen]);
 
   if (!booted) {
     return (
@@ -313,29 +346,61 @@ export default function App() {
   const crumbDatabase = (activeTab && 'database' in activeTab && activeTab.database) || agentDatabase || crumbConn?.database || '';
   const dark = settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
 
-  // 两栏宽度按视口收敛：始终给主工作区留出 MIN_WORKSPACE，窗口回缩时自动让位，放大后恢复用户偏好。
-  const MIN_WORKSPACE = 340;
-  const narrow = viewportWidth <= 720;
-  const agentOverlay = viewportWidth <= 1000;
-  const sidebarInFlow = sidebarOpen && !narrow;
-  const agentInFlow = agentOpen && !agentOverlay;
-  const budget = Math.max(0, viewportWidth - MIN_WORKSPACE - (sidebarInFlow ? 5 : 0) - (agentInFlow ? 5 : 0));
-  let effectiveSidebar = sidebarWidth;
-  let effectiveAgent = agentWidth;
-  if (agentInFlow) {
-    effectiveAgent = Math.min(agentWidth, Math.max(320, budget - (sidebarInFlow ? Math.min(sidebarWidth, 460) : 0)));
-    effectiveSidebar = Math.min(sidebarWidth, Math.max(200, budget - effectiveAgent));
-  } else if (sidebarInFlow) {
-    effectiveSidebar = Math.min(sidebarWidth, Math.min(460, Math.max(200, budget)));
-  }
-  if (narrow) effectiveSidebar = Math.min(sidebarWidth, 300);
-  const sidebarMax = narrow ? 460 : Math.min(460, Math.max(200, budget - (agentInFlow ? effectiveAgent : 0)));
-  const agentMax = Math.min(760, Math.max(320, budget - (sidebarInFlow ? effectiveSidebar : 0)));
+  // 三栏宽度只在这里算一次：比例、中间地板、拖拽上限、展开目标都在 lib/layout.ts 里，
+  // 组件只消费结果，避免 App / Workspace / CSS 各算一套互相打架。
+  const layout = computePaneLayout({
+    viewport: viewportWidth,
+    sidebarOpen,
+    agentOpen,
+    sidebarWanted: sidebarWidth,
+    agentWanted: agentWidth,
+    agentExpanded,
+  });
+  const effectiveSidebar = layout.sidebar;
+  const effectiveAgent = layout.agent;
+  const sidebarInFlow = layout.sidebarInFlow;
+  const agentInFlow = layout.agentInFlow;
+
+  // 环境徽章与窗口工具按钮在两处复用：macOS / 网页走独立标题栏，
+  // Windows / Linux 有原生标题栏，这两组并进 ribbon 右侧，少占一行。
+  const envPill = activeConn ? (
+    <span className={`env-pill ${activeConn.environment}`}>
+      <span className="conn-color" style={{ background: 'currentColor' }} />
+      {activeConn.environment.toUpperCase()} · {activeConn.engine}
+    </span>
+  ) : null;
+
+  const windowTools = (
+    <>
+      <button className="cmd-hint" onClick={() => setPaletteOpen(true)}>
+        <span>{tr("搜索或执行命令…")}</span>
+        <span className="kbd">⌘K</span>
+      </button>
+      <button
+        data-testid="toggle-sidebar"
+        className="icon-btn"
+        title={sidebarOpen ? tr("隐藏连接栏 (⌘B)") : tr("显示连接栏 (⌘B)")}
+        onClick={toggleSidebar}
+        style={sidebarOpen ? undefined : { color: 'var(--text-muted)' }}
+      >
+        <PanelLeft size={15} />
+      </button>
+      <button data-testid="agent-toggle" className="icon-btn" title={t('agent')} onClick={() => setAgentOpen(!agentOpen)} style={agentOpen ? { color: 'var(--agent)', background: 'var(--agent-soft)' } : undefined}>
+        <Bot size={15} />
+      </button>
+      <button data-testid="theme-toggle" className="icon-btn" title={tr("切换主题")} onClick={() => void saveSettings({ theme: dark ? 'light' : 'dark' })}>
+        {dark ? <Sun size={15} /> : <Moon size={15} />}
+      </button>
+      <button data-testid="open-settings" className="icon-btn" title={t('settings')} onClick={() => setSettingsOpen(true)}>
+        <Settings size={15} />
+      </button>
+    </>
+  );
 
   return (
-    <div className={`app${nativeWindowChrome ? ' native-chrome' : ''}`} data-testid="app-root">
-      <div className="titlebar">
-        {nativeWindowChrome ? null : (
+    <div className={`app${nativeWindowChrome ? ' native-chrome' : ''}${macHiddenInset ? ' platform-darwin' : ''}`} data-testid="app-root">
+      {nativeWindowChrome ? null : (
+        <div className="titlebar">
           <div className="brand">
             <img className="brand-mark" src="/logo-mark.svg" alt="" />
             <div>
@@ -343,77 +408,58 @@ export default function App() {
               <div className="brand-sub">AI-native database workbench</div>
             </div>
           </div>
-        )}
-        {activeConn ? (
-          <span className={`env-pill ${activeConn.environment}`}>
-            <span className="conn-color" style={{ background: 'currentColor' }} />
-            {activeConn.environment.toUpperCase()} · {activeConn.engine}
-          </span>
-        ) : null}
-        <div className="spacer" />
-        <button className="cmd-hint" onClick={() => setPaletteOpen(true)}>
-          <span>{tr("搜索或执行命令…")}</span>
-          <span className="kbd">⌘K</span>
-        </button>
-        <button
-          data-testid="toggle-sidebar"
-          className="icon-btn"
-          title={sidebarOpen ? tr("隐藏连接栏 (⌘B)") : tr("显示连接栏 (⌘B)")}
-          onClick={toggleSidebar}
-          style={sidebarOpen ? undefined : { color: 'var(--text-muted)' }}
-        >
-          <PanelLeft size={15} />
-        </button>
-        <button data-testid="agent-toggle" className="icon-btn" title={t('agent')} onClick={() => setAgentOpen(!agentOpen)} style={agentOpen ? { color: 'var(--agent)', background: 'var(--agent-soft)' } : undefined}>
-          <Bot size={15} />
-        </button>
-        <button data-testid="theme-toggle" className="icon-btn" title={tr("切换主题")} onClick={() => void saveSettings({ theme: dark ? 'light' : 'dark' })}>
-          {dark ? <Sun size={15} /> : <Moon size={15} />}
-        </button>
-        <button data-testid="open-settings" className="icon-btn" title={t('settings')} onClick={() => setSettingsOpen(true)}>
-          <Settings size={15} />
-        </button>
-      </div>
+          {envPill}
+          <div className="spacer" />
+          {windowTools}
+        </div>
+      )}
 
-      <div className="ribbon" data-testid="ribbon">
-        <RibbonGradients />
-        <RibbonButton icon={<Cable size={20} />} label={tr("连接")} tone="teal" onClick={() => openConnectionEditor('new')} />
-        <div className="ribbon-sep" />
-        <RibbonButton icon={<TerminalSquare size={20} />} label={tr("新建查询")} tone="sky" onClick={() => openQuery()} testId="ribbon-new-query" />
-        <RibbonButton
-          icon={<Table2 size={20} />}
-          label={tr("表")}
-          tone="emerald"
-          active={activeTab?.kind === 'data'}
-          onClick={() => {
-            const id = activeConnectionId ?? connections[0]?.id;
-            if (!id) {
-              openConnectionEditor('new');
-              return;
-            }
-            selectConnection(id);
-            if (!useApp.getState().expandedConnections[id]) toggleConnection(id);
-          }}
-        />
-        <RibbonButton icon={<Eye size={20} />} label={tr("视图")} tone="violet" onClick={() => openTools('objects')} />
-        <RibbonButton icon={<Braces size={20} />} label={tr("函数")} tone="amber" onClick={() => openTools('objects')} />
-        <div className="ribbon-sep" />
-        <RibbonButton icon={<Users size={20} />} label={tr("用户")} tone="rose" onClick={() => openTools('users')} />
-        <RibbonButton icon={<Boxes size={20} />} label={tr("其它")} tone="orange" onClick={() => openTools('objects')} />
-        <div className="ribbon-sep" />
-        <RibbonButton icon={<History size={20} />} label={tr("查询")} tone="indigo" onClick={() => openQuery()} />
-        <RibbonButton icon={<Archive size={20} />} label={tr("备份")} tone="lime" onClick={() => setSettingsOpen(true)} />
-        <div className="ribbon-sep" />
-        <RibbonButton icon={<Clock size={20} />} label={tr("自动运行")} tone="cyan" onClick={() => openTools('jobs')} />
-        <RibbonButton icon={<Network size={20} />} label={tr("模型")} tone="fuchsia" onClick={() => openRelations()} />
-        <RibbonButton
-          icon={<LayoutDashboard size={20} />}
-          label={tr("仪表板")}
-          tone="rose"
-          active={activeTab?.kind === 'dashboard'}
-          onClick={() => openDashboard()}
-          testId="ribbon-dashboard"
-        />
+      <div className="ribbon-shell">
+        <div className="ribbon" data-testid="ribbon">
+          <RibbonGradients />
+          <RibbonButton icon={<Cable size={20} />} label={tr("连接")} tone="teal" onClick={() => openConnectionEditor('new')} />
+          <div className="ribbon-sep" />
+          <RibbonButton icon={<TerminalSquare size={20} />} label={tr("新建查询")} tone="sky" onClick={() => openQuery()} testId="ribbon-new-query" />
+          <RibbonButton
+            icon={<Table2 size={20} />}
+            label={tr("表")}
+            tone="emerald"
+            active={activeTab?.kind === 'data'}
+            onClick={() => {
+              const id = activeConnectionId ?? connections[0]?.id;
+              if (!id) {
+                openConnectionEditor('new');
+                return;
+              }
+              selectConnection(id);
+              if (!useApp.getState().expandedConnections[id]) toggleConnection(id);
+            }}
+          />
+          <RibbonButton icon={<Eye size={20} />} label={tr("视图")} tone="violet" onClick={() => openTools('objects')} />
+          <RibbonButton icon={<Braces size={20} />} label={tr("函数")} tone="amber" onClick={() => openTools('objects')} />
+          <div className="ribbon-sep" />
+          <RibbonButton icon={<Users size={20} />} label={tr("用户")} tone="rose" onClick={() => openTools('users')} />
+          <RibbonButton icon={<Boxes size={20} />} label={tr("其它")} tone="orange" onClick={() => openTools('objects')} />
+          <div className="ribbon-sep" />
+          <RibbonButton icon={<History size={20} />} label={tr("查询")} tone="indigo" onClick={() => openQuery()} />
+          <RibbonButton icon={<Archive size={20} />} label={tr("备份")} tone="lime" onClick={() => setSettingsOpen(true)} />
+          <div className="ribbon-sep" />
+          <RibbonButton icon={<Clock size={20} />} label={tr("自动运行")} tone="cyan" onClick={() => openTools('jobs')} />
+          <RibbonButton icon={<Network size={20} />} label={tr("模型")} tone="fuchsia" onClick={() => openRelations()} />
+          <RibbonButton
+            icon={<LayoutDashboard size={20} />}
+            label={tr("仪表板")}
+            tone="rose"
+            active={activeTab?.kind === 'dashboard'}
+            onClick={() => openDashboard()}
+            testId="ribbon-dashboard"
+          />
+        </div>
+        {nativeWindowChrome ? (
+          <div className="ribbon-tools">
+            {windowTools}
+          </div>
+        ) : null}
       </div>
 
       <div className="shell" style={{ ['--sidebar-w' as string]: `${effectiveSidebar}px`, ['--agent-w' as string]: `${effectiveAgent}px` }}>
@@ -423,15 +469,20 @@ export default function App() {
             <PaneSplitter
               side="left"
               width={effectiveSidebar}
-              min={200}
-              max={sidebarMax}
+              min={PANE.sidebar.min}
+              max={layout.sidebarMax}
               onChange={(width) => setSidebarWidth(width)}
               onCommit={(width) => setSidebarWidth(width, true)}
               testId="splitter-sidebar"
             />
           </>
         ) : null}
-        <Workspace viewportWidth={viewportWidth} sidebarFlowWidth={sidebarInFlow ? effectiveSidebar : 0} />
+        <Workspace
+          viewportWidth={viewportWidth}
+          sidebarFlowWidth={sidebarInFlow ? effectiveSidebar : 0}
+          agentWidth={effectiveAgent}
+          agentMax={layout.agentMax}
+        />
       </div>
 
       <div className="statusbar">

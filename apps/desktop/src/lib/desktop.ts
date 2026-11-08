@@ -30,11 +30,21 @@ export interface SaveExportedFileResult {
   error?: string;
 }
 
+/** 原生菜单描述项：由渲染层按当前语言生成，主进程负责安装（见 electron/menuTemplate.cjs）。 */
+export type AppMenuItem =
+  | { type: 'separator' }
+  | { type: 'role'; role: string; label?: string; accelerator?: string }
+  | { type: 'submenu'; label: string; items: AppMenuItem[] }
+  | { type: 'command'; id: string; label: string; accelerator?: string }
+  | { type: 'open'; label: string; url: string };
+
 export interface DesktopBridge {
   platform: string;
   createTableShortcut: (payload: TableShortcutPayload & { ui?: DesktopDialogUi }) => Promise<{ ok: boolean; path?: string; error?: string }>;
   saveExportedFile?: (payload: { sourcePath: string; ui?: DesktopDialogUi }) => Promise<SaveExportedFileResult>;
   exportPdf?: (payload: { html: string; name?: string; ui?: DesktopDialogUi }) => Promise<SaveExportedFileResult>;
+  setApplicationMenu?: (spec: AppMenuItem[]) => Promise<boolean>;
+  onMenuCommand?: (callback: (id: string) => void) => () => void;
   onOpenTable: (callback: (payload: OpenTablePayload) => void) => () => void;
 }
 

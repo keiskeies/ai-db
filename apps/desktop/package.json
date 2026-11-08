@@ -10,7 +10,8 @@
     "build": "vite build",
     "package": "npm run build && electron-builder",
     "preview": "vite preview --port 4173 --strictPort",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/layout.test.ts"
   },
   "dependencies": {
     "@aidb/core": "*",

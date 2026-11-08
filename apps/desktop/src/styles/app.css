@@ -108,17 +108,25 @@ input[type='number']::-webkit-inner-spin-button, input[type='number']::-webkit-o
 .env-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border-strong); color: var(--text-secondary); text-transform: uppercase; letter-spacing: .4px; }
 .env-pill.prod { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); background: var(--danger-soft); }
 .env-pill.staging { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 45%, transparent); background: var(--warning-soft); }
-.titlebar .cmd-hint {
+.titlebar .cmd-hint, .ribbon-tools .cmd-hint {
   display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 10px;
   border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
   background: var(--bg-elevated); color: var(--text-muted); font-size: 11px;
 }
 .kbd { font-family: var(--font-mono); font-size: 10px; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border-strong); background: var(--bg-app); color: var(--text-secondary); }
 
-/* 有原生标题栏的平台（Windows / Linux 桌面端）不再重复品牌：这条压成工具栏，
-   并把 .spacer 的最小宽度留出来，保证窗口仍然有足够大的拖拽抓取面。 */
-.app.native-chrome .titlebar { height: 30px; flex-basis: 30px; }
-.app.native-chrome .titlebar .spacer { min-width: 60px; }
+/* 有原生标题栏的平台（Windows / Linux 桌面端）不再画应用内标题栏，
+   环境徽章与窗口工具按钮并进 ribbon 右侧：整块少一行，ribbon 仍然可以横向滚动。 */
+.ribbon-shell {
+  flex: 0 0 var(--ribbon-h); height: var(--ribbon-h);
+  display: flex; align-items: stretch; min-width: 0;
+  border-bottom: 1px solid var(--border-panel); background: var(--bg-ribbon);
+}
+
+/* macOS 的 hiddenInset：三个交通灯浮在 web 内容之上，实际占位约 x=20–72（12px 圆点 + 8px 间距，
+   起点 20）。标题栏必须让出这段，否则 logo 与名称被压在按钮下面；84px = 右缘 72 + 12px 呼吸。
+   让出的区域仍在 .titlebar 的 drag 区内，鼠标落在交通灯与 logo 之间照样能拖窗。 */
+.app.platform-darwin .titlebar { padding-left: 84px; }
 
 .shell { flex: 1; min-height: 0; display: flex; position: relative; }
 
@@ -500,7 +508,6 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
   width: var(--agent-w, 384px); flex: 0 0 var(--agent-w, 384px); min-width: 320px; border-left: 1px solid var(--border-panel);
   background: var(--bg-panel); display: flex; flex-direction: column; min-height: 0; position: relative;
 }
-.agent-panel.expanded { width: 58%; flex-basis: 58%; }
 .agent-head { height: 44px; flex: 0 0 44px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--border-subtle); }
 .agent-head .agent-title { display: flex; align-items: center; gap: 7px; font-weight: 650; font-size: 12.5px; }
 .agent-dot { width: 16px; height: 16px; border-radius: 5px; background: var(--agent); display: grid; place-items: center; color: var(--on-solid); font-size: 9px; font-weight: 800; }
@@ -1089,7 +1096,6 @@ details[open] > summary::before { transform: rotate(45deg); opacity: .7; }
 }
 @media (max-width: 1000px) {
   .agent-panel { position: absolute; right: 0; top: 0; bottom: 0; z-index: 25; box-shadow: var(--shadow-pop); width: min(440px, 94vw); flex-basis: auto; }
-  .agent-panel.expanded { width: min(440px, 94vw); }
   .pane-splitter[data-testid='splitter-agent'] { display: none; }
 }
 @media (max-width: 900px) {
@@ -1104,7 +1110,7 @@ details[open] > summary::before { transform: rotate(45deg); opacity: .7; }
   }
   .pane-splitter[data-testid='splitter-sidebar'] { display: none; }
   .brand-sub { display: none; }
-  .titlebar .cmd-hint { display: none; }
+  .titlebar .cmd-hint, .ribbon-tools .cmd-hint { display: none; }
   .agent-panel { width: 100vw; }
   .statusbar .path, .statusbar .model { display: none; }
 }
@@ -1182,11 +1188,17 @@ details[open] > summary::before { transform: rotate(45deg); opacity: .7; }
 
 /* ---------- Navicat-style ribbon ---------- */
 .ribbon {
-  flex: 0 0 var(--ribbon-h); height: var(--ribbon-h); display: flex; align-items: center; gap: 2px;
-  padding: 4px 10px; border-bottom: 1px solid var(--border-panel);
-  background: var(--bg-ribbon);
+  flex: 1 1 auto; min-width: 0; height: 100%; display: flex; align-items: center; gap: 2px;
+  padding: 4px 10px;
   overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
 }
+/* 右侧固定工具簇：徽章 / 搜索入口 / 窗口开关，不随 ribbon 横向滚动。
+   与图标区之间只靠留白分隔，不画竖线，免得在这一行里多出一条分割线。 */
+.ribbon-tools {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 5px;
+  align-self: center; height: 42px; padding: 0 10px 0 14px;
+}
+.ribbon-tools .env-pill { flex: 0 0 auto; }
 .ribbon::-webkit-scrollbar { display: none; }
 .ribbon > * { flex: 0 0 auto; }
 .ribbon-btn {

@@ -20,7 +20,7 @@
     "seed": "node --import tsx scripts/seed-demo.ts",
     "seed:business": "node --import tsx scripts/seed-business.ts",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm --workspace @aidb/core run test && npm --workspace @aidb/gateway run test",
+    "test": "npm --workspace @aidb/core run test && npm --workspace @aidb/gateway run test && npm --workspace @aidb/desktop run test",
     "build:core": "npm --workspace @aidb/core run build",
     "build": "npm run build:core && npm --workspace apps/gateway run build && npm --workspace apps/desktop run build && npm run build:mobile",
     "build:desktop": "npm run build:core && npm --workspace apps/desktop run package",

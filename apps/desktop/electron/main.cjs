@@ -6,9 +6,18 @@ const net = require('node:net');
 const crypto = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
 const { backupBeforeUpgrade, markVersion } = require('./upgrade.cjs');
+const { installMenu, configureAboutPanel } = require('./menu.cjs');
 
 let gatewayProcess = null;
 let mainWindow = null;
+
+/**
+ * 开发态窗口会沿用 electron.exe 自身的图标（标题栏、任务栏都是 Electron 的默认图标），
+ * 而打包配置里的 icon 只写进 exe / .app 的资源，运行时不会自己加载。
+ * 这里给未打包的场景补一个显式路径；打包态交给 exe 资源，不再重复覆盖。
+ */
+const DEV_ICON = path.join(__dirname, '..', 'build', 'icon.png');
+const windowIcon = !app.isPackaged && fs.existsSync(DEV_ICON) ? DEV_ICON : undefined;
 
 function readOpenTableArg(argv = process.argv) {
   const arg = argv.find((item) => item.startsWith('--open-table='));
@@ -19,6 +28,16 @@ function readOpenTableArg(argv = process.argv) {
     return null;
   }
 }
+
+// 渲染层生成菜单树后经 IPC 下发；语言变更时重发一次即可整体重建。
+ipcMain.handle('menu:set', (_event, spec) => {
+  try {
+    return installMenu(spec);
+  } catch (err) {
+    console.error('[desktop] install menu failed', err);
+    return false;
+  }
+});
 
 ipcMain.handle('create-table-shortcut', async (_event, payload) => {
   const errors = payload?.ui?.errors ?? {};
@@ -256,7 +275,10 @@ async function createWindow() {
     minHeight: 640,
     backgroundColor: '#090a09',
     title: 'AiDB Studio',
-    autoHideMenuBar: true,
+    icon: windowIcon,
+    // 菜单栏跟随窗口显示：Windows / Linux 直接排在原生标题栏下方（与 Navicat 同形），
+    // macOS 走屏幕顶部的系统菜单栏，这个选项无效但也无害。
+    autoHideMenuBar: false,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     webPreferences: {
       contextIsolation: true,
@@ -295,6 +317,11 @@ if (!hasSingleInstanceLock) {
   });
 
   app.whenReady().then(() => {
+    configureAboutPanel();
+    // Windows 的任务栏分组、通知来源都靠 AppUserModelId；与 electron-builder 的 appId 保持一致。
+    if (process.platform === 'win32') app.setAppUserModelId('com.aidb.studio');
+    // macOS 开发态的 Dock 图标同样来自 Electron.app，未打包时手动换成产品图标。
+    if (!app.isPackaged && process.platform === 'darwin' && windowIcon && app.dock) app.dock.setIcon(windowIcon);
     registerExportDialogs();
     return createWindow();
   }).catch((err) => {
