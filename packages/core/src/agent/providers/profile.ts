@@ -86,8 +86,42 @@ export function maxOutputTokensOf(agent: AgentSettings, profile = getModelProfil
  */
 export function historyTokenBudget(agent: AgentSettings, profile = getModelProfile(agent)): number {
   const configured = Math.max(MIN_HISTORY_TOKENS, Math.floor((agent.compactionThreshold || MIN_HISTORY_TOKENS * 2) / 2));
-  const window = profile?.contextWindow;
-  if (!window || window <= 0) return configured;
-  const room = window - (maxOutputTokensOf(agent, profile) ?? FALLBACK_MAX_OUTPUT_TOKENS) - PROMPT_RESERVE_TOKENS;
+  const room = roomInWindow(profile, agent);
+  if (!room) return configured;
   return Math.max(MIN_HISTORY_TOKENS, Math.min(configured, Math.floor(room)));
 }
+
+/** 窗口扣掉输出与系统提示词后的余量；没声明窗口的模型返回 undefined（= 不设限）。 */
+function roomInWindow(profile: ModelProfile | undefined, agent: AgentSettings): number | undefined {
+  const window = profile?.contextWindow;
+  if (!window || window <= 0) return undefined;
+  return window - (maxOutputTokensOf(agent, profile) ?? FALLBACK_MAX_OUTPUT_TOKENS) - PROMPT_RESERVE_TOKENS;
+}
+
+/**
+ * 单条工具结果给模型看的字符预算。
+ *
+ * 之前是写死的 16000 字符：200K 窗口的模型也只喂 16K，一次 JOIN 出来的宽表被砍掉大半，
+ * 模型只能反复补问；128K 的本地小模型用同一个值又偏大，几步就把窗口挤爆。
+ * 现在按「窗口 − 已用 − 输出 − 提示词余量」算出剩余空间，取其中一部分给单条结果：
+ * 开局宽松，越跑越紧，天然和上下文占用联动。
+ */
+const RESULT_SHARE = 0.3;
+/** 下限：再挤也要给够一次像样的取样，否则小窗口模型完全读不到数据。 */
+const MIN_RESULT_CHARS = 6000;
+/** 上限：单条结果再大模型也读不进去，而且序列化本身会拖慢回合。 */
+const MAX_RESULT_CHARS = 200000;
+/** token→字符的折算率，取保守值（中英混排 + JSON 语法字符）。 */
+const CHARS_PER_TOKEN = 3;
+/** 没有模型档案时的兜底，与改造前的写死值一致。 */
+const FALLBACK_RESULT_CHARS = 16000;
+
+export function modelResultCharBudget(options: { contextWindow?: number; usedTokens?: number; maxOutputTokens?: number }): number {
+  const window = options.contextWindow;
+  if (!window || window <= 0) return FALLBACK_RESULT_CHARS;
+  const used = Number.isFinite(options.usedTokens) ? Math.max(0, options.usedTokens ?? 0) : 0;
+  const room = window - used - (options.maxOutputTokens ?? FALLBACK_MAX_OUTPUT_TOKENS) - PROMPT_RESERVE_TOKENS;
+  if (room <= 0) return MIN_RESULT_CHARS;
+  return Math.min(MAX_RESULT_CHARS, Math.max(MIN_RESULT_CHARS, Math.floor(room * RESULT_SHARE * CHARS_PER_TOKEN)));
+}
+

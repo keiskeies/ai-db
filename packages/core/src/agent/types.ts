@@ -250,6 +250,12 @@ export interface AgentRuntimeDeps {
   temperature?: number;
   /** 当前模型档案里的最大输出 tokens；未配置时由 provider 兜底。 */
   maxTokens?: number;
+  /**
+   * 单条工具结果给模型看的字符预算。用函数而不是常量：预算要跟着本回合已用掉的
+   * 上下文走（开局给得多，越跑越紧），上层通常按「窗口 − 已用 − 输出 − 提示词余量」推。
+   * 省略时 runtime 用固定的 16000 兜底。
+   */
+  resultCharBudget?: (usedContextTokens: number) => number;
   reasoning?: ProviderReasoning;
   /** 本轮下发给模型的工具；缺省使用全局 40+ 工具目录。 */
   tools?: ProviderTool[];

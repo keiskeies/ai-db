@@ -190,3 +190,24 @@ test('image input is gated by the model profile', () => {
   assert.equal(supportsInput({ inputs: ['text'] }, 'image'), false);
   assert.equal(supportsInput({ inputs: ['text', 'image'] }, 'image'), true);
 });
+
+test('单条工具结果的字符预算随上下文窗口与已用量变化', async () => {
+  const { modelResultCharBudget } = await import('../src/agent/providers/profile');
+  // 没声明窗口 → 沿用改造前的固定值，行为不变
+  assert.equal(modelResultCharBudget({}), 16000);
+  assert.equal(modelResultCharBudget({ contextWindow: 0 }), 16000);
+
+  const small = modelResultCharBudget({ contextWindow: 8_192, maxOutputTokens: 4_096 });
+  const big = modelResultCharBudget({ contextWindow: 1_000_000, maxOutputTokens: 8_192 });
+  assert.ok(big > small * 5, `1M 窗口应远大于 8K 窗口：${small} → ${big}`);
+  assert.ok(small >= 6_000, '再小的窗口也要给够一次像样的取样');
+  assert.ok(big <= 200_000, '单条结果要有绝对上限，否则序列化本身拖慢回合');
+
+  // 已用越多预算越小，触底后停在地板而不是变成 0 或负数
+  const fresh = modelResultCharBudget({ contextWindow: 200_000, maxOutputTokens: 8_192 });
+  const used = modelResultCharBudget({ contextWindow: 200_000, maxOutputTokens: 8_192, usedTokens: 150_000 });
+  const exhausted = modelResultCharBudget({ contextWindow: 200_000, maxOutputTokens: 8_192, usedTokens: 400_000 });
+  assert.ok(fresh > used, '上下文吃紧时要收窄');
+  assert.equal(exhausted, 6_000, '窗口顶穿也不能给 0');
+  assert.equal(modelResultCharBudget({ contextWindow: 200_000, maxOutputTokens: 8_192, usedTokens: Number.NaN }), fresh, 'NaN 已用量要当 0 处理');
+});

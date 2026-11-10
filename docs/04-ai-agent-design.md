@@ -375,6 +375,14 @@ pinned → +0.3 且不衰减
 - **零回归约定**：未配置任何覆盖项时 bundle 为 inactive，`compressSchema` 走与引入该机制前**逐字节相同**的分支（有集成测试断言）；`## Business context` 段落整段省略。
 - **数据库交接文档（`/init` → `AI_DB.md`）**：按 `${connectionId}/${database}` 保存；每回合注入摘要（速览、业务、关联、核心表、口径、性能、坑）与覆盖/漂移状态，不含全量附录以控制 token。提示词硬性规定：文档是说明层，不是白名单；表没写进文档不等于不存在；与 schema/工具结果冲突时以工具为准；`inferred` 段落必须先验证。生成器用 schema 指纹与逐表哈希发现新增/删除/改表，文件内容变化会提示重跑 `/init`；每次 `/init` 都全量重建自动段落（业务地图、核心表、Join、指标、性能、坑、全量清单），只有“数据流与新鲜度”“人工补充”两个 manual 段落保留。需要长期维护的文字应写在 manual 段落，避免自动内容长期不更新。
 - **工具结果摘要**：历史中的大结果替换为 `{summary, rowCount, preview(5)}`，完整结果仅保留最近 2 次，控制 token。
+- **单条工具结果的字符预算按上下文窗口算**（`modelResultCharBudget`，`providers/profile.ts`）：
+  `(contextWindow − 本回合已用 tokens − maxOutputTokens − 提示词预留) × 30%`，折成字符（3 字符/token），
+  地板 6000、绝对上限 200000；每次工具调用重算，所以上下文越吃越紧时预算自己收窄，不会被单条结果顶穿。
+  超出预算时按**整行**装箱（不切坏 JSON 行），带 `totalRows` / `rowRange` / `meta.truncated`，
+  并附一句续查提示（改用显式 `LIMIT/OFFSET` 或更窄的 `WHERE`，长文本列单独 `SELECT ... LIMIT 1`），
+  让模型知道数据被截了、下一步怎么取剩下的 —— 静默截断只会让它拿半截数据下结论。
+  **前提**：`contextWindow` 只有模型档案里填了、或服务商 `/models` 探测得到时才知道（见 9.0.1）；
+  没有档案时退回固定 16000 字符，不瞎猜窗口。
 - **压缩**：会话 > 阈值（默认 24k tokens）→ 生成摘要（保留目标、决策、schema 变更、未完成事项）写入 `sessions.summary`，丢弃早期工具大结果。
 
 ## 9. Provider

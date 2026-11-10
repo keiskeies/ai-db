@@ -588,3 +588,80 @@ test('超时中止：reason 说出真实上限与耗时，绝不再写「用户�
   assert.match(abortedEvent.reason, /可继续/, '要告诉用户还能接着跑');
   assert.equal(outcome.abortCause, 'timeout', 'agentHost 事后要靠返回值判断是否写检查点');
 });
+
+/** 造一个跑一次 run_sql 就收尾的 runtime，返回喂给模型的那条 tool 消息。 */
+async function toolMessageForRows(rows: unknown[], budget: (used: number) => number) {
+  const provider = new ScriptedProvider([
+    [{ type: 'tool_call', call: { id: 'q1', name: 'run_sql', args: { connectionId: 'c1', sql: 'SELECT * FROM t' } } }, { type: 'usage', tokensIn: 100, tokensOut: 5 }, { type: 'done', stopReason: 'tool_use' }],
+    [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }],
+  ]);
+  const runtime = new AgentRuntime({
+    provider,
+    buildSystem: () => 'system',
+    executeTool: async () => ({ ok: true, summary: `返回 ${rows.length} 行`, data: { rows }, meta: { durationMs: 1 } }),
+    requestApproval: async () => ({ decision: 'allow', scope: 'once' }),
+    emit: () => undefined,
+    generateId: () => `id_${Math.random().toString(36).slice(2, 8)}`,
+    resultCharBudget: budget,
+  });
+  await runtime.run({ ...baseInput, sessionAllowed: new Set(), alwaysAllowed: new Set() });
+  const toolMessage = provider.requests[1].messages.filter((m) => m.role === 'tool').at(-1)!;
+  return String(toolMessage.content);
+}
+
+const wideRows = (count: number) => Array.from({ length: count }, (_, i) => ({ id: i, name: `row-${i}-payload`, note: 'x'.repeat(40) }));
+
+test('工具结果按预算装箱：预算大就多给行，不再卡死 50 行', async () => {
+  const roomy = await toolMessageForRows(wideRows(400), () => 120_000);
+  assert.ok(!roomy.includes('[truncated]'), '预算够就不该出现截断标记');
+  const parsed = JSON.parse(roomy);
+  assert.equal(parsed.data.rows.length, 400, '大预算要能一次给满 400 行');
+});
+
+test('预算不足时按字符预算裁行，并告诉模型剩多少行怎么续', async () => {
+  const rows = wideRows(400);
+  const tight = await toolMessageForRows(rows, () => 6_000);
+  assert.ok(tight.length <= 6_000, `实际 ${tight.length} 字符，越过预算`);
+  assert.match(tight, /\[truncated\]/);
+  assert.match(tight, /LIMIT\/OFFSET/, '要给出拿剩下的数据的办法');
+  const body = JSON.parse(tight.split('\n[truncated]')[0]);
+  assert.ok(body.data.rows.length > 0 && body.data.rows.length < 400);
+  assert.equal(body.data.totalRows, 400, '要说清总行数，模型才知道还差多少');
+  assert.equal(body.data.rowRange, `1-${body.data.rows.length}`);
+  assert.equal(body.meta.truncated, true);
+});
+
+test('预算随上下文占用收缩：同一份数据后半程给得更少', async () => {
+  const rows = wideRows(400);
+  // 同一个 provider 回合里 contextTokens 会增长，这里用两个固定值模拟开局与后半程
+  const early = await toolMessageForRows(rows, () => 120_000);
+  const late = await toolMessageForRows(rows, () => 4_000);
+  const earlyRows = JSON.parse(early).data.rows.length;
+  assert.match(late, /\[truncated\]/);
+  const lateBody = JSON.parse(late.split('\n[truncated]')[0]);
+  assert.ok(lateBody.data.rows.length < earlyRows, '上下文吃紧时给得更少');
+  assert.equal(lateBody.data.totalRows, earlyRows || lateBody.data.totalRows, '总行数始终要说清');
+});
+
+test('非行式结果超预算时保留前缀而不是整块丢弃', async () => {
+  const longDoc = 'AI_DB 说明 '.padEnd(4000, 'x');
+  const provider = new ScriptedProvider([
+    [{ type: 'tool_call', call: { id: 'r1', name: 'run_sql', args: { connectionId: 'c1', sql: 'SELECT 1' } } }, { type: 'done', stopReason: 'tool_use' }],
+    [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }],
+  ]);
+  const runtime = new AgentRuntime({
+    provider,
+    buildSystem: () => 'system',
+    executeTool: async () => ({ ok: true, summary: '读文件', data: longDoc, meta: { durationMs: 1 } }),
+    requestApproval: async () => ({ decision: 'allow', scope: 'once' }),
+    emit: () => undefined,
+    generateId: () => 'id_r',
+    resultCharBudget: () => 1_200,
+  });
+  await runtime.run({ ...baseInput, sessionAllowed: new Set(), alwaysAllowed: new Set() });
+  const msg = String(provider.requests[1].messages.filter((m) => m.role === 'tool').at(-1)!.content);
+  assert.ok(msg.length <= 1_200, `实际 ${msg.length}`);
+  const body = JSON.parse(msg).data as string;
+  assert.match(body, /^AI_DB 说明/, '要留下正文开头');
+  assert.match(body, /…\(truncated\)/);
+});

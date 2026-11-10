@@ -38,8 +38,15 @@ export interface AgentRunResult {
   error?: { code: string; message: string };
 }
 
+/** 没有 deps.resultCharBudget 时的兜底，与改造前的写死值一致。 */
 const MAX_MODEL_RESULT_CHARS = 16000;
 const MAX_SQL_REPAIRS = 2;
+/** 裁剪后仍要告诉模型怎么拿剩下的数据，否则它只能反复补问同一件事。 */
+const RESULT_CONTINUATION_HINT =
+  '[truncated] 上面的结果被截断了。不要假设剩下的内容：需要更多行就带上明确的 LIMIT/OFFSET 或更窄的 WHERE 重新查一次；'
+  + '需要单列的完整内容（长文本/JSON/BLOB）就只 SELECT 那一列并把 LIMIT 设为 1。';
+/** 预算被 summary / meta 挤到低于这个值时，宁可只给一句说明也不产出半截结构。 */
+const MIN_USABLE_RESULT_CHARS = 512;
 const NON_REPAIRABLE = new Set([
   'PERMISSION_DENIED',
   'APPROVAL_DENIED',
@@ -50,23 +57,73 @@ const NON_REPAIRABLE = new Set([
   'METADATA_BLOCKED',
 ]);
 
-function serializeForModel(result: ToolResult, extra?: Record<string, unknown>): string {
-  const compact: Record<string, unknown> = { ...result, ...(extra ?? {}) };
-  const data = result.data as { rows?: unknown[] } | undefined;
-  if (data && Array.isArray(data.rows) && data.rows.length > 50) {
-    compact.data = { ...(data as object), rows: data.rows.slice(0, 50), truncated: true };
-    compact.meta = { ...(compact.meta as object), truncated: true };
+/**
+ * 把工具结果序列化成给模型看的文本，长度受 maxChars 约束。
+ *
+ * 两条裁剪路径都按预算算，不再按固定行数：
+ *  - 行式结果逐行装箱，装到预算边为止。1M 窗口的模型一次能看到几百行，
+ *    128K 的本地模型自动只看到几十行；原来那条「超过 50 行就砍到 50」的死规矩
+ *    对两边都不对。
+ *  - 非行式结果（schema、文件正文、MCP 文本）整块超预算时保留前缀，
+ *    留开头永远比整块丢掉有用。
+ * 两种情况都在尾部留一句续跑指引，模型才知道该带 LIMIT/OFFSET 再查一次。
+ */
+function serializeForModel(result: ToolResult, extra?: Record<string, unknown>, maxChars = MAX_MODEL_RESULT_CHARS): string {
+  const budget = Math.max(0, Math.floor(maxChars));
+  const whole = JSON.stringify({ ...result, ...(extra ?? {}) });
+  if (whole.length <= budget) return whole;
+
+  const rows = Array.isArray((result.data as { rows?: unknown[] } | undefined)?.rows)
+    ? ((result.data as { rows: unknown[] }).rows as unknown[])
+    : undefined;
+
+  /** 外层字段保持和 whole 一致，只替换 data，模型读起来格式统一。 */
+  const envelope = (data: unknown): string =>
+    JSON.stringify({
+      ok: result.ok,
+      summary: result.summary,
+      error: result.error,
+      meta: { ...(result.meta as object | undefined), truncated: true },
+      ...(extra ?? {}),
+      data,
+    });
+
+  const omitted = (reason: string) => envelope(`(result omitted: ${reason})${RESULT_CONTINUATION_HINT}`);
+
+  if (rows?.length) {
+    const packed: unknown[] = [];
+    // 估算就带上最终会出现的 rowRange / totalRows，装箱才不会差出几十字符。
+    let bytes = envelope({ rows: packed, totalRows: rows.length, rowRange: '1-999' }).length + RESULT_CONTINUATION_HINT.length + 1;
+    for (const row of rows) {
+      const size = JSON.stringify(row).length + 1;
+      if (bytes + size > budget) break;
+      packed.push(row);
+      bytes += size;
+    }
+    if (!packed.length) return omitted('the current context budget is too small for even one row; narrow the query or request fewer rows');
+    const built = `${envelope({ rows: packed, totalRows: rows.length, rowRange: `1-${packed.length}` })}\n${RESULT_CONTINUATION_HINT}`;
+    // 装箱是估算，越界就丢掉最后一行重来，绝不把超预算的内容发给模型。
+    if (built.length <= budget) return built;
+    packed.pop();
+    if (!packed.length) return omitted('the current context budget is too small for even one row; narrow the query or request fewer rows');
+    return `${envelope({ rows: packed, totalRows: rows.length, rowRange: `1-${packed.length}` })}\n${RESULT_CONTINUATION_HINT}`;
   }
-  const json = JSON.stringify(compact);
-  if (json.length <= MAX_MODEL_RESULT_CHARS) return json;
-  return JSON.stringify({
-    ok: result.ok,
-    summary: result.summary,
-    error: result.error,
-    ...(extra ?? {}),
-    meta: compact.meta,
-    data: '(result too large and was omitted; narrow the query or request fewer rows)',
-  });
+
+  if (budget < MIN_USABLE_RESULT_CHARS) return omitted('the envelope alone fills the current context budget');
+  const text = typeof result.data === 'string' ? result.data : JSON.stringify(result.data ?? null);
+  // 外壳（ok/summary/meta/extra）的实际长度要量出来再决定 data 能留多少；
+  // JSON 转义还会让正文变长，所以裁完必须实测一次，超了就按溢出量回退。
+  const tail = `…(truncated)${RESULT_CONTINUATION_HINT}`;
+  const shellLength = envelope('').length + tail.length + 8;
+  let room = budget - shellLength;
+  if (room <= 0 || !text) return omitted('the envelope alone fills the current context budget');
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const built = envelope(`${text.slice(0, room)}${tail}`);
+    if (built.length <= budget) return built;
+    room -= built.length - budget + 8;
+    if (room <= 0) break;
+  }
+  return omitted('the envelope alone fills the current context budget');
 }
 
 /** 提取 FROM / JOIN 后的表名；支持 `db.table` 与反引号包裹。 */
@@ -274,6 +331,18 @@ export class AgentRuntime {
       ...(cacheReported ? { cacheHitTokens, cacheMissTokens: cacheMissTokens || Math.max(0, tokensIn - cacheHitTokens) } : {}),
     });
 
+    /**
+     * 单条工具结果的字符预算。每次调用都重新算：contextTokens 随模型调用增长，
+     * 所以开局能给一大块、跑到后半程自动收窄，不会在第 10 步把窗口顶穿。
+     */
+    const resultBudget = () => {
+      try {
+        return deps.resultCharBudget?.(contextTokens) ?? MAX_MODEL_RESULT_CHARS;
+      } catch {
+        return MAX_MODEL_RESULT_CHARS;
+      }
+    };
+
     deps.emit({ type: 'start', turnId, sessionId: input.sessionId, model: deps.provider.label });
     if (input.context.memories?.length) {
       deps.emit({
@@ -447,7 +516,7 @@ export class AgentRuntime {
         if (!tool) {
           const res = toolFailed(`未知工具：${call.name}`, 'UNKNOWN_TOOL');
           deps.emit({ type: 'tool_result', callId: call.id, tool: call.name, result: res });
-          messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: serializeForModel(res) });
+          messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: serializeForModel(res, undefined, resultBudget()) });
           continue;
         }
         const risk = resolveRisk(call, tool);
@@ -467,7 +536,7 @@ export class AgentRuntime {
           planUpdatedThisStep = true;
           const res: ToolResult = { ok: true, summary: `计划已更新（${plan.length} 项）`, data: { items: plan }, meta: { durationMs: 0 } };
           deps.emit({ type: 'tool_result', callId: call.id, tool: call.name, result: res });
-          messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: serializeForModel(res) });
+          messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: serializeForModel(res, undefined, resultBudget()) });
           continue;
         }
 
@@ -486,7 +555,7 @@ export class AgentRuntime {
         if (verdict === 'deny') {
           const res = permissionDenied(input.mode, input.connectionReadonly);
           deps.emit({ type: 'tool_result', callId: call.id, tool: call.name, result: res });
-          messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: serializeForModel(res) });
+          messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: serializeForModel(res, undefined, resultBudget()) });
           continue;
         }
 
@@ -517,7 +586,7 @@ export class AgentRuntime {
           if (decision.decision === 'deny') {
             const res = approvalDenied();
             deps.emit({ type: 'tool_result', callId: call.id, tool: call.name, result: res });
-            messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: serializeForModel(res) });
+            messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: serializeForModel(res, undefined, resultBudget()) });
             continue;
           }
           const sig = toolSignature(call);
@@ -534,13 +603,16 @@ export class AgentRuntime {
         }
         if (input.signal?.aborted) return aborted();
         deps.emit({ type: 'tool_result', callId: call.id, tool: call.name, result: res });
-        let modelContent = serializeForModel(res, { resultRef: call.id });
+        // repair / plan 提醒是往尾部追加的短句，这里先留出一点余量，
+        // 免得拼完恰好越过预算。
+        const budget = Math.max(1024, resultBudget() - 512);
+        let modelContent = serializeForModel(res, { resultRef: call.id }, budget);
         if (call.name === 'run_sql' && !res.ok && typeof call.args.sql === 'string' && !NON_REPAIRABLE.has(res.error?.code ?? '')) {
           sqlRepairs += 1;
           modelContent = serializeForModel(res, {
             resultRef: call.id,
             repair: buildRepairHint(String(call.args.sql), res, input.context.databases, sqlRepairs),
-          });
+          }, budget);
         }
         toolsSincePlan += 1;
         // 模型常常只在开头建一次计划就忘了更新：连续两个工具后仍停在旧状态时，

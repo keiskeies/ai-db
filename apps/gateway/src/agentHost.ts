@@ -13,6 +13,7 @@ import {
   historyTokenBudget,
   providerTools,
   maxOutputTokensOf,
+  modelResultCharBudget,
   resolvePeriod,
   suggestFollowUps,
   supportsInput,
@@ -517,6 +518,15 @@ export class AgentHost {
       maxSteps,
       temperature: settings.agent.temperature,
       maxTokens: maxOutputTokensOf(settings.agent, profile),
+      // 单条工具结果给模型看的字符预算：模型档案声明了上下文窗口才谈得上「智能计算」，
+      // 窗口越大开局给得越多，跑到后半程按已用 tokens 自动收窄。没配档案时
+      // 退回原来的 16000 固定值（设置 → 模型能力 里填了上下文窗口即可启用）。
+      resultCharBudget: (usedTokens) =>
+        modelResultCharBudget({
+          contextWindow: profile?.contextWindow,
+          maxOutputTokens: maxOutputTokensOf(settings.agent, profile),
+          usedTokens,
+        }),
       reasoning: activeReasoningTier(settings.agent, profile),
       generateId: () => randomUUID(),
       buildSystem: (run: AgentRunInput) => {
