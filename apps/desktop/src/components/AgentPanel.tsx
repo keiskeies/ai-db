@@ -990,6 +990,7 @@ export function AgentPanel() {
   const followUps = useApp((s) => s.agentFollowUps);
   const live = useApp((s) => s.live);
   const approval = useApp((s) => s.approval);
+  const approvalQueue = useApp((s) => s.approvalQueue);
   const sessions = useApp((s) => s.sessions);
   const sessionsOpen = useApp((s) => s.sessionsOpen);
   const agentSessionId = useApp((s) => s.agentSessionId);
@@ -2110,6 +2111,19 @@ export function AgentPanel() {
               {approval.risk === 'destructive' ? (
                 <div className="risk-banner" style={{ marginTop: 10 }}>
                   {tr(" 这是破坏性操作，可能永久删除数据。确认前 Agent 已按设置尝试创建备份。 ")}</div>
+              ) : null}
+              {approvalQueue.length ? (
+                <div className="hint" style={{ marginTop: 10 }}>
+                  <span>{tr('还需确认 {0} 处：', [approvalQueue.length])}</span>
+                  <ul style={{ margin: '4px 0 0', paddingLeft: 16, listStyle: 'disc' }}>
+                    {approvalQueue.map((item) => (
+                      <li key={item.approvalId} style={{ fontSize: 10.5 }}>
+                        <span className="mono">{item.tool}</span>
+                        {item.summary ? ` · ${localizeSummary(item.summary)}` : ''}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               ) : null}
               <p className="hint" style={{ marginTop: 10 }}>{t('transactionNote')}</p>
               {approval.tool === 'mcp_call' ? (

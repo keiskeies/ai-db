@@ -17,6 +17,7 @@ import type {
 } from '@aidb/core';
 import { DEFAULT_SETTINGS, engineMeta, normalizeLocale } from '@aidb/core';
 import { ApiError, api, streamTurn, type BootstrapData, type UnavailableEngine } from './lib/api';
+import { NO_APPROVAL, enqueueApproval, settleApproval } from './lib/approvalQueue';
 import { startSchemaEvents } from './lib/schemaEvents';
 import { getI18nLocale, setI18nLocale, translate, type I18nKey, type I18nVars } from './i18n';
 import { t as tr } from './i18n';
@@ -198,6 +199,13 @@ interface AppStore {
   homeDatabase: string;
   live?: LiveTurn;
   approval?: ApprovalState;
+  /**
+   * 当前回合里排在 approval 后面的审批请求。一个回合可以连着要求多次审批
+   * （建 5 张表 = 5 次 DDL），弹窗槽位却只有一个；把「最后一个事件」当成当前弹窗，
+   * 就会在结算前一个时顺手抹掉后一个。队列显式建模，入队出队都按 approvalId 走。
+   * 规则与单测在 lib/approvalQueue.ts。
+   */
+  approvalQueue: ApprovalState[];
   agentPrefill?: string;
   sessionsOpen: boolean;
   memoryOpen: boolean;
@@ -406,6 +414,7 @@ export const useApp = create<AppStore>((set, get) => ({
   agentWidth: readUiPrefs().agentWidth ?? 384,
   agentMessages: [],
   agentFollowUps: [],
+  approvalQueue: [],
   agentMode: 'ask',
   agentDatabase: '',
   homeDatabase: readUiPrefs().homeDatabaseByConnection?.[readUiPrefs().activeConnectionId ?? ''] ?? '',
@@ -919,7 +928,7 @@ export const useApp = create<AppStore>((set, get) => ({
       agentMessages: [],
       agentFollowUps: [],
       live: undefined,
-      approval: undefined,
+      ...NO_APPROVAL,
       agentDatabase,
     });
   },
@@ -977,7 +986,7 @@ export const useApp = create<AppStore>((set, get) => ({
         agentMessages: [],
         agentFollowUps: [],
         live: undefined,
-        approval: undefined,
+        ...NO_APPROVAL,
         agentOpen: true,
         sessionsOpen: false,
       });
@@ -997,7 +1006,7 @@ export const useApp = create<AppStore>((set, get) => ({
         agentMessages: detail.messages,
         agentFollowUps: [],
         live: undefined,
-        approval: undefined,
+        ...NO_APPROVAL,
         agentOpen: true,
         sessionsOpen: false,
         // 权限档位是「当前的安全意图」，不是会话的内容属性。
@@ -1066,18 +1075,26 @@ export const useApp = create<AppStore>((set, get) => ({
           for (const tool of live.tools) if (tool.tool === event.call.tool && tool.status === 'running') tool.status = 'awaiting';
           return {
             live,
-            approval: {
+            ...enqueueApproval(prev, {
               approvalId: event.approvalId,
               tool: event.call.tool,
               args: event.call.args,
               risk: event.call.risk,
               summary: event.call.summary,
               sql: event.call.sql,
-            },
+            }),
           };
-        case 'approval_resolved':
-          live.status = 'streaming';
-          return { live, approval: undefined };
+        case 'approval_resolved': {
+          // 按 id 出队而不是整槽清空：SSE 与用户点击是两条通道，
+          // 谁先把槽位改成下一条 approval 不确定，无差别清空会连带抹掉正在显示的那条
+          // （它会挂到 Bridge 的 5 分钟超时被自动拒绝 = 「后面的弹窗弹不出来」）。
+          const settled = settleApproval(prev, event.approvalId);
+          // 提上来下一个就还是「等用户」，不能闪回 streaming，否则状态条在
+          // 连续审批之间会一路乱跳。settleApproval 只有动过槽位才带 approval 键。
+          const stillPending = 'approval' in settled ? settled.approval : prev.approval;
+          live.status = stillPending ? 'awaiting' : 'streaming';
+          return { live, ...settled };
+        }
         case 'plan':
           live.plan = event.items;
           break;
@@ -1117,7 +1134,7 @@ export const useApp = create<AppStore>((set, get) => ({
           live.status = 'error';
           live.error = event.message;
           live.endedAt = Date.now();
-          return { live, approval: undefined };
+          return { live, ...NO_APPROVAL };
         default:
           break;
       }
@@ -1148,7 +1165,7 @@ export const useApp = create<AppStore>((set, get) => ({
       const permission = mode ?? get().agentMode;
       set({
         agentMode: permission,
-        approval: undefined,
+        ...NO_APPROVAL,
         agentFollowUps: [],
         live: {
           userText: trimmed,
@@ -1218,15 +1235,31 @@ export const useApp = create<AppStore>((set, get) => ({
   resolveApproval: async (decision, scope) => {
     const approval = get().approval;
     if (!approval) return;
+    const approvalId = approval.approvalId;
     try {
-      await api.approve(approval.approvalId, decision, scope);
-      set((prev) => ({
-        approval: undefined,
-        live: prev.live ? { ...prev.live, status: 'streaming' } : undefined,
-      }));
+      await api.approve(approvalId, decision, scope);
     } catch (err) {
-      get().notify('error', get().t('error'), errorText(err));
+      // 404 = Bridge 那边已经没有这个 pending 了（超时自动拒绝 / 用户中止 / 回合收尾）。
+      // 弹窗继续挂着只会让人多点一次没反应的按钮，按已结算处理并放下一个进来。
+      if ((err as { status?: number })?.status !== 404) {
+        get().notify('error', get().t('error'), errorText(err));
+        return;
+      }
     }
+    // 结算必须按 id 生效：POST 在飞的这段时间里 SSE 可能已经推进到下一个 approval
+    // 并在弹窗显示，无差别清空会把那一个一起抹掉——它会挂到 5 分钟超时被自动拒绝，
+    // 表现为「后面的提问弹窗弹不出来」。
+    set((prev) => {
+      const settled = settleApproval(prev, approvalId);
+      // 槽位里还压着下一条（刚从队列提上来，或本来就是别的 id 挂在屏上）时，
+      // 状态仍是「等用户」，不能闪回 streaming —— 与 SSE 的 approval_resolved 同一条规则，
+      // 否则这里会在弹窗还开着的时候把状态条改成「运行中」。
+      const stillPending = 'approval' in settled ? settled.approval : prev.approval;
+      return {
+        ...settled,
+        live: prev.live && prev.live.status === 'awaiting' && !stillPending ? { ...prev.live, status: 'streaming' } : prev.live,
+      };
+    });
   },
 
   prefillAgent: (text) => set({ agentOpen: true, agentPrefill: text }),
