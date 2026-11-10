@@ -161,8 +161,11 @@ export function evaluatePermission(risk: Risk, ctx: PermissionContext, call?: To
   const sig = call ? toolSignature(call) : '';
   const preApproved = risk !== 'destructive' && sig.length > 0 && (ctx.sessionAllowed?.has(sig) || ctx.alwaysAllowed?.has(sig));
 
-  // Production destructive actions always require explicit approval.
-  if (risk === 'destructive' && ctx.environment === 'prod') return 'ask';
+  // full = 「全权交给 Agent」，包括生产环境的破坏性操作：选了这一档就是不要中间人，
+  // 再弹一次确认等于推翻用户刚做的决定。DROP TABLE 在 prod + full 下同样直接执行。
+  // 兜底不在弹窗上：executor 的 drop 前自动备份、只读连接（上面的 deny）、完整审计日志。
+  // 要保护生产又想要自动，用 auto：破坏性操作照常审批。
+  if (risk === 'destructive' && ctx.environment === 'prod' && ctx.mode !== 'full') return 'ask';
 
   if (preApproved) return 'allow';
 

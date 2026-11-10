@@ -193,8 +193,10 @@ test('evaluatePermission 对批量破坏性脚本仍要求审批', () => {
   // auto 模式下 destructive 必须问，ddl 才自动放行。
   assert.equal(evaluatePermission('destructive', { ...base, mode: 'auto' }), 'ask');
   assert.equal(evaluatePermission('ddl', { ...base, mode: 'auto' }), 'allow');
-  // prod 环境的破坏性动作恒为 ask。
-  assert.equal(evaluatePermission('destructive', { ...base, mode: 'full', environment: 'prod' as const }), 'ask');
+  // 非 full 档下 prod 的破坏性动作恒为 ask；full 是全权委托，不再打断。
+  assert.equal(evaluatePermission('destructive', { ...base, mode: 'auto', environment: 'prod' as const }), 'ask');
+  assert.equal(evaluatePermission('destructive', { ...base, mode: 'ask', environment: 'prod' as const }), 'ask');
+  assert.equal(evaluatePermission('destructive', { ...base, mode: 'full', environment: 'prod' as const }), 'allow');
   // 只读连接与只读模式仍然直接拒绝，与批量与否无关。
   assert.equal(evaluatePermission('ddl', { ...base, mode: 'auto', connectionReadonly: true }), 'deny');
   assert.equal(evaluatePermission('ddl', { ...base, mode: 'readonly' }), 'deny');
