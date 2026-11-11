@@ -6,7 +6,11 @@ import {
   builtinMcpServerForTool,
   builtinMcpToolRisk,
   createProvider,
+  getModelProfile,
   getTool,
+  maxOutputTokensOf,
+  midContextTokenBudget,
+  modelResultCharBudget,
   providerTools,
   type AgentEvent,
   type AgentRunInput,
@@ -206,6 +210,7 @@ export class SkillWorker {
     userPrompt?: string,
   ): Promise<void> {
     const settings = this.store.getSettings();
+    const profile = getModelProfile(settings.agent);
     const runDir = this.runner.getRun(state.runId).workspace;
     const workspace = `${runDir}/workspace`;
     const skillDir = this.skills.skillDir(state.skill);
@@ -290,6 +295,14 @@ ${(skill.body ?? '').slice(0, 20000)}`;
       provider,
       maxSteps: Math.min(120, Math.max(60, (settings.agent.maxSteps || 20) * 2)),
       temperature: settings.agent.temperature,
+      maxTokens: maxOutputTokensOf(settings.agent, profile),
+      resultCharBudget: (usedTokens) =>
+        modelResultCharBudget({
+          contextWindow: profile?.contextWindow,
+          maxOutputTokens: maxOutputTokensOf(settings.agent, profile),
+          usedTokens,
+        }),
+      contextTokenBudget: midContextTokenBudget(profile?.contextWindow, maxOutputTokensOf(settings.agent, profile)),
       generateId: () => randomUUID(),
       tools: workerTools(mcpServers.length > 0),
       getTool: (name) => name === 'skill_ask' ? SKILL_ASK_TOOL : WORKER_TOOL_NAMES.includes(name) || (mcpServers.length > 0 && (name === 'mcp_list_tools' || name === 'mcp_call')) ? getTool(name) : undefined,

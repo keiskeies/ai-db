@@ -6,7 +6,11 @@ import {
   createProvider,
   formatBusinessContext,
   formatPeriodForPrompt,
+  getModelProfile,
   getTool,
+  maxOutputTokensOf,
+  midContextTokenBudget,
+  modelResultCharBudget,
   providerTools,
   resolvePeriod,
   type CommandSourceInput,
@@ -476,6 +480,7 @@ export async function generateAgentReport(
 ): Promise<ReportSpec> {
   const settings = store.getSettings();
   if (settings.agent.provider === 'local') throw Object.assign(new Error('本地推理器不生成 Agent 报告'), { code: 'MODEL_REQUIRED', status: 400 });
+  const profile = getModelProfile(settings.agent);
   const provider = createProvider(settings.agent);
   const schemas: Array<{ source: CommandSourceInput; connection: any; schemas: any[]; label: string }> = [];
   for (const [index, source] of input.sources.entries()) {
@@ -609,6 +614,14 @@ Rules:
     provider,
     maxSteps: Math.min(40, Math.max(20, (settings.agent.maxSteps || 12) * 2)),
     temperature: settings.agent.temperature,
+    maxTokens: maxOutputTokensOf(settings.agent, profile),
+    resultCharBudget: (usedTokens) =>
+      modelResultCharBudget({
+        contextWindow: profile?.contextWindow,
+        maxOutputTokens: maxOutputTokensOf(settings.agent, profile),
+        usedTokens,
+      }),
+    contextTokenBudget: midContextTokenBudget(profile?.contextWindow, maxOutputTokensOf(settings.agent, profile)),
     generateId: () => randomUUID(),
     tools: providerToolsForReport(),
     getTool: (name) => TOOL_DEFS.get(name),
