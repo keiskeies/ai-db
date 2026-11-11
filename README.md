@@ -719,6 +719,7 @@ When starting the Bridge, set `AIDB_PUBLIC_URL=https://db.example.com` so pairin
 - [Welcome page design](docs/17-welcome-home-design.md)
 - [Home / Agent decoupling](docs/18-agent-home-decoupling.md)
 - [Schema change events](docs/19-schema-change-events.md)
+- [Table detail tiers](docs/20-table-tier-detail-allocation.md)
 
 ## License
 
