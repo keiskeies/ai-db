@@ -240,3 +240,22 @@ test('buildSystemPrompt renders the tier shapes and keeps the no-tier output unt
   assert.ok(!without.includes('Tier legend'));
   assert.ok(without.includes('- table order_logs'));
 });
+
+test('the "N more tables" count excludes tables already listed by name', () => {
+  // tier 模式下超过 120 张活跃表才会触发「还有 N 张」的省略行。进了字典/低频名字清单的
+  // 表同样算「出现过」，早先只按展开明细的表数减，会让模型以为库里表更少、进而断定
+  // 某张表不存在。
+  const total = 160;
+  const schemas: DatabaseSchema[] = [
+    { name: 'shop', tables: Array.from({ length: total }, (_, i) => table(`fact_${i}`, { columns: columns(3) })) },
+  ];
+  const tiers: TableTiers = Object.fromEntries(
+    schemas[0].tables.map((t, i) => [t.name, { tier: i < 140 ? ('active' as const) : ('cold' as const), reason: 'x' }]),
+  );
+  const out = compressSchema(schemas, [], 15, undefined, tiers, 1_000_000);
+  const claimed = Number(/… (\d+) more tables/.exec(out)?.[1] ?? -1);
+  assert.ok(claimed >= 0, '160 张表应触发省略行');
+  // 140 张活跃 - 120 条明细上限 = 20 张真没出现；20 张冷表已在低频行里报了名字。
+  assert.equal(claimed, 20, '冷表已按名字列出，不能被算成「没出现」');
+  assert.match(out, /low-frequency tables/, '冷表要有名行');
+});
