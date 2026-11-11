@@ -72,8 +72,8 @@ test('确定性报告输出业务指标、同口径基线与差值', async () =>
     resolvedPeriod: period,
   });
   const metrics = spec.sections[0].blocks.filter((block) => block.kind === 'metric').flatMap((block) => block.metrics ?? []);
-  const orders = metrics.find((metric) => metric.label === '订单单量');
-  assert.ok(orders, `缺少订单单量：${metrics.map((metric) => metric.label).join(', ')}`);
+  const orders = metrics.find((metric) => metric.label === '订单量');
+  assert.ok(orders, `缺少订单量：${metrics.map((metric) => metric.label).join(', ')}`);
   // 软删除行不计入；本期 3 笔 vs 上期 2 笔。
   assert.equal(orders?.value, 3);
   assert.equal(orders?.baseline, 2);
@@ -85,7 +85,7 @@ test('确定性报告输出业务指标、同口径基线与差值', async () =>
   assert.equal(amount?.value, 600);
   assert.equal(amount?.baseline, 100);
   // 退款上升是坏消息：方向由业务语义决定，而不是数字正负。
-  const refunds = metrics.find((metric) => metric.label === '退款单量');
+  const refunds = metrics.find((metric) => metric.label === '退款量');
   assert.equal(refunds?.value, 2);
   assert.equal(refunds?.baseline, 1);
   assert.equal(refunds?.goodDirection, 'down');
@@ -136,7 +136,7 @@ test('显式 period 槽位优先于主题里的时间话术', async () => {
   const orders = spec.sections[0].blocks
     .filter((block) => block.kind === 'metric')
     .flatMap((block) => block.metrics ?? [])
-    .find((metric) => metric.label === '订单单量');
+    .find((metric) => metric.label === '订单量');
   assert.equal(orders?.value, 2);
 });
 
@@ -152,7 +152,7 @@ test('没有业务时间列时不给假指标，明确说明只能做规模盘�
     resolvedPeriod: period,
   });
   const metrics = spec.sections[0].blocks.filter((block) => block.kind === 'metric').flatMap((block) => block.metrics ?? []);
-  assert.ok(!metrics.some((metric) => metric.label.includes('单量')), `不应把文本列当时间列：${metrics.map((metric) => metric.label).join(', ')}`);
+  assert.ok(!metrics.some((metric) => metric.label.includes('记录数')), `不应把文本列当时间列：${metrics.map((metric) => metric.label).join(', ')}`);
   assert.ok(spec.sections[0].blocks.some((block) => block.kind === 'callout' && block.tone === 'warning'));
   assert.match(spec.executive?.headline ?? '', /未识别出/);
 });

@@ -2277,14 +2277,16 @@ check(
 );
 await page.locator('.cm-content').click();
 await page.keyboard.type('SELECT status, COUNT(*) AS n, SUM(total_cents) AS total FROM orders GROUP BY status ORDER BY n DESC;');
-await page.keyboard.press('Control+Enter');
+// 编辑器绑定的是 Mod-Enter（macOS 上是 Cmd），所以按键必须用 ControlOrMeta，
+// 写死 Control 在 mac 上按下去只是普通 Enter，查询永远不跑。
+await page.keyboard.press('ControlOrMeta+Enter');
 await page.waitForSelector('[data-testid="query-result-grid"]', { timeout: 20000 });
 const queryRows = await page.locator('[data-testid="query-result-grid"] tbody tr').count();
 check('SQL editor runs with Ctrl+Enter', queryRows >= 4, `${queryRows} rows`);
 await page.screenshot({ path: join(shots, 'desktop-query.png') });
 
 await page.locator('.cm-content').click();
-await page.keyboard.press('Control+A');
+await page.keyboard.press('ControlOrMeta+A');
 await page.keyboard.type('SELECT * FROM ord');
 await page.waitForSelector('.cm-tooltip-autocomplete', { timeout: 8000 });
 const completionText = await page.locator('.cm-tooltip-autocomplete').innerText();
@@ -2532,7 +2534,9 @@ await page.locator('[data-testid="agent-input"]').press('Enter');
 await page.waitForFunction(() => document.querySelector('.agent-transcript')?.textContent?.includes('AI_DB.md 已生成'), null, { timeout: 60000 });
 check('/init runs inline without a modal', (await page.locator('.modal').count()) === 0);
 const initAnswer = await page.locator('.msg-assistant .content').last().innerText();
-const initPath = /([A-Za-z]:\\[^\r\n]+?AI_DB\.md)/.exec(initAnswer)?.[1]?.trim();
+// 路径按宿主平台匹配：只认盘符写法的话，macOS / Linux 上永远抽不到路径，
+// 下面那条「文件内容包含各章节」的断言就变成永远拿 no file 的空断言。
+const initPath = /((?:[A-Za-z]:\\|\/)[^\r\n]+?AI_DB\.md)/.exec(initAnswer)?.[1]?.trim();
 check('/init reports the generated AI_DB.md path', Boolean(initPath), initAnswer.split('\n').slice(0, 6).join(' | '));
 const initMarkdown = initPath ? await readFile(initPath, 'utf8') : '';
 check(

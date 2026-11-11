@@ -90,3 +90,35 @@ test('报告饼图按 3–8 个切片校验，避免把 Top N 伪装成整体', 
   assert.match(tooMany.error, /3–8/);
 });
 
+
+/**
+ * 表格与图表以前可以在不带 resultRef 的情况下退回全局数字池，
+ * 「必须绑定来源」对它们其实没生效：模型能把 A 查询的数字写进标着 B 的表里。
+ */
+test('表格与图表不带 resultRef 时不再退回全局数字池', () => {
+  const table = normalizeReportBlock({ kind: 'table', columns: ['n'], rows: [[7]] }, new Set([7]), refs, true);
+  assert.ok('error' in table);
+  assert.match(table.error, /表格/);
+
+  const chart = normalizeReportBlock({ kind: 'chart', chartType: 'bar', series: [{ label: 'a', value: 7 }] }, new Set([7]), refs, true);
+  assert.ok('error' in chart);
+  assert.match(chart.error, /图表/);
+
+  // 多来源块：refs 全部存在才放行，数字只能来自这些结果。
+  const merged = normalizeReportBlock(
+    { kind: 'chart', resultRefs: ['call_1'], chartType: 'bar', series: [{ label: 'a', value: 7 }] },
+    new Set([7]),
+    refs,
+    true,
+  );
+  assert.ok(!('error' in merged));
+
+  const unknownRefs = normalizeReportBlock(
+    { kind: 'chart', resultRefs: ['call_nope'], chartType: 'bar', series: [{ label: 'a', value: 7 }] },
+    new Set([7]),
+    refs,
+    true,
+  );
+  assert.ok('error' in unknownRefs);
+  assert.match(unknownRefs.error, /不存在/);
+});

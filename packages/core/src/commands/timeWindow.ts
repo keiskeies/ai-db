@@ -529,6 +529,51 @@ export function formatPeriodForPrompt(period: ResolvedPeriod): string {
   return lines.join('\n');
 }
 
+/** 区间天数（含首尾）。归一化与「本期没走完」的对比都要用它。 */
+export function windowDays(from: string, to: string): number {
+  const span = diffDays(from, to) + 1;
+  return span > 0 ? span : 1;
+}
+
+/**
+ * 与本期**等长**、且紧挨在本期前面的窗口。
+ * 本期没走完时（本月只过了 8 天、滚动窗口以今天结尾），直接和整期基线比是
+ * 报表里最常见的假下跌：基线多算了后面那几十天。要判断涨跌，先比一样长的天。
+ */
+export function precedingEqualWindow(period: ResolvedPeriod): TimeWindow | undefined {
+  const previous = period.previous;
+  if (!previous) return undefined;
+  const days = windowDays(period.current.from, period.current.to);
+  if (windowDays(previous.from, previous.to) === days) return previous;
+  const from = addDays(previous.to, -(days - 1));
+  return {
+    from,
+    to: previous.to,
+    label: `同长 ${days} 天（${from} ~ ${previous.to}）`,
+  };
+}
+
+/**
+ * 紧挨在本期前面的等长区间（「上一区间」）。
+ * 主基线是同比时，读者还需要一个环比视角才能判断这是趋势还是季节。
+ */
+export function chainWindow(window: TimeWindow): TimeWindow {
+  const days = windowDays(window.from, window.to);
+  const to = addDays(window.from, -1);
+  const from = addDays(to, -(days - 1));
+  return { from, to, label: `环比 前一区间（${from} ~ ${to}）` };
+}
+
+/**
+ * 去年同期窗口。主基线是环比时补一个同比，读者才能分清
+ * 「比上月少了」和「比去年这个时候也少了」——前者可能只是季节。
+ */
+export function yearAgoWindow(window: TimeWindow): TimeWindow {
+  const from = addYears(window.from, -1);
+  const to = addYears(window.to, -1);
+  return { from, to, label: `同比 去年同期（${from} ~ ${to}）` };
+}
+
 /** 报告脚注里给读者看的一句话。 */
 export function formatPeriodForReader(period: ResolvedPeriod): string {
   const baseline = period.previous ? `，对比${period.previous.label.split('（')[0]?.trim() ?? '上一周期'}` : '';

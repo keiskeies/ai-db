@@ -423,18 +423,24 @@ export class CommandRunner {
         const audience = ['executive', 'business', 'technical'].includes(String(input.audience))
           ? (String(input.audience) as 'executive' | 'business' | 'technical')
           : undefined;
+        // 读者给的目标值：环比与同比回答不了「离计划还差多少」。
+        const target = typeof input.target === 'string' && input.target.trim() ? input.target.trim() : undefined;
         const settings = this.store.getSettings();
         let spec;
         if (settings.agent.provider !== 'local' && this.executor) {
           try {
-            spec = await generateAgentReport(this.store, this.manager, this.executor, { sources, topic, tables, period, audience, home: this.home }, state.controller.signal);
+            spec = await generateAgentReport(this.store, this.manager, this.executor, { sources, topic, tables, period, audience, target, home: this.home }, state.controller.signal);
             spec.meta.notes = [...(spec.meta.notes ?? []), '报告由 Agent 查数并生成；数字经过工具结果来源校验。'];
           } catch (err: any) {
-            spec = await generateReport(this.store, this.manager, { sources, topic, tables, period, audience }, state.controller.signal);
-            spec.meta.notes = [...(spec.meta.notes ?? []), `Agent 报告未生成，已回退确定性统计：${err?.message ?? '未知错误'}`];
+            spec = await generateReport(this.store, this.manager, { sources, topic, tables, period, audience, target }, state.controller.signal);
+            const reason = `Agent 报告未生成，已回退确定性统计：${err?.message ?? '未知错误'}`;
+            spec.meta.notes = [...(spec.meta.notes ?? []), reason];
+            // 降级必须让读者看得见：确定性报告只有规模盘点与固定口径指标，
+            // 如果它在界面上和 Agent 报告长得一模一样，用户会把它当成分析结论。
+            spec.meta.degraded = reason;
           }
         } else {
-          spec = await generateReport(this.store, this.manager, { sources, topic, tables, period, audience }, state.controller.signal);
+          spec = await generateReport(this.store, this.manager, { sources, topic, tables, period, audience, target }, state.controller.signal);
         }
         this.store.addAudit({
           actor: 'user',

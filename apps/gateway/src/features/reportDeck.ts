@@ -1,5 +1,5 @@
-import { deltaIsGood } from '@aidb/core';
-import type { ReportBlock, ReportMetric, ReportSpec } from '@aidb/core';
+import { flattenDeckSlides, planReportDeck } from '@aidb/core';
+import type { ReportCopy, DeckLine, DeckMetric, DeckPlan, DeckSlide, ReportSpec } from '@aidb/core';
 
 const W = 1280;
 const H = 720;
@@ -71,196 +71,184 @@ function frame(theme: DeckTheme, pageNo: number, total: number, eyebrow: string,
 <rect x="64" y="160" width="96" height="4" fill="${theme.gold}"/>
 <text x="1216" y="70" text-anchor="end" font-family="${theme.font}" font-size="18" fill="${theme.muted}">${pageNo} / ${total}</text>
 <rect x="64" y="664" width="1152" height="1" fill="#26302F"/>
-<text x="64" y="696" font-family="${theme.font}" font-size="16" fill="${theme.muted}">AiDB Studio · 数字来自报告 resultRef</text>
+<text x="64" y="696" font-family="${theme.font}" font-size="16" fill="${theme.muted}">AiDB Studio</text>
 <text x="1216" y="696" text-anchor="end" font-family="${theme.font}" font-size="16" fill="${theme.muted}">AIDB · NATIVE PPTX</text>`,
   };
 }
 
-function cover(spec: ReportSpec, total: number, theme: DeckTheme): string {
-  const sourceLabels = spec.sources.map((source) => `${source.connectionName}${source.database ? ` / ${source.database}` : ''}`).join('  ·  ');
-  const titleLines = wrap(spec.title, 16, 3);
-  const period = spec.meta?.period;
-  const window = period ? `${period.label ?? `${period.from} ~ ${period.to}`}` : '';
-  const subtitle = `${spec.meta?.createdAt ? new Date(spec.meta.createdAt).toLocaleString('zh-CN') : ''}${window ? `  ·  ${window}` : ''}${sourceLabels ? `  ·  ${sourceLabels}` : ''}`;
-  return `<svg xmlns="http://www.w3.org/2000/svg" lang="zh-CN" viewBox="0 0 ${W} ${H}">
-<rect width="${W}" height="${H}" fill="${theme.bg}"/>
+function svg(body: string): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" lang="zh-CN" viewBox="0 0 ${W} ${H}">\n${body}\n</svg>`;
+}
+
+function cover(slide: Extract<DeckSlide, { kind: 'cover' }>, total: number, theme: DeckTheme): string {
+  const titleLines = wrap(slide.title, 16, 3);
+  const goldY = 236 + titleLines.length * 79 + 18;
+  return svg(`<rect width="${W}" height="${H}" fill="${theme.bg}"/>
 <rect x="0" y="0" width="14" height="${H}" fill="${theme.accent}"/>
 <rect x="880" y="0" width="400" height="${H}" fill="${theme.surface}"/>
-<text x="64" y="96" font-family="${theme.font}" font-size="22" letter-spacing="7" fill="${theme.accent}">AIDB STUDIO · REPORT</text>
+<text x="64" y="96" font-family="${theme.font}" font-size="22" letter-spacing="7" fill="${theme.accent}">${esc(slide.eyebrow)}</text>
 ${textLines(titleLines, 64, 236, 68, theme.text, 700, 1.16)}
-<rect x="64" y="${236 + titleLines.length * 79 + 18}" width="160" height="6" fill="${theme.gold}"/>
-<text x="64" y="${236 + titleLines.length * 79 + 86}" font-family="${theme.font}" font-size="22" fill="${theme.muted}">${esc(clip(subtitle, 72))}</text>
-<text x="64" y="${H - 88}" font-family="${theme.font}" font-size="20" fill="${theme.muted}">${spec.sections.length} 个章节 · ${spec.layout} · 原生 PPTX</text>
+<rect x="64" y="${goldY}" width="160" height="6" fill="${theme.gold}"/>
+<text x="64" y="${goldY + 68}" font-family="${theme.font}" font-size="22" fill="${theme.muted}">${esc(clip(slide.subtitle, 72))}</text>
+<text x="64" y="${H - 88}" font-family="${theme.font}" font-size="20" fill="${theme.muted}">${esc(clip(slide.meta, 80))}</text>
 <text x="1120" y="210" text-anchor="end" font-family="${theme.font}" font-size="20" letter-spacing="4" fill="${theme.accent}">REPORT</text>
-<text x="1120" y="${H - 88}" text-anchor="end" font-family="${theme.font}" font-size="20" fill="${theme.muted}">${total} 页</text>
-</svg>`;
+<text x="1120" y="${H - 88}" text-anchor="end" font-family="${theme.font}" font-size="20" fill="${theme.muted}">${total}</text>
+</svg>`);
 }
 
-function metricsOf(spec: ReportSpec): ReportMetric[] {
-  const out: ReportMetric[] = [];
-  const seen = new Set<string>();
-  for (const section of spec.sections) {
-    for (const block of section.blocks) {
-      for (const metric of block.kind === 'metric' ? block.metrics ?? [] : block.kind === 'comparison' ? [block.left, block.right].filter(Boolean) as ReportMetric[] : []) {
-        const key = `${metric.label}:${metric.value}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push(metric);
-      }
-    }
-  }
-  return out;
-}
-
-function deltaOf(metric: ReportMetric): { text: string; color: string } | undefined {
-  if (!metric.delta) return undefined;
-  const absolute = metric.delta.absolute;
-  const sign = absolute > 0 ? '+' : '';
-  const percent = metric.delta.percent;
-  const text = `${sign}${absolute.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}${percent === null || percent === undefined ? '' : `（${percent > 0 ? '+' : ''}${percent.toFixed(1)}%）`}`;
-  const tone = deltaIsGood(absolute, metric.goodDirection ?? 'up');
-  return { text, color: tone === 'good' ? '#45C8C3' : tone === 'bad' ? '#E0604F' : '#93A19E' };
-}
-
-function metricsPage(spec: ReportSpec, pageNo: number, total: number, theme: DeckTheme): string | undefined {
-  const metrics = metricsOf(spec);
-  if (!metrics.length) return undefined;
-  const { open } = frame(theme, pageNo, total, '关键指标', '关键指标');
-  const cards = metrics.slice(0, 6).map((metric, index) => {
-    const col = index % 3;
-    const row = Math.floor(index / 3);
-    const x = 64 + col * 388;
-    const y = 236 + row * 206;
-    const delta = deltaOf(metric);
-    const accent = delta ? delta.color : index % 3 === 1 ? theme.gold : theme.accent;
-    return `<rect x="${x}" y="${y}" width="360" height="192" rx="10" fill="${theme.surface}"/>
-<rect x="${x}" y="${y}" width="6" height="192" rx="3" fill="${accent}"/>
+function metricCard(metric: DeckMetric, x: number, y: number, width: number, height: number, accent: string, theme: DeckTheme): string {
+  const delta = metric.deltaText
+    ? `<text x="${x + 28}" y="${y + height - 22}" font-family="${theme.font}" font-size="18" font-weight="600" fill="${toneColor(metric.deltaTone, theme)}">${esc(clip(`${metric.baselineLabel ?? ''} ${metric.deltaText}`, 30))}</text>`
+    : '';
+  return `<rect x="${x}" y="${y}" width="${width}" height="${height}" rx="10" fill="${theme.surface}"/>
+<rect x="${x}" y="${y}" width="6" height="${height}" rx="3" fill="${accent}"/>
 <text x="${x + 28}" y="${y + 44}" font-family="${theme.font}" font-size="20" fill="${theme.muted}">${esc(clip(metric.label, 18))}</text>
-<text x="${x + 28}" y="${y + 108}" font-family="${theme.font}" font-size="48" font-weight="700" fill="${theme.text}">${esc(clip(metric.value, 12))}</text>
-<text x="${x + 28}" y="${y + 144}" font-family="${theme.font}" font-size="20" fill="${metric.unit ? theme.accent : theme.muted}">${esc(clip(metric.unit ?? metric.source ?? '', 24))}</text>
-${delta ? `<text x="${x + 28}" y="${y + 174}" font-family="${theme.font}" font-size="18" font-weight="600" fill="${delta.color}">${esc(clip(`${metric.baselineLabel ?? '对比上期'} ${delta.text}`, 30))}</text>` : ''}`;
-  }).join('');
-  return `<svg xmlns="http://www.w3.org/2000/svg" lang="zh-CN" viewBox="0 0 ${W} ${H}">
-${open}
-${cards}
-${metrics.length > 6 ? `<text x="64" y="640" font-family="${theme.font}" font-size="18" fill="${theme.muted}">仅展示前 6 项，共 ${metrics.length} 项指标</text>` : ''}
-</svg>`;
+<text x="${x + 28}" y="${y + 108}" font-family="${theme.font}" font-size="48" font-weight="700" fill="${theme.text}">${esc(clip(metric.value, 14))}</text>
+<text x="${x + 28}" y="${y + 144}" font-family="${theme.font}" font-size="20" fill="${metric.unit ? theme.accent : theme.muted}">${esc(clip(metric.unit ?? '', 24))}</text>
+${delta}`;
 }
 
-function blockLines(block: ReportBlock): string[] {
-  const lines: string[] = [];
-  if (block.kind === 'narrative' || block.kind === 'callout') {
-    if (block.text) lines.push(...wrap(block.text, 34, block.kind === 'callout' ? 4 : 8));
-  } else if (block.kind === 'comparison') {
-    lines.push(`${block.left?.label ?? 'A'}：${block.left?.value ?? '—'}${block.left?.unit ?? ''}`);
-    lines.push(`${block.right?.label ?? 'B'}：${block.right?.value ?? '—'}${block.right?.unit ?? ''}`);
-    if (block.delta) {
-      const percent = block.delta.percent;
-      lines.push(`差值：${block.delta.absolute}${block.left?.unit ?? ''}${percent === null || percent === undefined ? '' : `（${percent > 0 ? '+' : ''}${percent}%）`}`);
-    }
-  } else if (block.kind === 'metric') {
-    for (const metric of block.metrics ?? []) {
-      const delta = deltaOf(metric);
-      lines.push(`${metric.label}：${metric.value}${metric.unit ?? ''}${delta ? ` ${delta.text}` : ''}`);
-    }
-  } else if (block.kind === 'actions') {
-    for (const [index, action] of (block.actions ?? []).entries()) {
-      lines.push(...wrap(`${index + 1}. ${action.text}${action.impact ? `（预期：${action.impact}）` : ''}`, 34, 2));
-    }
-  }
-  return lines;
+function toneColor(tone: DeckMetric['deltaTone'], theme: DeckTheme): string {
+  return tone === 'good' ? theme.accent : tone === 'bad' ? theme.danger : theme.muted;
 }
 
-/** 管理层摘要页：一页把结论、要点和风险讲完，后面的页只是证据。 */
-function executivePage(spec: ReportSpec, pageNo: number, total: number, theme: DeckTheme): string | undefined {
-  const executive = spec.executive;
-  if (!executive) return undefined;
-  const { open } = frame(theme, pageNo, total, '管理层摘要', '一页看懂');
-  const headline = wrap(executive.headline, 30, 4);
-  const takeaways = executive.takeaways.slice(0, 4);
-  const risks = (executive.risks ?? []).slice(0, 2);
-  const takeawaySvg = takeaways.map((line, index) => {
-    const y = 356 + index * 62;
-    return `<circle cx="80" cy="${y - 7}" r="5" fill="${theme.accent}"/>
+function metricsPage(slide: Extract<DeckSlide, { kind: 'metrics' }>, pageNo: number, total: number, theme: DeckTheme): string {
+  const { open } = frame(theme, pageNo, total, slide.eyebrow, slide.title);
+  const perRow = slide.metrics.length > 2 ? 3 : Math.max(1, slide.metrics.length);
+  const cardWidth = Math.min(360, Math.floor((1152 - (perRow - 1) * 28) / perRow));
+  const cards = slide.metrics
+    .map((metric, index) => {
+      const col = index % perRow;
+      const row = Math.floor(index / perRow);
+      const x = 64 + col * (cardWidth + 28);
+      const y = 236 + row * 206;
+      const accent = metric.deltaText ? toneColor(metric.deltaTone, theme) : index % 3 === 1 ? theme.gold : theme.accent;
+      return metricCard(metric, x, y, cardWidth, 192, accent, theme);
+    })
+    .join('');
+  const overflow = slide.overflow ? `<text x="64" y="640" font-family="${theme.font}" font-size="18" fill="${theme.muted}">${esc(slide.overflow)}</text>` : '';
+  return svg(`${open}\n${cards}\n${overflow}`);
+}
+
+function executivePage(slide: Extract<DeckSlide, { kind: 'executive' }>, pageNo: number, total: number, theme: DeckTheme): string {
+  const { open } = frame(theme, pageNo, total, slide.eyebrow, slide.title);
+  const headline = wrap(slide.headline, 30, 4);
+  const takeawaySvg = slide.takeaways
+    .map((line, index) => {
+      const y = 356 + index * 62;
+      return `<circle cx="80" cy="${y - 7}" r="5" fill="${theme.accent}"/>
 ${textLines(wrap(line, 34, 2), 100, y, 22, theme.text, 400, 1.5)}`;
-  }).join('');
-  const riskSvg = risks.map((line, index) => {
-    const y = 600 + index * 34;
-    return `<text x="64" y="${y}" font-family="${theme.font}" font-size="19" fill="${theme.danger}">${esc(clip(line, 56))}</text>`;
-  }).join('');
-  return `<svg xmlns="http://www.w3.org/2000/svg" lang="zh-CN" viewBox="0 0 ${W} ${H}">
-${open}
+    })
+    .join('');
+  const riskSvg = slide.risks
+    .map((line, index) => `<text x="64" y="${600 + index * 34}" font-family="${theme.font}" font-size="19" fill="${theme.danger}">${esc(clip(line, 56))}</text>`)
+    .join('');
+  return svg(`${open}
 <rect x="64" y="212" width="1152" height="1" fill="${theme.border}"/>
 ${textLines(headline, 64, 264, 30, theme.text, 700, 1.35)}
 ${takeawaySvg}
-${riskSvg}
-</svg>`;
+${riskSvg}`);
 }
 
-function sectionPage(section: ReportSpec['sections'][number], pageNo: number, total: number, theme: DeckTheme): string {
-  const { open } = frame(theme, pageNo, total, '章节', section.title);
-  const narrative: string[] = [];
-  const metrics: ReportMetric[] = [];
-  let table: { columns?: string[]; rows?: Array<Array<string | number | null>> } | undefined;
-  let chart: { series?: Array<{ label: string; value: number; baseline?: number }>; baselineName?: string } | undefined;
-  for (const block of section.blocks) {
-    if (block.kind === 'table' && !table) table = block;
-    else if (block.kind === 'chart' && !chart) chart = block;
-    else if (block.kind === 'metric') metrics.push(...(block.metrics ?? []));
-    else narrative.push(...blockLines(block));
-  }
-  const conclusion = section.conclusion ? wrap(section.conclusion, 40, 2) : [];
-  const hasData = Boolean(table || chart?.series?.length);
-  const leftLines = [...conclusion, ...narrative].slice(0, hasData ? 4 : 9);
+function lineColor(tone: DeckLine['tone'], theme: DeckTheme): string {
+  return tone === 'danger' ? theme.danger : tone === 'warning' ? theme.gold : theme.text;
+}
+
+function sectionPage(slide: Extract<DeckSlide, { kind: 'section' }>, pageNo: number, total: number, theme: DeckTheme, copy: ReportCopy): string {
+  const { open } = frame(theme, pageNo, total, slide.eyebrow, slide.title);
+  const conclusion = slide.conclusion ? wrap(slide.conclusion, 40, 2) : [];
+  const hasData = Boolean(slide.table || slide.chart);
   const topY = conclusion.length ? 236 + conclusion.length * 36 + 12 : 236;
-  const metricLines = metrics.slice(0, 6).map((metric) => {
-    const delta = deltaOf(metric);
-    return `${clip(metric.label, 14)}：${metric.value}${metric.unit ?? ''}${delta ? ` ${delta.text}` : ''}`;
-  });
-  const conclusionSvg = conclusion.length
-    ? textLines(conclusion, 64, 236, 20, theme.accent, 600, 1.7)
-    : '';
-  const left = textLines(leftLines.length ? leftLines.slice(conclusion.length) : hasData ? [] : ['—'], 64, topY, 22, theme.text, 400, 1.6);
+  const bodyLines = slide.lines.slice(0, hasData ? 4 : 9);
+  const conclusionSvg = conclusion.length ? textLines(conclusion, 64, 236, 20, theme.accent, 600, 1.7) : '';
+  const left = bodyLines.length
+    ? bodyLines.map((line, index) => `<text x="64" y="${topY + index * 36}" font-family="${theme.font}" font-size="22" fill="${lineColor(line.tone, theme)}">${esc(clip(line.text, 46))}</text>`).join('')
+    : hasData
+      ? ''
+      : `<text x="64" y="${topY}" font-family="${theme.font}" font-size="22" fill="${theme.muted}">—</text>`;
+
+  const metricLines = slide.metrics.slice(0, hasData ? 3 : 6);
   const metricPanel = !hasData && metricLines.length
-    ? `<rect x="700" y="${topY - 16}" width="516" height="${Math.min(6, metricLines.length) * 58 + 36}" rx="10" fill="${theme.surface}"/>${textLines(metricLines, 728, topY + 28, 22, theme.accent, 600, 2.6)}`
+    ? `<rect x="700" y="${topY - 16}" width="516" height="${metricLines.length * 58 + 36}" rx="10" fill="${theme.surface}"/>${metricLines
+        .map((metric, index) => {
+          const y = topY + 28 + index * 58;
+          const delta = metric.deltaText ? ` ${metric.deltaText}` : '';
+          return `<text x="728" y="${y}" font-family="${theme.font}" font-size="22" fill="${theme.accent}">${esc(clip(`${metric.label}：${metric.value}${metric.unit ?? ''}${delta}`, 26))}</text>`;
+        })
+        .join('')}`
     : '';
-  let tableSvg = '';
-  if (table) {
-    const columns = (table.columns ?? []).slice(0, 3);
-    const rows = (table.rows ?? []).slice(0, 6);
+
+  let dataSvg = '';
+  if (slide.table) {
+    const columns = slide.table.columns;
+    const rows = slide.table.rows;
     const y = Math.max(400, topY + 120);
-    tableSvg = `<text x="64" y="${y - 14}" font-family="${theme.font}" font-size="20" fill="${theme.muted}">${esc(clip(section.title, 24))} · 数据表</text>`;
-    tableSvg += columns.map((column, index) => `<text x="${64 + index * 380}" y="${y + 26}" font-family="${theme.font}" font-size="20" font-weight="700" fill="${theme.gold}">${esc(clip(column, 18))}</text>`).join('');
-    tableSvg += rows.map((row, rowIndex) => {
-      const rowY = y + 62 + rowIndex * 32;
-      return `<line x1="64" y1="${rowY - 22}" x2="1216" y2="${rowY - 22}" stroke="${theme.border}"/>${row.slice(0, 3).map((cell, index) => `<text x="${64 + index * 380}" y="${rowY}" font-family="${theme.font}" font-size="20" fill="${theme.text}">${esc(clip(cell, 18))}</text>`).join('')}`;
-    }).join('');
-  } else if (chart?.series?.length) {
-    const series = chart.series.slice(0, 6);
+    const columnWidth = columns.length ? Math.floor(1152 / columns.length) : 380;
+    dataSvg = `<text x="64" y="${y - 14}" font-family="${theme.font}" font-size="20" fill="${theme.muted}">${esc(clip(slide.table.title ?? slide.title, 24))}</text>`;
+    dataSvg += columns
+      .map((column, index) => `<text x="${64 + index * columnWidth}" y="${y + 26}" font-family="${theme.font}" font-size="20" font-weight="700" fill="${theme.gold}">${esc(clip(column, 18))}</text>`)
+      .join('');
+    dataSvg += rows
+      .map((row, rowIndex) => {
+        const rowY = y + 62 + rowIndex * 32;
+        return `<line x1="64" y1="${rowY - 22}" x2="1216" y2="${rowY - 22}" stroke="${theme.border}"/>${row.cells
+          .map((cell, index) => `<text x="${64 + index * columnWidth}" y="${rowY}" font-family="${theme.font}" font-size="20" fill="${theme.text}">${esc(clip(cell, 18))}</text>`)
+          .join('')}`;
+      })
+      .join('');
+    if (slide.table.overflow) {
+      dataSvg += `<text x="64" y="${y + 62 + rows.length * 32 + 8}" font-family="${theme.font}" font-size="16" fill="${theme.muted}">${esc(slide.table.overflow)}</text>`;
+    }
+  } else if (slide.chart) {
+    const chart = slide.chart;
+    const series = chart.points;
     const hasBaseline = series.some((point) => typeof point.baseline === 'number');
     const max = Math.max(...series.map((point) => Math.max(Math.abs(point.value), Math.abs(point.baseline ?? 0))), 1);
-    const barWidth = 330;
-    tableSvg = series.map((point, index) => {
-      const y = Math.max(400, topY + 90) + index * (hasBaseline ? 42 : 28);
-      const width = Math.max(8, Math.round((Math.abs(point.value) / max) * barWidth));
-      const baseWidth = hasBaseline ? Math.max(0, Math.round((Math.abs(point.baseline ?? 0) / max) * barWidth)) : 0;
-      return `<text x="64" y="${y}" font-family="${theme.font}" font-size="20" fill="${theme.muted}">${esc(clip(point.label, 12))}</text>
-<rect x="240" y="${y - 18}" width="${width}" height="18" rx="4" fill="${theme.accent}"/>
-${hasBaseline ? `<rect x="240" y="${y + 2}" width="${baseWidth}" height="12" rx="3" fill="${theme.muted}" opacity="0.45"/>` : ''}
+    // 条形区从 y 起、到页脚线（664）之前结束：按可用高度决定能画几根，
+    // 而不是固定步长往下堆——12 个点的月度趋势以前会画到页脚之外。
+    const startY = Math.max(400, topY + 90);
+    const rowStep = hasBaseline ? 42 : 30;
+    const fit = Math.max(1, Math.floor((640 - startY) / rowStep));
+    const drawn = series.slice(0, fit);
+    const labelWidth = 300;
+    const barWidth = 1216 - 240 - labelWidth - 90;
+    // 图的标题要画出来：一节里有多张图时，读者得知道这一页画的是哪一张。
+    dataSvg = `<text x="64" y="${startY - 34}" font-family="${theme.font}" font-size="20" fill="${theme.muted}">${esc(clip(chart.title, 24))}</text>`;
+    dataSvg += drawn
+      .map((point, index) => {
+        const y = startY + index * rowStep;
+        const width = Math.max(8, Math.round((Math.abs(point.value) / max) * barWidth));
+        const baseWidth = hasBaseline ? Math.max(0, Math.round((Math.abs(point.baseline ?? 0) / max) * barWidth)) : 0;
+        return `<text x="64" y="${y}" font-family="${theme.font}" font-size="20" fill="${theme.muted}">${esc(clip(point.label, 20))}</text>
+<rect x="240" y="${y - 18}" width="${width}" height="${hasBaseline ? 16 : 18}" rx="4" fill="${theme.accent}"/>
+${hasBaseline ? `<rect x="240" y="${y + 2}" width="${baseWidth}" height="11" rx="3" fill="${theme.muted}" opacity="0.45"/>` : ''}
 <text x="${248 + width}" y="${y}" font-family="${theme.font}" font-size="20" fill="${theme.text}">${esc(point.value)}</text>`;
-    }).join('');
-    if (hasBaseline) {
-      tableSvg += `<rect x="240" y="${Math.max(400, topY + 90) + series.length * 42 + 8}" width="10" height="10" fill="${theme.accent}"/><text x="258" y="${Math.max(400, topY + 90) + series.length * 42 + 18}" font-family="${theme.font}" font-size="16" fill="${theme.muted}">本期</text>
-<rect x="330" y="${Math.max(400, topY + 90) + series.length * 42 + 8}" width="10" height="10" fill="${theme.muted}" opacity="0.45"/><text x="348" y="${Math.max(400, topY + 90) + series.length * 42 + 18}" font-family="${theme.font}" font-size="16" fill="${theme.muted}">${esc(chart.baselineName ?? '上期')}</text>`;
+      })
+      .join('');
+    if (hasBaseline && drawn.length) {
+      const legendY = startY + (drawn.length - 1) * rowStep + 28;
+      dataSvg += `<rect x="240" y="${legendY}" width="10" height="10" fill="${theme.accent}"/><text x="258" y="${legendY + 10}" font-family="${theme.font}" font-size="16" fill="${theme.muted}">${esc(copy.current)}</text>
+<rect x="330" y="${legendY}" width="10" height="10" fill="${theme.muted}" opacity="0.45"/><text x="348" y="${legendY + 10}" font-family="${theme.font}" font-size="16" fill="${theme.muted}">${esc(chart.baselineName || copy.previous)}</text>`;
+    }
+    const footnote = chart.overflow ?? chart.note;
+    if (footnote && drawn.length) {
+      dataSvg += `<text x="64" y="${startY + drawn.length * rowStep + 10}" font-family="${theme.font}" font-size="16" fill="${theme.muted}">${esc(clip(footnote, 80))}</text>`;
     }
   }
-  return `<svg xmlns="http://www.w3.org/2000/svg" lang="zh-CN" viewBox="0 0 ${W} ${H}">
-${open}
-${conclusionSvg}
-${left}
-${metricPanel}
-${tableSvg}
-</svg>`;
+  return svg(`${open}\n${conclusionSvg}\n${left}\n${metricPanel}\n${dataSvg}`);
+}
+
+function assumptionsPage(slide: Extract<DeckSlide, { kind: 'assumptions' }>, pageNo: number, total: number, theme: DeckTheme): string {
+  const { open } = frame(theme, pageNo, total, slide.eyebrow, slide.title);
+  const lines = slide.lines.slice(0, 12);
+  const body = lines
+    .map((line, index) => {
+      const y = 244 + index * 40;
+      return `<circle cx="72" cy="${y - 7}" r="4" fill="${theme.gold}"/><text x="92" y="${y}" font-family="${theme.font}" font-size="20" fill="${theme.text}">${esc(clip(line, 62))}</text>`;
+    })
+    .join('');
+  const more = slide.lines.length > lines.length ? `<text x="64" y="640" font-family="${theme.font}" font-size="16" fill="${theme.muted}">+${slide.lines.length - lines.length}</text>` : '';
+  return svg(`${open}\n${body}\n${more}`);
 }
 
 export interface ReportDeckPage {
@@ -268,30 +256,38 @@ export interface ReportDeckPage {
   svg: string;
 }
 
+const SLUG: Record<DeckSlide['kind'], string> = {
+  cover: 'cover',
+  executive: 'executive',
+  metrics: 'metrics',
+  section: 'section',
+  assumptions: 'assumptions',
+};
+
+/**
+ * 报告 → 原生 PPTX 的 SVG 页面。
+ * 分页与截断全部来自 planReportDeck：屏幕 / PPTX / 这里三份产物必须说同一套话。
+ * 一节里放不下第二张图 / 第二张表时，各占一整页，而不是被静默丢掉。
+ */
 export function buildReportDeck(spec: ReportSpec, input: Partial<DeckTheme> = {}): ReportDeckPage[] {
   const theme: DeckTheme = { ...DEFAULT_DECK_THEME, ...input };
-  const pages: ReportDeckPage[] = [];
-  const metrics = metricsOf(spec);
-  const sectionPages = spec.sections.filter((section) => section.blocks.length > 0).slice(0, 4);
-  const hasExecutive = Boolean(spec.executive);
-  const total = 1 + (hasExecutive ? 1 : 0) + (metrics.length ? 1 : 0) + sectionPages.length;
-  let pageNo = 1;
-  pages.push({ name: 'P01_cover.svg', svg: cover(spec, total, theme) });
-  if (hasExecutive) {
-    pageNo += 1;
-    pages.push({ name: `P${String(pageNo).padStart(2, '0')}_executive.svg`, svg: executivePage(spec, pageNo, total, theme)! });
-  }
-  if (metrics.length) {
-    pageNo += 1;
-    pages.push({ name: `P${String(pageNo).padStart(2, '0')}_metrics.svg`, svg: metricsPage(spec, pageNo, total, theme)! });
-  }
-  sectionPages.forEach((section, index) => {
-    pageNo += 1;
-    pages.push({ name: `P${String(pageNo).padStart(2, '0')}_${index + 1}.svg`, svg: sectionPage(section, pageNo, total, theme) });
-  });
-  return pages;
-}
+  const plan: DeckPlan = planReportDeck(spec);
+  const bodyOf = (slide: DeckSlide, pageNo: number, total: number): string => {
+    if (slide.kind === 'cover') return cover(slide, total, theme);
+    if (slide.kind === 'executive') return executivePage(slide, pageNo, total, theme);
+    if (slide.kind === 'metrics') return metricsPage(slide, pageNo, total, theme);
+    if (slide.kind === 'section') return sectionPage(slide, pageNo, total, theme, plan.copy);
+    return assumptionsPage(slide, pageNo, total, theme);
+  };
 
+  // 先按「一页一主题」展开，再统一编号：页码必须反映真实页数。
+  const laid = flattenDeckSlides(plan.slides).map((slide) => ({ slide, slug: SLUG[slide.kind] }));
+  const total = laid.length;
+  return laid.map((entry, index) => {
+    const pageNo = index + 1;
+    return { name: `P${String(pageNo).padStart(2, '0')}_${entry.slug}.svg`, svg: bodyOf(entry.slide, pageNo, total) };
+  });
+}
 
 function luminance(hex: string): number {
   const value = hex.replace('#', '');

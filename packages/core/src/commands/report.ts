@@ -39,6 +39,11 @@ export interface ReportMetric {
   delta?: ReportDelta;
   /** 该指标涨是好还是跌是好，缺省 up。 */
   goodDirection?: MetricDirection;
+  /**
+   * 主基线（环比）之外的补充基线，例如同比去年同期、上期日均。
+   * 只有一条基线时读者无法判断这是季节波动还是趋势变化。
+   */
+  alternativeBaselines?: Array<{ label: string; value?: number; delta?: ReportDelta }>;
 }
 
 export interface ReportChartPoint {
@@ -98,6 +103,26 @@ export interface ReportSection {
   blocks: ReportBlock[];
 }
 
+/**
+ * 一次工具查询的证据。报告里的每个数字都通过 resultRef 指向这里，
+ * 于是「这个数字哪来的」在报告生成之后仍然是可以回答的问题——
+ * 读者点开卡片能看到 SQL、行数、耗时与是否被截断，两次运行之间还能比对口径是否漂移。
+ */
+export interface ReportEvidence {
+  /** 工具调用 id，与 block 上的 resultRef 对应。 */
+  ref: string;
+  tool: string;
+  /** 给读者看的口径描述：Agent 报告里是实际执行的 SQL，确定性报告里是统计描述。 */
+  sql?: string;
+  /** 查询参数摘要（表名、分组列等），不含连接凭据。 */
+  args?: Record<string, string | number | boolean>;
+  rowCount?: number;
+  /** 结果是否被行数上限截断：截断后的聚合值不能当总体值读。 */
+  truncated?: boolean;
+  durationMs?: number;
+  ranAt: string;
+}
+
 /** 报告开头的管理层摘要：先看结论，再看数据。 */
 export interface ReportExecutive {
   headline: string;
@@ -118,11 +143,25 @@ export interface ReportSpec {
     createdAt: string;
     /** 报告覆盖的时间窗，由网关按 period 解析后写入。 */
     period?: { from: string; to: string; label?: string; grain?: string };
-    /** 阅读对象：管理层 / 业务 / 技术，影响排版与信息密度。 */
+    /** 报告脚注里给读者看的一句话。 */
     audience?: 'executive' | 'business' | 'technical';
     /** 生成报告时的口径假设，例如「订单=已支付，剔除退款」。 */
     assumptions?: string[];
     notes?: string[];
+    /**
+     * 渲染文案的语言：deck / PPTX / Excel 由网关生成，没有 React 的 t() 可用，
+     * 只能靠这里决定中英。正文内容永远跟着模型输出的语言，这里只管子生成器的标签。
+     */
+    locale?: 'zh' | 'en';
+    /** 数字的证据链：resultRef → 产生它的查询。 */
+    evidence?: Record<string, ReportEvidence>;
+    /**
+     * 报告是降级产物时写明原因（例如 Agent 失败回退确定性统计）。
+     * UI 必须显式标出来——降级报告长得和正常报告一样，是对读者的误导。
+     */
+    degraded?: string;
+    /** 质量闸口的非阻断提示：结构合法但写作质量有欠缺的地方，如实告诉读者。 */
+    qualityNotes?: string[];
   };
 }
 

@@ -1,7 +1,8 @@
 import { mkdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import PptxGenJS from 'pptxgenjs';
-import type { ArtifactInfo, ArtifactRunInfo, ReportSpec } from '@aidb/core';
+import { flattenDeckSlides, planReportDeck, reportSheets } from '@aidb/core';
+import type { ArtifactInfo, ArtifactRunInfo, DeckSlide, ReportSpec } from '@aidb/core';
 import { writeExportFile } from '../services';
 import type { Store } from '../store';
 
@@ -27,51 +28,9 @@ function latestRun(store: Store, artifactId: string): ArtifactRunInfo | undefine
   return store.listArtifactRuns(artifactId, 1)[0];
 }
 
-function reportRows(spec: ReportSpec): { columns: string[]; rows: unknown[][] } {
-  const rows: unknown[][] = [];
-  if (spec.executive) {
-    rows.push(['摘要', '结论', spec.executive.headline]);
-    for (const takeaway of spec.executive.takeaways) rows.push(['摘要', '要点', takeaway]);
-    for (const risk of spec.executive.risks ?? []) rows.push(['摘要', '风险', risk]);
-  }
-  for (const section of spec.sections) {
-    for (const block of section.blocks) {
-      if (block.kind === 'narrative') rows.push([section.title, '叙述', block.text ?? '']);
-      else if (block.kind === 'metric') {
-        for (const metric of block.metrics ?? []) {
-          const delta = metric.delta
-            ? `${metric.baselineLabel ?? '对比上期'} ${metric.delta.absolute > 0 ? '+' : ''}${metric.delta.absolute}${metric.delta.percent === null || metric.delta.percent === undefined ? '' : `（${metric.delta.percent > 0 ? '+' : ''}${metric.delta.percent.toFixed(1)}%）`}`
-            : '';
-          rows.push([section.title, '指标', `${metric.label}: ${metric.value}${metric.unit ?? ''}${delta ? ` · ${delta}` : ''}`]);
-        }
-      } else if (block.kind === 'table') {
-        for (const row of block.rows ?? []) rows.push([section.title, '表格', row.join(' | ')]);
-      } else if (block.kind === 'chart') {
-        for (const point of block.series ?? []) rows.push([section.title, '图表', `${point.label}: ${point.value}${typeof point.baseline === 'number' ? ` / ${block.baselineName ?? '上期'} ${point.baseline}` : ''}`]);
-      } else if (block.kind === 'comparison') {
-        rows.push([section.title, '对比', `${block.left?.label}=${block.left?.value} / ${block.right?.label}=${block.right?.value} / 差值=${block.delta?.absolute ?? ''}`]);
-      } else if (block.kind === 'actions') {
-        for (const action of block.actions ?? []) {
-          rows.push([section.title, '建议', `${action.text}${action.impact ? ` · 预期：${action.impact}` : ''}${action.owner || action.due ? ` · ${[action.owner, action.due].filter(Boolean).join(' / ')}` : ''}`]);
-        }
-      } else if (block.kind === 'callout') {
-        rows.push([section.title, '说明', block.text ?? '']);
-      }
-    }
-    if (section.conclusion) rows.push([section.title, '结论', section.conclusion]);
-  }
-  for (const line of spec.meta.assumptions ?? []) rows.push(['口径', '假设', line]);
-  return { columns: ['章节', '类型', '内容'], rows };
-}
-
-function blockDeltaText(metric: { delta?: { absolute: number; percent: number | null }; baselineLabel?: string }): string {
-  if (!metric.delta) return '';
-  const percent = metric.delta.percent;
-  return `${metric.baselineLabel ?? '对比上期'} ${metric.delta.absolute > 0 ? '+' : ''}${metric.delta.absolute}${percent === null || percent === undefined ? '' : `（${percent > 0 ? '+' : ''}${percent.toFixed(1)}%）`}`;
-}
-
-function hasChartPoints(block: { series?: Array<{ label: string; value: number }> }): boolean {
-  return (block.series?.length ?? 0) >= 2;
+/** 报告导出走 core 的共享排版：Excel 的多 sheet 划分必须和屏幕 / AI PPT 同源。 */
+function reportSheetsOf(spec: ReportSpec) {
+  return reportSheets(spec);
 }
 
 function diffRows(result: any): { columns: string[]; rows: unknown[][] } {
@@ -105,7 +64,18 @@ function fixRows(result: any): { columns: string[]; rows: unknown[][] } {
 function tabular(artifact: ArtifactInfo, run: ArtifactRunInfo | undefined): { columns: string[]; rows: unknown[][] } {
   if (artifact.type === 'report' || artifact.type === 'compare') {
     const spec = run?.result as ReportSpec | undefined;
-    if (spec?.sections) return reportRows(spec);
+    if (spec?.sections) {
+      // 报告是多结构的（摘要 / 指标 / 表格 / 图表），压成一张表会丢信息；
+      // 这里给「只能出一张表」的调用方一个汇总视图，Excel 导出走 reportSheetsOf 的多 sheet。
+      const sheets = reportSheetsOf(spec);
+      const columns = ['sheet', ...Array.from({ length: Math.max(...sheets.map((sheet) => sheet.columns.length), 0) }, (_, index) => `col${index + 1}`)];
+      const rows: unknown[][] = [];
+      for (const sheet of sheets) {
+        rows.push([sheet.name, ...sheet.columns.map((column) => String(column ?? ''))]);
+        for (const row of sheet.rows) rows.push([sheet.name, ...row.map((cell) => cell ?? '')]);
+      }
+      return { columns, rows };
+    }
   }
   if (artifact.type === 'diff') return diffRows(run?.result);
   if (artifact.type === 'recon') return reconRows(run?.result);
@@ -113,96 +83,163 @@ function tabular(artifact: ArtifactInfo, run: ArtifactRunInfo | undefined): { co
   return { columns: ['内容'], rows: [] };
 }
 
+const INK = '1F2937';
+const MUTED = '6B7280';
+const BODY = '374151';
+const ACCENT = '0F766E';
+const DANGER = 'B03A2E';
+
+/**
+ * 报告 PPTX。
+ * 页与页的内容划分来自 planReportDeck —— 与 AI PPT（SVG deck）共用同一份计划，
+ * 两份产物不能一个给 4 页一个给 8 页，也不能一个缩写数字一个不缩写。
+ */
+function writeReportSlides(pptx: PptxGenJS, spec: ReportSpec): void {
+  const plan = planReportDeck(spec);
+  const copy = plan.copy;
+  const slides = flattenDeckSlides(plan.slides);
+  slides.forEach((slide: DeckSlide, index) => {
+    const page = pptx.addSlide();
+    page.background = { color: 'FFFFFF' };
+    const pageNo = `${index + 1} / ${slides.length}`;
+    page.addText(pageNo, { x: 11.0, y: 0.25, w: 1.8, h: 0.35, fontSize: 10, color: MUTED, align: 'right' });
+
+    if (slide.kind === 'cover') {
+      page.addText(slide.title, { x: 0.7, y: 2.1, w: 11.9, h: 1.4, fontSize: 32, bold: true, color: INK });
+      page.addText(slide.eyebrow, { x: 0.7, y: 1.5, w: 11.9, h: 0.4, fontSize: 13, color: ACCENT, charSpacing: 3 });
+      page.addText(slide.subtitle, { x: 0.7, y: 3.7, w: 11.9, h: 0.5, fontSize: 14, color: MUTED });
+      page.addText(slide.meta, { x: 0.7, y: 4.3, w: 11.9, h: 0.4, fontSize: 12, color: MUTED });
+      return;
+    }
+
+    page.addText(slide.title, { x: 0.6, y: 0.4, w: 12, h: 0.6, fontSize: 22, bold: true, color: INK });
+    if (slide.eyebrow !== slide.title) {
+      page.addText(slide.eyebrow, { x: 0.62, y: 0.06, w: 8, h: 0.3, fontSize: 10, color: ACCENT, charSpacing: 2 });
+    }
+
+    if (slide.kind === 'executive') {
+      page.addText(slide.headline, { x: 0.7, y: 1.1, w: 11.8, h: 1.0, fontSize: 18, bold: true, color: ACCENT });
+      if (slide.takeaways.length) {
+        page.addText(slide.takeaways.map((line) => ({ text: line })), {
+          x: 0.8, y: 2.3, w: 11.6, h: 3.4, fontSize: 14, color: BODY, breakLine: true, valign: 'top', bullet: true,
+        });
+      }
+      if (slide.risks.length) {
+        page.addText(slide.risks.map((line) => ({ text: line })), {
+          x: 0.8, y: 5.8, w: 11.6, h: 1.2, fontSize: 13, color: DANGER, breakLine: true, valign: 'top',
+        });
+      }
+      return;
+    }
+
+    if (slide.kind === 'metrics') {
+      const perRow = slide.metrics.length > 2 ? 3 : Math.max(1, slide.metrics.length);
+      const cardW = 3.7;
+      const cardH = 1.7;
+      slide.metrics.forEach((metric, position) => {
+        const col = position % perRow;
+        const row = Math.floor(position / perRow);
+        const x = 0.6 + col * (cardW + 0.25);
+        const y = 1.2 + row * (cardH + 0.25);
+        page.addShape('rect', { x, y, w: cardW, h: cardH, fill: { color: 'F3F4F6' }, line: { color: 'E5E7EB', pt: 0.5 } });
+        page.addText(metric.label, { x: x + 0.15, y: y + 0.12, w: cardW - 0.3, h: 0.35, fontSize: 11, color: MUTED });
+        page.addText(metric.value, { x: x + 0.15, y: y + 0.5, w: cardW - 0.3, h: 0.6, fontSize: 26, bold: true, color: INK });
+        if (metric.unit) page.addText(metric.unit, { x: x + 0.15, y: y + 1.08, w: cardW - 0.3, h: 0.3, fontSize: 11, color: ACCENT });
+        if (metric.deltaText) {
+          const color = metric.deltaTone === 'good' ? ACCENT : metric.deltaTone === 'bad' ? DANGER : MUTED;
+          page.addText(`${metric.baselineLabel ?? copy.previous} ${metric.deltaText}`, { x: x + 0.15, y: y + 1.34, w: cardW - 0.3, h: 0.3, fontSize: 10, color, bold: true });
+        }
+      });
+      if (slide.overflow) page.addText(slide.overflow, { x: 0.6, y: 6.6, w: 12, h: 0.35, fontSize: 10, color: MUTED });
+      return;
+    }
+
+    if (slide.kind === 'assumptions') {
+      page.addText(slide.lines.map((line) => ({ text: line })), {
+        x: 0.8, y: 1.2, w: 11.6, h: 5.6, fontSize: 12, color: '4B5563', breakLine: true, valign: 'top', bullet: true,
+      });
+      return;
+    }
+
+    // section：结论先行，然后叙述，再落到表格或图。
+    let cursorY = 1.15;
+    if (slide.conclusion) {
+      page.addText(slide.conclusion, { x: 0.7, y: cursorY, w: 11.8, h: 0.55, fontSize: 15, bold: true, color: ACCENT });
+      cursorY += 0.62;
+    }
+    if (slide.lines.length) {
+      const height = Math.min(2.2, 0.32 * slide.lines.length + 0.2);
+      page.addText(slide.lines.map((line) => ({ text: line.text })), {
+        x: 0.8, y: cursorY, w: 11.6, h: height, fontSize: 13,
+        color: BODY, breakLine: true, valign: 'top',
+      });
+      cursorY += height + 0.1;
+    }
+    if (slide.metrics.length && !slide.table && !slide.chart) {
+      page.addText(
+        slide.metrics.map((metric) => ({ text: `${metric.label}: ${metric.value}${metric.unit ?? ''}${metric.deltaText ? `  ${metric.baselineLabel ?? ''} ${metric.deltaText}` : ''}` })),
+        { x: 0.8, y: cursorY, w: 11.6, h: Math.min(2.4, 0.3 * slide.metrics.length + 0.2), fontSize: 13, color: ACCENT, breakLine: true, valign: 'top' },
+      );
+      return;
+    }
+    if (slide.table) {
+      const header = slide.table.columns.map((column) => ({ text: String(column), options: { bold: true, color: INK } }));
+      const rows = [header, ...slide.table.rows.map((row) => row.cells.map((cell) => String(cell)))];
+      page.addTable(rows as any, {
+        x: 0.6, y: Math.min(cursorY, 4.4), w: 12, fontSize: 10, color: BODY,
+        border: { pt: 0.5, color: 'D1D5DB' }, valign: 'middle',
+      });
+      if (slide.table.overflow) {
+        page.addText(slide.table.overflow, { x: 0.6, y: 6.7, w: 12, h: 0.3, fontSize: 9, color: MUTED });
+      }
+    }
+    if (slide.chart) {
+      const chart = slide.chart;
+      const series = [{ name: copy.current, labels: chart.points.map((point) => point.label), values: chart.points.map((point) => point.value) }];
+      if (chart.points.some((point) => typeof point.baseline === 'number')) {
+        series.push({
+          name: chart.baselineName || copy.previous,
+          labels: chart.points.map((point) => point.label),
+          values: chart.points.map((point) => point.baseline ?? 0),
+        });
+      }
+      const chartTop = Math.min(cursorY, 4.2);
+      page.addText(chart.title, { x: 0.6, y: Math.max(1.1, chartTop - 0.34), w: 12, h: 0.3, fontSize: 11, color: MUTED });
+      const type = chart.chartType === 'line' ? pptx.ChartType.line : chart.chartType === 'pie' ? pptx.ChartType.pie : pptx.ChartType.bar;
+      page.addChart(type, series as any, {
+        x: 0.6, y: chartTop, w: 12, h: Math.max(2.2, 6.4 - chartTop),
+        showLegend: series.length > 1,
+        showValue: chart.chartType === 'pie',
+        chartColors: ['0F766E', '93A19E', 'D6B45A', '5B8DEF', 'E0604F'],
+      } as any);
+      const footnote = chart.overflow ?? chart.note;
+      if (footnote) page.addText(footnote, { x: 0.6, y: 6.7, w: 12, h: 0.3, fontSize: 9, color: MUTED });
+    }
+    if (!slide.lines.length && !slide.table && !slide.chart && !slide.metrics.length) {
+      page.addText(copy.noText, { x: 0.8, y: cursorY, w: 11.6, h: 0.5, fontSize: 13, color: MUTED });
+    }
+  });
+}
+
 async function writePptx(artifact: ArtifactInfo, run: ArtifactRunInfo | undefined, config: ExportTarget): Promise<{ path: string; rows: number }> {
   const pptx = new PptxGenJS();
   pptx.layout = 'LAYOUT_WIDE';
   pptx.author = 'AiDB Studio';
   pptx.subject = artifact.title;
-  const titleSlide = pptx.addSlide();
-  titleSlide.background = { color: 'FFFFFF' };
-  titleSlide.addText(artifact.title, { x: 0.7, y: 2.1, w: 11.9, h: 1.1, fontSize: 30, bold: true, color: '1F2937' });
-  titleSlide.addText(
-    `${artifact.type} · ${new Date(artifact.updatedAt).toLocaleString()} · AiDB Studio`,
-    { x: 0.7, y: 3.3, w: 11.9, h: 0.5, fontSize: 13, color: '6B7280' },
-  );
+  const spec = (run?.result ?? undefined) as ReportSpec | undefined;
 
-  if (artifact.type === 'report' || artifact.type === 'compare') {
-    const spec = run?.result as ReportSpec | undefined;
-    if (spec?.executive) {
-      const slide = pptx.addSlide();
-      slide.background = { color: 'FFFFFF' };
-      slide.addText('管理层摘要', { x: 0.6, y: 0.4, w: 12, h: 0.6, fontSize: 22, bold: true, color: '111827' });
-      slide.addText(spec.executive.headline, { x: 0.7, y: 1.1, w: 11.8, h: 1.0, fontSize: 18, bold: true, color: '0F2F2C' });
-      slide.addText(spec.executive.takeaways.map((line) => ({ text: line })), {
-        x: 0.8, y: 2.2, w: 11.6, h: 2.6, fontSize: 14, color: '374151', breakLine: true, valign: 'top', bullet: true,
-      });
-      if (spec.executive.risks?.length) {
-        slide.addText(spec.executive.risks.map((line) => ({ text: line })), {
-          x: 0.8, y: 5.2, w: 11.6, h: 1.4, fontSize: 13, color: 'B03A2E', breakLine: true, valign: 'top',
-        });
-      }
-    }
-    for (const section of spec?.sections ?? []) {
-      const slide = pptx.addSlide();
-      slide.background = { color: 'FFFFFF' };
-      slide.addText(section.title, { x: 0.6, y: 0.4, w: 12, h: 0.6, fontSize: 22, bold: true, color: '111827' });
-      const lines: string[] = [];
-      if (section.conclusion) lines.push(section.conclusion);
-      for (const block of section.blocks) {
-        if (block.kind === 'narrative' && block.text) lines.push(block.text);
-        else if (block.kind === 'metric') {
-          for (const metric of block.metrics ?? []) {
-            const delta = blockDeltaText(metric);
-            lines.push(`${metric.label}: ${metric.value}${metric.unit ?? ''}${delta ? `  ${delta}` : ''}`);
-          }
-        } else if (block.kind === 'comparison') lines.push(`${block.left?.label}: ${block.left?.value}    ${block.right?.label}: ${block.right?.value}    差值: ${block.delta?.absolute ?? ''}`);
-        else if (block.kind === 'callout' && block.text) lines.push(block.text);
-        else if (block.kind === 'actions') for (const action of block.actions ?? []) lines.push(`• ${action.text}${action.impact ? `（预期：${action.impact}）` : ''}`);
-        else if (block.kind === 'table') for (const row of (block.rows ?? []).slice(0, 10)) lines.push(row.join('  |  '));
-        else if (block.kind === 'chart' && !hasChartPoints(block)) for (const point of block.series ?? []) lines.push(`${point.label}: ${point.value}`);
-      }
-      slide.addText(lines.length ? lines.map((line) => ({ text: line, options: { bullet: false } })) : [{ text: '（本节无文本内容）' }], {
-        x: 0.8,
-        y: 1.2,
-        w: 11.6,
-        h: 5.6,
-        fontSize: 14,
-        color: '374151',
-        breakLine: true,
-        valign: 'top',
-      });
-      for (const block of section.blocks) {
-        if (block.kind !== 'chart' || !hasChartPoints(block)) continue;
-        const chartSlide = pptx.addSlide();
-        chartSlide.background = { color: 'FFFFFF' };
-        chartSlide.addText(`${section.title} · ${block.title ?? '趋势'}`, { x: 0.6, y: 0.4, w: 12, h: 0.6, fontSize: 20, bold: true, color: '111827' });
-        const points = (block.series ?? []).slice(0, 12);
-        const series = [{ name: '本期', labels: points.map((point) => point.label), values: points.map((point) => point.value) }];
-        if (points.some((point) => typeof point.baseline === 'number')) {
-          series.push({ name: block.baselineName ?? '上期', labels: points.map((point) => point.label), values: points.map((point) => point.baseline ?? 0) });
-        }
-        const type = block.chartType === 'line' ? pptx.ChartType.line : block.chartType === 'pie' ? pptx.ChartType.pie : pptx.ChartType.bar;
-        chartSlide.addChart(type, series as any, {
-          x: 0.6, y: 1.2, w: 12, h: 5.4,
-          showLegend: series.length > 1,
-          showValue: block.chartType === 'pie',
-          chartColors: ['45C8C3', '93A19E', 'D6B45A', '5B8DEF', 'E0604F'],
-        } as any);
-        if (block.note) chartSlide.addText(block.note, { x: 0.6, y: 6.6, w: 12, h: 0.4, fontSize: 10, color: '6B7280' });
-      }
-    }
-    if (spec?.meta.assumptions?.length) {
-      const slide = pptx.addSlide();
-      slide.background = { color: 'FFFFFF' };
-      slide.addText('口径与假设', { x: 0.6, y: 0.4, w: 12, h: 0.6, fontSize: 20, bold: true, color: '111827' });
-      slide.addText(spec.meta.assumptions.map((line) => ({ text: line })), {
-        x: 0.8, y: 1.2, w: 11.6, h: 5.4, fontSize: 12, color: '4B5563', breakLine: true, valign: 'top', bullet: true,
-      });
-    }
+  if ((artifact.type === 'report' || artifact.type === 'compare') && spec?.sections) {
+    writeReportSlides(pptx, spec);
   } else {
     const table = tabular(artifact, run);
+    const titleSlide = pptx.addSlide();
+    titleSlide.background = { color: 'FFFFFF' };
+    titleSlide.addText(artifact.title, { x: 0.7, y: 2.1, w: 11.9, h: 1.1, fontSize: 30, bold: true, color: INK });
+    titleSlide.addText(`${artifact.type} · ${new Date(artifact.updatedAt).toLocaleString()} · AiDB Studio`, {
+      x: 0.7, y: 3.3, w: 11.9, h: 0.5, fontSize: 13, color: MUTED,
+    });
     const slide = pptx.addSlide();
-    slide.addText(artifact.title, { x: 0.6, y: 0.4, w: 12, h: 0.6, fontSize: 22, bold: true, color: '111827' });
+    slide.addText(artifact.title, { x: 0.6, y: 0.4, w: 12, h: 0.6, fontSize: 22, bold: true, color: INK });
     const rows = [table.columns.map((column) => ({ text: column, options: { bold: true } })), ...table.rows.slice(0, 20).map((row) => row.map((cell) => String(cell ?? '')))];
     slide.addTable(rows as any, { x: 0.5, y: 1.2, w: 12, fontSize: 9, border: { pt: 0.5, color: 'D1D5DB' } });
   }
@@ -228,7 +265,10 @@ export async function exportArtifact(
     const result = await writePptx(artifact, run, config);
     return { ...result, bytes: statSync(result.path).size, format };
   }
-  const table = tabular(artifact, run);
+  const reportSpec = (artifact.type === 'report' || artifact.type === 'compare') && (run?.result as ReportSpec | undefined)?.sections
+    ? (run!.result as ReportSpec)
+    : undefined;
+  const table = reportSpec ? { columns: [] as string[], rows: [] as unknown[][] } : tabular(artifact, run);
   const file = writeExportFile({
     dir: config.exportDir,
     format: 'xlsx',
@@ -237,6 +277,8 @@ export async function exportArtifact(
     tableName: safeName(artifact.title),
     engine: 'sqlite',
     baseName: safeName(artifact.title),
+    // 报告按结构分 sheet：摘要、指标、每个表格块各一张，图表与对比另存。
+    ...(reportSpec ? { sheets: reportSheetsOf(reportSpec) } : {}),
   });
   return { path: file.path, rows: file.rows, bytes: file.bytes ?? 0, format };
 }

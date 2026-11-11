@@ -21,13 +21,17 @@ import {
   type ReportSourceRef,
   type ReportSpec,
   type ResolvedPeriod,
+  type ToolCall,
   type ToolDefinition,
   type ToolResult,
+  type ReportEvidence,
+  checkReportQuality,
 } from '@aidb/core';
 import type { ToolExecutor } from '../executor';
 import type { ConnectionManager } from '../manager';
 import type { Store } from '../store';
 import { briefPromptBlock, defaultBriefPath, loadBrief, readBrief } from '../features/databaseBrief';
+import { parseTarget } from '../features/report';
 
 const REPORT_TOOLS = [
   'inspect_schema',
@@ -157,15 +161,58 @@ function refIdsOf(block: { resultRef?: string; resultRefs?: string[] }): string[
   return [...new Set(ids)];
 }
 
+/** 参数摘要：只留读者看得懂、且不含凭据的字段。 */
+function evidenceArgs(args: Record<string, unknown>): Record<string, string | number | boolean> {
+  const out: Record<string, string | number | boolean> = {};
+  for (const key of ['table', 'column', 'columns', 'limit', 'maxRows', 'interval', 'function', 'method', 'period', 'x', 'y']) {
+    const value = args[key];
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * 记下这个数字是哪次查询产生的。
+ * ref 以前只是校验时用完即弃的 id，报告生成后「这个数字哪来的」就没人能回答了；
+ * 存下 SQL / 行数 / 是否截断，读者点开卡片就能自己复核。
+ */
+function evidenceOf(call: ToolCall, result: ToolResult): ReportEvidence {
+  const data = (result.data ?? {}) as Record<string, unknown>;
+  const sql = typeof data.sql === 'string' ? data.sql : typeof call.args.sql === 'string' ? call.args.sql : undefined;
+  const rowCount = typeof data.rowCount === 'number' ? data.rowCount : Array.isArray(data.rows) ? data.rows.length : undefined;
+  const truncated = typeof data.truncated === 'boolean' ? data.truncated : result.meta.truncated;
+  const args = evidenceArgs(call.args ?? {});
+  return {
+    ref: call.id,
+    tool: call.name,
+    ...(sql ? { sql } : {}),
+    ...(Object.keys(args).length ? { args } : {}),
+    ...(rowCount === undefined ? {} : { rowCount }),
+    ...(truncated === undefined ? {} : { truncated }),
+    ...(result.meta.durationMs === undefined ? {} : { durationMs: result.meta.durationMs }),
+    ranAt: new Date().toISOString(),
+  };
+}
+
 function invalid(message: string): ToolResult {
   return { ok: false, summary: '报告规格不合法', error: { code: 'INVALID_REPORT_SPEC', message }, meta: { durationMs: 0 } };
 }
 
+function scopeRequired(label: string): { error: string } {
+  return { error: `${label} 缺少 resultRef：每个数据块都必须绑定产生它的工具调用 id` };
+}
+
+/**
+ * 校验并归一化模型提交的块。
+ * targetValue 是读者在表单里填的参照值：它是唯一允许不带 resultRef 的数字，
+ * 因为它来自用户而不是数据库——但必须与用户填的完全一致，否则照样拒。
+ */
 export function normalizeReportBlock(
   raw: any,
   numbers: Set<number>,
   refNumbers: Map<string, Set<number>>,
   requireRef: boolean,
+  targetValue?: number,
 ): ReportBlock | { error: string } {
   if (!raw || typeof raw !== 'object') return { error: 'block 必须是对象' };
   const kind = raw.kind;
@@ -181,19 +228,30 @@ export function normalizeReportBlock(
    */
   const checkRef = (ref: string | undefined, label: string): Set<number> | { error: string } => {
     if (!ref) {
-      if (requireRef) return { error: `${label} 缺少 resultRef` };
+      if (requireRef) return scopeRequired(label);
       return numbers;
     }
     const refSet = refNumbers.get(ref);
     if (!refSet) return { error: `${label} 的 resultRef 不存在：${ref}` };
     return refSet;
   };
-  const scopeFor = (ref: string | undefined): Set<number> => {
-    if (ref) return refNumbers.get(ref) ?? numbers;
-    if (blockRefs.length === 1) return refNumbers.get(blockRefs[0]) ?? numbers;
-    if (!blockRefs.length) return numbers;
+  /**
+   * 数据块（表格 / 图表）的数字作用域。
+   * 这里以前会在 ref 缺失或未知时退回全局数字池，等于让「必须绑定 resultRef」对表格和图表失效：
+   * 模型可以把 A 查询的数字写进标着 B 的图里，校验照样通过。要求 ref 之后仍然只认那次结果。
+   */
+  const scopeFor = (ref: string | undefined, label: string): Set<number> | { error: string } => {
+    if (ref) {
+      const set = refNumbers.get(ref);
+      return set ?? { error: `${label} 的 resultRef 不存在：${ref}` };
+    }
+    if (!blockRefs.length) return requireRef ? scopeRequired(label) : numbers;
     const merged = new Set<number>();
-    for (const id of blockRefs) for (const value of refNumbers.get(id) ?? []) merged.add(value);
+    for (const id of blockRefs) {
+      const set = refNumbers.get(id);
+      if (!set) return { error: `${label} 的 resultRefs 不存在：${id}` };
+      for (const value of set) merged.add(value);
+    }
     return merged;
   };
   const note = typeof raw.note === 'string' && raw.note.trim() ? raw.note.trim() : undefined;
@@ -257,13 +315,38 @@ export function normalizeReportBlock(
         if (Number.isFinite(value)) normalized.delta = computeMetricDelta(value, baseline);
       }
       if (metric?.goodDirection === 'down' || metric?.goodDirection === 'neutral') normalized.goodDirection = metric.goodDirection;
+      // 补充基线（同比 / 前一区间 / 目标）同样要能溯源，差值一律由应用算。
+      const rawAlternatives = Array.isArray(metric?.alternativeBaselines) ? metric.alternativeBaselines : [];
+      const alternatives: NonNullable<ReportMetric['alternativeBaselines']> = [];
+      const metricNumber = Number(metric?.value);
+      const altDelta = (baseline: number) => (Number.isFinite(metricNumber) ? computeMetricDelta(metricNumber, baseline) : undefined);
+      for (const item of rawAlternatives) {
+        const altLabel = String(item?.label ?? '').trim();
+        const altValue = Number(item?.value);
+        if (!altLabel || !Number.isFinite(altValue)) continue;
+        if (altLabel.includes('目标')) {
+          // 目标值来自用户输入而非查询结果：允许没有 ref，但必须就是读者填的那个数。
+          if (targetValue === undefined || altValue !== targetValue) {
+            return { error: `指标 ${label} 的目标值必须是读者填写的参照值${targetValue !== undefined ? `（${targetValue}）` : '（本次没有提供目标值）'}` };
+          }
+          alternatives.push({ label: altLabel, value: altValue, ...(altDelta(altValue) ? { delta: altDelta(altValue) } : {}) });
+          continue;
+        }
+        const altRef = typeof item?.resultRef === 'string' ? item.resultRef : ref;
+        const altSet = checkRef(altRef, `指标 ${label} 的补充基线 ${altLabel}`);
+        if ('error' in altSet) return altSet;
+        if (!hasNumber(altSet, altValue)) return { error: `指标 ${label} 的补充基线 ${altLabel} 没有对应 resultRef 的来源` };
+        alternatives.push({ label: altLabel, value: altValue, ...(altDelta(altValue) ? { delta: altDelta(altValue) } : {}) });
+      }
+      if (alternatives.length) normalized.alternativeBaselines = alternatives;
       out.push(normalized);
     }
     if (!out.length) return { error: 'metric 缺少有效指标' };
     return { kind, resultRef: blockRef, ...(blockRefs.length > 1 ? { resultRefs: blockRefs } : {}), title: raw.title === undefined ? undefined : String(raw.title), metrics: out, ...(note ? { note } : {}) };
   }
   if (kind === 'table') {
-    const refSet = scopeFor(blockRef);
+    const refSet = scopeFor(blockRef, '表格');
+    if ('error' in refSet) return refSet;
     const rows = Array.isArray(raw.rows) ? raw.rows : [];
     for (const row of rows) {
       if (!Array.isArray(row)) return { error: 'table.rows 必须是数组' };
@@ -287,7 +370,8 @@ export function normalizeReportBlock(
     };
   }
   if (kind === 'chart') {
-    const refSet = scopeFor(blockRef);
+    const refSet = scopeFor(blockRef, '图表');
+    if ('error' in refSet) return refSet;
     const series = Array.isArray(raw.series) ? raw.series : [];
     if (!series.length) return { error: 'chart 缺少 series' };
     const out: ReportChartPoint[] = [];
@@ -375,6 +459,8 @@ export interface AgentReportInput {
   period?: unknown;
   /** 阅读对象，决定信息密度与措辞。 */
   audience?: 'executive' | 'business' | 'technical';
+  /** 读者给的参照值（例如「订单量 5000」）：环比与同比回答不了「离计划差多少」。 */
+  target?: string;
   /** 用于定位 AI_DB.md（口径来源）；缺省时按连接的默认路径查找。 */
   home?: string;
 }
@@ -450,6 +536,15 @@ export async function generateAgentReport(
     : '';
 
   const period = resolvePeriod({ period: input.period, topic: input.topic });
+  const targetNumber = parseTarget(input.target)?.value;
+
+  // 供质量闸口判断「正文里是否漏出了表名/列名」。分级在 core 里做：
+  // 带下划线的标识符漏出来一定是问题，month/status 这种词形列名只能提示不能拒。
+  const columnTerms = schemas
+    .flatMap((item) => item.schemas)
+    .flatMap((database) => database.tables ?? [])
+    .flatMap((table: any) => [table.name, ...(table.columns ?? []).map((column: any) => column.name)])
+    .filter((name) => Boolean(name));
 
   const header = compare
     ? `You are AiDB Compare Agent. Compare the two sides using the selected data sources, and write it up for a business reader.
@@ -462,7 +557,11 @@ ${input.tables?.length ? `Focus tables: ${input.tables.join(', ')}` : ''}`
     : `You are AiDB Report Agent. You produce the report a business owner reads: conclusions first, numbers you can defend, plain business wording.
 Topic: ${input.topic}
 Audience: ${audience}${audience === 'executive' ? ' — one page of decisions and risks; no operational detail.' : audience === 'technical' ? ' — engineering detail (query shape, data quality) is welcome.' : ''}
-${input.tables?.length ? `Focus tables: ${input.tables.join(', ')}` : ''}`;
+${input.tables?.length ? `Focus tables: ${input.tables.join(', ')}` : ''}${
+  input.target
+    ? `
+Reader's target: ${input.target} — attach it as an alternative baseline labelled 目标 on the metric it refers to (never on an unrelated one, and never invent the target's value).`
+    : ''}`;
   const system = `${header}
 
 ${formatPeriodForPrompt(period)}
@@ -483,9 +582,12 @@ Rules:
 - For 3+ steps, call update_plan first, then call it again after each finished step: mark the step done and the next step doing. Never leave the plan at 0/N while continuing to run tools. Keep the same plan items across updates and only change their statuses; do not replace the plan with a shorter one unless the task scope itself changed.
 - Inspect schema before writing SQL when unsure. Keep SQL bounded; use aggregate SQL for summaries.
 - Never calculate totals, deltas, ratios or shares by hand. Use one aggregate SQL or analyze_chart; quote its numbers verbatim. The app computes comparison deltas from the submitted left/right values and the metric baseline you supply.
-- KPI cards need a reference point: for each headline metric, query its baseline in a second aggregate SQL and submit it as \`baseline\` + \`baselineLabel\` (e.g. 环比 上周 / 同比 去年同期 / 目标). Set \`goodDirection\` to "down" for metrics where a rise is bad (refund rate, complaint rate, latency, cost). The app computes the delta; never submit a delta yourself.
+- KPI cards need a reference point: for each headline metric, query its baseline in a second aggregate SQL and submit it as \`baseline\` + \`baselineLabel\` (e.g. 环比 上周 / 同比 去年同期 / 目标). One baseline is not enough to tell a trend from a season: for the headline metric also query 同比 去年同期 (or 环比 前一区间 when the main baseline is already 同比) and submit it in \`alternativeBaselines\` as {label, value} — the app computes its delta. Set \`goodDirection\` to "down" for metrics where a rise is bad (refund rate, complaint rate, latency, cost). The app computes the delta; never submit a delta yourself.
 - Numbers must be the exact values returned by a tool. The app abbreviates for display (12,345,678 -> 「1234.57 万」) — never pre-round or re-scale a number yourself, and never write a percentage that was not returned (a 0.1234 ratio stays 0.1234 in the payload).
 - Report chart blocks support bar / line / pie / stacked. Choose line for an ordered time axis, bar for category comparisons, stacked for parts-of-a-total across an ordered axis, and pie only for 3–8 non-negative parts of one whole (never for time series or multi-period comparison). Other render_chart types (scatter/heatmap/radar) are for exploration during the turn, not for compose_report blocks; never force them into a pie just to add a chart. For a trend that should show 本期 vs 上期, submit one line chart whose series points each carry a \`baseline\`.
+- Analysis depth, in this order: (1) the level, (2) the change vs the baseline, (3) where the change came from — decompose the delta by one main dimension with two same-caliber GROUP BY queries (current vs baseline) and put it in a table block whose columns are 维度/本期/上期/变化, (4) whether the period is anomalous, using analyze_chart on a bucketed series; report an outlier as a fact with its window, not as a cause you invent.
+- analyze_chart and forecast_chart are for reading an existing bucketed series (trend direction, volatility, outliers, next-period projection); pass them the series you already queried, and never present a forecast as an observed number — label it 「预测」 in the block note.
+- When the current period is partial or the two windows differ in length, do not read the raw total delta as a trend: compare equal-length windows or per-day averages and say which you used in the block note. Put the caveat in executive.risks.
 - Time series must be bucketed. Group by a date expression (day / week / month), never by a raw timestamp — one point per row is not a trend.
 - Do not join across different sources. Each source is queried separately; if the user asks for a merged total, aggregate per source and label the result.
 - ${compare ? 'This is a comparison: use layout comparison and include a comparison block with the two numeric results. Both queries must use the same aggregation and filters; only the compared period/segment may differ.' : 'Choose the layout from the user semantics: sections for per-source sections, comparison for side-by-side comparison, merged for summed totals, mixed for a broad report. Do not ask the user which layout.'}
@@ -499,8 +601,10 @@ Rules:
 
   let captured: ReportSpec | undefined;
   let composeError = '';
+  let rejections = 0;
   const knownNumbers = new Set<number>();
   const toolNumbers = new Map<string, Set<number>>();
+  const evidence = new Map<string, ReportEvidence>();
   const runtime = new AgentRuntime({
     provider,
     maxSteps: Math.min(40, Math.max(20, (settings.agent.maxSteps || 12) * 2)),
@@ -537,7 +641,7 @@ Rules:
         for (const [index, rawSection] of args.sections.slice(0, 30).entries()) {
           const blocks: ReportBlock[] = [];
           for (const rawBlock of Array.isArray(rawSection?.blocks) ? rawSection.blocks.slice(0, 30) : []) {
-            const block = normalizeReportBlock(rawBlock, numbers, toolNumbers, true);
+            const block = normalizeReportBlock(rawBlock, numbers, toolNumbers, true, targetNumber);
             if ('error' in block) return invalid(`第 ${index + 1} 节：${block.error}`);
             blocks.push(block);
           }
@@ -551,7 +655,7 @@ Rules:
             blocks,
           });
         }
-        captured = {
+        const draft: ReportSpec = {
           version: 1,
           title: args.title.trim(),
           layout,
@@ -562,15 +666,36 @@ Rules:
             intent: input.topic,
             createdAt: new Date().toISOString(),
             audience,
+            // 网关生成的 deck / PPTX / Excel 没有 React 的 t() 可用，只能靠正文语言判断标签语言。
+            locale: /[一-鿿]/.test(`${args.title}${headline}`) ? 'zh' : 'en',
             period: { from: period.current.from, to: period.current.to, label: period.current.label, grain: period.grain },
             ...(assumptions.length ? { assumptions } : {}),
             notes: [...(Array.isArray(args.notes) ? args.notes.map(String) : []), compare ? '对比由 Agent 查数，差值由应用计算。' : '报告由 Agent 查数并生成。'],
+            ...(evidence.size ? { evidence: Object.fromEntries(evidence) } : {}),
           },
         };
+        // 写作质量闸口：硬伤退回重写，软伤记进 meta 让读者知情。
+        // 表名/列名从 schema 里取——模型不该在读者看得见的标题与结论里写出它们。
+        const quality = checkReportQuality(draft, columnTerms);
+        if (quality.errors.length) {
+          rejections += 1;
+          // 拒绝要有尽头：否则模型可以反复提交同一份瑕疵稿，把整个预算烧光还什么产物都没有。
+          if (rejections >= 3) {
+            captured = { ...draft, meta: { ...draft.meta, qualityNotes: [...quality.errors, ...quality.notes] } };
+            return {
+              ok: true,
+              summary: `报告规格已提交（有 ${quality.errors.length} 处质量问题未修正）`,
+              data: { title: draft.title, layout, sections: sections.length, quality: quality.errors },
+              meta: { durationMs: 0 },
+            };
+          }
+          return invalid(`质量问题：${quality.errors.join('；')}`);
+        }
+        captured = quality.notes.length ? { ...draft, meta: { ...draft.meta, qualityNotes: quality.notes } } : draft;
         return {
           ok: true,
           summary: `报告规格已提交：${sections.length} 个章节`,
-          data: { title: captured.title, layout, sections: sections.length },
+          data: { title: draft.title, layout, sections: sections.length },
           meta: { durationMs: 0 },
         };
       }
@@ -585,6 +710,7 @@ Rules:
         collectNumbers(result.data, refSet);
         toolNumbers.set(call.id, refSet);
         for (const value of refSet) knownNumbers.add(value);
+        evidence.set(call.id, evidenceOf(call, result));
       }
       return result;
     },

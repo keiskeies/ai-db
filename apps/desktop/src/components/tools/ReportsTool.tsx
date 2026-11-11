@@ -57,6 +57,8 @@ export function ReportsTool() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [audience, setAudience] = useState<'executive' | 'business' | 'technical'>('business');
+  // 读者给的参照值：环比与同比只能和过去比，回答不了「离计划差多少」。
+  const [target, setTarget] = useState('');
   const [format, setFormat] = useState<'screen' | 'xlsx' | 'pptx'>('screen');
   const [reports, setReports] = useState<ArtifactInfo[]>([]);
   const [selectedId, setSelectedId] = useState('');
@@ -115,6 +117,7 @@ export function ReportsTool() {
         topic: topic.trim() || tr("数据概览"),
         period: custom ? { from, to } : period,
         audience,
+        ...(target.trim() ? { target: target.trim() } : {}),
         format,
       };
       // 标题交给网关生成（主题 + 日期）；这里传固定标题会让同名报告无法区分。
@@ -208,6 +211,16 @@ export function ReportsTool() {
             </div>
           </div>
         ) : null}
+        <div className="field" style={{ minWidth: 150 }}>
+          <label>{tr("目标值（可选）")}</label>
+          <input
+            className="input"
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+            placeholder={tr("例如：订单量 5000")}
+            data-testid="report-target"
+          />
+        </div>
         <div className="field" style={{ minWidth: 110 }}>
           <label>{tr("阅读对象")}</label>
           <Select className="select" value={audience} onChange={(e) => setAudience(e.target.value as typeof audience)}>

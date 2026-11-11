@@ -24,7 +24,7 @@ import {
 } from '@aidb/core';
 import type { GatewayConfig } from './config';
 import { DbError, type Driver } from './drivers';
-import { toXlsx } from './xlsx';
+import { toXlsx, toXlsxSheets, type XlsxSheet } from './xlsx';
 import type { ConnectionManager } from './manager';
 import type { Store } from './store';
 
@@ -133,6 +133,11 @@ export interface ExportInput {
   tableName?: string;
   engine: Engine;
   baseName?: string;
+  /**
+   * 多 sheet 输出（仅 xlsx）。报告的表格块各占一张表时用它；
+   * 给了 sheets 就忽略 columns/rows。
+   */
+  sheets?: XlsxSheet[];
 }
 
 export function writeExportFile(input: ExportInput): { path: string; bytes: number; rows: number } {
@@ -162,7 +167,7 @@ export function writeExportFile(input: ExportInput): { path: string; bytes: numb
     content = `<?xml version="1.0" encoding="UTF-8"?>\n<rows>\n${xmlRows}\n</rows>\n`;
   }
   else if (input.format === 'xlsx') {
-    content = toXlsx(input.columns, input.rows);
+    content = input.sheets?.length ? toXlsxSheets(input.sheets) : toXlsx(input.columns, input.rows);
   }
   else if (input.format === 'json') {
     content = JSON.stringify(
@@ -178,7 +183,8 @@ export function writeExportFile(input: ExportInput): { path: string; bytes: numb
   }
   if (typeof content === 'string') writeFileSync(path, content, 'utf8');
   else writeFileSync(path, content);
-  return { path, bytes: statSync(path).size, rows: input.rows.length };
+  const rowCount = input.sheets?.length ? input.sheets.reduce((sum, sheet) => sum + sheet.rows.length, 0) : input.rows.length;
+  return { path, bytes: statSync(path).size, rows: rowCount };
 }
 
 export function parseCsv(text: string, delimiter = ','): string[][] {

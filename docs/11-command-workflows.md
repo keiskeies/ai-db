@@ -42,15 +42,15 @@
 | M0 命令框架 | 完成 | core 注册表 / 校验；gateway CommandRunner / SSE / 取消；artifacts / artifact_runs / artifact_schedules；桌面命令运行卡（早期表单已在 M7 移除） | — |
 | M1 `/diff` | 完成 | 结构差异产物；差异页；同步到 B（确认 + 只读校验 + `/schema/sync` 审计） | 目标库强制备份尚未在命令内自动执行 |
 | M2 `/recon` | 完成（首版） | SQL↔SQL、SQL↔Redis、Mongo/ES 文档对账；Redis 类型校验；映射表单；差异分类；Redis 修复快照 + 写回 + 复检 | 向量库适配器 |
-| M3 `/report` | 完成（首版） | 确定性报告；Agent 查数 + `compose_report`（数字来源校验）；AI 解读；语义布局；保存 / 重跑 / 定时；XLSX 与中性 PPTX 导出 | 模板库；Agent 失败时的质量调优 |
+| M3 `/report` | 完成 | 确定性报告；Agent 查数 + `compose_report`（`resultRef` 逐块强校验 + 写作质量闸口）；结论先行的管理层摘要；变化归因 / 多基线 / 异常点；阅读对象决定分页与密度；屏幕 / PPTX / SVG deck 共用一份分页计划；XLSX 多 sheet；证据链可回溯 | 模板库 |
 | M4 `/compare` | 完成（首版） | 同口径 SQL 或默认行数对比；Agent 组两条同口径查询（可回退确定性）；差值 / 百分比；复用报告视图 | 更复杂的异动归因 |
 | M5 `/fix` | 完成（首版） | 复用 audit_database；findings + 风险 + 修复计划；只读保护；dry-run 预览；勾选步骤 + 备份 + 输入 EXECUTE 后执行；支持的引擎且无 DDL 时自动事务，失败回滚；执行后自动复检；审计 | 逐条审批的完整会话记录（当前为步骤勾选 + EXECUTE） |
 | M6 硬化 | 完成（首版） | 产物定时 + tick 集成测试；3 个全局对比工具 + 2 个 MCP 工具（工具数 45）；全局命令面板与工具箱入口；移动端命令面；通知渠道与 inbound/MCP 插件已落到 [机器人与 MCP 插件](./12-bots-and-mcp.md)；文档契约同步；E2E 报告/移动端/通知/MCP 冒烟 | 企业微信 inbound、个人微信、移动端异构 Redis 对账 |
 | M7 `/init` | 完成（首版） | Agent 内联执行；AI_DB.md 交接文档（业务说明/核心表手册/Join/口径/性能/坑/全量清单）；模型可选注解；schema hash + 逐表指纹漂移；每次执行全量刷新自动段落；数据流/人工补充段落保留；后续回合自动注入摘要 | 模型注解质量评估；超大库的分段检索 |
 
-当前验证：docs 契约 335/335；core 153/153；gateway 188 pass / 65 skipped（共 253 个用例）；commands 集成测试 18/18；Mongo/ES 文档适配器契约测试 1/1；Redis 写回实机测试 1/1；resultRef 校验测试 1/1；构建全绿；E2E 201/201 全通过（含桌面/移动端命令内联无表单、七种图表类型切换、`/init` 文档落盘与 Electron 回答 PDF 真实导出校验）。`npm run verify` 全绿。
+当前验证（2026-11-10，macOS 宿主复测）：docs 契约 391/391；core 367/367；desktop 34/34；gateway 427 pass / 65 skipped / 2 fail（共 494 个用例，两条失败分别是 database-brief 的 Windows 路径断言与 filesystem 的 read_file 路径断言，在未包含本次改动的干净工作树上同样失败，与报告无关）；构建全绿；E2E 287/288（唯一失败是移动端 worker 从 CDN 拉 jsQR 超时，属宿主网络限制）。报告相关：`report-analytics` / `report-ref` / `report-business` / `report-deck` / `report-render` / `report-quality` / `xlsx-sheets` 全绿。
 
-实现与本文的已知偏差：Agent 报告/对比依赖已配置模型，模型不可用时回退确定性统计；`compose_report` 当前用“数字必须出现在工具结果中”的来源校验，尚未把每个块绑定到 `resultRef`；`/fix` 已有步骤勾选 + 备份 + 确认执行 + 自动复检，但尚未提供事务回滚；移动端命令面已提供基础表单，异构 Redis 对账仍需桌面端。上述偏差作为后续迭代项（v2 / 模板库 / 通知机器人），不影响首版交付。
+实现与本文的已知偏差：Agent 报告/对比依赖已配置模型，模型不可用时回退确定性统计，并在报告开头显式标注为降级产物（`meta.degraded`）；`compose_report` 已把每个指标 / 表格 / 图表块绑定到 `resultRef`（含多查询共同支撑的 `resultRefs` 与基线的 `baselineResultRef`），数字来源校验以逐块引用为准；`/fix` 已有步骤勾选 + 备份 + 确认执行 + 自动复检，但尚未提供事务回滚；移动端命令面已提供基础表单，异构 Redis 对账仍需桌面端。上述偏差作为后续迭代项（v2 / 模板库 / 通知机器人），不影响首版交付。
 
 ## 0.2 `/init`：数据库交接文档（AI_DB.md）
 
@@ -706,6 +706,8 @@ CREATE INDEX IF NOT EXISTS idx_artifact_schedules ON artifact_schedules(enabled,
 | `topic` | 是 | 自然语言主题，例如“本周订单与履约情况” |
 | `period` | 否 | 时间范围；留空由 Agent 根据数据推断并确认 |
 | `tables` | 否 | 关注表；留空由 Agent 搜索 |
+| `audience` | 否 | `executive` / `business` / `technical`，默认 `business`。决定呈现密度，不改变数字：章节数、指标卡数、表格行数、图表点数、是否附口径页都按档收缩，被裁掉的部分在页面上写明「共 N 项，此处呈现前 M 项」 |
+| `target` | 否 | 读者自带的参照值，例如「订单量 5000」。这是唯一允许不带 `resultRef` 的数字（来源是用户而非数据库），只作为该指标的补充基线「目标」出现，差值仍由应用计算；填到不相关的指标上会被拒 |
 | `format` | 是 | `screen` / `xlsx` / `pdf` / `pptx`，默认 `screen` |
 
 源限制：`/report` 只接受有 schema 的连接（SQL / 文档 / 搜索等可描述对象的源）；Redis 等键值源不进入多表报告，改用 `/recon` 或 `/compare` 的确定性路径。选到不支持的源时表单直接禁用并说明原因。
@@ -732,104 +734,141 @@ CREATE INDEX IF NOT EXISTS idx_artifact_schedules ON artifact_schedules(enabled,
 
 ### 7.3 ReportSpec DSL
 
+以下是 `packages/core/src/commands/report.ts` 的实际形状（早期设计里的 `MetricRef` / `combine` / `valuePath` 未落地，改用「数字直接来自被引用的那次结果」，见 §7.5）：
+
 ```ts
 export type ReportLayout = 'sections' | 'comparison' | 'merged' | 'mixed';
-export type ReportBlockKind = 'narrative' | 'metric' | 'chart' | 'table' | 'comparison' | 'callout';
+export type MetricDirection = 'up' | 'down' | 'neutral';
 
-export interface ReportSourceRef {
-  key: string;              // 'a' | 'b' ...
-  connectionId: string;
-  connectionName: string;
-  database?: string;
-  engine: string;
-  label: string;
+export interface ReportDelta {
+  absolute: number;
+  percent: number | null;
+  /** 与 absolute 同源；差值由应用按 baseline 计算，模型不手写。 */
+  direction?: MetricDirection;
 }
 
-export interface MetricRef {
-  resultRef: string;        // 步骤 id / 工具调用 id
-  valuePath: string;        // 结果 JSON 路径，例如 'rows.0.total'
-  sourceKey?: string;
-  label?: string;
+export interface ReportMetric {
+  label: string;
+  value: number | string;
+  unit?: string;
+  /** 产生该数字的工具调用 id；compose_report 用它做来源校验。 */
+  resultRef?: string;
+  /** 对比基线（上一周期、去年同期或目标值），必须同样来自工具结果。 */
+  baseline?: number;
+  baselineLabel?: string;
+  /** 基线数字来自哪一次调用；缺省沿用 resultRef。 */
+  baselineResultRef?: string;
+  /** 由应用从 value/baseline 计算，模型不需要（也不应该）提供。 */
+  delta?: ReportDelta;
+  /** 涨好还是跌好：退款率上升要用红色。 */
+  goodDirection?: MetricDirection;
+  /** 主基线之外的补充读法：同比、日均口径、目标值。 */
+  alternativeBaselines?: Array<{ label: string; value?: number; delta?: ReportDelta }>;
 }
 
 export interface ReportBlock {
-  kind: ReportBlockKind;
+  kind: 'narrative' | 'metric' | 'table' | 'chart' | 'comparison' | 'callout' | 'actions';
   title?: string;
-  /** narrative：支持 {{ref:stepId.path}} 占位符，由渲染器解析。 */
-  text?: string;
-  tone?: 'info' | 'warning' | 'danger';
-  /** metric：refs 为多源时可合并。 */
-  label?: string;
-  refs?: MetricRef[];
-  combine?: 'sum' | 'none';
-  unit?: string;
-  /** chart / table 绑定一个已执行的结果引用。 */
+  /** 该块绑定的工具调用 id；表格与图表的数字只认这次结果。 */
   resultRef?: string;
-  chartType?: 'bar' | 'line' | 'pie' | 'stacked';
-  x?: string;
-  y?: string;
-  ys?: string[];
-  stacked?: boolean;
+  /** 一个块由多次查询共同支撑时使用（本期与上期两条折线）。 */
+  resultRefs?: string[];
+  text?: string;                          // narrative / callout
+  tone?: 'info' | 'warning' | 'danger';
+  metrics?: ReportMetric[];
   columns?: string[];
-  maxRows?: number;
-  /** comparison：左右各一个指标引用。 */
-  left?: MetricRef;
-  right?: MetricRef;
-  deltaMode?: 'absolute' | 'percent' | 'both';
+  rows?: Array<Array<string | number | null>>;
+  /** 哪些列是度量列：渲染与导出按数字处理，而不是当文本。 */
+  measureColumns?: string[];
+  chartType?: 'bar' | 'line' | 'pie' | 'stacked';
+  series?: Array<{ label: string; value: number; baseline?: number }>;
+  baselineName?: string;
+  left?: ReportMetric;
+  right?: ReportMetric;
+  delta?: ReportDelta;
+  goodDirection?: MetricDirection;
+  /** 口径说明：统计范围、过滤条件、单位。作脚注呈现，不进正文。 */
+  note?: string;
+  actions?: Array<{ text: string; resultRef?: string; impact?: string; owner?: string; due?: string }>;
+}
+
+/** 一次工具查询的证据：数字哪来的，在报告生成之后仍然可回答。 */
+export interface ReportEvidence {
+  ref: string;                            // 与 block 上的 resultRef 对应
+  tool: string;
+  sql?: string;
+  args?: Record<string, string | number | boolean>;
+  rowCount?: number;
+  /** 结果是否被行数上限截断：截断后的聚合值不能当总体值读。 */
+  truncated?: boolean;
+  durationMs?: number;
+  ranAt: string;
 }
 
 export interface ReportSection {
   id: string;
   title: string;
   sourceKey?: string;
+  /** 本节结论，先行一句话；渲染在该节数据之前。 */
+  conclusion?: string;
   blocks: ReportBlock[];
 }
 
 export interface ReportSpec {
   version: 1;
   title: string;
-  subtitle?: string;
   layout: ReportLayout;
   sources: ReportSourceRef[];
   sections: ReportSection[];
+  /** 结论先行：先看结论，再看数据。 */
+  executive?: { headline: string; takeaways: string[]; risks?: string[] };
   meta: {
     intent: string;
     createdAt: string;
-    model?: string;
+    period?: { from: string; to: string; label?: string; grain?: string };
+    audience?: 'executive' | 'business' | 'technical';
+    assumptions?: string[];
     notes?: string[];
+    /** deck / PPTX / Excel 由网关生成，没有 React 的 t()，标签语言只能靠这里。 */
+    locale?: 'zh' | 'en';
+    /** 数字的证据链：resultRef → 产生它的查询。 */
+    evidence?: Record<string, ReportEvidence>;
+    /** 降级产物写明原因。降级报告长得和正常报告一样，是对读者的误导。 */
+    degraded?: string;
+    /** 质量闸口的非阻断提示：结构合法但写作质量有欠缺处，如实告诉读者。 */
+    qualityNotes?: string[];
   };
 }
 ```
 
 约束：
 
-- `metric` / `chart` / `table` / `comparison` 必须引用已存在的结果；没有引用的数据块不允许进入产物。
-- `metric` 的 `refs` 只允许来自已执行步骤；`combine='sum'` 只用于可加指标。
-- `narrative` 中允许出现 `{{ref:...}}` 占位符；渲染时解析，解析失败即校验失败。
-- 块数量上限 30；每张表最多 200 行预览；导出时按需重新取数，不把全量结果塞进 JSON。
+- `metric` / `chart` / `table` / `comparison` / `actions` 必须引用已存在的结果；缺 `resultRef` 直接打回，不再退回全局数字池——否则模型可以把 A 查询的数字挂到标着 B 的图上，校验照样通过。
+- 一个数字只在产生它的那次结果里校验，跨 ref 挪用同样被拒；`resultRefs` 表示该块确实由多次查询共同支撑。
+- 叙述块不再走 `{{ref:...}}` 占位符：模型直接在叙述里写数字，但该数字必须已经出现在本次会话的某次工具结果里，写作质量闸口另查「整份报告一个数字都没有」。
+- 读者填的 `target` 是唯一免 `resultRef` 的数字，且必须与用户填的值逐字相等。
+- 章节与块数量上限各 30；块数量不是呈现上限——分页与截断按 `audience` 决定（§7.7），被裁掉的内容在页面上写明总数。
 - 模型不能输出 HTML / Markdown 表格；只有 `table` 块由渲染器生成。
 
 ### 7.4 生成流水线
 
-1. **解析输入**：校验源、库、表、时间；把源转换为 `AgentSourceContext`。
+1. **解析输入**：校验源、库、表、时间；把源转换为 `AgentSourceContext`。时间窗一律由网关 `resolvePeriod` 解析（本期、上一期、去年同期、粒度、是否未走完），Agent 不参与算日期。
 2. **探查**：Agent 调用 `inspect_schema` / `search_objects`，确定相关表与字段；必要时调用 `sample_rows` 确认枚举值。
-3. **建查询**：Agent 为每个指标 / 维度调用 `run_sql`，SQL 必须带 LIMIT 或聚合；数字型总结调用 `analyze_chart`，预测调用 `forecast_chart`。
-4. **提交规格**：Agent 调用 `compose_report`，传入 `ReportSpec`；工具校验引用、占位符、数字块与源匹配。
-5. **落产物**：校验通过后写入 `artifacts` + `artifact_runs`，`artifact_ready` 事件通知 UI。
-6. **渲染 / 导出**：屏幕渲染由前端按 DSL 完成；导出由网关按同一 DSL 生成 XLSX / PDF / PPTX。
+3. **建查询**：Agent 为每个指标 / 维度调用 `run_sql`，SQL 必须带 LIMIT 或聚合；趋势判断调用 `analyze_chart`，预测调用 `forecast_chart`（两者都在报告里留证据）。
+4. **提交规格**：Agent 调用 `compose_report`，传入 `ReportSpec`；工具逐块校验引用与数字来源。
+5. **质量闸口**：`checkReportQuality` 分硬伤与软伤——硬伤（整份没有数字、标题结论里出现表名列名、章节既没结论也没数字、headline 无数字又没说明原因）退回重写，最多 3 次；软伤（建议太笼统、指标全无基线、同一名出现两个值、折线横轴没分桶）记进 `meta.qualityNotes` 给读者看。
+6. **落产物**：校验通过后写入 `artifacts` + `artifact_runs`，`artifact_ready` 事件通知 UI。
+7. **渲染 / 导出**：屏幕、XLSX、PPTX、SVG deck 都由同一份 `ReportSpec` 生成；分页与截断共用 `planReportDeck`。
 
-`compose_report` 的校验失败示例：
+`compose_report` 的校验失败形如（一次只报第一个问题，Agent 改完再交）：
 
 ```json
 {
   "ok": false,
+  "summary": "报告规格不合法",
   "error": {
     "code": "INVALID_REPORT_SPEC",
-    "message": "2 个数据块没有有效的结果引用",
-    "details": [
-      { "path": "sections[0].blocks[1]", "reason": "resultRef 's9' 不存在" },
-      { "path": "sections[1].blocks[0].text", "reason": "占位符 {{ref:s3.total}} 无法解析" }
-    ]
+    "message": "第 1 节：table 缺少 resultRef：每个数据块都必须绑定产生它的工具调用 id"
   }
 }
 ```
@@ -838,13 +877,15 @@ export interface ReportSpec {
 
 这是报告可信度的核心，必须同时满足：
 
-1. **结果引用**：每个数据块 / 指标绑定 `resultRef`（工具调用 id）；`compose_report` 校验引用存在且数字来自该结果，结果快照存于 `artifact_runs.steps_json`。
-2. **叙述占位符**：叙述中的数字用 `{{ref:stepId.path}}`；渲染器解析，不允许模型在文本里直接写数字。
-3. **服务端算数**：合计、差值、占比、环比由 `analyze_chart` 或网关的 `computeDelta` 计算；模型只引用。
-4. **重跑快照**：每次运行保存 SQL、参数、结果与时间；报告显示“数据截至”。
-5. **冲突处理**：同一指标出现多个值时，报告以最新一次成功运行的结果为准，并在 `meta.notes` 中记录差异，不静默覆盖。
+1. **逐块结果引用**：每个指标 / 表格 / 图表 / 对比 / 建议块都绑定 `resultRef`（工具调用 id），缺失即打回。数字只在**产生它的那次结果**里校验——退回全局数字池等于没有校验，模型可以把 A 查询的数字挂到标着 B 的图上。
+2. **多来源显式化**：一个块由多次查询共同支撑时用 `resultRefs`（例如本期与上期两条折线、归因表的两期数字），逐 ref 校验后取并集。
+3. **基线同样是数字**：`baseline` 带 `baselineResultRef`，`alternativeBaselines` 每一项要么带自己的 ref，要么是读者填的目标值。
+4. **服务端算数**：差值、百分比、涨跌方向由 `computeMetricDelta` / `computeDelta` 计算；模型只提交本期与基线两个权威数字，不手写差值。
+5. **证据链**：`meta.evidence[resultRef]` 存 `tool / sql / args / rowCount / truncated / durationMs / ranAt`。屏幕上每个数字旁边可以展开看到 SQL 与「结果被行数上限截断」——截断后的聚合值不能当总体值读，这句话必须让读者看到，而不是只记在日志里。
+6. **重跑快照**：每次运行保存 SQL、参数、结果与时间；报告显示“数据截至”，两次运行之间可比对口径是否漂移。
+7. **冲突处理**：同一指标出现多个值时，报告以最新一次成功运行的结果为准，质量闸口同时在 `meta.qualityNotes` 里提示口径可能不一致，不静默覆盖。
 
-验收时必须核对：报告展示的每个数字都能在 `steps_json` 中找到出处；叙述占位符全部解析成功。
+验收时必须核对：报告展示的每个数字都能通过 `resultRef` 在 `meta.evidence` 与 `artifact_runs.steps_json` 里找到出处；基线的 ref 不等于本期的 ref。
 
 ### 7.6 多源合并
 
@@ -856,10 +897,15 @@ export interface ReportSpec {
 
 ### 7.7 渲染
 
+三份产物（屏幕 / PPTX / SVG deck）的分页、截断与数字读法来自 `packages/core/src/commands/reportRender.ts` 一处，不再各写一套常量——三处各写一份时，它们一定会在某个版本开始互相矛盾。
+
 - 屏幕渲染复用现有图表组件与数据网格；报告页为独立标签页，支持滚动、打印、导出。
-- 布局：标题区 + 概览指标 + 章节；每节可含叙述、指标卡、图表、表格、对比、提示。
-- 报告图表块只输出柱 / 折线 / 饼 / 堆叠柱（`compose_report` 的结构，热力图/雷达图/散点图在报告块中显式拒绝并提示改用对话图表）；交互图表与 Agent 工具支持柱 / 堆叠 / 折线 / 饼 / 散点 / 热力 / 雷达，多系列用 `ys`。助手里的 `/report` 属于 Agent 对话图表，可按数据形态使用全部七种。
-- 表格最多 200 行预览，超过时提示“导出查看全部”。
+- 布局：管理层摘要（结论 / 三条要点 / 风险）+ 概览指标 + 章节；每节先给 `conclusion`，再给数据。
+- **密度由 `audience` 决定**（`reportDensity`）：章节 2 / 4 / 8，指标卡 4 / 6 / 8，表格行 4 / 8 / 15，图表点 8 / 12 / 24，口径与假设页只给业务与技术档。屏幕与 deck 都从这一个函数取值（deck 另外受 `columns` / `points` / `narrative` 约束，屏幕上表格不裁列，改为横向滚动）。未知取值退回业务档，不允许崩成一页。
+- **截断必须可见**：裁掉指标、行、点或章节时，页面上写「共 N 项，此处呈现前 M 项」，屏幕上提供「展开其余」；不允许悄悄少给内容。
+- 大数字在展示层缩写成「万 / 亿」（英文 K / M），原值不改写：悬停、导出、证据里仍是全精度。
+- 每个数字旁边可展开证据（SQL、行数、是否截断、耗时）；降级产物在开头显示降级原因；`qualityNotes` 如实列出。
+- 报告图表块只输出柱 / 折线 / 饼 / 堆叠柱（热力图 / 雷达图 / 散点图在报告块中显式拒绝并提示改用对话图表）；折线与柱状支持 `baseline` 双系列（本期 vs 上期）。
 - 响应式：桌面双栏，移动端单栏；图表在移动端保持可读的最小高度。
 - 打印 / PDF：沿用现有打印通道；分页避免把图表切断。
 
@@ -868,14 +914,16 @@ export interface ReportSpec {
 | 格式 | 实现 | 说明 |
 |---|---|---|
 | 屏幕 | 前端渲染 | 默认 |
-| XLSX | 复用现有 xlsx 导出能力 | 每个表格一个 sheet，指标 / 叙述一个 sheet |
+| XLSX | 网关零依赖 zip + sheet XML | `reportSheets` 按结构分 sheet：管理层摘要 / 关键指标 / 每个表格一个 sheet；单元格保持数字类型，Excel 能直接求和透视 |
 | PDF | Electron 打印 / 浏览器打印 | 不新写 PDF 库 |
-| PPTX | 网关新增 `pptxgenjs` | 中性模板：封面、概览、每节一页、对比页、附录；图表先转 PNG 再嵌入；后续再扩展模板库 |
+| PPTX | `pptxgenjs` 原生图表 **或** SVG 页（ppt-master 技能） | 两个后端共用 `planReportDeck` + `flattenDeckSlides` 的同一份分页计划 |
 
 PPTX 规则：
 
-- 不让模型决定幻灯片版式；模板由报告布局决定。
-- 图表用现有 SVG→PNG 光栅化（中文标签已验证可用），嵌入 PNG。
+- 不让模型决定幻灯片版式；模板由报告布局与 `audience` 决定。
+- 两个后端必须产出同样的页序与同样的截断说明；分页只在 `planReportDeck` 里算一次。
+- 一个章节里有第二张图 / 第二张表时，各自展开成独立一页（标题「章节 · 子标题」），而不是静默丢掉——`flattenDeckSlides` 展开后必须不留待办字段。
+- 图表标题必须画出来（SVG 与 pptx 两条路径都要），否则读者看到一张没有名字的图。
 - 标题、叙述、表格文本来自 ReportSpec；数字仍来自结果引用。
 - 导出失败返回 `EXPORT_FAILED`，不影响已保存的报告。
 
@@ -892,31 +940,47 @@ PPTX 规则：
 `/report` 的 Agent 提示词必须包含：
 
 - 布局选择规则（§7.2）与“布局不是用户选项”。
-- 数字守卫：禁止手算、外推、估算；合计必须来自聚合 SQL 或 `analyze_chart`。
+- 数字守卫：禁止手算、外推、估算；合计必须来自聚合 SQL 或 `analyze_chart`；每个块都要带 `resultRef`。
+- 分析深度的先后次序：先给本期与环比，再补同比 / 日均 / 目标等第二读法，然后才是归因与异常——顺序颠倒的报告会让人先看到最不可靠的推断。
+- 本期未走完（`partial`）时必须写明总量不可直接与上期比，并给出等长切片或日均口径。
+- 趋势判断走 `analyze_chart`、预测走 `forecast_chart`，两者都会在报告里留证据；异常只描述偏离，不替读者编造原因。
+- 读者填了 `target` 时，把它作为**该指标**的补充基线「目标」，不许挂到别的指标上，更不许改它的值。
 - 多源规则：不得跨源 JOIN；每个结论标源；不可合并指标分开展示。
-- 规格规则：只引用已执行结果；叙述用占位符；最多 30 块。
+- 规格规则：只引用已执行结果；最多 30 节 / 30 块。
 - 澄清规则：只问一个问题；能从 schema 推断的不问。
 - 语言：跟随用户语言；专业术语保留原文。
 
 ### 7.11 降级
 
-模型不可用或本地推理器时，`/report` 输出确定性模板：
+模型不可用（provider 为 `local`）或 Agent 执行失败时，`/report` 走确定性路径。**降级不是一个静默状态**：Agent 失败回退时写入 `meta.degraded`（原因），屏幕在报告开头显示降级横幅。读者不该靠猜来判断自己拿到的报告少了什么。
+
+确定性路径本身也要给出可用的分析，而不只是数据盘点：
 
 - 按确定性规则选布局：多源 + 对比动词 → comparison；多源 + 汇总动词 → merged；否则 sections。
-- 每个选中的表生成行数、空值率、Top 值图表；没有业务指标时生成“数据概览”而不是编造结论。
-- 叙述由模板生成（“表 X 共 N 行，字段 Y 空值率 Z%”），不调用模型。
-- 明确标注“未启用 AI 解读”。
+- 业务指标按表实际字段推断（金额 / 数量列 → 度量），每条都带环比基线；两期天数不等时补「同长 N 天切片」与「日均口径」两种读法，并把这条口径提醒写进风险。
+- 主基线是环比时补一条同比，读者才分得清趋势与季节波动。
+- 环比变化按主维度拆成「变化归因」一节：本期、上期、变化、占整体变化，两期数字各自带 ref。
+- 趋势序列上偏离 ≥ 2σ 的点（样本 ≥ 4）进风险，只报「哪天偏离多少」，不写「因为什么」。
+- 每个查询都进证据表（`q1`、`q2`…），指标、图表、归因表都绑定 ref——没有 AI 也照样能回答「这个数字哪来的」。
+- 没有业务指标时生成「数据概览」（行数、空值率、Top 值），而不是编造结论。
 
 ### 7.12 限额
 
 | 项 | 默认值 | 可配置 |
 |---|---|---|
 | 源数量 | 4 | 命令定义 |
-| 块数量 | 30 | 命令定义 |
-| 数据查询数 / 报告 | 8 | 是 |
-| 表格预览行数 | 200 | 是 |
-| 单次报告超时 | 120s | 是 |
+| 章节 / 块数量 | 各 30 | 命令定义 |
+| 质量闸口打回次数 | 3（超过就带着问题出稿，不再烧预算） | 否 |
+| 业务指标数 / 源 | 4 | 否 |
+| 补充基线数 / 指标 | 2（总预算 4 次查询） | 否 |
+| 归因维度项 | 6 | 否 |
+| 趋势查询行数 | 24 | 否 |
+| 异常点 | 每期最多 3 个，样本 ≥ 4 且偏离 ≥ 2σ | 否 |
+| 风险条数 | 分析类风险优先，总共 6 条 | 否 |
+| 单次报告超时 | 15 分钟 | 是 |
 | 图表数量 | 8 | 是 |
+
+上表是**取数**上限；**呈现**上限由 `audience` 决定（§7.7），两者分开——为了让版面短而少查一次数据，是在替读者做他没要求的事。
 
 ## 8. `/diff` 详细设计
 
@@ -1810,6 +1874,8 @@ npm run e2e
 
 ## 附录 A：ReportSpec 示例
 
+与 §7.3 的 DSL 一致的双库示例（数字都是各次查询的返回值，差值由应用算）：
+
 ```json
 {
   "version": 1,
@@ -1819,13 +1885,37 @@ npm run e2e
     { "key": "a", "connectionId": "c_prod", "connectionName": "prod-mysql", "database": "shop", "engine": "mysql", "label": "生产库" },
     { "key": "b", "connectionId": "c_stg", "connectionName": "stg-pg", "database": "shop", "engine": "postgresql", "label": "预发库" }
   ],
+  "executive": {
+    "headline": "生产库本周订单额 128.4 万元，比上周少 6.2%；预发库数据量不足，不能作对照",
+    "takeaways": ["生产库订单额 1,284,000 元，环比减少 84,600 元", "预发库仅 12 笔订单，样本不足以支撑结论"],
+    "risks": ["预发库本周只有 12 笔记录，任何比率都会被个位数放大"]
+  },
   "sections": [
     {
       "id": "overview",
       "title": "概览",
+      "conclusion": "生产库订单额环比减少 6.2%，主要是 10 月 3 日后活动结束",
       "blocks": [
-        { "kind": "metric", "label": "本周订单额", "refs": [{ "resultRef": "s3", "valuePath": "rows.0.total", "sourceKey": "a" }], "combine": "none", "unit": "元" },
-        { "kind": "narrative", "text": "本周生产库订单额 {{ref:s3.rows.0.total}} 元，预发库 {{ref:s6.rows.0.total}} 元。" }
+        {
+          "kind": "metric",
+          "metrics": [
+            {
+              "label": "本周订单额",
+              "value": 1284000,
+              "unit": "元",
+              "resultRef": "s3",
+              "baseline": 1368600,
+              "baselineLabel": "环比 上周",
+              "baselineResultRef": "s5",
+              "goodDirection": "up",
+              "alternativeBaselines": [
+                { "label": "同比 去年同期", "value": 1102000 },
+                { "label": "目标", "value": 1500000 }
+              ]
+            }
+          ]
+        },
+        { "kind": "narrative", "text": "生产库本周订单额 1,284,000 元；预发库仅 3,200 元，样本量 12 笔，不参与结论。" }
       ]
     },
     {
@@ -1833,20 +1923,67 @@ npm run e2e
       "title": "生产库",
       "sourceKey": "a",
       "blocks": [
-        { "kind": "chart", "resultRef": "s4", "chartType": "line", "x": "day", "y": "amount", "title": "按天订单额" },
-        { "kind": "table", "resultRef": "s4", "columns": ["day", "orders", "amount"], "maxRows": 100 }
+        {
+          "kind": "chart",
+          "resultRef": "s4",
+          "chartType": "line",
+          "title": "按天订单额",
+          "series": [
+            { "label": "2026-10-26", "value": 210000, "baseline": 198000 },
+            { "label": "2026-10-27", "value": 186000, "baseline": 205000 }
+          ],
+          "baselineName": "上周同日"
+        },
+        {
+          "kind": "table",
+          "resultRef": "s4",
+          "title": "按渠道",
+          "columns": ["渠道", "订单额"],
+          "measureColumns": ["订单额"],
+          "rows": [["广告", 640000], ["自然", 420000]]
+        }
+      ]
+    },
+    {
+      "id": "attribution",
+      "title": "变化归因",
+      "conclusion": "减少的 84,600 元里，广告渠道占 71%",
+      "blocks": [
+        {
+          "kind": "table",
+          "resultRefs": ["s4", "s6"],
+          "title": "按渠道拆解环比变化",
+          "columns": ["渠道", "本期", "上期", "变化", "占整体变化"],
+          "rows": [["广告", 640000, 700000, -60000, "71%"]]
+        }
       ]
     },
     {
       "id": "compare",
       "title": "双库对比",
       "blocks": [
-        { "kind": "comparison", "left": { "resultRef": "s3", "valuePath": "rows.0.total", "sourceKey": "a" }, "right": { "resultRef": "s6", "valuePath": "rows.0.total", "sourceKey": "b" }, "deltaMode": "both" },
+        {
+          "kind": "comparison",
+          "title": "订单额",
+          "left": { "label": "生产库", "value": 1284000, "resultRef": "s3" },
+          "right": { "label": "预发库", "value": 3200, "resultRef": "s7" }
+        },
         { "kind": "callout", "tone": "info", "text": "两库订单额分别统计，未做行级合并；口径：已支付订单，按下单时间。" }
       ]
     }
   ],
-  "meta": { "intent": "分别看两个库本周订单，并做对比", "createdAt": "2026-10-30T10:00:00.000Z" }
+  "meta": {
+    "intent": "分别看两个库本周订单，并做对比",
+    "createdAt": "2026-10-30T10:00:00.000Z",
+    "period": { "from": "2026-10-26", "to": "2026-11-01", "label": "本周", "grain": "day" },
+    "audience": "business",
+    "locale": "zh",
+    "assumptions": ["订单额 = SUM(amount)，已剔除退款"],
+    "evidence": {
+      "s3": { "ref": "s3", "tool": "run_sql", "sql": "SELECT SUM(amount) FROM orders WHERE ...", "rowCount": 1, "durationMs": 42, "ranAt": "2026-11-01T10:00:00.000Z" },
+      "s5": { "ref": "s5", "tool": "run_sql", "sql": "SELECT SUM(amount) FROM orders WHERE ...（上周）", "rowCount": 1, "durationMs": 38, "ranAt": "2026-11-01T10:00:01.000Z" }
+    }
+  }
 }
 ```
 

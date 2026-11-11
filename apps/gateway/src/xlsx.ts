@@ -86,20 +86,67 @@ function zip(files: Record<string, string>): Buffer {
 }
 
 export function toXlsx(columns: string[], rows: unknown[][]): Buffer {
-  const header = `<row r="1">${columns.map((column, index) => cellXml(column, cellRef(index, 1))).join('')}</row>`;
-  const body = rows
-    .map((row, index) => `<row r="${index + 2}">${row.map((value, column) => cellXml(value, cellRef(column, index + 2))).join('')}</row>`)
+  return toXlsxSheets([{ name: 'Sheet1', columns, rows }]);
+}
+
+export interface XlsxSheet {
+  name: string;
+  columns: string[];
+  rows: unknown[][];
+}
+
+/**
+ * 多 sheet 工作簿。报告的表格块各占一张表：
+ * 把表格压成「章节 | 类型 | 内容」三列再拼上 `a | b | c`，业务读者就没法拿去用了。
+ */
+export function toXlsxSheets(sheets: XlsxSheet[]): Buffer {
+  const safe = (name: string, index: number): string => {
+    const cleaned = String(name ?? '').replace(/[\\/:*?[\]]/g, ' ').trim().slice(0, 31);
+    return cleaned || `Sheet${index + 1}`;
+  };
+  // 同名 sheet 会让 Excel 直接拒绝打开，重名时加序号。
+  const names: string[] = [];
+  const used = new Map<string, number>();
+  sheets.forEach((sheet, index) => {
+    const base = safe(sheet.name, index);
+    const count = used.get(base.toLowerCase()) ?? 0;
+    used.set(base.toLowerCase(), count + 1);
+    names.push(count ? `${base.slice(0, 27)} (${count + 1})` : base);
+  });
+
+  const sheetXml = sheets
+    .map((sheet, index) => {
+      const header = `<row r="1">${sheet.columns.map((column, position) => cellXml(column, cellRef(position, 1))).join('')}</row>`;
+      const body = sheet.rows
+        .map((row, rowIndex) => `<row r="${rowIndex + 2}">${row.map((value, position) => cellXml(value, cellRef(position, rowIndex + 2))).join('')}</row>`)
+        .join('');
+      return { name: names[index] ?? `Sheet${index + 1}`, xml: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${header}${body}</sheetData></worksheet>` };
+    });
+
+  const overrides = sheetXml
+    .map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`)
     .join('');
-  const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${header}${body}</sheetData></worksheet>`;
-  return zip({
+  const sheetEntries = sheetXml
+    .map((sheet, index) => `<sheet name="${escapeXml(sheet.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`)
+    .join('');
+  const relationships = sheetXml
+    .map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`)
+    .join('');
+
+  const files: Record<string, string> = {
     '[Content_Types].xml':
-      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+      overrides +
+      '</Types>',
     '_rels/.rels':
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
     'xl/workbook.xml':
-      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheetEntries}</sheets></workbook>`,
     'xl/_rels/workbook.xml.rels':
-      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
-    'xl/worksheets/sheet1.xml': sheet,
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${relationships}</Relationships>`,
+  };
+  sheetXml.forEach((sheet, index) => {
+    files[`xl/worksheets/sheet${index + 1}.xml`] = sheet.xml;
   });
+  return zip(files);
 }

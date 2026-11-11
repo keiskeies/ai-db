@@ -2,6 +2,8 @@ import { buildCount, buildTimeBucketExpr, createProvider, engineMeta, quoteIdent
 import type {
   CommandSourceInput,
   ReportBlock,
+  ReportEvidence,
+  ReportDelta,
   ReportExecutive,
   ReportLayout,
   ReportMetric,
@@ -9,8 +11,9 @@ import type {
   ReportSourceRef,
   ReportSpec,
   ResolvedPeriod,
+  TimeWindow,
 } from '@aidb/core';
-import { computeMetricDelta, formatPeriodForReader, resolvePeriod } from '@aidb/core';
+import { chainWindow, computeMetricDelta, formatPeriodForReader, precedingEqualWindow, resolvePeriod, windowDays, yearAgoWindow } from '@aidb/core';
 import type { ConnectionManager } from '../manager';
 import type { Store } from '../store';
 import { connectionSchema } from './common';
@@ -20,28 +23,50 @@ import { businessTimeOf, columnsOf, dimensionLabel, dimensionOf, factScore, mone
 /**
  * 无模型时可用的业务名：英文库名直译成中文，读者才不会看到「orders单量」。
  * 只覆盖高频实体；有表注释或 AI_DB.md 时 tableLabel 已经给出更好的名字。
+ *
+ * 计量的说法必须跟着实体变。以前所有事实表都写成「XX单量 / 笔」，
+ * 用户表就变成了「用户单量 1,200 笔」——业务读者一眼就能看出这不是人写的。
  */
-const ENTITY_ZH: Array<[RegExp, string]> = [
-  [/^(orders?|order_info|trade_orders?|order_items?)$/i, '订单'],
-  [/^(users?|user_info|members?)$/i, '用户'],
-  [/^(refunds?|refund_orders?)$/i, '退款'],
-  [/^(payments?|pay_orders?|transactions?)$/i, '支付'],
-  [/^(products?|items?|skus?|goods)$/i, '商品'],
-  [/^(customers?|clients?)$/i, '客户'],
-  [/^(invoices?)$/i, '发票'],
-  [/^(shipments?|deliver(y|ies)|logistics)$/i, '履约'],
-  [/^(carts?)$/i, '购物车'],
-  [/^(tickets?|issues?)$/i, '工单'],
-  [/^(visits?|sessions?|page_?views?)$/i, '访问'],
-  [/^(complaints?|reports?)$/i, '投诉'],
+interface EntityShape {
+  zh: string;
+  /** 计数指标的名字与单位，例如「订单量 / 笔」「活跃用户 / 人」。 */
+  count: { label: string; unit: string };
+  money: string;
+}
+
+const ENTITY_SHAPES: Array<{ pattern: RegExp } & EntityShape> = [
+  { pattern: /^(orders?|order_info|trade_orders?|order_items?)$/i, zh: '订单', count: { label: '订单量', unit: '笔' }, money: '订单金额' },
+  { pattern: /^(users?|user_info|members?)$/i, zh: '用户', count: { label: '活跃用户', unit: '人' }, money: '用户消费额' },
+  { pattern: /^(refunds?|refund_orders?)$/i, zh: '退款', count: { label: '退款量', unit: '笔' }, money: '退款金额' },
+  { pattern: /^(payments?|pay_orders?|transactions?)$/i, zh: '支付', count: { label: '支付笔数', unit: '笔' }, money: '支付金额' },
+  { pattern: /^(products?|items?|skus?|goods)$/i, zh: '商品', count: { label: '商品数', unit: '个' }, money: '商品金额' },
+  { pattern: /^(customers?|clients?)$/i, zh: '客户', count: { label: '客户数', unit: '位' }, money: '客户金额' },
+  { pattern: /^(invoices?)$/i, zh: '发票', count: { label: '开票量', unit: '张' }, money: '开票金额' },
+  { pattern: /^(shipments?|deliver(y|ies)|logistics)$/i, zh: '履约', count: { label: '履约单量', unit: '单' }, money: '履约金额' },
+  { pattern: /^(carts?)$/i, zh: '购物车', count: { label: '加购量', unit: '次' }, money: '加购金额' },
+  { pattern: /^(tickets?|issues?)$/i, zh: '工单', count: { label: '工单量', unit: '单' }, money: '工单金额' },
+  { pattern: /^(visits?|sessions?|page_?views?)$/i, zh: '访问', count: { label: '访问量', unit: '次' }, money: '访问金额' },
+  { pattern: /^(complaints?|reports?)$/i, zh: '投诉', count: { label: '投诉量', unit: '件' }, money: '投诉金额' },
 ];
 
-function businessLabel(fact: TableFact): string {
+function entityOf(fact: TableFact): EntityShape | undefined {
   const base = tableLabel(fact);
-  for (const [pattern, zh] of ENTITY_ZH) {
-    if (pattern.test(base) || pattern.test(fact.name)) return zh;
-  }
-  return base;
+  return ENTITY_SHAPES.find((entry) => entry.pattern.test(base) || entry.pattern.test(fact.name));
+}
+
+function businessLabel(fact: TableFact): string {
+  return entityOf(fact)?.zh ?? tableLabel(fact);
+}
+
+/** 计数指标名与单位；未识别的实体退回中性的「记录数 / 条」。 */
+function countMeasure(fact: TableFact): { label: string; unit: string } {
+  const entity = entityOf(fact);
+  if (entity) return entity.count;
+  return { label: `${tableLabel(fact)}记录数`, unit: '条' };
+}
+
+function moneyMeasure(fact: TableFact): string {
+  return entityOf(fact)?.money ?? `${tableLabel(fact)}金额`;
 }
 
 export interface ReportInput {
@@ -53,6 +78,26 @@ export interface ReportInput {
   audience?: 'executive' | 'business' | 'technical';
   /** 已解析好的时间窗（Agent 与确定性两条路径共用同一份解析结果）。 */
   resolvedPeriod?: ResolvedPeriod;
+  /**
+   * 读者自己给的参照值，例如「订单量 5000」。
+   * 环比/同比只能回答「和过去比」，回答不了「和计划比」。
+   */
+  target?: string;
+}
+
+/**
+ * 解析读者给的参照值：取第一个数字做值，它前面的文字做指标名。
+ * 「订单量 5000」「日均 120 笔」「5000」都能解析；解析不出数字就当没填。
+ */
+export function parseTarget(value: string | undefined): { label?: string; value: number } | undefined {
+  const text = value?.trim();
+  if (!text) return undefined;
+  const match = /(-?\d[\d,]*(?:\.\d+)?)/.exec(text.replace(/[，,](?=\d{3}\b)/g, ''));
+  if (!match) return undefined;
+  const numeric = Number.parseFloat(match[1].replace(/,/g, ''));
+  if (!Number.isFinite(numeric)) return undefined;
+  const label = text.slice(0, match.index).replace(/[：:=\s]+$/u, '').trim();
+  return { ...(label ? { label } : {}), value: numeric };
 }
 
 interface SourceData {
@@ -67,6 +112,10 @@ interface SourceData {
   series: BusinessSeries[];
   /** 口径说明：哪个时间列、哪个金额列、是否剔除软删除。 */
   calibers: string[];
+  /** 趋势序列上的异常点与口径风险提示。 */
+  risks: string[];
+  /** 环比变化的维度归因。 */
+  attributions: Attribution[];
 }
 
 /** 一条确定性业务指标：本期值 + 基线值，差值由应用算。 */
@@ -79,6 +128,21 @@ interface BusinessFact {
   goodDirection?: 'up' | 'down' | 'neutral';
   definition: string;
   tableLabel: string;
+  /** 产生该数字的查询；确定性报告同样可追溯。 */
+  ref?: string;
+  /** 基线数字来自哪次查询。 */
+  baselineRef?: string;
+  /** 环比之外的补充基线（同比、本期未结束时的同长切片）。 */
+  alternatives?: Array<{ label: string; value?: number; delta?: ReportDelta }>;
+  /** 该事实所属的事实表与时间列：归因与异常检测要按它再查一次。 */
+  table: string;
+  timeColumn: string;
+  dimension?: string;
+  dimensionLabel?: string;
+  /** 与本期同口径的过滤条件（不含时间边界）。 */
+  filter: string;
+  /** 计数用的聚合表达式，例如 COUNT(*)。 */
+  measure: string;
 }
 
 /** 一条确定性图表数据。 */
@@ -87,6 +151,122 @@ interface BusinessSeries {
   chartType: 'line' | 'bar' | 'pie' | 'stacked';
   points: Array<{ label: string; value: number }>;
   definition: string;
+  ref?: string;
+}
+
+/** 归因取维度值的上限：高基数维度不能把整张表拉回内存。 */
+const DIMENSION_LIMIT = 50;
+
+/** 环比变化按维度拆开：总量涨跌只有拆到维度上才可解释。 */
+interface Attribution {
+  label: string;
+  dimensionLabel: string;
+  dimension: string;
+  movers: Array<{ value: string; current: number; baseline: number; delta: number; share: number }>;
+  totalDelta: number;
+  /** 维度值撞到 DIMENSION_LIMIT：合计只覆盖取回的那部分，必须在读者面前承认。 */
+  capped: boolean;
+  ref?: string;
+  baselineRef?: string;
+}
+
+/** 环比变化按主维度拆开。两个窗口共用同一条过滤模板，只换时间边界。 */
+async function attributionOf(
+  manager: ConnectionManager,
+  conn: ConnectionConfig,
+  database: string | undefined,
+  fact: BusinessFact,
+  period: ResolvedPeriod,
+  topN = 6,
+  trace?: EvidenceTrace,
+): Promise<Attribution | undefined> {
+  const previous = period.previous;
+  if (!previous || !fact.dimension) return undefined;
+  const engine = conn.engine;
+  const dim = quoteIdent(fact.dimension, engine);
+  const windowOf = (start: string, end: string): string => {
+    const bounds = windowFilter(fact.timeColumn, engine, start, end);
+    const clauses = [fact.filter.replace(/^WHERE\s+/i, '').trim(), bounds].filter(Boolean);
+    return clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  };
+  const sqlOf = (start: string, end: string) =>
+    `SELECT ${dim} AS dim_value, ${fact.measure} AS metric FROM ${fact.table} ${windowOf(start, end)} GROUP BY dim_value ORDER BY metric DESC LIMIT ${DIMENSION_LIMIT}`;
+  const [current, baseline] = await Promise.all([
+    rowsQuery(manager, conn, database, sqlOf(period.current.from, period.current.to), 50, trace),
+    rowsQuery(manager, conn, database, sqlOf(previous.from, previous.to), 50, trace),
+  ]);
+  if (!current.rows.length && !baseline.rows.length) return undefined;
+  const merged = new Map<string, { current: number; baseline: number }>();
+  for (const row of current.rows) {
+    const key = String(row[0] ?? '—');
+    const value = Number(row[1]);
+    if (!Number.isFinite(value)) continue;
+    const entry = merged.get(key) ?? { current: 0, baseline: 0 };
+    entry.current += value;
+    merged.set(key, entry);
+  }
+  for (const row of baseline.rows) {
+    const key = String(row[0] ?? '—');
+    const value = Number(row[1]);
+    if (!Number.isFinite(value)) continue;
+    const entry = merged.get(key) ?? { current: 0, baseline: 0 };
+    entry.baseline += value;
+    merged.set(key, entry);
+  }
+  const rows = [...merged.entries()].map(([value, entry]) => ({ value, ...entry, delta: entry.current - entry.baseline }));
+  const totalDelta = rows.reduce((sum, row) => sum + row.delta, 0);
+  if (!rows.length || totalDelta === 0) return undefined;
+  const absTotal = rows.reduce((sum, row) => sum + Math.abs(row.delta), 0) || 1;
+  return {
+    label: fact.label,
+    dimensionLabel: fact.dimensionLabel ?? fact.dimension,
+    dimension: fact.dimension,
+    movers: [...rows]
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+      .slice(0, topN)
+      .map((row) => ({ ...row, share: (Math.abs(row.delta) / absTotal) * 100 })),
+    totalDelta,
+    // 两条 SQL 都带 LIMIT 50：维度值更多时被砍掉的那些不进合计。SQL 层已经限流，
+    // 批次不会标记 truncated，只能自己说出来——否则「整体变化」会被当成全量。
+    capped: current.rows.length >= DIMENSION_LIMIT || baseline.rows.length >= DIMENSION_LIMIT,
+    ...(current.ref ? { ref: current.ref } : {}),
+    ...(baseline.ref ? { baselineRef: baseline.ref } : {}),
+  };
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+/** 归因表：读「对整体变化的贡献」而不是各自涨跌幅——小体量的大涨会骗人。 */
+function attributionTable(attribution: Attribution): ReportBlock {
+  const refs = [attribution.ref, attribution.baselineRef].filter((ref): ref is string => Boolean(ref));
+  return {
+    kind: 'table',
+    title: `${attribution.label}：环比变化主要来自哪里（按 ${attribution.dimensionLabel}）`,
+    columns: [attribution.dimensionLabel, '本期', '上期', '变化', '占整体变化'],
+    measureColumns: ['本期', '上期', '变化', '占整体变化'],
+    rows: attribution.movers.map((mover) => [mover.value, round2(mover.current), round2(mover.baseline), round2(mover.delta), `${mover.share.toFixed(1)}%`]),
+    ...(attribution.ref ? { resultRef: attribution.ref } : {}),
+    ...(refs.length ? { resultRefs: refs } : {}),
+    note: `整体变化 ${signed(attribution.totalDelta)}；占比 = 该项变化量 ÷ 各项变化量绝对值之和，正负项都计入分母。${
+      attribution.capped ? `维度值超过 ${DIMENSION_LIMIT} 个，未取回的部分不计入整体变化。` : ''
+    }`,
+  };
+}
+
+/** 偏离均值多少个标准差。少于 4 个样本时标准差不稳定，宁可不报。 */
+function detectAnomalies(points: Array<{ label: string; value: number }>, threshold = 2): Array<{ label: string; value: number; mean: number; deviation: number }> {
+  const values = points.map((point) => point.value);
+  if (values.length < 4) return [];
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const sd = Math.sqrt(values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length);
+  if (!(sd > 0)) return [];
+  return points
+    .map((point) => ({ label: point.label, value: point.value, mean, deviation: (point.value - mean) / sd }))
+    .filter((point) => Math.abs(point.deviation) >= threshold)
+    .sort((a, b) => Math.abs(b.deviation) - Math.abs(a.deviation))
+    .slice(0, 3);
 }
 
 async function countRows(manager: ConnectionManager, conn: ConnectionConfig, table: TableInfo, database?: string): Promise<number | null> {
@@ -135,20 +315,47 @@ function windowFilter(column: string, engine: ConnectionConfig['engine'], from: 
   return `${col} >= '${from}' AND ${col} < '${exclusive}'`;
 }
 
+/**
+ * 证据登记器：记下「这个数字是哪条 SQL 查出来的」。
+ * 确定性路径同样要有证据链——没开 AI 时，读者若不能复核，就只能选择相信。
+ */
+interface EvidenceTrace {
+  record(entry: Omit<ReportEvidence, 'ref' | 'ranAt'>): string;
+}
+
+function newTrace(): { trace: EvidenceTrace; dump: () => Record<string, ReportEvidence> } {
+  const map = new Map<string, ReportEvidence>();
+  let seq = 0;
+  return {
+    trace: {
+      record(entry) {
+        seq += 1;
+        const ref = `q${seq}`;
+        map.set(ref, { ref, ranAt: new Date().toISOString(), ...entry });
+        return ref;
+      },
+    },
+    dump: () => Object.fromEntries(map),
+  };
+}
+
 /** 跑一条只读聚合，取第一行第一列。失败返回 null，不拖垮整份报告。 */
 async function scalarQuery(
   manager: ConnectionManager,
   conn: ConnectionConfig,
   database: string | undefined,
   sql: string,
-): Promise<number | null> {
+  trace?: EvidenceTrace,
+): Promise<{ value: number | null; ref?: string }> {
   try {
     const batch = await manager.query(conn.id, sql, { database, maxRows: 5, allowMulti: false, autoLimit: false, actor: 'user' });
     const value = batch.sets[0]?.rows[0]?.[0];
     const numeric = Number(value);
-    return value === null || value === undefined || !Number.isFinite(numeric) ? null : numeric;
+    const clean = value === null || value === undefined || !Number.isFinite(numeric) ? null : numeric;
+    if (!trace) return { value: clean };
+    return { value: clean, ref: trace.record({ tool: 'run_sql', sql, rowCount: batch.sets[0]?.rowCount, durationMs: batch.durationMs }) };
   } catch {
-    return null;
+    return { value: null };
   }
 }
 
@@ -159,13 +366,25 @@ async function rowsQuery(
   database: string | undefined,
   sql: string,
   maxRows = 24,
-): Promise<Array<Array<unknown>>> {
+  trace?: EvidenceTrace,
+): Promise<{ rows: Array<Array<unknown>>; ref?: string }> {
   try {
     // 报告里的分组聚合可能命中超大表；把行数上限下推成 LIMIT，别把整组结果拉回来。
     const batch = await manager.query(conn.id, sql, { database, maxRows, allowMulti: false, autoLimit: true, actor: 'user' });
-    return batch.sets[0]?.rows ?? [];
+    const rows = batch.sets[0]?.rows ?? [];
+    if (!trace) return { rows };
+    return {
+      rows,
+      ref: trace.record({
+        tool: 'run_sql',
+        sql,
+        rowCount: batch.sets[0]?.rowCount ?? rows.length,
+        truncated: batch.sets[0]?.truncated,
+        durationMs: batch.durationMs,
+      }),
+    };
   } catch {
-    return [];
+    return { rows: [] };
   }
 }
 
@@ -204,7 +423,9 @@ async function businessFactsOf(
   facts: TableFact[],
   period: ResolvedPeriod,
   limit = 4,
-): Promise<{ facts: BusinessFact[]; series: BusinessSeries[]; calibers: string[] }> {
+  trace?: EvidenceTrace,
+  target?: { label?: string; value: number },
+): Promise<{ facts: BusinessFact[]; series: BusinessSeries[]; calibers: string[]; risks: string[]; attributions: Attribution[] }> {
   const engine = conn.engine;
   const out: BusinessFact[] = [];
   const series: BusinessSeries[] = [];
@@ -217,7 +438,30 @@ async function businessFactsOf(
   const previous = period.previous;
   // 基线读法直接取解析器的标签（已含「环比 / 同比」），不要再加前缀，否则会变成「环比 环比 上期」。
   const baselineLabel = previous ? previous.label.split('（')[0]?.trim() : undefined;
+  const risks: string[] = [];
+  const attributions: Attribution[] = [];
   let compositionTried = false;
+  let attributionDone = false;
+  /** 读者填的参照值只贴到名字对得上的指标上；对不上就不贴，绝不硬套到第一个指标。 */
+  const withTarget = (
+    list: Array<{ label: string; value?: number; delta?: ReportDelta }>,
+    metricLabel: string,
+    currentValue: number,
+  ): Array<{ label: string; value?: number; delta?: ReportDelta }> => {
+    if (!target) return list;
+    if (target.label && !(metricLabel.includes(target.label) || target.label.includes(metricLabel))) return list;
+    if (list.some((item) => item.label.includes('目标'))) return list;
+    return [...list, { label: target.label ? `目标 ${target.label}` : '目标', value: target.value, delta: computeMetricDelta(currentValue, target.value) }];
+  };
+  // 每条报告为「多一条基线」额外发的查询数：值得多问一句，但不值得把生产库打满。
+  let altBudget = 4;
+  const currentDays = windowDays(from, to);
+  const baselineDays = previous ? windowDays(previous.from, previous.to) : undefined;
+  const primaryWindow = previous ? `${previous.from}~${previous.to}` : '';
+  // 本期未走完 / 两期天数不等时，直接环比会凭空造出涨跌，补两个不依赖长度的读法。
+  const sliceWindow = precedingEqualWindow(period);
+  const yoyWindow = yearAgoWindow(period.current);
+  const chainView = period.baselineKind === 'year' ? chainWindow(period.current) : undefined;
 
   for (const fact of usable) {
     if (out.length >= limit && series.length >= 2) break;
@@ -235,17 +479,79 @@ async function businessFactsOf(
       return clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     };
     const aggregate = (fn: string, start: string, end: string) =>
-      scalarQuery(manager, conn, database, `SELECT ${fn} FROM ${table} ${whereFor(start, end)}`);
+      scalarQuery(manager, conn, database, `SELECT ${fn} FROM ${table} ${whereFor(start, end)}`, trace);
 
-    const current = await aggregate('COUNT(*)', from, to);
-    if (current === null) continue;
-    const baseline = previous ? await aggregate('COUNT(*)', previous.from, previous.to) : null;
+    /**
+     * 环比之外的补充基线：同比、前一区间，以及两期天数不等时的日均口径。
+     * 只有一条基线的报告分不清「比上月少」是趋势还是季节，也分不清是不是本月没过完。
+     */
+    const alternativesFor = async (
+      measure: string,
+      scale: (value: number) => number,
+      currentValue: number,
+      baselineValue?: number,
+    ): Promise<Array<{ label: string; value?: number; delta?: ReportDelta }>> => {
+      const out: Array<{ label: string; value?: number; delta?: ReportDelta }> = [];
+      let windowBaselines = 0;
+      if (
+        previous &&
+        baselineValue !== undefined &&
+        baselineDays !== undefined &&
+        baselineDays !== currentDays &&
+        baselineValue > 0
+      ) {
+        const perDay = (value: number, days: number) => Math.round((value / days) * 100) / 100;
+        const currentPerDay = perDay(currentValue, currentDays);
+        const baselinePerDay = perDay(baselineValue, baselineDays);
+        out.push({
+          label: `日均口径（本期 ${currentDays} 天 / 基线 ${baselineDays} 天）`,
+          value: currentPerDay,
+          delta: computeMetricDelta(currentPerDay, baselinePerDay),
+        });
+      }
+      const seen = new Set<string>([primaryWindow]);
+      for (const window of [sliceWindow, yoyWindow, chainView]) {
+        if (!window || altBudget <= 0) continue;
+        altBudget -= 1;
+        const key = `${window.from}~${window.to}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        // 窗口型基线最多两条：同长切片与同比（或环比视角），再多就是在重复问同一个问题。
+        if (windowBaselines >= 2) break;
+        windowBaselines += 1;
+        const hit = await scalarQuery(manager, conn, database, `SELECT ${measure} FROM ${table} ${whereFor(window.from, window.to)}`, trace);
+        // 查不到或为 0 一律跳过：那里多半根本没有那一年的数据，不是真的腰斩。
+        if (hit.value === null || hit.value === 0) continue;
+        const value = scale(hit.value);
+        out.push({
+          label: window.label.split('（')[0]?.trim() ?? '对比',
+          value,
+          delta: computeMetricDelta(currentValue, value),
+        });
+      }
+      return out;
+    };
+
+    const counted = await aggregate('COUNT(*)', from, to);
+    if (counted.value === null) continue;
+    const prior = previous ? await aggregate('COUNT(*)', previous.from, previous.to) : undefined;
+    const count = countMeasure(fact);
     out.push({
-      label: `${label}单量`,
-      value: current,
-      unit: '笔',
+      label: count.label,
+      value: counted.value,
+      unit: count.unit,
       goodDirection: inferGoodDirection(label),
-      ...(baseline === null ? {} : { baseline, baselineLabel }),
+      ...(counted.ref ? { ref: counted.ref } : {}),
+      ...(prior?.value === undefined || prior.value === null ? {} : { baseline: prior.value, baselineLabel, ...(prior.ref ? { baselineRef: prior.ref } : {}) }),
+      alternatives: withTarget(
+        await alternativesFor('COUNT(*)', (value) => value, counted.value, prior?.value ?? undefined),
+        count.label,
+        counted.value,
+      ),
+      table,
+      timeColumn: time,
+      filter: softDelete,
+      measure: 'COUNT(*)',
       definition: `${label}：按 ${time} 统计 ${from} ~ ${to} 的记录数${softDelete ? '（已按软删除过滤）' : ''}`,
       tableLabel: label,
     });
@@ -254,17 +560,29 @@ async function businessFactsOf(
     if (money) {
       const sum = `SUM(${quoteIdent(money, engine)})`;
       const amountCurrent = await aggregate(sum, from, to);
-      if (amountCurrent !== null) {
-        const amountPrevious = previous ? await aggregate(sum, previous.from, previous.to) : null;
+      if (amountCurrent.value !== null) {
+        const amountPrevious = previous ? await aggregate(sum, previous.from, previous.to) : undefined;
         // 以「分」存储的金额在这里统一换算成元，并在口径里写明——业务读者拿到的是元，不是分。
         const cents = /(_cents?|cents?)$/i.test(money);
         const scale = (value: number) => Math.round(value * (cents ? 0.01 : 1) * 100) / 100;
         out.push({
-          label: `${label}金额`,
-          value: scale(amountCurrent),
+          label: moneyMeasure(fact),
+          value: scale(amountCurrent.value),
           unit: cents ? '元' : undefined,
           goodDirection: inferGoodDirection(label),
-          ...(amountPrevious === null || amountPrevious === undefined ? {} : { baseline: scale(amountPrevious), baselineLabel }),
+          ...(amountCurrent.ref ? { ref: amountCurrent.ref } : {}),
+          ...(amountPrevious?.value === undefined || amountPrevious.value === null
+            ? {}
+            : { baseline: scale(amountPrevious.value), baselineLabel, ...(amountPrevious.ref ? { baselineRef: amountPrevious.ref } : {}) }),
+          alternatives: withTarget(
+            await alternativesFor(sum, scale, scale(amountCurrent.value), amountPrevious?.value === undefined || amountPrevious.value === null ? undefined : scale(amountPrevious.value)),
+            moneyMeasure(fact),
+            scale(amountCurrent.value),
+          ),
+          table,
+          timeColumn: time,
+          filter: softDelete,
+          measure: sum,
           definition: `${label}：SUM(${money})${cents ? '／100（元）' : ''}，${from} ~ ${to}`,
           tableLabel: label,
         });
@@ -274,18 +592,20 @@ async function businessFactsOf(
 
     if (!series.length) {
       const bucket = buildTimeBucketExpr(engine, time, 'month');
-      const trendRows = await rowsQuery(
+      const trend = await rowsQuery(
         manager,
         conn,
         database,
         `SELECT ${bucket} AS period, COUNT(*) AS cnt FROM ${table} ${softDelete} GROUP BY period ORDER BY period DESC LIMIT 12`,
         12,
-      ).then((rows) => rows.reverse());
-      const points = trendRows
+        trace,
+      );
+      const points = trend.rows
+        .reverse()
         .map((row) => ({ label: String(row[0] ?? '—'), value: Number(row[1]) }))
         .filter((point) => Number.isFinite(point.value) && !/^\s*$/.test(point.label));
       if (points.length >= 3) {
-        series.push({ title: `${label}月度趋势`, chartType: 'line', points, definition: `${label}：按 ${time} 分月统计记录数` });
+        series.push({ title: `${label}月度趋势`, chartType: 'line', points, definition: `${label}：按 ${time} 分月统计记录数`, ...(trend.ref ? { ref: trend.ref } : {}) });
       }
     }
 
@@ -295,13 +615,15 @@ async function businessFactsOf(
       const dim = dimensionOf(fact, [time, ...(money ? [money] : [])]);
       if (dim) {
         compositionTried = true;
-        const composition = await rowsQuery(
+        const grouped = await rowsQuery(
           manager,
           conn,
           database,
           `SELECT ${quoteIdent(dim, engine)} AS dim_value, COUNT(*) AS cnt FROM ${table} ${whereFor(from, to)} GROUP BY dim_value ORDER BY cnt DESC LIMIT 9`,
           9,
+          trace,
         );
+        const composition = grouped.rows;
         const points = composition
           .slice(0, 8)
           .map((row) => ({ label: String(row[0] ?? '—'), value: Number(row[1]) }))
@@ -313,29 +635,58 @@ async function businessFactsOf(
             chartType: 'pie',
             points,
             definition: `${label}：${from} ~ ${to} 按 ${dim} 分组统计记录数`,
+            ...(grouped.ref ? { ref: grouped.ref } : {}),
           });
           calibers.push(`${label} 构成口径：按 ${dim} 分组`);
         }
       }
     }
 
+    // 环比变化按维度拆开：总量涨跌只有落到维度上才可解释、可行动。
+    if (!attributionDone) {
+      const countFact = out.find((item) => item.tableLabel === label && item.baseline !== undefined);
+      const dim = dimensionOf(fact, [time, ...(money ? [money] : [])]);
+      if (countFact && dim) {
+        attributionDone = true;
+        countFact.dimension = dim;
+        countFact.dimensionLabel = dimensionLabel(fact, dim);
+        const attribution = await attributionOf(manager, conn, database, countFact, period, 6, trace).catch(() => undefined);
+        if (attribution) attributions.push(attribution);
+      }
+    }
+
     if (series.length < 2) {
-      const distribution = await rowsQuery(
+      const daily = await rowsQuery(
         manager,
         conn,
         database,
         `SELECT ${buildTimeBucketExpr(engine, time, 'day')} AS bucket, COUNT(*) AS cnt FROM ${table} ${whereFor(from, to)} GROUP BY bucket ORDER BY cnt DESC LIMIT 8`,
         8,
+        trace,
       );
+      const distribution = daily.rows;
       const points = distribution
         .map((row) => ({ label: String(row[0] ?? '—'), value: Number(row[1]) }))
         .filter((point) => Number.isFinite(point.value) && !/^\s*$/.test(point.label));
       if (points.length >= 2) {
-        series.push({ title: `${label}：按天分布`, chartType: 'bar', points, definition: `${label}：${from} ~ ${to} 内按 ${time} 的按天分布` });
+        series.push({ title: `${label}：按天分布`, chartType: 'bar', points, definition: `${label}：${from} ~ ${to} 内按 ${time} 的按天分布`, ...(daily.ref ? { ref: daily.ref } : {}) });
       }
     }
   }
-  return { facts: out, series, calibers };
+
+  // 趋势序列上的异常点进风险：只报「哪天明显偏离日常水位」，不替读者下结论。
+  for (const item of series) {
+    const points = detectAnomalies(item.points);
+    for (const point of points) {
+      risks.push(
+        `${item.title}：${point.label} 为 ${point.value.toLocaleString('zh-CN')}，${point.deviation > 0 ? '高于' : '低于'}这段时间均值 ${Math.round(point.mean).toLocaleString('zh-CN')} 约 ${Math.abs(point.deviation).toFixed(1)} 个标准差。`,
+      );
+    }
+  }
+  if (period.partial && baselineDays !== undefined && baselineDays !== currentDays) {
+    risks.push(`本期只统计了 ${currentDays} 天，基线是 ${baselineDays} 天：环比请看「日均口径」那条，别直接读总量差。`);
+  }
+  return { facts: out, series, calibers, risks: risks.slice(0, 4), attributions };
 }
 
 /** BusinessFact → ReportMetric：差值与方向由应用计算，基线保证和本期同口径。 */
@@ -346,11 +697,14 @@ function toReportMetric(fact: BusinessFact, sourceKey?: string): ReportMetric {
     ...(fact.unit ? { unit: fact.unit } : {}),
     ...(sourceKey ? { source: sourceKey } : {}),
     ...(fact.goodDirection ? { goodDirection: fact.goodDirection } : {}),
+    ...(fact.ref ? { resultRef: fact.ref } : {}),
   };
+  if (fact.alternatives?.length) metric.alternativeBaselines = fact.alternatives;
   if (fact.baseline !== undefined) {
     metric.baseline = fact.baseline;
     metric.baselineLabel = fact.baselineLabel;
     metric.delta = computeMetricDelta(fact.value, fact.baseline);
+    if (fact.baselineRef) metric.baselineResultRef = fact.baselineRef;
   }
   return metric;
 }
@@ -372,7 +726,7 @@ function executiveHeadline(period: ResolvedPeriod, facts: BusinessFact[]): strin
 }
 
 /** 管理层摘要：先给三条能直接复述的结论，再给数据。 */
-function executiveSummary(period: ResolvedPeriod, facts: BusinessFact[], seriesCount: number): ReportExecutive {
+function executiveSummary(period: ResolvedPeriod, facts: BusinessFact[], seriesCount: number, analyticsRisks: string[] = []): ReportExecutive {
   const headline = executiveHeadline(period, facts);
   // 头条放第一条指标，要点从第二条开始——否则同一句话会在摘要里出现两遍。
   const ranked = facts.filter((fact) => fact.baseline !== undefined);
@@ -388,7 +742,9 @@ function executiveSummary(period: ResolvedPeriod, facts: BusinessFact[], seriesC
   if (!facts.length) risks.push('没有可用的业务指标：以下章节只是数据规模盘点，不能当作经营结论。');
   if (period.partial) risks.push('统计区间尚未结束，环比数字会随最后一天的数据继续变化。');
   else if (seriesCount === 0) risks.push('未生成趋势图，无法判断本期是常态还是异常。');
-  return { headline, takeaways, ...(risks.length ? { risks } : {}) };
+  // 异常点与口径风险排在最前：它们决定前面那些数字能不能直接读。
+  const merged = [...analyticsRisks, ...risks].slice(0, 6);
+  return { headline, takeaways, ...(merged.length ? { risks: [...new Set(merged)] } : {}) };
 }
 
 async function writeAiNarrative(
@@ -444,11 +800,13 @@ export async function generateReport(
   input: ReportInput,
   signal?: AbortSignal,
 ): Promise<ReportSpec> {
+  const target = parseTarget(input.target);
   const topic = input.topic.trim() || '数据概览';
   const period = input.resolvedPeriod ?? resolvePeriod({ period: input.period, topic });
   const audience = input.audience ?? 'business';
   const selectedTables = new Set((input.tables ?? []).map((table) => table.toLowerCase()));
   const sources: SourceData[] = [];
+  const tracing = newTrace();
   for (const [index, source] of input.sources.entries()) {
     const conn = store.getConnection(source.connectionId);
     if (!conn) throw Object.assign(new Error(`连接不存在：${source.connectionId}`), { code: 'SOURCE_UNAVAILABLE', status: 404 });
@@ -474,10 +832,12 @@ export async function generateReport(
     const factPool = flattenTables(schemas).filter(
       (fact) => !selectedTables.size || selectedTables.has(fact.table.name.toLowerCase()),
     );
-    const business = await businessFactsOf(manager, conn, source.database ?? conn.database, factPool, period).catch(() => ({
+    const business = await businessFactsOf(manager, conn, source.database ?? conn.database, factPool, period, 4, tracing.trace, target).catch(() => ({
       facts: [] as BusinessFact[],
       series: [] as BusinessSeries[],
       calibers: [] as string[],
+      risks: [] as string[],
+      attributions: [] as Attribution[],
     }));
     sources.push({
       ref: {
@@ -495,6 +855,8 @@ export async function generateReport(
       facts: business.facts,
       series: business.series,
       calibers: business.calibers,
+      risks: business.risks,
+      attributions: business.attributions,
     });
   }
 
@@ -504,7 +866,7 @@ export async function generateReport(
   const sourceRefs = sources.map((source) => source.ref);
   const allFacts = sources.flatMap((source) => source.facts);
   const allSeries = sources.flatMap((source) => source.series);
-  const executive = executiveSummary(period, allFacts, allSeries.length);
+  const executive = executiveSummary(period, allFacts, allSeries.length, sources.flatMap((source) => source.risks));
 
   const scaleMetrics: ReportMetric[] = [
     { label: '数据源', value: sources.length },
@@ -561,7 +923,19 @@ export async function generateReport(
         chartType: entry.chartType,
         series: entry.points,
         note: entry.definition,
+        ...(entry.ref ? { resultRef: entry.ref } : {}),
       })),
+    });
+  }
+
+  // 归因紧跟趋势：读者看完「总量变了」，下一个问题就是「变在哪」。
+  const attributionBlocks = sources.flatMap((source) => source.attributions).map(attributionTable);
+  if (attributionBlocks.length) {
+    sections.push({
+      id: 'attribution',
+      title: '变化归因',
+      conclusion: '把环比变化按主维度拆开，看变化集中在哪里；占比按变化量绝对值归一，正负项都算分母。',
+      blocks: attributionBlocks,
     });
   }
 
@@ -668,6 +1042,8 @@ export async function generateReport(
         narrative.text ? '报告数字由网关统计，AI 仅生成叙述。' : '当前未启用 AI 叙述：报告数字由网关确定性统计。',
         ...(narrative.error && narrative.error !== 'local provider' ? [`AI 叙述未生成：${narrative.error}`] : []),
       ],
+      // 确定性路径的证据链：点开指标能看到产生它的 SQL、行数与耗时。
+      evidence: tracing.dump(),
     },
   };
 }
