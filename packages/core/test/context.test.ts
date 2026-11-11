@@ -10,6 +10,7 @@ import {
   formatMemoriesForPrompt,
   formatRelations,
   formatSqlExamples,
+  schemaFocusEnabled,
 } from '../src/agent/prompt';
 import { extractHeuristicMemories, rankMemories } from '../src/agent/memory';
 import { isAgentContextActive, type AgentContextEntry, type DatabaseSchema, type Memory } from '../src/types';
@@ -351,12 +352,8 @@ test('focusTablesForQuestion returns attachments and ignores unrelated questions
   assert.deepEqual(focusTablesForQuestion({ question: '随便', databases: schema, attachments: ['audit_log'] }), ['audit_log']);
 });
 
-test('buildSystemPrompt limits column detail to question-relevant tables', () => {
+test('compressSchema prioritizes question-relevant candidate tables for column detail', () => {
   const bundle = bundleAgentContext([entry({ kind: 'table', table: 'orders', alias: '订单表' })], { connectionId: 'c1', database: 'shop' });
-  const out = buildSystemPrompt({ databases: schema, context: bundle, mode: 'ask', memories: [], question: '查一下订单', focusMode: 'on' });
-  assert.match(out, /Column detail is prioritized for tables relevant to this question/);
-  assert.match(out, /- table orders \(订单表\)[\s\S]*columns:/);
-
   // 小 schema 会填满默认 15 表预算，这里用 1 表预算单独验证“候选表优先”
   const compressed = compressSchema(schema, ['orders'], 1, bundle);
   const lines = compressed.split('\n');
@@ -365,22 +362,35 @@ test('buildSystemPrompt limits column detail to question-relevant tables', () =>
   assert.ok(!/- table users[\s\S]*\n\s+columns:/.test(compressed), '非候选表不占明细');
 });
 
-test('schema focus auto-enables only for very large schemas', () => {
+test('schema focus is window-aware: 1M window keeps full detail, small window focuses', () => {
+  // 小 schema：无窗口档案时保持整库明细（旧行为）；1M 窗口也不再聚焦
   const small = buildSystemPrompt({ databases: schema, mode: 'ask', memories: [], question: '查一下订单' });
-  assert.ok(!small.includes('Column detail is prioritized'), '116 表以下保持整库明细');
+  assert.ok(!small.includes('Column detail is prioritized'), '小 schema 保持整库明细');
 
+  const wide = buildSystemPrompt({ databases: schema, mode: 'ask', memories: [], question: '查一下订单', contextWindow: 1_048_576 });
+  assert.ok(!wide.includes('Column detail is prioritized'), '1M 窗口下小 schema 明细完整，不被裁剪');
+
+  // 大库 + 小窗口 → 触发聚焦
   const big: DatabaseSchema = {
     name: 'big',
-    tables: Array.from({ length: 151 }, (_, i) => ({
+    tables: Array.from({ length: 3000 }, (_, i) => ({
       name: i === 0 ? 't_order' : `t_${i}`,
       type: 'table' as const,
-      columns: [{ name: 'id', type: 'INT', nullable: false, primaryKey: true }],
+      columns: Array.from({ length: 30 }, (_, j) => ({ name: `c${j}`, type: 'INT', nullable: false, primaryKey: j === 0 })),
     })),
   };
-  const large = buildSystemPrompt({ databases: [big], mode: 'ask', memories: [], question: '查一下订单' });
-  assert.match(large, /Column detail is prioritized/);
-  assert.match(large, /- table t_order/);
-  assert.match(large, /other tables \(name only/);
+  // 小窗口 32K：展开 3000*30 列远超余量 → 聚焦
+  const tight = buildSystemPrompt({ databases: [big], mode: 'ask', memories: [], question: '查一下订单', contextWindow: 32_000 });
+  assert.match(tight, /Column detail is prioritized/);
+  assert.match(tight, /- table t_order/);
+  // 大窗口 1M：同一大库也能放得下展开明细 → 不聚焦
+  const roomy = buildSystemPrompt({ databases: [big], mode: 'ask', memories: [], question: '查一下订单', contextWindow: 1_048_576 });
+  assert.ok(!roomy.includes('Column detail is prioritized'), '1M 窗口的整库明细不再被无谓裁剪');
+
+  // schemaFocusEnabled 无窗口档案时退回旧的表数/列数启发式
+  assert.equal(schemaFocusEnabled({ contextWindow: 0, totalTables: 100, totalColumns: 300 }), false);
+  assert.equal(schemaFocusEnabled({ contextWindow: 0, totalTables: 151, totalColumns: 80 }), true, '无档案时用旧的 150 表阈值');
+  assert.equal(schemaFocusEnabled({ contextWindow: 0, totalTables: 10, totalColumns: 3000 }), true, '无档案时用旧的 2500 列阈值');
 });
 
 test('anti-pattern glossary entries become a separate hard-constraint section', () => {

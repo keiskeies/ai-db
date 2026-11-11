@@ -37,7 +37,6 @@ const VALIDATE_ONLY = hasFlag('validate-only');
 const FAIL_ON_REGRESSION = hasFlag('fail-on-regression');
 const ARMS = arg('arms', 'ab');
 const ONLY_B = ARMS === 'b';
-const FOCUS = arg('focus', '');
 const OUT = arg('out', '');
 const headers = { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` };
 
@@ -256,15 +255,6 @@ if (VALIDATE_ONLY) {
 if (!VALIDATE_ONLY) {
 const ctxQuery = `connectionId=${encodeURIComponent(conn.id)}&database=${encodeURIComponent(database)}`;
 
-// 固定候选表检索开关：auto（默认）/ on / off。实验结束后恢复原值。
-let originalFocus;
-if (FOCUS) {
-  const current = await api('/settings');
-  originalFocus = current.settings.agent.schemaFocus ?? 'auto';
-  await api('/settings', { method: 'PUT', body: JSON.stringify({ agent: { ...current.settings.agent, schemaFocus: FOCUS } }) });
-  console.log(`schemaFocus=${FOCUS}（原值 ${originalFocus}）`);
-}
-
 await api(`/agent/context?${ctxQuery}`, { method: 'DELETE' }).catch(() => {});
 let armA = [];
 if (!ONLY_B) {
@@ -276,7 +266,7 @@ if (!ONLY_B) {
   console.log(`\n=== A 组：无业务上下文（${questions.length} 题）===`);
   armA = await runArm('A', questions, conn.id, database);
 } else {
-  console.log(`\n=== B-only：跳过 A 组（${questions.length} 题，focus=${FOCUS || 'auto'}）===`);
+  console.log(`\n=== B-only：跳过 A 组（${questions.length} 题）===`);
 }
 
 // ---------- Arm B：配置业务上下文 ----------
@@ -317,18 +307,13 @@ if (!KEEP) {
 } else {
   console.log('\n--keep：保留本次配置的业务上下文与记忆。');
 }
-if (FOCUS) {
-  const current = await api('/settings');
-  await api('/settings', { method: 'PUT', body: JSON.stringify({ agent: { ...current.settings.agent, schemaFocus: originalFocus ?? 'auto' } }) });
-  console.log(`已恢复 schemaFocus=${originalFocus ?? 'auto'}`);
-}
 
 // ---------- 报告 ----------
 const sa = armA.length ? summarize(armA) : null;
 const sb = armB ? summarize(armB) : null;
 const line = (label, a, b) => `${label.padEnd(16)}${String(a).padStart(10)}${b === undefined ? '' : String(b).padStart(12)}`;
 if (!sa) {
-  console.log(`\n================ B-only 结果（focus=${FOCUS || 'auto'}） ================`);
+  console.log(`\n================ B-only 结果 ================`);
   const rows = [
     ['题目数', sb?.total],
     ['答上率（严格）', pct(sb?.answeredRate ?? null)],
@@ -379,7 +364,7 @@ for (let i = 0; i < questions.length; i++) {
 }
 
 if (OUT) {
-  writeFileSync(OUT, JSON.stringify({ focus: FOCUS || 'auto', arms: ARMS, summary: { a: sa, b: sb }, rows: { a: armA, b: armB } }, null, 2));
+  writeFileSync(OUT, JSON.stringify({ arms: ARMS, summary: { a: sa, b: sb }, rows: { a: armA, b: armB } }, null, 2));
   console.log(`\n结果已写入 ${OUT}`);
 }
 

@@ -565,8 +565,6 @@ export interface AgentSettings {
   modelProfiles?: Record<string, ModelProfile>;
   /** 当前模型选用的推理档位（对应 modelProfiles[model].reasoningTiers 的 level）。 */
   reasoningTier?: string;
-  /** 大 schema 候选表检索：auto 仅在超大 schema 启用；on/off 强制。 */
-  schemaFocus?: 'auto' | 'on' | 'off';
   hasApiKey?: boolean;
   /** 可切换的模型来源列表；缺省时用当前 provider/baseUrl/model 合成一个默认连接。 */
   modelConfigs?: AgentModelConfig[];
@@ -729,7 +727,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
     followUpSuggestions: true,
     snapshotBeforeWrite: true,
     compactionThreshold: 24000,
-    schemaFocus: 'auto',
   },
   embedding: {
     provider: 'none',

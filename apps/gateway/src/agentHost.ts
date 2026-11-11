@@ -544,7 +544,7 @@ export class AgentHost {
           mode: run.mode,
           attachmentTables,
           question: run.userText,
-          focusMode: settings.agent.schemaFocus ?? 'auto',
+          contextWindow: profile?.contextWindow,
         });
         const extra: string[] = [];
         if (intent) {

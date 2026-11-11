@@ -17,10 +17,10 @@ export interface SystemPromptOptions {
   mode: PermissionMode;
   attachmentTables?: string[];
   maxTablesWithColumns?: number;
-  /** 当前用户问题：用于把列明细优先分配给相关表。 */
+  /** snapshot: 是否启用「按问题聚焦列明细」。现在是内部自动判断，不再暴露开关。 */
   question?: string;
-  /** auto（默认）只在超大 schema 启用；on/off 用于测试或强制切换。 */
-  focusMode?: 'auto' | 'on' | 'off';
+  /** 模型上下文窗口（tokens）。已知时按窗口算聚焦阈值；未知时退回表数/列数启发式。 */
+  contextWindow?: number;
 }
 
 const MODE_TEXT: Record<PermissionMode, string> = {
@@ -95,6 +95,30 @@ function nameTokens(name: string): string[] {
  * 按当前问题挑选候选表，并补一跳关联表。
  * 只影响 prompt 的“列明细”分配，未命中的表仍以表名出现在 Schema 中。
  */
+/* 整库完整展开的 token 估算。关键：compressSchema 无论是否聚焦，列明细只展开前
+   ~15 张表（detailBudget），其余表只出「- table X」名行；所以真正随库规模线性增长
+   的是表名行数，不是列数。聚焦与否的差别在于把上百条名行并成一行「other tables」。
+   用「每表一条名行」估算整库完整展开的占用，聚焦省的就是把这些名行收进一行的量。 */
+function fullSchemaTokens(totalTables: number): number {
+  // 每表名行：表名列 + 换行，英文 ~2-3 token，中文备注更贵，取保守值 12。
+  const perTableLine = 12;
+  return perTableLine * totalTables;
+}
+
+/** 决定是否启用「按问题聚焦列明细」。 */
+export function schemaFocusEnabled(input: { contextWindow?: number; totalTables: number; totalColumns: number }): boolean {
+  const { contextWindow, totalTables, totalColumns } = input;
+  // 无窗口档案 → 退回旧启发式，行为与改造前一致。
+  if (!contextWindow || contextWindow <= 0) return totalTables > 150 || totalColumns > 2500;
+  // 已知窗口：整库完整展开（= 每表一条名行）超过「窗口余量的 10%」才聚焦。
+  // 1M 窗口余量约 0.7M tokens，可容 ~5800 张表的名行 → 通常的几千表大库不再被裁剪；
+  // 32K/128K 小窗口用同一比例折算出更低阈值，表一多就尽早聚焦收拢名行。
+  const expanded = fullSchemaTokens(totalTables);
+  const windowHeadroom = contextWindow * 0.7; // 输出 + 系统/历史留白约 30%
+  return expanded > windowHeadroom * 0.1;
+}
+
+/** 焦点表用于列明细分配；未启聚焦时只跟随附件，不额外裁剪。 */
 export function focusTablesForQuestion(input: {
   question?: string;
   databases?: DatabaseSchema[];
@@ -350,10 +374,13 @@ export function formatBusinessContext(opts: { context?: AgentContextBundle; glos
 }
 
 export function buildSystemPrompt(opts: SystemPromptOptions): string {
-  const { connection, databases, memories, glossary, sqlExamples, context, mode, attachmentTables = [], question, focusMode = 'auto' } = opts;
+  const { connection, databases, memories, glossary, sqlExamples, context, mode, attachmentTables = [], question, contextWindow } = opts;
   const totalTables = (databases ?? []).reduce((sum, db) => sum + (db.tables?.length ?? 0), 0);
   const totalColumns = (databases ?? []).reduce((sum, db) => sum + (db.tables ?? []).reduce((n, table) => n + (table.columns?.length ?? 0), 0), 0);
-  const focusEnabled = focusMode === 'on' || (focusMode === 'auto' && (totalTables > 150 || totalColumns > 2500));
+  // 已知模型窗口时按「整库完整展开的 token 估算」决定是否聚焦：展开后占用超过窗口可读余量的
+  // 一定比例才聚焦，因此 1M 窗口的整库明细不再被无谓裁剪（旧实现只按表数/列数写死）。
+  // 窗口未知（无模型档案）时退回旧的表数/列数启发式，保证没有档案的模型行为与改造前一致。
+  const focusEnabled = schemaFocusEnabled({ contextWindow, totalTables, totalColumns });
   const focusTables = focusEnabled
     ? focusTablesForQuestion({ question, databases, context, memories, glossary, sqlExamples, attachments: attachmentTables })
     : [...attachmentTables];

@@ -903,19 +903,6 @@ export function SettingsModal() {
                     <label>{tr("上下文压缩阈值（tokens）")}</label>
                     <input className="input" type="number" min={4000} step={1000} value={form.agent.compactionThreshold} onChange={(e) => setAgent({ compactionThreshold: Number(e.target.value) })} />
                   </div>
-                  <div className="field">
-                    <label>{tr("大 schema 候选表检索")}</label>
-                    <Select
-                      className="select"
-                      value={form.agent.schemaFocus ?? 'auto'}
-                      onChange={(e) => setAgent({ schemaFocus: e.target.value as 'auto' | 'on' | 'off' })}
-                      data-testid="settings-schema-focus"
-                    >
-                      <Option value="auto">{tr("自动（超过 150 表或 2500 列）")}</Option>
-                      <Option value="on">{tr("总是开启")}</Option>
-                      <Option value="off">{tr("关闭")}</Option>
-                    </Select>
-                  </div>
                 </div>
                 <label className="checkbox">
                   <input type="checkbox" checked={form.agent.autoMemory} onChange={(e) => setAgent({ autoMemory: e.target.checked })} />
