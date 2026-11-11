@@ -26,6 +26,9 @@ export function createProvider(settings: AgentSettings): LlmProvider {
       model: settings.model,
       maxTokens,
       label: preset?.label ?? 'Ollama',
+      // 本机推理引擎加载模型/长提示词 prefill 期间可以整几分钟不吐字节，
+      // 这不是卡死。对这类端点不做停摆判定——误杀比漏杀贵得多。
+      stallMs: 0,
     });
   }
   if (settings.provider === 'openai') {

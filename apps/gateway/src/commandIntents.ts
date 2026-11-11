@@ -6,7 +6,6 @@
 export interface CommandIntent {
   id: string;
   defaultTask: string;
-  timeoutMs: number;
   instruction: string;
 }
 
@@ -16,7 +15,6 @@ export const COMMAND_INTENTS: Record<string, CommandIntent> = {
   compare: {
     id: 'compare',
     defaultTask: '对比当前库中最值得关注的两种数据（根据当前表和对话自行判断，例如最近两个时间段、两个分组、两个查询或两个连接）；如果没有足够信息，先问一个简短问题。',
-    timeoutMs: 10 * 60_000,
     instruction: `## Command mode: /compare — data comparison
 
 ${COMMON}
@@ -36,7 +34,6 @@ No form, no asking the user to choose columns unless the ambiguity is real.`,
   diff: {
     id: 'diff',
     defaultTask: '对比当前连接/库与另一个可用连接/库的结构差异；如果无法确定对比对象，先问一个简短问题。',
-    timeoutMs: 10 * 60_000,
     instruction: `## Command mode: /diff — schema structure difference
 
 ${COMMON}
@@ -56,7 +53,6 @@ Do not pretend a non-relational engine has SQL schema diff; explain the limitati
   recon: {
     id: 'recon',
     defaultTask: '对当前库与另一个可用数据源做一致性对账，找出不一致的键与字段；如果无法确定对端，先问一个简短问题。',
-    timeoutMs: 10 * 60_000,
     instruction: `## Command mode: /recon — cross-source data reconciliation
 
 ${COMMON}
@@ -77,7 +73,6 @@ Offer repair suggestions only after showing the evidence.`,
   fix: {
     id: 'fix',
     defaultTask: '对当前库做一次健康检查，找出可修复的问题并给出可执行修复 SQL，不要自动改库。',
-    timeoutMs: 10 * 60_000,
     instruction: `## Command mode: /fix — database health check and repair plan
 
 ${COMMON}
@@ -94,7 +89,6 @@ Deliver a short findings table (severity | problem | evidence | repair SQL), ord
   report: {
     id: 'report',
     defaultTask: '围绕当前库生成一份数据报告；如果用户没有给主题，就做整体数据概览。',
-    timeoutMs: 15 * 60_000,
     instruction: `## Command mode: /report — data report for a business reader
 
 ${COMMON}

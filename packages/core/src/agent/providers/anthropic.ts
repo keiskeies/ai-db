@@ -1,11 +1,13 @@
 import type { LlmProvider, ProviderEvent, ProviderMessage, ProviderRequest, ToolCall } from '../types';
-import { joinUrl, mapHttpError, normalizeCacheUsage, ProviderError, readSse } from './common';
+import { joinUrl, mapHttpError, normalizeCacheUsage, ProviderError, readSse, resolveStallMs, watchRequestStall } from './common';
 
 export interface AnthropicConfig {
   apiKey?: string;
   baseUrl: string;
   model: string;
   maxTokens?: number;
+  /** 流式停摆阈值（毫秒）；0 关闭。 */
+  stallMs?: number;
 }
 
 type AnthropicBlock =
@@ -70,6 +72,9 @@ export class AnthropicProvider implements LlmProvider {
     const budget = req.reasoning ? Number(req.reasoning.value) : NaN;
     const thinking = Number.isFinite(budget) && budget >= 1024 ? Math.floor(budget) : undefined;
     const requested = req.maxTokens ?? this.cfg.maxTokens ?? 4096;
+    const stallMs = resolveStallMs(this.cfg.stallMs);
+    // 只看响应头阶段的静默；拿到头之后交给 readSse 逐块判定
+    const requestWatch = watchRequestStall(signal, stallMs);
     const res = await fetch(joinUrl(this.cfg.baseUrl, '/v1/messages'), {
       method: 'POST',
       headers: {
@@ -88,11 +93,14 @@ export class AnthropicProvider implements LlmProvider {
         ...(req.tools.length ? { tools: req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })) } : {}),
         stream: true,
       }),
-      signal,
+      signal: requestWatch.signal,
     }).catch((err) => {
+      // 停摆阈值是被 abort(reason) 触发的，err 可能只是 AbortError，真因在 signal.reason 上
+      const reason = requestWatch.signal?.reason;
+      if (reason instanceof ProviderError) throw reason;
       if (err?.name === 'AbortError') throw err;
       throw new ProviderError(`无法连接模型接口：${err.message}`, { code: 'PROVIDER_NETWORK', retryable: true });
-    });
+    }).finally(requestWatch.clear);
     if (!res.ok || !res.body) throw mapHttpError(res.status, await res.text());
 
     let inputTokens = 0;
@@ -115,7 +123,7 @@ export class AnthropicProvider implements LlmProvider {
       if (typeof usage.cache_creation_input_tokens === 'number') cacheWriteTokens = usage.cache_creation_input_tokens;
     };
 
-    for await (const frame of readSse(res.body)) {
+    for await (const frame of readSse(res.body, { stallMs: resolveStallMs(this.cfg.stallMs) })) {
       if (!frame.data || frame.data === '[DONE]') continue;
       let evt: any;
       try {

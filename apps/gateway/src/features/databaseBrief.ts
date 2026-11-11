@@ -152,7 +152,6 @@ export interface BriefResult {
 
 const KEY_TABLE = /(order|user|customer|product|item|payment|pay|refund|account|transaction|invoice|inventory|stock|shipment|delivery|cart|member|tenant|org|company)/i;
 const MAX_CORE_TABLES = 20;
-const ANNOTATION_TIMEOUT_MS = 120_000;
 const DIGEST_CHARS = 12_000;
 
 function hash(value: string, length = 12): string {
@@ -866,8 +865,10 @@ export async function annotateBrief(
     ? `${factsText.slice(0, 80_000)}\n\n[TRUNCATED] The facts above were cut. Do not invent tables/columns that are not shown; omit any annotation that would require them.`
     : factsText;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ANNOTATION_TIMEOUT_MS);
-  timer.unref?.();
+  // 原来这里有个 120 秒到点 abort 的定时器，和回合计时器同一个毛病：它只看总时长。
+  // 给 20 张核心表补注解、一次要吐 3500 tokens，慢一点的模型就是会跑过 120 秒，
+  // 到点掐断只会把已经在生成的注解整段丢掉（表现为「模型注解不是有效 JSON，已跳过」）。
+  // 连接真死了由 provider 层的停摆看门狗负责；注解失败本来就不挡确定性文档。
   const onAbort = () => controller.abort();
   input.signal?.addEventListener('abort', onAbort, { once: true });
   let text = '';
@@ -887,7 +888,6 @@ export async function annotateBrief(
   } catch (err: any) {
     return { annotations: empty, error: `模型注解失败：${clip(err?.message ?? String(err), 180)}` };
   } finally {
-    clearTimeout(timer);
     input.signal?.removeEventListener('abort', onAbort);
   }
   const parsed = parseJson(text);

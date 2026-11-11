@@ -786,7 +786,12 @@ export interface AgentSessionMeta {
 }
 
 export interface AgentMessageBlock {
-  type: 'tool_call' | 'tool_result' | 'plan' | 'thinking' | 'image';
+  /**
+   * text / thinking 带 step 字段的是 runtime 按步交付的（见 AgentEvent.step_text）：
+   * 有它们才能把「这段解释是在哪个工具之前说的」渲染回真实顺序。
+   * 不带 step 的老 thinking 是整回合合并的一坨，仅为兼容旧数据保留。
+   */
+  type: 'tool_call' | 'tool_result' | 'plan' | 'thinking' | 'text' | 'image';
   callId?: string;
   tool?: string;
   args?: unknown;
@@ -795,6 +800,7 @@ export interface AgentMessageBlock {
   status?: string;
   items?: AgentPlanItem[];
   text?: string;
+  step?: number;
   /** type 为 image 时指向 Bridge 本地附件。 */
   attachmentId?: string;
   mime?: string;

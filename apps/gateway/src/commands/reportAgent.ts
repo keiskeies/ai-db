@@ -477,6 +477,12 @@ export async function generateAgentReport(
   executor: ToolExecutor,
   input: AgentReportInput,
   signal?: AbortSignal,
+  /**
+   * 进度上报。两个用途，第二个是硬性的：
+   * CommandRunner 用「上次有动静是什么时候」判定运行是否已死（见 runner 的 COMMAND_STALL_MS），
+   * 不报进度的话，一份正常跑 20~40 步的报告会因为「一直没消息」被误判成卡死。
+   */
+  onProgress?: (message: string, current?: number, total?: number) => void,
 ): Promise<ReportSpec> {
   const settings = store.getSettings();
   if (settings.agent.provider === 'local') throw Object.assign(new Error('本地推理器不生成 Agent 报告'), { code: 'MODEL_REQUIRED', status: 400 });
@@ -486,6 +492,7 @@ export async function generateAgentReport(
   for (const [index, source] of input.sources.entries()) {
     const connection = store.getConnection(source.connectionId);
     if (!connection) throw Object.assign(new Error(`连接不存在：${source.connectionId}`), { code: 'SOURCE_UNAVAILABLE', status: 404 });
+    onProgress?.(`读取 ${connection.name || source.connectionId} 的结构（${index + 1}/${input.sources.length}）`, index + 1, input.sources.length);
     const loaded = await manager.schema(connection.id, source.database, true);
     schemas.push({
       source,
@@ -611,12 +618,14 @@ Rules:
   let captured: ReportSpec | undefined;
   let composeError = '';
   let rejections = 0;
+  let reportStep = 0;
   const knownNumbers = new Set<number>();
   const toolNumbers = new Map<string, Set<number>>();
   const evidence = new Map<string, ReportEvidence>();
+  const maxReportSteps = Math.min(40, Math.max(20, (settings.agent.maxSteps || 12) * 2));
   const runtime = new AgentRuntime({
     provider,
-    maxSteps: Math.min(40, Math.max(20, (settings.agent.maxSteps || 12) * 2)),
+    maxSteps: maxReportSteps,
     temperature: settings.agent.temperature,
     maxTokens: maxOutputTokensOf(settings.agent, profile),
     resultCharBudget: (usedTokens) =>
@@ -634,6 +643,12 @@ Rules:
     emit: (event) => {
       if (event.type === 'tool_result' && event.tool === 'compose_report' && !event.result.ok) {
         composeError = event.result.error?.message ?? event.result.summary;
+      }
+      // 每一步都上报一次进度：读者看到的是「查数中 · 第 3/24 步 run_sql」，
+      // 而不是一个转到底都不动的圈；CommandRunner 也据此判断这次运行还活着。
+      if (event.type === 'tool_call') {
+        reportStep += 1;
+        onProgress?.(`查数中 · 第 ${reportStep} 步 · ${event.tool}`, reportStep, maxReportSteps);
       }
     },
     executeTool: async (call, abort) => {

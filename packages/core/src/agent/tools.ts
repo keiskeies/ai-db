@@ -962,7 +962,8 @@ x/y/ys/value/label are result column names, not SQL expressions.`,
       properties: {
         skill: { type: 'string', description: 'Skill id, e.g. ppt-master' },
         prompt: { type: 'string', description: 'Task for the worker: audience, page count, required numbers/tables, language' },
-        timeoutSeconds: { type: 'number', description: 'Max wait, 30–900 seconds (default 600)' },
+        // 曾经有 timeoutSeconds（30–900 秒到点取消）。删掉了：deck 生成本来就要几十分钟，
+        // 到点取消只会把干了很久的活儿扔掉。要停就取消回合，worker 跟着 abort 一起停。
       },
     },
     summarize: (a) => `Skill Worker ${a.skill}: ${String(a.prompt ?? '').slice(0, 80)}`,

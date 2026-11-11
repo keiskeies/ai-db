@@ -171,10 +171,15 @@ export interface ApprovalPayload {
 /**
  * 一个回合为什么被中止。
  *
- * 区分它们是必须的：超时中止不是用户的选择，UI 不能继续显示「已中止」，
+ * 'user' 之外只留 'stalled'：模型/连接彻底不动了，多等一秒都不会变。
+ * 曾经还有个 'timeout'（回合跑满固定分钟数就被掐断），已删——回合该不该结束由
+ * 「还有没有进展」决定，不由挂钟决定；健康长回合被计时器掐断是纯粹的浪费，
+ * 用户看到的还是「跑到一半莫名其妙停了」。
+ *
+ * 区分仍然是必须的：停摆中止不是用户的选择，UI 不能继续显示「已中止」，
  * 上层也要据此写「可续跑」的检查点——用户点停止时不该替他留续跑提示。
  */
-export type AgentAbortCause = 'timeout' | 'user';
+export type AgentAbortCause = 'stalled' | 'user';
 
 export type AgentEvent =
   | { type: 'start'; turnId: string; sessionId: string; model: string }
@@ -182,6 +187,17 @@ export type AgentEvent =
   /** 模型把工具调用当文本吐出来时，更正已经流出去的正文。 */
   | { type: 'text_replace'; text: string }
   | { type: 'thinking_delta'; text: string }
+  /**
+   * 单步正文收尾：把这一步模型说的话整段交付，用于把文字与工具调用按真实顺序交错渲染。
+   *
+   * text_delta 只是打字机增量，步骤边界在它里面不存在 —— 过去所有步骤的正文被拼成
+   * 一个字符串（runtime 里的 finalText），「哪段话是哪个工具之前说的」在落盘前就丢了，
+   * 界面只能「工具堆在上、文字堆在下」。本事件不替代 text_delta（流式照旧），
+   * 只在每步结束时补一个边界，消费方按需分段。
+   */
+  | { type: 'step_text'; text: string; step: number }
+  /** 同 step_text：这一步的思考过程整段交付，让思考挂在对应步骤上而不是一坨置顶。 */
+  | { type: 'step_thinking'; text: string; step: number }
   | { type: 'tool_call'; callId: string; tool: string; args: unknown; risk: Risk; summary: string }
   | { type: 'tool_result'; callId: string; tool: string; result: ToolResult }
   | { type: 'approval_required'; approvalId: string; call: { tool: string; args: unknown; risk: Risk; summary: string; sql?: string }; expiresIn: number }
@@ -224,18 +240,6 @@ export interface AgentRunInput {
   sessionAllowed?: Set<string>;
   alwaysAllowed?: Set<string>;
   signal?: AbortSignal;
-  /**
-   * 本回合的截止时间（毫秒时间戳）。给了之后 runtime 才有「预算」概念：
-   * 每步工具结果后按剩余时间追加软提醒。省略时完全无副作用。
-   */
-  deadlineAt?: number;
-  /** 本回合的时间预算，只用于把「已用/剩余」说成人话；省略时用 deadlineAt 与开局时间推算。 */
-  turnBudgetMs?: number;
-  /**
-   * 中止原因取器。用函数而不是快照值：abort 可能发生在 run() 已经拿到 input 之后，
-   * 快照会永远读到「还没超时」。上层（agentHost）只需翻转自己的标记。
-   */
-  abortCause?: () => AgentAbortCause;
 }
 
 export interface AgentRuntimeDeps {

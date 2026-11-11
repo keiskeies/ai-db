@@ -361,6 +361,8 @@ test('主 Agent 可通过 skill_worker_run 取得最终答复与产物', async (
   const worker = new SkillWorker(gateway.store, gateway.skills, new SkillRunner(gateway.skills, home), executor, () => provider);
   executor.setSkillWorker(worker);
   const result = await executor.execute(
+    // timeoutSeconds 已经从工具 schema 里删了（等待不再有上限）；这里照旧传一个，
+    // 钉住「老的调用参数被忽略、不会报错也不会半路取消」。
     { id: 'swr', name: 'skill_worker_run', args: { skill: 'api-skill', prompt: 'produce output', timeoutSeconds: 30 } },
     { sessionId: 'main-agent' },
   );

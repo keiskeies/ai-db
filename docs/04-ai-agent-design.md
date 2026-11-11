@@ -63,7 +63,40 @@ for (step = 0; step < maxSteps; step++) {
 
 **约束**：`maxSteps` 默认 12；同一工具相同参数连续失败 2 次 → 中止并解释；单工具超时 60s（查询 30s）；取消信号贯穿 Provider 与 Driver。
 
-**回合时间预算**：默认由步数预算推导 `clamp(maxSteps × 20s, 8min, 30min)`，优先级仍是 `AIDB_AGENT_TURN_MS` > 命令意图 > 推导。放在这里而不是写死 8 分钟的原因：实测每步约 15 秒，写死 8 分钟等于承诺 100 步却只给 32 步，时间会抢在步数前面把回合截断。同时：① 跑到预算 80% 时在工具结果后追加 `[deadline reminder]`，要求模型立即 `update_plan`、在正文写明剩余工作，并改用批量写法收敛；② 超时中止与用户中止必须区分（`AgentAbortCause`），超时的 `aborted` 事由如实写「本回合已达 N 分钟上限（可继续）」；③ 超时中止会落一条**续跑检查点** assistant 消息（计划状态、已跑步数、时间如何耗尽、下一步做什么），下一轮「继续」据此接上而不是重来。
+**回合没有截止时间**（曾有，已删）。原先的 `AIDB_AGENT_TURN_MS` / `clamp(maxSteps × 20s, 8min, 30min)`
+时间预算会在跑满时 abort 整个回合，看起来像「跑到一半莫名其妙停了」。删掉它的理由不是「上限太短」，
+而是**用总时长当结束条件本身就是错的**：回合该不该结束取决于还有没有进展，而回合级计时器看不见进展——
+模型在连续生成、工具在连续返回的健康长回合，和真卡死的连接，对它来说一模一样。
+同理删掉了 `[deadline reminder]`：它是计时器的同伙，没有掐断之后还催模型提前收尾，只会让长回合草草出结论。
+
+现在的约束分三类，全都按「资源/进展」判定，不按挂钟：
+
+- **步数**：`maxSteps`（0 = 不限），先卡住的是步数而不是时间。
+- **上下文**：`contextTokenBudget` 触及即压缩最早的工具结果；单条结果按剩余窗口装箱。
+- **进展**：模型流的字节级停摆看门狗（`AIDB_PROVIDER_STALL_MS`，默认 300s，0 = 关闭）。
+  判定在 `providers/common.ts`：连续无字节才算死，SSE keep-alive 注释帧也算活着，
+  本地推理（Ollama）首 token 前可以静默很久，因此该路径直接关闭看门狗。
+  响应头之前的静默由 `watchRequestStall` 覆盖，拿到头之后交回逐块判定。
+
+中止原因只有两种（`AgentAbortCause = 'stalled' | 'user'`）：用户点的停止，或连接停摆。
+停摆会落一条**续跑检查点** assistant 消息（计划状态、已跑步数、下一步做什么），下一轮「继续」据此接上而不是重来；
+用户主动停止不写检查点——那是他自己的决定。半截正文在步骤边界处入账到 `result.text`，
+所以停摆时「已经说过的话」仍然落库并回灌给模型。
+
+单条 SQL / 单次 HTTP / 子进程仍然有自己的超时（查询默认 30s），那是「一个操作多久算卡住」，
+与回合活多久无关。等待用户审批的 5 分钟自动拒绝也保留：那期间确实没有任何进展。
+
+同一把刀也切掉了回合之外的两处总时长上限：
+
+- **命令运行**（`/report`、`/compare`、`/diff` 等，`commands/runner.ts`）：原先整次运行有总时长
+  上限（report 15 分钟、其余 10 分钟），到点 canceled，原因还写成 `COMMAND_TIMEOUT`。
+  中途试过换成「静默判定」，也是错的：`diff` / `fix` 这类确定性步骤本来就有一整段没有可播报
+  进度的计算，**忙但安静 ≠ 死了**。现在运行器里一个计时器都不留，卡住的运行留在 running，
+  由用户按取消；「它还活着」靠真实进度让人看见（Agent 每步 tool_call 上抛成 `step_progress`）。
+- **`skill_worker_run` 的等待**（`executor.ts`）：原先 30~900 秒到点 cancel + `SKILL_TIMEOUT`。
+  deck 生成本来就是几十分钟的活儿。改成一直等到 Worker 自己到终态或上游 abort；
+  里面的模型调用有 provider 看门狗、起的子进程有 skillRunner 自己的超时。
+  等用户回答的挂起问题本来就该一直等——那是在等人，不是在卡死。
 
 ### 3.1 SQL 失败自动修复
 
@@ -208,7 +241,7 @@ for (step = 0; step < maxSteps; step++) {
 | 49 | `skill_write` | write | 写入 Skill 运行 workspace / output | `{ skill, runId?, area?, path, content }` |
 | 50 | `skill_run` | write | 按 aidb.skill.json 声明运行 python/node 入口 | `{ skill, entrypoint, runId? }` |
 | 51 | `skill_list_files` | read | 列出 Skill 运行的 workspace/input/output | `{ runId }` |
-| 52 | `skill_worker_run` | write | 在独立 Skill Worker 中运行技能，等待完成后返回最终答复与产物 | `{ skill, prompt, timeoutSeconds? }` |
+| 52 | `skill_worker_run` | write | 在独立 Skill Worker 中运行技能，等待完成后返回最终答复与产物 | `{ skill, prompt }`（等待无上限，见 §2「回合没有截止时间」） |
 | 53 | `manage_pipeline` | write | 数据流处理的增删改查与运行：`list` / `validate` / `create` / `update` / `run` / `delete`；`run` 支持 `dryRun` 只渲染目标端 SQL/请求体不写库；返回逐步状态与行数，不含样本行 | `{ action, id?, name?, description?, connectionId?, database?, spec?, params?, dryRun? }` |
 
 \* `run_sql`、`run_mql`、`run_redis`、`run_cypher`、`run_cql`、`run_aql` 风险按各自语言的安全分类动态提升；`alter_table` 按 `operations` 动态判定（`add_column` 为 ddl、`drop_column` 为 destructive）；`mcp_call` 按内置 Server 的工具声明动态判定（只读工具为 read，写工具与外部 Server 为 write）；`dryRun=true` 时 DDL 只返回将执行的 SQL（用于预览）。`run_mql` / `run_redis` / `run_cypher` / `run_aql` / `vector_search` 仅用于对应模型的连接，SQL 专属工具（DDL、审计、图表等）在非 SQL 连接上明确返回不支持；例外是 `manage_index`，在 MongoDB 连接上改走结构化索引通道（同一实现服务对象信息面板的建删），不拼 SQL DDL。

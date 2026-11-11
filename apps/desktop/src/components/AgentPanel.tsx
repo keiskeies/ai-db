@@ -1595,8 +1595,8 @@ export function AgentPanel() {
                   {!busy ? (
                     <div className="turn-end">
                       {live.status === 'aborted'
-                        ? live.abortCause === 'timeout'
-                          ? t('timedOut')
+                        ? live.abortCause === 'stalled'
+                          ? t('stalled')
                           : t('aborted')
                         : live.status === 'error'
                           ? t('failed')

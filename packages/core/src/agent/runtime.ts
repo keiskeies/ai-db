@@ -2,6 +2,7 @@ import type { AgentPlanItem, Risk } from '../types';
 import { describeCall, evaluatePermission, resolveRisk, toolSignature } from './policy';
 import { getTool, providerTools } from './tools';
 import { rescueXmlToolCalls } from './xmlTools';
+import { PROVIDER_STALL_CODE } from './providers/common';
 import type {
   AgentAbortCause,
   AgentEvent,
@@ -453,7 +454,45 @@ export class AgentRuntime {
       });
     };
 
+    /**
+     * 本步的正文与思考。声明在回合层而不是循环体内：三条出口（正常推进、服务商报错、
+     * 回合收尾）要读到同一份，声明在循环里就得复制三遍取法。
+     */
+    let stepText = '';
+    let stepThinking = '';
+
+    /**
+     * 把这一步的正文/思考整段交付给消费方（step_text / step_thinking），然后清空。
+     *
+     * 为什么需要：finalText 会把所有步骤的正文拼成一坨，「哪段话在哪个工具之前说」当场消失，
+     * 界面只能把工具堆上、文字堆下。这里补回边界，finalText 原样保留（搜索、导出、
+     * 会话摘要都靠它，不能动）。
+     *
+     * 正文与思考分开发：中止可能发生在模型调用之后、工具执行之中——那时正文已经随
+     * 步骤推进交付过，思考还留着。合并成一个函数会把残留思考用**上一步的步号**重发一遍，
+     * 界面就会看到同一段思考挂错步骤。
+     */
+    const commitStepText = (): void => {
+      // 正文在边界处入账，而不是在「模型没再调工具」那个分支里：中止与调用失败也走
+      // 这里。过去半截正文只发过 text_delta——屏幕上看得见，result.text 里没有，
+      // 于是落库与回灌给模型的上下文里那句话凭空消失，续跑时等于没说过。
+      if (stepText.trim()) {
+        finalText += (finalText ? '\n\n' : '') + stepText;
+        deps.emit({ type: 'step_text', text: stepText.trim(), step: steps });
+      }
+      stepText = '';
+    };
+    const commitStepThinking = (): void => {
+      if (stepThinking.trim()) deps.emit({ type: 'step_thinking', text: stepThinking.trim(), step: steps });
+      stepThinking = '';
+    };
+    const commitStep = (): void => {
+      commitStepText();
+      commitStepThinking();
+    };
+
     const finish = (status: AgentRunResult['status'], error?: AgentRunResult['error']): AgentRunResult => {
+      commitStep();
       emitTurnUsage();
       if (status === 'done') {
         deps.emit({ type: 'done', turnId, durationMs: now() - started, summary: finalText.slice(0, 280) });
@@ -462,21 +501,21 @@ export class AgentRuntime {
     };
 
     /**
-     * 中止文案必须诚实：超时不是用户的选择。
-     * 分钟数由真实预算算出来，写死「8 分钟」会在预算跟着步数变化时说错话。
+     * 中止文案必须诚实：停摆不是用户的选择。
      */
-    const abortReason = (cause: AgentAbortCause): string => {
-      if (cause === 'timeout') {
-        const limitMs = input.turnBudgetMs ?? (input.deadlineAt ? input.deadlineAt - started : undefined);
-        const minutes = limitMs && limitMs > 0 ? Math.max(1, Math.round(limitMs / 60_000)) : undefined;
-        return `本回合已达${minutes ? ` ${minutes} 分钟` : ''}上限（可继续）`;
-      }
-      return '用户中止';
-    };
+    const abortReason = (cause: AgentAbortCause): string =>
+      cause === 'stalled' ? '模型连接无响应（可继续）' : '用户中止';
 
-    const aborted = (): AgentRunResult => {
+    /**
+     * 中止原因由 runtime 自己判：**只有两种**——模型连接彻底不动了（stalled），或者用户点了停止。
+     *
+     * 曾经还有第三种 'timeout'：回合跑满固定分钟数就被上层掐断。已删——回合该不该结束
+     * 取决于「还有没有进展」，而不是挂了多久；上层计时器看不见进展，只能连健康长回合一起掐。
+     * 现在卡死的判定权在字节流那一层（见 providers/common.ts 的停摆阈值），它知道区别。
+     */
+    const aborted = (cause: AgentAbortCause = 'user'): AgentRunResult => {
+      commitStep();
       emitTurnUsage();
-      const cause = input.abortCause?.() ?? 'user';
       deps.emit({ type: 'aborted', turnId, reason: abortReason(cause), cause });
       return {
         text: finalText.trim(),
@@ -493,33 +532,17 @@ export class AgentRuntime {
     };
 
     /**
-     * 临近截止的软提醒：只在传了 deadlineAt 时才存在。
+     * 这里曾经有一个「时间预算快用完了」的软提醒，随回合级计时器一起删掉了。
      *
-     * 模型看不见墙钟，不给它数字它就会一直慢慢磨——事故里跑到第 30 步还在逐个读文件。
-     * 提醒必须可执行，所以除了剩余时间，还要强制它落两份痕：更新计划、把下一步写进正文。
-     * 一个回合只提醒一次：反复刷只会多烧上下文，反而更快撞上限。
+     * 它是计时器的同伙：提醒的存在只是因为「再不收敛就要被掐断」。没有掐断之后还留着它，
+     * 等于让模型自己去做本来不该发生的提前收尾——用户看到的还是「跑一半就草草结论」，
+     * 只是这次是模型听招呼，不是定时器动的手。长回合的收敛靠步数上限与上下文预算，
+     * 两者都是「资源真的不够了」才说话，不是「时间到了」。
      */
-    let deadlineWarned = false;
-    const deadlineReminder = (): string | undefined => {
-      if (!input.deadlineAt || deadlineWarned) return undefined;
-      const leftMs = input.deadlineAt - now();
-      const budgetMs = input.turnBudgetMs ?? (input.deadlineAt - started);
-      // 剩余不足预算的 20% 才提醒；预算未知（<=0）时按剩余时间判断，不硬塞一个假比例
-      if (budgetMs > 0 ? leftMs > budgetMs * 0.2 : leftMs > 60_000) return undefined;
-      deadlineWarned = true;
-      const leftSeconds = Math.max(0, Math.round(leftMs / 1000));
-      return (
-        `\n\n[deadline reminder] 本回合时间预算快用完了：约剩 ${leftSeconds} 秒（上限 ${Math.round(budgetMs / 60_000)} 分钟，已跑 ${steps} 步 / ${toolCount} 次工具）。` +
-        '现在立刻做三件事，不要再开启任何需要多步才能完成的新工作：\n' +
-        '1) 调用 update_plan：已完成的项标 done，当前这项标 doing，剩余项列清楚；\n' +
-        '2) 在回复正文里写明「已完成什么、剩下什么、下一步具体做什么」，这段会被保存成续跑检查点；\n' +
-        '3) 剩余工作优先用批量写法（一条语句覆盖多个对象），不要逐个对象慢慢来。'
-      );
-    };
 
     // 0 表示「无步数上限」：一直跑到模型主动结束、用户中止、或预算压缩后仍超窗为止。
-    // 无限制不代表失去约束——真正约束来自弧 token 预算（contextTokenBudget，见下）与
-    // 时间预算（deadlineAt），它们让长回合在明显失控前就停下来。
+    // 无限制不代表失去约束——真正约束来自上下文 token 预算（contextTokenBudget，见下）：
+    // 它顶不住时会压缩早期工具结果，而不是把整回合掐掉。时间从来不是约束。
     for (let step = 0; maxSteps === 0 || step < maxSteps; step++) {
       if (input.signal?.aborted) return aborted();
       steps = step + 1;
@@ -550,7 +573,8 @@ export class AgentRuntime {
         context: input.context,
       };
       const calls: ToolCall[] = [];
-      let stepText = '';
+      // stepText / stepThinking 是回合层的变量（见 commitStep 注释）：上一步在出口处
+      // 已经把它们交付并清空，这里直接复用，不能再声明一次把外层遮掉。
       let providerError: { code: string; message: string } | undefined;
       const callStarted = now();
 
@@ -561,6 +585,7 @@ export class AgentRuntime {
             stepText += ev.text;
             deps.emit({ type: 'text_delta', text: ev.text });
           } else if (ev.type === 'thinking') {
+            stepThinking += ev.text;
             deps.emit({ type: 'thinking_delta', text: ev.text });
           } else if (ev.type === 'plan') {
             // 离线推理器没有模型可以调 update_plan，计划由规划器直接给出。
@@ -590,12 +615,18 @@ export class AgentRuntime {
         }
       } catch (err: any) {
         if (input.signal?.aborted || err?.name === 'AbortError') return aborted();
+        // 字节流停摆：连接彻底不动了，多等一秒也不会变。它不是「调用失败」——
+        // 报 error 会让界面显示红色失败并丢掉续跑检查点，而进度其实还在。
+        if (err?.code === PROVIDER_STALL_CODE) return aborted('stalled');
         providerError = { code: err?.code ?? 'PROVIDER_ERROR', message: err?.message ?? '模型调用失败' };
       }
       // 模型调用的耗时单独累计：tok/s 只该反映生成速度，不该被工具执行时间稀释
       modelDurationMs += now() - callStarted;
       if (input.signal?.aborted) return aborted();
       if (providerError) {
+        // 半截正文与思考也要交边界：调用方按 step_text/step_thinking 分段渲染，漏发会让
+        // 界面里「这一步说过的话」凭空消失，而 text_delta 已经把它打在屏幕上了。
+        commitStep();
         emitTurnUsage();
         deps.emit({ type: 'error', code: providerError.code, message: providerError.message, retryable: true });
         return { text: finalText.trim(), status: 'error', usage: usageSummary(), steps, modelCalls, contextTokens, modelDurationMs, toolCalls: toolCount, plan, error: providerError };
@@ -610,10 +641,17 @@ export class AgentRuntime {
           deps.emit({ type: 'text_replace', text: stepText });
         }
       }
-      if (stepText) finalText += (finalText ? '\n\n' : '') + stepText;
+      // 正文入账交给 commitStepText（下面那一步边界），这里不再自己拼一次，否则
+      // XML 兜底改写过的文本会在 finalText 里出现两遍。
       if (!calls.length) return finish('done');
 
-      messages.push({ role: 'assistant', content: stepText, toolCalls: calls });
+      // 步骤边界：这一步的话说完了，下面就是它的工具。放在这里而不是循环末尾——
+      // 工具执行期间也可能被中止，先把边界发出去，中止后界面里这段还在。
+      // 思考一起交：否则它会一路累积到回合结束、整坨挂在最后一步上。
+      // 先取正文再提交：commitStepText 会清空 stepText（它现在负责把正文入账到 finalText）。
+      const assistantText = stepText;
+      commitStep();
+      messages.push({ role: 'assistant', content: assistantText, toolCalls: calls });
 
       let planUpdatedThisStep = false;
       for (const call of calls) {
@@ -728,9 +766,6 @@ export class AgentRuntime {
           modelContent += '\n\n[plan reminder] The visible task plan is stale. Call update_plan now with the same items: mark finished steps done, mark the current step doing, then continue. Do not replace the plan with a shorter one.';
           toolsSincePlan = 0;
         }
-        // 计划提醒之后再看预算：临近截止的存档指令优先级最高，放最后模型更容易照做
-        const deadline = deadlineReminder();
-        if (deadline) modelContent += deadline;
         messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: modelContent });
       }
     }

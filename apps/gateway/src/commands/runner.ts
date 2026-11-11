@@ -30,16 +30,35 @@ interface RunState {
   seq: number;
   finished: boolean;
   waiters: Array<() => void>;
-  timer?: ReturnType<typeof setTimeout>;
 }
+
+/**
+ * 一次命令运行**没有任何时长上限**（曾有，已删）。
+ *
+ * 这里曾经是整次运行的总时长上限：report 15 分钟、compare/fix 10 分钟、其余 120 秒，
+ * 到点直接 cancel。一份 Agent 报告要跑 20~40 步、每步实测十几秒，慢服务商下超过 15 分钟完全正常，
+ * 于是读者看到的就是「报告生成到一半被取消了」，原因还写成 COMMAND_TIMEOUT。
+ * 这和回合计时器是同一个错误（见 docs/04-ai-agent-design.md 的「回合没有截止时间」）：
+ * 跑得久正是它还需要跑的信号，时长本身不是停止的理由。
+ *
+ * 中途也考虑过换成「静默判定」——连续 N 秒没有任何事件就算卡死。看着对，实际会误杀：
+ * diff / fix 这类确定性步骤就是一整段没有可播报进度的计算（compareSchemas 一次读两侧全部表结构），
+ * 忙但安静 ≠ 死了。所以这里连静默阈值也不留。真正需要边界的都在下一层，而且是有界的 I/O：
+ *   - 每条查询的 queryTimeoutMs（默认 30 秒，各驱动都吃）与驱动连接超时；
+ *   - 模型调用由 provider 的字节级看门狗兜底（AIDB_PROVIDER_STALL_MS，见 providers/common.ts）；
+ *   - 技能子进程、HTTP 管道、MCP 各自带自己的超时。
+ * 万一还是有一条运行永远挂着（多半是代码 bug），它留在 running 状态，用户可以按取消；
+ * 宁可这样，也不要一刀切把健康运行丢掉。
+ *
+ * 该看得见「它还活着」的地方靠真实进度，不靠计时器：Agent 每步的 tool_call 经 onProgress
+ * 上抛成 step_progress（report / compare 两条路径），确定性步骤按数据源逐段报进展。
+ */
 
 export interface StartCommandOptions {
   title?: string;
   originSessionId?: string;
   /** 在已有产物上追加一次运行，而不是新建产物。 */
   artifactId?: string;
-  /** 整次命令超时；默认 120s。 */
-  timeoutMs?: number;
 }
 
 interface StepResult {
@@ -138,18 +157,6 @@ export class CommandRunner {
       finished: false,
       waiters: [],
     };
-    const defaultTimeoutMs = command.id === 'report' ? 15 * 60_000 : ['compare', 'fix'].includes(command.id) ? 10 * 60_000 : 120_000;
-    state.timer = setTimeout(() => {
-      if (!state.finished) {
-        this.store.updateArtifactRun(state.artifactRunId, {
-          status: 'failed',
-          error: 'COMMAND_TIMEOUT',
-          finishedAt: new Date().toISOString(),
-        });
-        this.cancel(state.info.id);
-      }
-    }, options.timeoutMs ?? defaultTimeoutMs);
-    state.timer.unref?.();
     this.runs.set(run.id, state);
     this.emit(state, { type: 'run_started', runId: run.id, command: command.id, startedAt: new Date().toISOString() });
     queueMicrotask(() => void this.execute(command, state));
@@ -218,7 +225,6 @@ export class CommandRunner {
     });
     this.store.updateArtifact(state.artifactId, { status: 'ready' });
     state.finished = true;
-    if (state.timer) clearTimeout(state.timer);
     this.emit(state, {
       type: 'run_finished',
       runId: state.info.id,
@@ -332,6 +338,18 @@ export class CommandRunner {
     return `已导出 ${format.toUpperCase()}：${exported.path}`;
   }
 
+  /**
+   * 把一次进度上报变成 step_progress 事件。
+   *
+   * 计时器被去掉之后，「它还在跑」只能靠这个让人看见：Agent 每走一步（tool_call）
+   * 都会经 onProgress 上抛到这里，界面上的运行日志也就有了中间内容
+   * （原本只有首尾两条，读者盯着一个不动的进度条等十几分钟）。
+   */
+  private reportProgress(state: RunState, step: CommandStepInfo, message: string, current?: number, total?: number): void {
+    if (state.finished) return;
+    this.emit(state, { type: 'step_progress', runId: state.info.id, stepId: step.id, message, current, total });
+  }
+
   private async executeStep(command: CommandDefinition, state: RunState, step: CommandStepInfo): Promise<StepResult> {
     switch (command.id) {
       case 'diff': {
@@ -429,7 +447,14 @@ export class CommandRunner {
         let spec;
         if (settings.agent.provider !== 'local' && this.executor) {
           try {
-            spec = await generateAgentReport(this.store, this.manager, this.executor, { sources, topic, tables, period, audience, target, home: this.home }, state.controller.signal);
+            spec = await generateAgentReport(
+              this.store,
+              this.manager,
+              this.executor,
+              { sources, topic, tables, period, audience, target, home: this.home },
+              state.controller.signal,
+              (message, current, total) => this.reportProgress(state, step, message, current, total),
+            );
             spec.meta.notes = [...(spec.meta.notes ?? []), '报告由 Agent 查数并生成；数字经过工具结果来源校验。'];
           } catch (err: any) {
             spec = await generateReport(this.store, this.manager, { sources, topic, tables, period, audience, target }, state.controller.signal);
@@ -485,7 +510,7 @@ export class CommandRunner {
               rightLabel,
               queryA,
               queryB,
-            }, state.controller.signal);
+            }, state.controller.signal, (message, current, total) => this.reportProgress(state, step, message, current, total));
             spec.meta.notes = [...(spec.meta.notes ?? []), '对比由 Agent 查数并生成；数字经过工具结果来源校验。'];
           } catch (err: any) {
             spec = await compareValues(this.store, this.manager, { sources, metric, leftLabel, rightLabel, queryA, queryB });
@@ -596,7 +621,6 @@ export class CommandRunner {
   private finish(state: RunState, status: 'succeeded' | 'failed'): void {
     state.info.status = status;
     state.finished = true;
-    if (state.timer) clearTimeout(state.timer);
     this.emit(state, {
       type: 'run_finished',
       runId: state.info.id,

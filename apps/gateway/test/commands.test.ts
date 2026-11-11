@@ -593,7 +593,7 @@ test('/fix dry-run 只返回计划，不执行也不要求备份', async () => {
 });
 
 
-test('命令运行可以取消，并在超时后自动取消', async () => {
+test('命令运行可以手动取消', async () => {
   const slowManager = {
     schema: async () => {
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -602,12 +602,55 @@ test('命令运行可以取消，并在超时后自动取消', async () => {
   } as any;
   const runner = new CommandRunner(gateway.store, slowManager);
   const sources = [{ connectionId: leftConn.id }, { connectionId: rightConn.id }];
-  const canceled = runner.start('diff', { sources }, { timeoutMs: 5000 });
+  const canceled = runner.start('diff', { sources });
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(runner.cancel(canceled.id), true);
   assert.equal(runner.get(canceled.id)?.status, 'canceled');
-
-  const timedOut = runner.start('diff', { sources }, { timeoutMs: 40 });
-  await new Promise((resolve) => setTimeout(resolve, 160));
-  assert.equal(runner.get(timedOut.id)?.status, 'canceled');
 });
+
+test('跑得久的运行不会被时长取消：慢到原来的上限之上也照样跑完', async () => {
+  // 原来这里断言的是「timeoutMs: 40 到点自动 canceled」。那个总时长上限已经删掉
+  // （见 runner.ts 顶部注释），这条测试改成钉住删掉之后的行为：比原来的上限还慢的运行，
+  // 只要没人按取消，就必须正常跑完。
+  let schemaCalls = 0;
+  const slowManager = {
+    schema: async () => {
+      schemaCalls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return [];
+    },
+  } as any;
+  const runner = new CommandRunner(gateway.store, slowManager);
+  const sources = [{ connectionId: leftConn.id }, { connectionId: rightConn.id }];
+  const run = runner.start('diff', { sources });
+  // 轮询等到终态；总时长远超任何曾经存在过的秒级上限
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && !['succeeded', 'failed', 'canceled'].includes(runner.get(run.id)?.status ?? '')) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  const finished = runner.get(run.id);
+  assert.notEqual(finished?.status, 'canceled', '没人按取消，运行不该是 canceled');
+  assert.equal(finished?.status, 'succeeded', `运行没有跑完：${finished?.status}`);
+  assert.ok(schemaCalls > 0);
+  const events = runner.events(run.id);
+  const finishedEvent = events.find((event) => event.type === 'run_finished');
+  assert.equal(finishedEvent?.status, 'succeeded');
+  assert.equal(
+    events.some((event) => event.type === 'error' && event.code === 'COMMAND_TIMEOUT'),
+    false,
+    'COMMAND_TIMEOUT 这个原因码已经不存在了',
+  );
+});
+
+test('运行时长这个概念已经从运行器里删掉了', async () => {
+  const runnerModule = await import('../src/commands/runner.js');
+  // StartCommandOptions 里不再有 timeoutMs：调用方无法再给一次运行设总时长
+  type StartOptions = Parameters<CommandRunner['start']>[2];
+  type HasKey<T, K extends string> = T extends unknown ? (K extends keyof T ? true : false) : false;
+  const hasTimeout: HasKey<StartOptions, 'timeoutMs'> = false;
+  assert.equal(hasTimeout, false);
+  // 也不再导出任何调阈值的旋钮——没有阈值可调
+  assert.equal((runnerModule as Record<string, unknown>).commandStallMs, undefined);
+  assert.equal((runnerModule as Record<string, unknown>).COMMAND_STALL_MS, undefined);
+});
+

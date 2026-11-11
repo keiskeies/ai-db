@@ -2,13 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { COMMAND_INTENTS, commandIntent, parseCommandIntent } from '../src/commandIntents';
 
-test('every command mode has a default task, timeout and no-form instruction', () => {
+test('every command mode has a default task and a no-form instruction', () => {
   for (const [id, intent] of Object.entries(COMMAND_INTENTS)) {
     assert.equal(intent.id, id);
     assert.ok(intent.defaultTask.length > 10, `${id} 缺少默认任务`);
-    assert.ok(intent.timeoutMs >= 60_000, `${id} 超时过短`);
     assert.match(intent.instruction, /Do not ask them to write SQL/);
     assert.match(intent.instruction, /never open a form/i);
+    // 命令意图上不再有 timeoutMs：一次运行能跑多久不由命令定义说了算
+    assert.equal('timeoutMs' in intent, false, `${id} 不该再带时长上限`);
   }
   assert.equal(commandIntent('COMPARE')?.id, 'compare');
   assert.equal(commandIntent('unknown'), undefined);

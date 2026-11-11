@@ -82,50 +82,19 @@ export interface AgentHostOptions {
   executor: ToolExecutor;
   config: GatewayConfig;
   skills?: SkillStore;
-  /**
-   * 本回合时间预算解析器，返回 undefined 表示回落到默认规则。
-   *
-   * 为什么需要它：`Math.max(30_000, ...)` 的 30 秒地板让超时分支无法在秒级测通，
-   * 而超时后落检查点这条路径必须有测试。多入口（bot / 远程）按入口分配预算也用得上，
-   * 不是纯测试桩——生产默认路径仍是 env > intent > 步数推导，见 resolveTurnBudgetMs。
-   */
-  turnBudgetMs?: (context: { maxSteps: number; intentTimeoutMs?: number }) => number | undefined;
-}
-
-/** 每步模型调用的实测中位耗时（15s）留三分之一余量，用来把步数预算折成时间预算。 */
-const PER_STEP_MS = 20_000;
-/** 时间预算下限：默认 12 步的推导结果必须落在这里，保证与旧行为（480s）一致。 */
-const MIN_TURN_MS = 480_000;
-/** 时间预算上限：再长就不该靠一个回合硬扛，而该靠检查点续跑。 */
-const MAX_TURN_MS = 1_800_000;
-
-/**
- * 由步数预算推导时间预算。
- *
- * 不给「更长」而给「自洽」：承诺 100 步却只给 8 分钟，必然在 32 步左右被时间抢先截断，
- * 用户看到的就是「跑一半停了」。上限跟着步数走之后，先卡住的才是步数而不是时间。
- * 长回合的安全性来自软提醒（80% 收敛）与检查点（断了能接），不来自放宽上限本身。
- */
-export function deriveTurnBudgetMs(maxSteps: number): number {
-  return Math.min(MAX_TURN_MS, Math.max(MIN_TURN_MS, maxSteps * PER_STEP_MS));
 }
 
 /**
- * 解析本回合的时间预算。优先级：env > 命令意图 > 按步数推导。
+ * 这里曾经有 deriveTurnBudgetMs / resolveTurnBudgetMs：把步数预算折成时间预算，
+ * 到点就 abort 整个回合。已整体删除——回合该不该结束取决于「还有没有进展」，
+ * 不是「挂了多久」。定时器看不见进展：模型在连续生成、工具在连续返回的健康长回合，
+ * 和真卡死的连接对它来说一模一样，只能一起掐断，用户看到的就是「跑到一半莫名其妙停了」。
  *
- * 保留 env 与 intent 的既有语义（运维与 /init 之类命令依赖它们），只把最后一档
- * 从写死的 480_000 换成随步数走——这一步就是「承诺 100 步却只给 8 分钟」的解药。
- * 30 秒地板保持原样：预算再小只会把正常回合截成碎片。
+ * 卡死的判定改由唯一知道进展的那一层负责：providers/common.ts 的停摆阈值看的是
+ * 「连续多久没有任何字节进来」，SSE keep-alive 也算进展。运维开关换成了
+ * AIDB_PROVIDER_STALL_MS（0 = 关闭），不再是 AIDB_AGENT_TURN_MS。
+ * 资源上限依然有：步数上限与上下文 token 预算，两者都是「资源真的不够」才说话。
  */
-export function resolveTurnBudgetMs(input: {
-  maxSteps: number;
-  intentTimeoutMs?: number;
-  env?: Record<string, string | undefined>;
-}): number {
-  const env = input.env ?? process.env;
-  const raw = env.AIDB_AGENT_TURN_MS ?? input.intentTimeoutMs ?? deriveTurnBudgetMs(input.maxSteps);
-  return Math.max(30_000, Number(raw));
-}
 
 /** 把毫秒说成「M 分 S 秒」，避免检查点里出现 493000 这种没人读的数字。 */
 function humanDuration(ms: number): string {
@@ -136,11 +105,15 @@ function humanDuration(ms: number): string {
 }
 
 /**
- * 超时中止时写进会话的「续跑检查点」。
+ * 连接停摆中止时写进会话的「续跑检查点」。
  *
  * 为什么要单独写一条：abort 之后 runtime 只留下半截正文，用户再问「继续」时，
  * 模型从历史里只能看到那半截，等于从零开始重新摸索——上一回合烧掉的时间白费。
  * 这条把「做到哪、剩下什么、下一步做什么」显式留在历史里，续跑才有落点。
+ *
+ * 曾经触发条件是「跑满时间预算」，现在只剩模型连接停摆一种：回合本身不再有截止时间，
+ * 只有连接真的不动了才会中止。用户点停止不写检查点——那是他自己的决定，不该替他
+ * 留一句「可以继续」。
  *
  * 措辞同时面向两类读者：模型（拿它当上下文继续干）和人（看懂为什么断在这里）。
  */
@@ -149,14 +122,13 @@ export function buildResumeCheckpoint(input: {
   steps: number;
   toolCalls: number;
   elapsedMs: number;
-  budgetMs: number;
   toolTrace: string[];
 }): string {
-  const { plan, steps, toolCalls, elapsedMs, budgetMs, toolTrace } = input;
+  const { plan, steps, toolCalls, elapsedMs, toolTrace } = input;
   const lines: string[] = [
-    `## 本回合因超时中止（进度已保留，回复「继续」可接着做）`,
+    `## 本回合因模型连接无响应而中止（进度已保留，回复「继续」可接着做）`,
     ``,
-    `时间预算 ${humanDuration(budgetMs)}已用尽（实际 ${humanDuration(elapsedMs)}），已跑 ${steps} 步、${toolCalls} 次工具调用后被中止。这不是执行出错，也不是模型放弃。`,
+    `已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）后，模型端连续无响应，连接被判定为已死。这不是执行出错，也不是模型放弃——已完成的部分都算数。`,
   ];
   if (plan.length) {
     lines.push('', '计划状态：');
@@ -389,26 +361,13 @@ export class AgentHost {
     }
     const images = this.loadImages(input.images);
     const provider = createProvider(settings.agent);
-    // 步数预算在这里先定：它同时喂给 runtime 与时间预算推导，两处各算一次必然漂移。
     // 语义命令通常要「看结构 → 多次查数 → 出图」，给足步数；普通提问保持用户设置。
+    // 这是回合唯一的量上限：时间不参与判定（见文件头那段说明），0 表示不限步数，
+    // 一直跑到模型自己收尾、用户中止或连接停摆。
     const maxSteps = intent ? Math.min(40, Math.max(16, (settings.agent.maxSteps || 12) * 2)) : settings.agent.maxSteps;
-    const turnBudgetMs =
-      this.opts.turnBudgetMs?.({ maxSteps, ...(intent?.timeoutMs ? { intentTimeoutMs: intent.timeoutMs } : {}) }) ??
-      resolveTurnBudgetMs({ maxSteps, ...(intent?.timeoutMs ? { intentTimeoutMs: intent.timeoutMs } : {}), env: process.env });
     const startedAt = Date.now();
-    // 超时不是用户的选择，续跑检查点也不该在用户主动停止时出现——这个标记是两者唯一的分水岭。
-    // runtime 用 abortCause() 取它，因此必须在中止发生后才被读，不能在创建时快照。
-    let timedOut = false;
     const controller = new AbortController();
     this.active.set(sessionId, controller);
-    // 硬上限：模型端整条流卡死时也要结束回合，避免会话永远 running
-    const turnTimer = setTimeout(() => {
-      if (controller.signal.aborted) return;
-      timedOut = true;
-      controller.abort();
-      this.opts.store.updateSession(sessionId, { status: 'aborted' });
-    }, turnBudgetMs);
-    turnTimer.unref();
 
     const store = this.opts.store;
     const historyMessages = store.listMessages(sessionId);
@@ -476,6 +435,14 @@ export class AgentHost {
       switch (event.type) {
         case 'thinking_delta':
           thinking += event.text;
+          break;
+        // 按步交付的正文/思考：顺序就是渲染顺序，块数组是这段对话的唯一时间线。
+        // 老的「整回合 thinking 一坨」仍在 thinking 变量里，只在没有分段块时兜底用。
+        case 'step_text':
+          blocks.push({ type: 'text', text: event.text, step: event.step });
+          break;
+        case 'step_thinking':
+          blocks.push({ type: 'thinking', text: event.text, step: event.step });
           break;
         case 'tool_call':
           callInfo.set(event.callId, { call: { id: event.callId, name: event.tool, args: (event.args ?? {}) as Record<string, unknown> }, risk: event.risk });
@@ -630,19 +597,21 @@ export class AgentHost {
         sessionAllowed,
         alwaysAllowed: this.alwaysAllowed,
         signal: controller.signal,
-        // 预算相关的三个字段一起给：runtime 靠 deadlineAt 决定何时追加收敛提醒，
-        // 靠 turnBudgetMs 把「还剩多少」说成人话，靠 abortCause 区分超时与用户中止。
-        deadlineAt: startedAt + turnBudgetMs,
-        turnBudgetMs,
-        abortCause: () => (timedOut ? 'timeout' : 'user'),
+        // 这里原来传的是 deadlineAt / turnBudgetMs / abortCause 三件套：一个到点就掐
+        // 整个回合的计时器，加一个告诉 runtime「这次掐断算超时不算用户停止」的标记。
+        // 都删了——回合没有截止时间，中止只可能是用户点的或连接停摆（后者由 runtime
+        // 自己从 PROVIDER_STALLED 认出来，不需要上层转述）。
       });
       status = result.status;
       usage = result.usage;
-      const finalBlocks = thinking ? [{ type: 'thinking' as const, text: thinking }, ...blocks] : blocks;
+      // 有分段思考块就不再拼整回合那一坨（同一段文字存两遍，界面也会重复渲染）；
+      // 没有分段块的模型（不发 step_thinking 的旧路径/本地推理器）保留原兜底。
+      const hasStepThinking = blocks.some((b) => b.type === 'thinking' && b.step !== undefined);
+      const finalBlocks = thinking && !hasStepThinking ? [{ type: 'thinking' as const, text: thinking }, ...blocks] : blocks;
       store.appendMessage({ sessionId, role: 'assistant', content: result.text, blocks: finalBlocks, tokens: result.usage.tokensOut });
-      // 超时中止时补一条续跑检查点。必须写在半截正文之后：正文是模型说过的话，
+      // 连接停摆中止时补一条续跑检查点。必须写在半截正文之后：正文是模型说过的话，
       // 检查点是「它本来还要做什么」，两者顺序颠倒会让下一轮的上下文读起来像倒叙。
-      if (result.status === 'aborted' && result.abortCause === 'timeout') {
+      if (result.status === 'aborted' && result.abortCause === 'stalled') {
         store.appendMessage({
           sessionId,
           role: 'assistant',
@@ -651,7 +620,6 @@ export class AgentHost {
             steps: result.steps,
             toolCalls: result.toolCalls,
             elapsedMs: Date.now() - startedAt,
-            budgetMs: turnBudgetMs,
             toolTrace: blocks.filter((b) => b.type === 'tool_call').map((b) => b.tool).filter(Boolean) as string[],
           }),
         });
@@ -683,7 +651,6 @@ export class AgentHost {
       store.updateSession(sessionId, { status: 'error' });
       emit({ type: 'error', code: err?.code ?? 'AGENT_ERROR', message: err?.message ?? 'Agent 运行失败', retryable: false });
     } finally {
-      clearTimeout(turnTimer);
       this.active.delete(sessionId);
       for (const [id, pending] of this.approvals) {
         if (pending.sessionId !== sessionId) continue;
@@ -720,8 +687,10 @@ export class AgentHost {
     const turnId = randomUUID();
     const controller = new AbortController();
     this.active.set(sessionId, controller);
-    const timer = setTimeout(() => controller.abort(), 5 * 60_000);
-    timer.unref();
+    // 这里原来有个 5 分钟到点就 abort 的定时器。删掉了，理由和回合计时器一样：
+    // 几百张表的库扫 schema + 补注解就是会跑很久，到点掐断只会把已经扫完的部分扔掉，
+    // 而且它 abort 之后照实报的是「用户中止」——用户根本没点过停止。
+    // 挂死由模型流的停摆看门狗兜（注解调用走同一个 provider），用户随时能手动中止。
     const started = Date.now();
     store.updateSession(sessionId, {
       connectionId,
@@ -780,7 +749,6 @@ export class AgentHost {
       });
       const content = [summarizeInit(result), existing ? '\n\n已更新现有文件：自动段落全部刷新，数据流与人工补充段落保留。' : '\n\n这是首次生成，后续对话会自动加载它。'].join('');
       store.appendMessage({ sessionId, role: 'assistant', content });
-      clearTimeout(timer);
       this.active.delete(sessionId);
       store.updateSession(sessionId, {
         status: 'done',
@@ -807,7 +775,6 @@ export class AgentHost {
         },
       });
     } catch (err: any) {
-      clearTimeout(timer);
       this.active.delete(sessionId);
       const aborted = controller.signal.aborted || err?.code === 'ABORTED';
       store.updateSession(sessionId, { status: aborted ? 'aborted' : 'error' });

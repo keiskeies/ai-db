@@ -1262,10 +1262,14 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
         if (!this.skillWorker) throw new Error('Skill Worker 未启用');
         const worker = this.skillWorker;
         const prompt = String(a.prompt ?? '');
-        const timeoutMs = Math.min(900_000, Math.max(30_000, Number(a.timeoutSeconds ?? 600) * 1000 || 600_000));
         const startedRun = worker.start(String(a.skill ?? ''), prompt);
-        const deadline = Date.now() + timeoutMs;
-        while (Date.now() < deadline) {
+        // 没有等待上限（曾有 30~900 秒的 deadline + SKILL_TIMEOUT，已删）。
+        // 一次 PPT 生成就是几十分钟量级的活儿，到点取消等于把干了 14 分钟的成果扔掉，
+        // 和回合计时器是同一个错误（docs/04-ai-agent-design.md「回合没有截止时间」）。
+        // Worker 里面的模型调用有 provider 字节看门狗、起的子进程有 skillRunner 自己的超时，
+        // 卡死在下一层就会被看见；这里只等两种事：Worker 自己到了终态，或者上游中止。
+        // Worker 也可能停在「等用户回答」上——那是在等人，不是在卡死，本来就该一直等。
+        for (;;) {
           if (ctx.signal?.aborted) {
             worker.cancel(startedRun.runId);
             return { ok: false, summary: 'Skill Worker 已取消', error: { code: 'CANCELED', message: '运行已取消' }, meta: { durationMs: Date.now() - started } };
@@ -1290,14 +1294,6 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
           }
           await new Promise((resolve) => setTimeout(resolve, 500));
         }
-        worker.cancel(startedRun.runId);
-        return {
-          ok: false,
-          summary: 'Skill Worker 超时',
-          error: { code: 'SKILL_TIMEOUT', message: `Skill Worker 超过 ${Math.round(timeoutMs / 1000)} 秒未完成` },
-          data: { runId: startedRun.runId, status: 'timed_out' },
-          meta: { durationMs: Date.now() - started },
-        };
       }
 
       case 'skill_write': {

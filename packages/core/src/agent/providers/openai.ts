@@ -1,5 +1,5 @@
 import type { LlmProvider, ProviderEvent, ProviderMessage, ProviderRequest, ToolCall } from '../types';
-import { isPrivateEndpoint, joinUrl, mapHttpError, normalizeCacheUsage, ProviderError, readSse } from './common';
+import { isPrivateEndpoint, joinUrl, mapHttpError, normalizeCacheUsage, ProviderError, readSse, resolveStallMs, watchRequestStall } from './common';
 
 /** 从 OpenAI 兼容响应的 usage 里取缓存命中量；各家字段位置不同，这里统一认。 */
 function readCacheUsage(usage: any): { hit?: number; miss?: number } {
@@ -22,6 +22,8 @@ export interface OpenAIConfig {
   maxTokens?: number;
   /** 展示名（来自服务商预设）。 */
   label?: string;
+  /** 流式停摆阈值（毫秒）；0 关闭。本地推理（Ollama 等）首 token 前可能静默很久，须传 0。 */
+  stallMs?: number;
 }
 
 type OpenAIContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
@@ -82,6 +84,9 @@ export class OpenAIProvider implements LlmProvider {
     if (!(this.cfg.apiKey ?? '').trim() && !isPrivateEndpoint(this.cfg.baseUrl)) {
       throw new ProviderError('缺少 API Key', { code: 'NO_API_KEY' });
     }
+    const stallMs = resolveStallMs(this.cfg.stallMs);
+    // 只看响应头阶段的静默；拿到头之后交给 readSse 逐块判定
+    const requestWatch = watchRequestStall(signal, stallMs);
     const res = await fetch(joinUrl(this.cfg.baseUrl, '/chat/completions'), {
       method: 'POST',
       headers: this.authHeaders(),
@@ -95,11 +100,14 @@ export class OpenAIProvider implements LlmProvider {
         stream: true,
         stream_options: { include_usage: true },
       }),
-      signal,
+      signal: requestWatch.signal,
     }).catch((err) => {
+      // 停摆阈值是被 abort(reason) 触发的，err 只是 AbortError，真因在 signal.reason 上
+      const reason = requestWatch.signal?.reason;
+      if (reason instanceof ProviderError) throw reason;
       if (err?.name === 'AbortError') throw err;
       throw new ProviderError(`无法连接模型接口：${err.message}`, { code: 'PROVIDER_NETWORK', retryable: true });
-    });
+    }).finally(requestWatch.clear);
     if (!res.ok || !res.body) throw mapHttpError(res.status, await res.text());
 
     const calls = new Map<number, { id: string; name: string; args: string }>();
@@ -109,7 +117,7 @@ export class OpenAIProvider implements LlmProvider {
     let cacheMissTokens: number | undefined;
     let stopReason = 'stop';
 
-    for await (const frame of readSse(res.body)) {
+    for await (const frame of readSse(res.body, { stallMs: resolveStallMs(this.cfg.stallMs) })) {
       if (!frame.data) continue;
       if (frame.data === '[DONE]') break;
       let evt: any;

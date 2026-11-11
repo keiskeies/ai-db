@@ -129,6 +129,8 @@ interface LiveTurn {
   tools: LiveTool[];
   plan: AgentPlanItem[];
   status: 'streaming' | 'awaiting' | 'done' | 'aborted' | 'error';
+  /** 中止事由：连接停摆不是用户点的停止，不能一律显示「已中止」。 */
+  abortReason?: string;
   error?: string;
   startedAt: number;
   memories: Array<{ id: string; title: string; kind: string }>;
@@ -941,6 +943,9 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
           break;
         case 'aborted':
           next.status = 'aborted';
+          // 事由由 runtime 给：'用户中止' 或 '模型连接无响应（可继续）'。
+          // 移动端原本一律显示「已中止」，于是连接死了也像是在说用户自己按的停止。
+          next.abortReason = event.reason;
           break;
         default:
           break;
@@ -2206,7 +2211,7 @@ function ChatScreen({
               {live.error ? <Text style={styles.error}>{live.error}</Text> : null}
               {!busy ? (
                 <Text style={styles.turnEnd}>
-                  {live.status === 'aborted' ? '已中止' : live.status === 'error' ? '失败' : '已完成'} · {live.tools.length} 次工具 · {Math.max(1, Math.round((Date.now() - live.startedAt) / 1000))}s
+                  {live.status === 'aborted' ? live.abortReason ?? '已中止' : live.status === 'error' ? '失败' : '已完成'} · {live.tools.length} 次工具 · {Math.max(1, Math.round((Date.now() - live.startedAt) / 1000))}s
                 </Text>
               ) : null}
             </View>

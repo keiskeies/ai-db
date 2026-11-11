@@ -479,10 +479,12 @@ test('turn_usage is emitted for aborted and failed turns too', async () => {
   assert.ok(failEvents.some((e) => e.type === 'turn_usage'), '失败的回合也要定格状态条');
 });
 
-// ---------- 回合预算：超时软提醒 / 中止原因区分 ----------
+// ---------- 回合中止：没有回合级时间上限，只有「用户停止」与「连接停摆」 ----------
 //
 // 事故背景：48 万毫秒硬上限到点 abort，runtime 一律写「用户中止」，
-// 用户没点停止却看到「已中止」；模型也不知道自己在烧预算，跑到第 30 步还在慢慢读文件。
+// 用户没点停止却看到「已中止」。修法是区分原因吗？不是——真正的问题是那一秒定时器
+// 本来就不该存在：它只看总时长，健康长回合和真卡死的连接在它眼里一模一样。
+// 现在时间不再参与任何中止判定，卡死由字节流那一层（providers/common.ts）报 PROVIDER_STALLED。
 
 /** 造一个「每步都调一次工具、永不收敛」的脚本，用来模拟慢慢磨的长回合。 */
 function grindingScripts(steps: number): ProviderEvent[][] {
@@ -496,61 +498,28 @@ function toolMessages(provider: ScriptedProvider, requestIndex: number): string[
   return provider.requests[requestIndex]?.messages.filter((message) => message.role === 'tool').map((message) => String(message.content)) ?? [];
 }
 
-test('deadlineAt 触发前不追加任何提醒（无截止时间时必须零副作用）', async () => {
+test('时间不再参与中止判定：时钟狂转、步数没跑满的长回合必须自己跑到 done', async () => {
   const events: AgentEvent[] = [];
-  const { provider, runtime } = statsRuntime(grindingScripts(2), events);
-  await runtime.run({ ...baseInput, sessionAllowed: new Set(), alwaysAllowed: new Set() });
-  const toolContents = toolMessages(provider, 1);
-  assert.equal(toolContents.length, 1);
-  assert.doesNotMatch(toolContents[0], /deadline reminder/, '没传 deadlineAt 就不该有截止提醒');
-});
-
-test('过了 deadlineAt 的软提醒阈值后，在工具结果尾部追加带剩余时间与存档指令的提醒', async () => {
-  const events: AgentEvent[] = [];
-  // 可控时钟：每次 now() 前进 100ms；预算 1000ms，阈值 80% 即 200ms 剩余处提醒
+  // 每步「消耗」10 分钟——按老的 480 秒预算，第 1 步就该被掐断
   let clock = 0;
-  const now = () => (clock += 100);
+  const now = () => (clock += 600_000);
   const { provider, runtime } = statsRuntime(grindingScripts(4), events, { now, maxSteps: 4 });
-  await runtime.run({
-    ...baseInput,
-    sessionAllowed: new Set(),
-    alwaysAllowed: new Set(),
-    deadlineAt: 1_000,
-  });
-  const allToolContents = [0, 1, 2, 3].flatMap((i) => toolMessages(provider, i + 1)).join('\n');
-  assert.match(allToolContents, /\[deadline reminder\]/, '临近截止必须有提醒');
-  // 提醒必须带具体剩余时间，而不是「快没时间了」这种不可执行的措辞
-  assert.match(allToolContents, /约剩 \d+ 秒/);
-  // 提醒必须强制模型存档：先更新计划，再把下一步写进正文
-  assert.match(allToolContents, /update_plan/);
-  assert.match(allToolContents, /下一步/);
+  const outcome = await runtime.run({ ...baseInput, sessionAllowed: new Set(), alwaysAllowed: new Set() });
+  assert.equal(outcome.status, 'done', '跑得完就该跑完，不能被时间掐');
+  assert.equal(outcome.steps, 4);
+  assert.ok(!events.some((event) => event.type === 'aborted'), '没有任何人中止，就不该有 aborted 事件');
+  assert.equal(provider.calls, 4);
 });
 
-test('距离截止还早时不打扰模型', async () => {
-  const events: AgentEvent[] = [];
-  // 时钟几乎不动，1000ms 预算永远用不完 80%
-  const now = () => 0;
-  const { provider, runtime } = statsRuntime(grindingScripts(3), events, { now, maxSteps: 3 });
-  await runtime.run({
-    ...baseInput,
-    sessionAllowed: new Set(),
-    alwaysAllowed: new Set(),
-    deadlineAt: 1_000_000,
-  });
-  const toolContents = [0, 1, 2].flatMap((i) => toolMessages(provider, i + 1)).join('\n');
-  assert.doesNotMatch(toolContents, /\[deadline reminder\]/, '预算充裕时不该刷提醒');
-});
-
-test('同一回合里提醒只追加一次，避免每一步都在刷屏', async () => {
+test('工具结果里不再出现任何「时间预算快用完了」的收敛指令', async () => {
   const events: AgentEvent[] = [];
   let clock = 0;
-  const now = () => (clock += 100);
-  const { provider, runtime } = statsRuntime(grindingScripts(5), events, { now, maxSteps: 5 });
-  await runtime.run({ ...baseInput, sessionAllowed: new Set(), alwaysAllowed: new Set(), deadlineAt: 500 });
-  // 只看最后一轮请求：历史消息会带着旧提醒一起重发，跨请求累加会重复计数
-  const lastRequestTools = toolMessages(provider, provider.requests.length - 1).join('\n');
-  const hits = lastRequestTools.match(/\[deadline reminder\]/g) ?? [];
-  assert.equal(hits.length, 1, '提醒次数必须收敛，否则每步都在烧上下文');
+  const now = () => (clock += 600_000);
+  const { provider, runtime } = statsRuntime(grindingScripts(3), events, { now, maxSteps: 3 });
+  await runtime.run({ ...baseInput, sessionAllowed: new Set(), alwaysAllowed: new Set() });
+  const allToolContents = [0, 1, 2].flatMap((i) => toolMessages(provider, i + 1)).join('\n');
+  assert.doesNotMatch(allToolContents, /deadline reminder/, '提醒是定时器的同伙：没有掐断就不该催模型提前收尾');
+  assert.doesNotMatch(allToolContents, /时间预算/);
 });
 
 test('用户手动中止：reason 与 cause 都如实写 user', async () => {
@@ -566,27 +535,61 @@ test('用户手动中止：reason 与 cause 都如实写 user', async () => {
   assert.equal(outcome.abortCause, 'user');
 });
 
-test('超时中止：reason 说出真实上限与耗时，绝不再写「用户中止」', async () => {
+test('模型连接停摆：按 aborted 处理并写明可继续，而不是报成调用失败', async () => {
   const events: AgentEvent[] = [];
-  const controller = new AbortController();
-  controller.abort();
-  let clock = 0;
-  const now = () => (clock += 100);
-  const { runtime } = statsRuntime([[{ type: 'text', text: 'x' }, { type: 'done', stopReason: 'end_turn' }]], events, { now });
-  const outcome = await runtime.run({
-    ...baseInput,
-    signal: controller.signal,
-    abortCause: () => 'timeout',
-    turnBudgetMs: 480_000,
+  // 半截正文已经打出去了——报 error 会让它变成红色失败并丢掉续跑检查点
+  const stalled = Object.assign(new Error('模型接口连续 300 秒没有任何响应，已断开本次调用'), {
+    name: 'ProviderStallError',
+    code: 'PROVIDER_STALLED',
   });
+  const provider = new ScriptedProvider([[{ type: 'text', text: '已处理前 12 张表' }]]);
+  provider.stream = function () {
+    return (async function* () {
+      yield { type: 'text', text: '已处理前 12 张表' } as ProviderEvent;
+      throw stalled;
+    })();
+  };
+  const runtime = new AgentRuntime({
+    provider,
+    buildSystem: () => 'system',
+    executeTool: async () => result(),
+    requestApproval: async () => ({ decision: 'allow', scope: 'once' }),
+    emit: (event) => events.push(event),
+    generateId: () => 'turn_1',
+  });
+  const outcome = await runtime.run({ ...baseInput, sessionAllowed: new Set(), alwaysAllowed: new Set() });
+  assert.equal(outcome.status, 'aborted', '停摆不是失败：进度是真的，还能续');
+  assert.equal(outcome.abortCause, 'stalled');
+  assert.match(outcome.text, /已处理前 12 张表/, '半截正文要留着，续跑才有落点');
   const abortedEvent = events.find((e) => e.type === 'aborted');
   assert.ok(abortedEvent && abortedEvent.type === 'aborted');
-  assert.equal(abortedEvent.cause, 'timeout');
-  assert.notEqual(abortedEvent.reason, '用户中止', '超时不是用户中止，不能撒谎');
-  assert.match(abortedEvent.reason, /上限/, '要说明是达到上限');
-  assert.match(abortedEvent.reason, /8 分钟/, '要说出真实上限，8 分钟预算就该是 8 分钟');
-  assert.match(abortedEvent.reason, /可继续/, '要告诉用户还能接着跑');
-  assert.equal(outcome.abortCause, 'timeout', 'agentHost 事后要靠返回值判断是否写检查点');
+  assert.equal(abortedEvent.cause, 'stalled');
+  assert.notEqual(abortedEvent.reason, '用户中止', '用户没点停止，不能这么写');
+  assert.match(abortedEvent.reason, /无响应/);
+  assert.match(abortedEvent.reason, /可继续/);
+  assert.ok(!events.some((event) => event.type === 'error'), '停摆不该再发一个 error 事件');
+});
+
+test('真正的调用失败仍然是 error，不能被停摆分支吞掉', async () => {
+  const events: AgentEvent[] = [];
+  const provider = new ScriptedProvider([[]]);
+  provider.stream = function () {
+    return (async function* () {
+      throw Object.assign(new Error('模型接口返回 500'), { code: 'PROVIDER_HTTP' });
+    })();
+  };
+  const runtime = new AgentRuntime({
+    provider,
+    buildSystem: () => 'system',
+    executeTool: async () => result(),
+    requestApproval: async () => ({ decision: 'allow', scope: 'once' }),
+    emit: (event) => events.push(event),
+    generateId: () => 'turn_1',
+  });
+  const outcome = await runtime.run({ ...baseInput, sessionAllowed: new Set(), alwaysAllowed: new Set() });
+  assert.equal(outcome.status, 'error');
+  assert.equal(outcome.error?.code, 'PROVIDER_HTTP');
+  assert.ok(events.some((event) => event.type === 'error'));
 });
 
 /** 造一个跑一次 run_sql 就收尾的 runtime，返回喂给模型的那条 tool 消息。 */

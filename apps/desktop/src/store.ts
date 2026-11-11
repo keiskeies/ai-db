@@ -49,8 +49,8 @@ export interface LiveTurn {
   tools: LiveTool[];
   plan: AgentPlanItem[];
   status: 'streaming' | 'awaiting' | 'done' | 'aborted' | 'error';
-  /** 中止原因：超时不是用户点的停止，界面不能都说成「已中止」。 */
-  abortCause?: 'timeout' | 'user';
+  /** 中止原因：连接停摆不是用户点的停止，界面不能都说成「已中止」。 */
+  abortCause?: 'stalled' | 'user';
   error?: string;
   startedAt: number;
   /** 回合结束时间；流式期间缺省，状态条的 tok/s 用它定格。 */
