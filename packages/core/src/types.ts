@@ -560,6 +560,7 @@ export interface AgentSettings {
   /** 每轮结束后基于本轮涉及的表给出可点击的追问建议。 */
   followUpSuggestions: boolean;
   snapshotBeforeWrite: boolean;
+  /** 上下文压缩阈值：占模型上下文窗口的百分比（0-100，默认 70）。超过即压缩历史。 */
   compactionThreshold: number;
   /** 按模型名保存的能力档案。 */
   modelProfiles?: Record<string, ModelProfile>;
@@ -726,7 +727,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     autoMemory: true,
     followUpSuggestions: true,
     snapshotBeforeWrite: true,
-    compactionThreshold: 24000,
+    compactionThreshold: 70,
   },
   embedding: {
     provider: 'none',

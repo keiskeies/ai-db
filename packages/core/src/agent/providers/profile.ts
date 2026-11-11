@@ -79,16 +79,26 @@ export function maxOutputTokensOf(agent: AgentSettings, profile = getModelProfil
   return value && value > 0 ? Math.floor(value) : undefined;
 }
 
+/** 历史压缩触发线：占上下文窗口的百分比。模型没声明窗口时用这个绝对兜底。 */
+const COMPACTION_PERCENT_DEFAULT = 70;
+const FALLBACK_COMPACTION_TOKENS = 48000;
+
 /**
  * 历史消息的 token 预算。
- * 基线沿用压缩阈值的一半（给输出和系统提示词留余量），模型声明了上下文窗口时再按窗口收紧，
- * 因此没有配置档案的行为与改造前完全一致。
+ *
+ * 「压缩阈值」按「占上下文窗口的百分比」解释（compactionThreshold 存 0-100，默认 70）：
+ * 历史最多能占到窗口的多少，超过就压缩。随窗口自动缩放——32K 模型压缩线约 22K，
+ * 1M 模型约 734K，同一次设置跨模型有效，不再为每个模型手调一个写死的 token 数。
+ *
+ * 有窗口：预算 = min(窗口×百分比, 窗口−输出−提示词余量)，兜底不小于 MIN_HISTORY_TOKENS。
+ * 无窗口（没有模型档案）：退回绝对兜底，行为稳定。
  */
 export function historyTokenBudget(agent: AgentSettings, profile = getModelProfile(agent)): number {
-  const configured = Math.max(MIN_HISTORY_TOKENS, Math.floor((agent.compactionThreshold || MIN_HISTORY_TOKENS * 2) / 2));
   const room = roomInWindow(profile, agent);
-  if (!room) return configured;
-  return Math.max(MIN_HISTORY_TOKENS, Math.min(configured, Math.floor(room)));
+  if (!room) return FALLBACK_COMPACTION_TOKENS;
+  const percent = agent.compactionThreshold > 0 ? agent.compactionThreshold : COMPACTION_PERCENT_DEFAULT;
+  const byPercent = Math.floor((room + PROMPT_RESERVE_TOKENS) * (percent / 100));
+  return Math.max(MIN_HISTORY_TOKENS, Math.min(byPercent, Math.floor(room)));
 }
 
 /** 窗口扣掉输出与系统提示词后的余量；没声明窗口的模型返回 undefined（= 不设限）。 */

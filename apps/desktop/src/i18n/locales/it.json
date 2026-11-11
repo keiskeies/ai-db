@@ -975,7 +975,6 @@
   "上上月": "2 mesi fa",
   "上下文 ≈ ": "Contesto ≈ ",
   "上下文占用 {0} / {1} tokens": "Il contesto occupa {0}/{1} token",
-  "上下文压缩阈值（tokens）": "Soglia di compressione del contesto (token)",
   "上下文已更新，下一回合生效": "Il contesto è stato aggiornato e avrà effetto nel prossimo turno",
   "上下文窗口": "Finestra del contesto",
   "上半年": "Prima metà",

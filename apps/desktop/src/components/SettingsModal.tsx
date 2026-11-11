@@ -900,8 +900,9 @@ export function SettingsModal() {
                     <input className="input" type="number" min={0} max={2} step={0.1} value={form.agent.temperature} onChange={(e) => setAgent({ temperature: Number(e.target.value) })} />
                   </div>
                   <div className="field">
-                    <label>{tr("上下文压缩阈值（tokens）")}</label>
-                    <input className="input" type="number" min={4000} step={1000} value={form.agent.compactionThreshold} onChange={(e) => setAgent({ compactionThreshold: Number(e.target.value) })} />
+                    <label>{tr("上下文压缩阈值")}</label>
+                    <input className="input" type="number" min={1} max={100} step={1} value={form.agent.compactionThreshold} onChange={(e) => setAgent({ compactionThreshold: Number(e.target.value) })} />
+                    <div className="muted" style={{ fontSize: 10, marginTop: 3 }}>{tr("占模型上下文窗口的百分比，超过即压缩历史对话")}</div>
                   </div>
                 </div>
                 <label className="checkbox">

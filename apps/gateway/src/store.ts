@@ -951,6 +951,12 @@ export class Store {
     // 没被用户手动改过的搜索设置迁移到新默认，改过的原样保留。
     if (merged.search.enabled.join(',') === 'exa,parallel,duckduckgo,searxng') merged.search.enabled = [...DEFAULT_SETTINGS.search.enabled];
     if (merged.search.searxngBaseUrl === 'https://searx.be') merged.search.searxngBaseUrl = DEFAULT_SETTINGS.search.searxngBaseUrl;
+    // 旧版本 compactionThreshold 存的是 token 数（默认 24000），语义已改为「占窗口的百分比」。
+    // 没被用户改过（仍是旧默认）的迁移到新默认 70；用户改过的按 token 数无法可靠换算成百分比，
+    // 为安全起见也落到新默认，避免一个几百 token 的旧值被当成 0.x% 把历史压缩到几乎全删。
+    if (typeof merged.agent.compactionThreshold === 'number' && merged.agent.compactionThreshold > 1000) {
+      merged.agent.compactionThreshold = DEFAULT_SETTINGS.agent.compactionThreshold;
+    }
     const enc = this.getSetting('agentApiKey');
     const decrypted = this.box.decrypt<{ apiKey: string }>(enc);
     const legacyKey = decrypted?.apiKey;

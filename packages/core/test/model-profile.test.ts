@@ -86,12 +86,21 @@ test('a reasoning tier only reaches the provider when it maps to a value', () =>
   assert.equal(activeReasoningTier(agent({ reasoningTier: 'high', modelProfiles: { m: { reasoningTiers: [{ level: 'high', value: 'high' }] } } })), undefined);
 });
 
-test('the context window tightens the history budget but never exceeds the threshold', () => {
-  assert.equal(historyTokenBudget(agent({ compactionThreshold: 24000 })), 12000);
-  const small = agent({ compactionThreshold: 24000, modelProfiles: { m: { contextWindow: 16000, maxOutputTokens: 4000 } } });
-  assert.equal(historyTokenBudget(small), 4000);
-  const huge = agent({ compactionThreshold: 24000, modelProfiles: { m: { contextWindow: 262144 } } });
-  assert.equal(historyTokenBudget(huge), 12000);
+test('the context window scales the history budget by the compaction percent', () => {
+  // 无窗口档案 → 绝对兜底 48K
+  assert.equal(historyTokenBudget(agent({ compactionThreshold: 70 })), 48000);
+  // 128K 窗口：预算按窗口宽计算，~70% 但不超过窗口余量
+  const small = agent({ compactionThreshold: 70, modelProfiles: { m: { contextWindow: 16384, maxOutputTokens: 4000 } } });
+  const smallBudget = historyTokenBudget(small);
+  assert.ok(smallBudget >= 4000, '兜底不小于最低历史预算');
+  assert.ok(smallBudget <= 16384 - 4000, '预算不超过窗口余量');
+  // 大窗口 1M：同样的 70% 设置预算随窗口放大
+  const huge = agent({ compactionThreshold: 70, modelProfiles: { m: { contextWindow: 1048576, maxOutputTokens: 4096 } } });
+  const hugeBudget = historyTokenBudget(huge);
+  assert.ok(hugeBudget > smallBudget, '大窗口的预算应显著大于小窗口');
+  // 百分比越小预算越小
+  const lower = agent({ compactionThreshold: 30, modelProfiles: { m: { contextWindow: 1048576, maxOutputTokens: 4096 } } });
+  assert.ok(historyTokenBudget(lower) < historyTokenBudget(huge), '更低的百分比应压缩得更狠');
 });
 
 test('model profiles are stored per model without clobbering the others', () => {
