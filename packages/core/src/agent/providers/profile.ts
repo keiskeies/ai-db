@@ -109,6 +109,29 @@ function roomInWindow(profile: ModelProfile | undefined, agent: AgentSettings): 
 }
 
 /**
+ * schema 段在「窗口 − 输出 − 提示词余量」里允许占的比例。
+ *
+ * 这里是提示词侧唯一的「schema 多大」策略：分档决定哪些表值得展开，这个比例只当
+ * 天花板。留 0.35 是因为 system 段还要装历史、业务上下文、记忆与 brief，全给 schema
+ * 会把 historyTokenBudget 的空间吃光（两者共用同一个窗口）。
+ */
+const SCHEMA_ROOM_SHARE = 0.35;
+/** 极小窗口的下限：再挤也要装得下若干表名，否则模型完全看不见这个库。 */
+const MIN_SCHEMA_TOKENS = 1200;
+
+/**
+ * schema 段的 token 上限。没声明窗口返回 0 = 不设限（调用方退回旧的固定档）。
+ * 与 historyTokenBudget / midContextTokenBudget 共用同一套余量常量，避免两处口径不一致。
+ */
+export function schemaTokenBudget(options: { contextWindow?: number; maxOutputTokens?: number }): number {
+  const window = options.contextWindow;
+  if (!window || window <= 0) return 0;
+  const room = window - (options.maxOutputTokens ?? FALLBACK_MAX_OUTPUT_TOKENS) - PROMPT_RESERVE_TOKENS;
+  if (room <= 0) return MIN_SCHEMA_TOKENS;
+  return Math.max(MIN_SCHEMA_TOKENS, Math.floor(room * SCHEMA_ROOM_SHARE));
+}
+
+/**
  * 单条工具结果给模型看的字符预算。
  *
  * 之前是写死的 16000 字符：200K 窗口的模型也只喂 16K，一次 JOIN 出来的宽表被砍掉大半，

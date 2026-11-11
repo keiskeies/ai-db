@@ -26,6 +26,7 @@ export * from './agent/policy';
 export * from './agent/memory';
 export * from './agent/context';
 export * from './agent/suggest';
+export * from './agent/schemaTiers';
 export * from './agent/prompt';
 export * from './agent/runtime';
 export * from './agent/providers/common';

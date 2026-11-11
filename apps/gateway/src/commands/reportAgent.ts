@@ -502,10 +502,24 @@ export async function generateAgentReport(
     engine: item.connection.engine,
     label: item.label,
   }));
+  // 每个源各自的 brief（含 /init 落盘的表用途分档）：分档决定该源 schema 段每张表的
+  // 展开形状。读不到 brief 的源退回无档模式（旧的窗口聚焦逻辑）。
+  const home = input.home;
+  const briefs = await Promise.all(
+    schemas.map(async (item) => {
+      if (!home) return undefined;
+      const database = item.source.database ?? item.connection.database;
+      const record = store.getDatabaseBrief(item.connection.id, database);
+      const path = record?.path ?? defaultBriefPath(home, item.connection);
+      const markdown = await readBrief(path).catch(() => null);
+      if (!markdown) return undefined;
+      return loadBrief(markdown, path, item.schemas);
+    }),
+  );
   const schemaText = schemas
-    .map((item) => {
+    .map((item, index) => {
       const focus = input.tables?.length ? input.tables : [];
-      return `### Source [${item.connection.id}] ${item.label} (${item.connection.engine})\n${compressSchema(item.schemas, focus, 12)}`;
+      return `### Source [${item.connection.id}] ${item.label} (${item.connection.engine})\n${compressSchema(item.schemas, focus, 12, undefined, briefs[index]?.meta.tiers, profile?.contextWindow, maxOutputTokensOf(settings.agent, profile))}`;
     })
     .join('\n\n');
   const connectionsText = sourceRefs
@@ -525,17 +539,7 @@ export async function generateAgentReport(
     ? store.agentContextBundle(primary.connection.id, primary.source.database ?? primary.connection.database)
     : undefined;
   const business = formatBusinessContext({ context: businessContext, glossary: recall.glossary, sqlExamples: recall.sqlExamples });
-  let briefBlock = '';
-  if (primary && input.home) {
-    const database = primary.source.database ?? primary.connection.database;
-    const record = store.getDatabaseBrief(primary.connection.id, database);
-    const path = record?.path ?? defaultBriefPath(input.home, primary.connection);
-    const markdown = await readBrief(path).catch(() => null);
-    if (markdown) {
-      const brief = loadBrief(markdown, path, primary.schemas);
-      briefBlock = briefPromptBlock(brief);
-    }
-  }
+  const briefBlock = briefs[0] ? briefPromptBlock(briefs[0]) : '';
   const memoriesBlock = recall.memories.length
     ? `## Memories recalled for this turn\n${recall.memories.map((memory: any) => `- ${memory.title}: ${memory.content}`).join('\n')}`
     : '';

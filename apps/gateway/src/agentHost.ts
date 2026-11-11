@@ -545,6 +545,10 @@ export class AgentHost {
           attachmentTables,
           question: run.userText,
           contextWindow: profile?.contextWindow,
+          maxOutputTokens: maxOutputTokensOf(settings.agent, profile),
+          // /init 落盘的表用途分档：决定 schema 段每张表的展开形状。brief 早于分档
+          // 功能（没有 table_tiers）时为 undefined，prompt 退回旧的窗口聚焦逻辑。
+          tiers: brief?.meta.tiers,
         });
         const extra: string[] = [];
         if (intent) {

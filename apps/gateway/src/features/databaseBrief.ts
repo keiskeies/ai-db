@@ -11,7 +11,10 @@ import type {
   LlmProvider,
   Memory,
   TableInfo,
+  TableTier,
+  TableTiers,
 } from '@aidb/core';
+import { classifyTable } from '@aidb/core';
 
 /**
  * AI_DB.md 是一份“老员工交接手册”，不是数据字典：
@@ -84,6 +87,12 @@ export interface BriefMeta {
   reviewed?: boolean;
   tableCount?: number;
   coreTables?: number;
+  /**
+   * /init 算出的表用途分档，只含非活跃表：active 是默认档，不落盘（省一半体积），
+   * 所以「表不在这里」等价于「活跃、完整展开」。缺整个字段表示这份 brief 早于分档
+   * 功能（按无档处理，提示词退回窗口聚焦逻辑）。
+   */
+  tiers?: TableTiers;
   connection?: string;
   database?: string;
   engine?: string;
@@ -284,6 +293,287 @@ export function selectCoreTables(
     if (!picked.includes(item.fact)) picked.push(item.fact);
   }
   return picked.slice(0, limit);
+}
+
+/**
+ * /init 分档编排：结构 + 行为信号 → TableTiers，供 prompt 的 compressSchema 决定
+ * 每张表的展开形状。低频重算（跟 /init），结果落盘 frontmatter，保证 system 前缀
+ * 在轮间稳定（缓存友好）；误判可在「业务上下文」里标注表别名/描述升档，或手改 brief。
+ */
+export function computeTableTiers(
+  schemas: DatabaseSchema[],
+  bundle?: AgentContextBundle,
+  historyCounts: Map<string, number> = new Map(),
+): TableTiers {
+  const facts = flattenTables(schemas);
+  const incoming = new Map<string, number>();
+  for (const fact of facts) {
+    for (const fk of fact.table.foreignKeys ?? []) {
+      const target = lastSegment(fk.refTable);
+      incoming.set(target, (incoming.get(target) ?? 0) + 1);
+    }
+  }
+  const tiers: TableTiers = {};
+  for (const fact of facts) {
+    const curated = Boolean(bundle?.tableMeta[fact.name] || bundle?.tableMeta[fact.displayName]);
+    tiers[fact.name.toLowerCase()] = classifyTable({
+      table: fact.table,
+      hits: historyCounts.get(fact.name) ?? historyCounts.get(fact.displayName) ?? 0,
+      curated,
+      incoming: incoming.get(fact.name) ?? 0,
+    });
+  }
+  return tiers;
+}
+
+/** 分档的人工可读标签（附录表格用）；中英双向映射见 manualTierOverrides。 */
+const TIER_LABELS: Array<[TableTier, string]> = [
+  ['active', '活跃业务表'],
+  ['config', '字典/配置'],
+  ['bridge', '桥接'],
+  ['cold', '低频'],
+  ['system', '系统内部'],
+];
+
+function tierLabel(tier: TableTier): string {
+  return TIER_LABELS.find(([value]) => value === tier)?.[1] ?? tier;
+}
+
+function tierFromLabel(text: string): TableTier | undefined {
+  const raw = text.trim().replace(/[`*]/g, '');
+  const hit = TIER_LABELS.find(([tier, label]) => raw === tier || raw === label || raw.includes(label));
+  return hit?.[0];
+}
+
+/**
+ * 解析分档表里的一行。**必须只认三列的行**：附录全量清单是七列表格，若不锚定行尾，
+ * 那些行会被当成分档行读进来（实测会让每张表都盖上「人工指定」的档）。
+ */
+function tierRowCells(line: string): [string, string, string] | undefined {
+  const cells = /^\|\s*`?([^|`]+?)\s*`?\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*$/.exec(line);
+  if (!cells) return undefined;
+  return [cells[1], cells[2], cells[3]];
+}
+
+/**
+ * 从 manual:tiers 段落读人工档位表。返回 undefined 表示这份 brief 还没有该段落
+ * （首次 /init 前），此时全部沿用自动分类；返回空对象表示用户把整张表删空了
+ * （= 显式声明「所有表都要完整展开」），两者语义不同，不能合并。
+ */
+export function parseManualTierRows(markdown: string): TableTiers | undefined {
+  const block = /<!-- aidb:manual:tiers -->([\s\S]*?)<!-- \/aidb:manual:tiers -->/.exec(markdown);
+  if (!block) return undefined;
+  const rows: TableTiers = {};
+  for (const line of block[1].split(/\r?\n/)) {
+    const cells = tierRowCells(line);
+    if (!cells) continue;
+    // 附录里显示 schema.table，分档键用裸表名：compressSchema 的 tierOf 也按裸名回退匹配。
+    const raw = cells[0].trim().toLowerCase();
+    if (!raw || raw.includes('表 / 视图') || /^[-\s:]+$/.test(raw)) continue;
+    const name = raw.includes('.') ? raw.slice(raw.lastIndexOf('.') + 1) : raw;
+    const tier = tierFromLabel(cells[1]);
+    if (!tier) continue;
+    // 理由列原样读回：可解释性是这一段的卖点，换成「人工指定」就把理由丢了。
+    rows[name] = { tier, reason: cells[2].trim() || '人工在 brief 的分档表里指定，覆盖自动分类' };
+  }
+  return rows;
+}
+
+/**
+ * 三方合并：本轮自动分类 auto、上次落盘的 lastEmitted（frontmatter 里的 table_tiers）、
+ * 人工档位表 manual。
+ *
+ * 契约（同步写在 brief 段落正文里，对用户可见）：**人工表存在即「非活跃表」的权威清单**
+ * ——表在表里 → 用人工档位；不在表里 → 视为活跃、完整展开，不再回落到自动分类。
+ * 所以「把误判那行删掉」是升档的正解，改档位列也可以。
+ *
+ * lastEmitted 只用来区分两种「不在表里」：上次有、这次没有 = 用户删了这行（尊重，保持
+ * 活跃，且 /init 不再补回来）；上次也没有 = 新增的表（用自动分类，并补进表格）。
+ * 没有 lastEmitted 时删行会在下一轮被规则重新降档，等于删了没用。
+ *
+ * 人工表里指向已删除的表的行直接丢弃：auto 覆盖当前 schema 的全部表，不在 auto 里
+ * 就是不存在，留着只会让模型去查一张没有的表。
+ */
+export function resolveTiers(auto: TableTiers, lastEmitted: TableTiers, manual?: TableTiers): TableTiers {
+  if (!manual) return { ...auto };
+  const resolved: TableTiers = {};
+  for (const [name, info] of Object.entries(auto)) {
+    if (manual[name]) continue; // 人工值统一在末尾写入
+    if (info.tier === 'active') {
+      resolved[name] = info;
+      continue;
+    }
+    // 上次落盘里有、人工表里已经没有 → 用户删了这行，按人工意愿保持活跃。
+    if (lastEmitted[name]) continue;
+    resolved[name] = info;
+  }
+  for (const [name, info] of Object.entries(manual)) {
+    if (!auto[name]) continue; // 表已不存在
+    if (info.tier === 'active') {
+      delete resolved[name];
+      continue;
+    }
+    resolved[name] = info;
+  }
+  return resolved;
+}
+
+/**
+ * 维护已有的人工分档段落：正文（含用户的说明文字与改过的档位列）逐行保留，只做
+ * 结构性维护——删掉已不存在表所在行、把新增的非活跃表补进表格末尾、刷新统计行。
+ * 不整段重渲染，否则段落里「/init 会保留你的修改」这句话就成了假话。
+ */
+export function mergeTierRows(
+  existingBlock: string,
+  facts: Array<{ displayName: string; name: string }>,
+  tiers: TableTiers,
+): string {
+  const wrap = /<!-- aidb:manual:tiers -->([\s\S]*?)<!-- \/aidb:manual:tiers -->/.exec(existingBlock);
+  const body = (wrap ? wrap[1] : existingBlock).trim();
+  const lines = body.split(/\r?\n/);
+  const bare = (value: string) => {
+    const raw = value.trim().toLowerCase().replace(/[`*]/g, '');
+    return raw.includes('.') ? raw.slice(raw.lastIndexOf('.') + 1) : raw;
+  };
+  const live = new Set<string>();
+  for (const fact of facts) {
+    live.add(fact.name.toLowerCase());
+    live.add(bare(fact.displayName));
+  }
+  const kept: string[] = [];
+  const present = new Set<string>();
+  let placeholder: number | undefined; // 「（无）」占位行，补新行时要撤掉
+  let separator = -1; // 表格分隔行 |---|---|---| 在 kept 里的下标
+  let lastRow = -1; // 最后一条真实表行在 kept 里的下标
+  for (const line of lines) {
+    const cells = tierRowCells(line);
+    const name = cells ? bare(cells[0]) : undefined;
+    if (name === undefined) {
+      kept.push(line);
+      continue;
+    }
+    if (/^[-\s:]+$/.test(name)) {
+      separator = kept.length;
+      kept.push(line);
+      continue;
+    }
+    if (name.includes('表 / 视图') || name.includes('（无）')) {
+      if (name.includes('（无）')) placeholder = kept.length;
+      kept.push(line);
+      continue;
+    }
+    // 已删除的表：行留着只会让模型去找不存在的表。
+    if (!live.has(name)) continue;
+    kept.push(line);
+    present.add(name);
+    lastRow = kept.length - 1;
+  }
+  const byBare = new Map<string, { displayName: string }>();
+  for (const fact of facts) {
+    if (!byBare.has(fact.name.toLowerCase())) byBare.set(fact.name.toLowerCase(), fact);
+  }
+  const missing = Object.entries(tiers)
+    .filter(([name, info]) => info.tier !== 'active' && !present.has(name) && byBare.has(name))
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, info]) => `| \`${cell(byBare.get(name)!.displayName)}\` | ${tierLabel(info.tier)} | ${cell(info.reason)} |`);
+  if (missing.length) {
+    if (placeholder !== undefined) {
+      kept.splice(placeholder, 1);
+      if (lastRow < 0) lastRow = separator;
+    }
+    if (lastRow >= 0) kept.splice(lastRow + 1, 0, ...missing);
+    else if (separator >= 0) kept.splice(separator + 1, 0, ...missing);
+    // 用户把表头也删了：补一张完整表格，否则新增的表无处可去。
+    else kept.push('| 表 / 视图 | 档位 | 判定理由 |', '|---|---|---|', ...missing);
+  }
+  // 统计行是机器写的，整行重算（保留首次生成时间）；其余正文一字不动。
+  for (let i = 0; i < kept.length; i += 1) {
+    if (!kept[i].startsWith('分档统计：')) continue;
+    const firstGenerated = /首次生成\s*([^\s）]+)/.exec(kept[i])?.[1] ?? new Date().toISOString();
+    kept[i] = renderTierStats(facts, tiers, firstGenerated);
+    break;
+  }
+  return manualBlock('tiers', kept.join('\n').trim());
+}
+
+/** 分档表正文（人工段落）：逐张列出非活跃表 + 判定理由，供核对与覆盖。 */
+export const TIER_HEADING = '# 9.1 表详略分档（人工可覆盖）';
+
+export function renderTierStats(facts: Array<{ displayName: string; name: string }>, tiers: TableTiers, generatedAt: string): string {
+  const tierOrder: TableTier[] = ['system', 'cold', 'config', 'bridge'];
+  const counts = tierOrder.map((tier) => `${tierLabel(tier)} ${Object.values(tiers).filter((info) => info.tier === tier).length} 张`);
+  const nonActive = facts.filter((fact) => {
+    const tier = tiers[fact.name.toLowerCase()]?.tier;
+    return tier && tier !== 'active';
+  }).length;
+  return `分档统计：活跃业务表 ${facts.length - nonActive} 张；${counts.join('、')}。（首次生成 ${generatedAt}）`;
+}
+
+export function renderTierTable(facts: Array<{ displayName: string; name: string }>, tiers: TableTiers, generatedAt: string): string {
+  const tierOrder: TableTier[] = ['system', 'cold', 'config', 'bridge'];
+  const rows = tierOrder.flatMap((tier) =>
+    facts
+      .filter((fact) => tiers[fact.name.toLowerCase()]?.tier === tier)
+      .sort((a, b) => a.displayName.localeCompare(b.displayName))
+      .map((fact) => `| \`${cell(fact.displayName)}\` | ${tierLabel(tier)} | ${cell(tiers[fact.name.toLowerCase()].reason)} |`),
+  );
+  return [
+    '提示词里每张表的详略由下表决定：**完整展开 = 活跃业务表**，其余只给表名（字典/配置表额外附取值含义）。',
+    '',
+    '本表是「非活跃表」的权威清单：不在表里的表一律完整展开。误判时**删掉那一行**即可升档（改档位列也可以，写「活跃业务表」等价于删行）。',
+    '本段是人工段落：`/init` 不改写你写的文字，不复活你删掉的行，只把新增的表补进表格、并重算下面的统计行。',
+    '',
+    renderTierStats(facts, tiers, generatedAt),
+    '',
+    '| 表 / 视图 | 档位 | 判定理由 |',
+    '|---|---|---|',
+    ...(rows.length ? rows : ['| （无） | — | 全部表按活跃业务表处理 |']),
+  ].join('\n');
+}
+
+/** frontmatter 里 table_tiers 的紧凑序列化：active 是默认档不写，省一半体积。 */
+function serializeTiers(tiers: TableTiers): string {
+  // 分隔符与结构符都要转义（含 ; 与 "），否则理由里的标点会把条目切开。
+  const esc = (value: string) => value.replace(/([\\;=":])/g, '\\$1').replace(/\s+/g, ' ');
+  return Object.entries(tiers)
+    .filter(([, info]) => info.tier !== 'active')
+    .map(([name, info]) => `${esc(name)}=${info.tier}:${esc(info.reason)}`)
+    .join(';');
+}
+
+/** 逐字符扫描到第一个未转义的结构符；找不到返回 -1。 */
+function indexOfUnescaped(text: string, marker: string, from = 0): number {
+  for (let i = from; i < text.length; i += 1) {
+    if (text[i] === '\\') { i += 1; continue; }
+    if (text[i] === marker) return i;
+  }
+  return -1;
+}
+
+const unescape = (value: string) => value.replace(/\\(.)/g, '$1');
+const TIERS: TableTier[] = ['active', 'config', 'bridge', 'cold', 'system'];
+
+/** 解析 frontmatter 的 table_tiers。解析不出来的条目直接跳过（按无档处理，不影响其它表）。 */
+export function parseTableTiers(raw: string | undefined): TableTiers {
+  const tiers: TableTiers = {};
+  const text = (raw ?? '').trim();
+  if (!text) return tiers;
+  let cursor = 0;
+  while (cursor < text.length) {
+    const end = indexOfUnescaped(text, ';', cursor);
+    const entry = end < 0 ? text.slice(cursor) : text.slice(cursor, end);
+    cursor = end < 0 ? text.length : end + 1;
+    const eq = indexOfUnescaped(entry, '=');
+    if (eq <= 0) continue;
+    const name = unescape(entry.slice(0, eq)).trim().toLowerCase();
+    if (!name) continue;
+    const rest = entry.slice(eq + 1);
+    const colon = indexOfUnescaped(rest, ':');
+    const tier = unescape(colon < 0 ? rest : rest.slice(0, colon)).trim();
+    if (!TIERS.includes(tier as TableTier)) continue;
+    tiers[name] = { tier: tier as TableTier, reason: colon < 0 ? '' : unescape(rest.slice(colon + 1)).trim() };
+  }
+  return tiers;
 }
 
 function isUniqueColumns(table: TableInfo, columns: string[]): boolean {
@@ -743,6 +1033,7 @@ function buildSections(
   annotationsLabel: 'model' | 'none',
   schemaHash: string,
   existing: ParsedDocument,
+  tiers: TableTiers,
 ): { sections: Array<{ name: string; block: string }>; preserved: string[]; manualBlocks: Array<{ name: string; block: string }> } {
   const { connection } = input;
   const tables = facts.filter((fact) => fact.table.type === 'table');
@@ -987,6 +1278,18 @@ function buildSections(
   ].join('\n\n');
   manualBlocks.push({ name: 'custom', block: existing.manual.get('custom') ?? manualBlock('custom', customFallback) });
   if (existing.manual.has('custom')) preserved.push('custom');
+
+  // 分档表放 manual 段落：它就是人工覆盖层。段落正文原样保留（用户的改动与删行都不
+  // 覆盖），只做两件维护：删掉已不存在的表所在行、把新增且非活跃表补进表格。覆盖层
+  // 不能放自动段落——那部分每次 /init 重写，改了也丢。
+  const existingTiers = existing.manual.get('tiers');
+  manualBlocks.push({
+    name: 'tiers',
+    block: existingTiers
+      ? mergeTierRows(existingTiers, facts, tiers)
+      : manualBlock('tiers', `${TIER_HEADING}\n\n${renderTierTable(facts, tiers, new Date().toISOString())}`),
+  });
+  if (existingTiers) preserved.push('tiers');
   // 兼容旧格式或用户在标记之外新增的内容：单独保留，绝不静默丢弃。
   if (existing.leftover) {
     manualBlocks.push({ name: 'extra', block: manualBlock('extra', existing.leftover) });
@@ -1011,6 +1314,7 @@ function frontmatter(input: BriefInput, meta: BriefMeta): string {
     `schema_hash: "${meta.schemaHash ?? ''}"`,
     `table_count: ${meta.tableCount ?? 0}`,
     `core_tables: ${meta.coreTables ?? 0}`,
+    ...(meta.tiers && Object.keys(meta.tiers).length ? [`table_tiers: "${serializeTiers(meta.tiers).replace(/"/g, '\\"')}"`] : []),
     `annotations: "${meta.annotations ?? 'none'}"`,
     `reviewed: ${reviewed}`,
     '---',
@@ -1028,12 +1332,16 @@ export async function composeDatabaseBrief(input: BriefInput): Promise<BriefResu
   const edges = joinEdges(facts, input.bundle, annotations);
   const schemaHash = schemaFingerprint(input.schemas);
   const annotationsLabel: 'model' | 'none' = annotations.business || annotations.tables.length || annotations.joins.length || annotations.metrics.length ? 'model' : 'none';
-  const { sections, preserved, manualBlocks } = buildSections(input, facts, core, edges, annotations, annotationsLabel, schemaHash, existing);
+  // 分档：自动分类 → 与人工档位表、上次落盘三方合并。人工删过的行不会被规则复活。
+  const autoTiers = computeTableTiers(input.schemas, input.bundle, historyCounts);
+  const tiers = resolveTiers(autoTiers, parseTableTiers(existing.frontmatter.table_tiers), parseManualTierRows(input.existing ?? ''));
+  const { sections, preserved, manualBlocks } = buildSections(input, facts, core, edges, annotations, annotationsLabel, schemaHash, existing, tiers);
   const reviewed = existing.frontmatter.reviewed === 'true';
   const meta: BriefMeta = {
     schemaHash,
     tableCount: facts.length,
     coreTables: core.length,
+    tiers,
     annotations: annotationsLabel,
     reviewed,
   };
@@ -1082,6 +1390,14 @@ export async function readBrief(path: string): Promise<string | null> {
 
 export function parseBriefMeta(markdown: string): BriefMeta {
   const frontmatter = parseDocument(markdown).frontmatter;
+  const fromFrontmatter = parseTableTiers(frontmatter.table_tiers);
+  // 人工分档表存在即权威：表在表里用它的档位，不在表里视为活跃（完整展开）。
+  // 不再把人工行叠加到 frontmatter 之上——那样用户删掉的行会被 frontmatter 复活，
+  // 段落里「删掉这行即完整展开」就成了假话。没有该段落（老 brief）才用 frontmatter。
+  const manual = parseManualTierRows(markdown);
+  const tiers: TableTiers = manual
+    ? Object.fromEntries(Object.entries(manual).filter(([, info]) => info.tier !== 'active'))
+    : fromFrontmatter;
   return {
     generatedAt: frontmatter.generated_at,
     schemaHash: frontmatter.schema_hash,
@@ -1089,6 +1405,7 @@ export function parseBriefMeta(markdown: string): BriefMeta {
     reviewed: frontmatter.reviewed === 'true',
     tableCount: Number(frontmatter.table_count ?? 0) || undefined,
     coreTables: Number(frontmatter.core_tables ?? 0) || undefined,
+    tiers: Object.keys(tiers).length ? tiers : undefined,
     connection: frontmatter.connection,
     database: frontmatter.database,
     engine: frontmatter.engine,

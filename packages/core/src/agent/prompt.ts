@@ -2,7 +2,9 @@ import type { AgentContextData, ProviderMessage, ProviderRequest } from './types
 import type { AgentContextBundle, ColumnInfo, ConnectionConfig, DatabaseSchema, Memory, PermissionMode, TableInfo } from '../types';
 import { isAgentContextActive } from '../types';
 import { engineMeta } from '../engines';
+import { schemaTokenBudget } from './providers/profile';
 import { isColumnDisabled, isTableDisabled } from './context';
+import { extractEnumGloss, TIER_GUIDE, type TableTiers } from './schemaTiers';
 
 export interface SystemPromptOptions {
   connection?: ConnectionConfig;
@@ -21,6 +23,13 @@ export interface SystemPromptOptions {
   question?: string;
   /** 模型上下文窗口（tokens）。已知时按窗口算聚焦阈值；未知时退回表数/列数启发式。 */
   contextWindow?: number;
+  /** 本回合的最大输出 tokens，和 contextWindow 一起算 schema 段的上限。 */
+  maxOutputTokens?: number;
+  /**
+   * /init 落盘的表用途分档。有档时按「用途决定展开形状」渲染 schema 段，
+   * 窗口预算退化为上限保护；没档（早于分档功能的 brief）沿用旧聚焦逻辑。
+   */
+  tiers?: TableTiers;
 }
 
 const MODE_TEXT: Record<PermissionMode, string> = {
@@ -92,17 +101,17 @@ function nameTokens(name: string): string[] {
 }
 
 /**
- * 按当前问题挑选候选表，并补一跳关联表。
- * 只影响 prompt 的“列明细”分配，未命中的表仍以表名出现在 Schema 中。
+ * 一条「只报表名」的表行的 token 成本：表名列 + 换行，英文 ~2-3 token，中文备注更贵，
+ * 取保守值。fullSchemaTokens 与 tier 护栏共用同一个数，两处口径不能各写一份。
  */
+const NAME_LINE_TOKENS = 12;
+
 /* 整库完整展开的 token 估算。关键：compressSchema 无论是否聚焦，列明细只展开前
    ~15 张表（detailBudget），其余表只出「- table X」名行；所以真正随库规模线性增长
    的是表名行数，不是列数。聚焦与否的差别在于把上百条名行并成一行「other tables」。
    用「每表一条名行」估算整库完整展开的占用，聚焦省的就是把这些名行收进一行的量。 */
 function fullSchemaTokens(totalTables: number): number {
-  // 每表名行：表名列 + 换行，英文 ~2-3 token，中文备注更贵，取保守值 12。
-  const perTableLine = 12;
-  return perTableLine * totalTables;
+  return NAME_LINE_TOKENS * totalTables;
 }
 
 /** 决定是否启用「按问题聚焦列明细」。 */
@@ -116,6 +125,39 @@ export function schemaFocusEnabled(input: { contextWindow?: number; totalTables:
   const expanded = fullSchemaTokens(totalTables);
   const windowHeadroom = contextWindow * 0.7; // 输出 + 系统/历史留白约 30%
   return expanded > windowHeadroom * 0.1;
+}
+
+/**
+ * tier 模式下的「列明细」预算：由窗口算上限，而不是写死 15 张。
+ *
+ * 分档已经决定了「哪些表值得展开」，窗口只剩护栏作用：active 表太多、全部展开会
+ * 超过 schemaTokenBudget 时，才从后往前砍列明细（表名行仍保留，模型看得见表的存在）。
+ * 每张表的列明细成本按实际列数估（formatTable 截 48 列），不用平均列数拍脑袋。
+ */
+export function tierDetailBudget(input: {
+  contextWindow?: number;
+  candidates: Array<{ columns: number }>;
+  /** schema 段 token 上限（schemaTokenBudget 算出）；0 = 不设限。 */
+  schemaTokens?: number;
+}): number {
+  const { contextWindow, candidates, schemaTokens } = input;
+  // 没有窗口档案 → 退回旧的固定上限，行为与改造前一致。
+  if (!contextWindow || contextWindow <= 0) return Math.min(candidates.length, 15);
+  if (!schemaTokens) return candidates.length;
+  const perTable = (columns: number) => {
+    const cols = Math.min(columns, 48);
+    // 每列 name:type + 约束标记 ~8 token；表名/注释/FK 行另有 ~40 token。
+    return 40 + cols * 8;
+  };
+  let used = 0;
+  let budget = 0;
+  for (const candidate of candidates) {
+    const cost = perTable(candidate.columns);
+    if (used + cost > schemaTokens) break;
+    used += cost;
+    budget += 1;
+  }
+  return budget;
 }
 
 /** 焦点表用于列明细分配；未启聚焦时只跟随附件，不额外裁剪。 */
@@ -212,6 +254,9 @@ export function compressSchema(
   focusTables: string[] = [],
   maxTablesWithColumns = 15,
   context?: AgentContextBundle,
+  tiers?: TableTiers,
+  contextWindow?: number,
+  maxOutputTokens?: number,
 ): string {
   if (!databases || !databases.length) {
     return '(schema not loaded yet — call inspect_schema or search_objects before querying)';
@@ -219,13 +264,20 @@ export function compressSchema(
   const active = isAgentContextActive(context);
   const focus = new Set(focusTables.map((t) => t.toLowerCase()));
   const focusOrder = new Map(focusTables.map((name, index) => [lower(name), index]));
+  const tierMode = Boolean(tiers && Object.keys(tiers).length);
+  const tierOf = (name: string): TableTiers[string] | undefined => {
+    if (!tiers) return undefined;
+    const bare = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : name;
+    return tiers[lower(name)] ?? tiers[lower(bare)];
+  };
   const lines: string[] = [];
-  let detailBudget = focus.size ? Math.min(maxTablesWithColumns, 8) : maxTablesWithColumns;
   let disabledCount = 0;
+  if (tierMode) lines.push(TIER_GUIDE);
 
   const bundleDb = context?.database?.trim().toLowerCase() ?? '';
-  for (const db of databases) {
-    lines.push(`### Database: ${db.name}`);
+  // 先按原有规则把每个库的表排好序，再决定明细预算：tier 模式下预算由窗口算，
+  // 而「哪些表要占预算」取决于分档结果，所以必须分两趟。
+  const plans = databases.map((db) => {
     // 覆盖项按库存储：多库 schema 下只对自身匹配的那个库生效，避免张冠李戴。
     const scoped = active && (!bundleDb || lower(db.name) === bundleDb) ? context : undefined;
     const visible = scoped ? db.tables.filter((t) => !isTableDisabled(scoped, t.name)) : db.tables;
@@ -246,25 +298,111 @@ export function compressSchema(
       }
       return a.name.localeCompare(b.name);
     });
+    return { db, scoped, tables };
+  });
+
+  // tier 模式：列明细预算按 schemaTokenBudget 算，字典/桥接/冷表已不竞争预算。
+  // candidates 沿用 plans 的顺序（focus 命中与用户标注过的表排在前面），所以预算
+  // 不够时先砍的是排在后面的活跃表列明细，本轮问题要的表一定拿得到列。
+  let detailBudget: number;
+  if (tierMode) {
+    const candidates = plans.flatMap(({ db, tables }) =>
+      tables
+        .filter((table) => {
+          const tier = tierOf(table.name)?.tier;
+          if (!tier) return true;
+          const isFocus = focus.has(table.name.toLowerCase()) || focus.has(db.name.toLowerCase());
+          if (tier === 'system') return false;
+          return isFocus || (tier !== 'cold' && tier !== 'bridge' && tier !== 'config');
+        })
+        .map((table) => ({ columns: table.columns?.length ?? 0 })),
+    );
+    // 每张表至少占一条名行，这部分是固定开销；先扣掉再拿剩余空间买列明细，
+    // 否则「明细买满、名行溢出」会让整段超出护栏。
+    const allTables = plans.reduce((sum, { tables }) => sum + tables.length, 0);
+    const nameLines = NAME_LINE_TOKENS * Math.max(0, allTables - candidates.length);
+    const schemaTokens = schemaTokenBudget({ contextWindow, maxOutputTokens });
+    detailBudget = tierDetailBudget({
+      contextWindow,
+      candidates,
+      schemaTokens: schemaTokens ? Math.max(0, schemaTokens - nameLines) : 0,
+    });
+  } else {
+    detailBudget = focus.size ? Math.min(maxTablesWithColumns, 8) : maxTablesWithColumns;
+  }
+
+  for (const { db, scoped, tables } of plans) {
+    lines.push(`### Database: ${db.name}`);
     let shown = 0;
+    const lowNames: string[] = [];
+    let lowCount = 0;
     const otherNames: string[] = [];
     let otherCount = 0;
-    const compactOthers = focus.size > 0;
+    const dictNames: string[] = [];
+    const compactOthers = focus.size > 0 && !tierMode;
+    // 「还有 N 张表没出现」要按真正没渲染的表算：进了名字清单的表也算出现过，
+    // 否则模型会以为库里表更少，从而断定某张表不存在。
+    const renderedSoFar = () => shown + dictNames.length + lowNames.length;
     for (const table of tables) {
+      const info = tierOf(table.name);
+      const tier = info?.tier;
+      // tier 模式：focus 命中即升为 active（本轮问题要它的列）。
       const isFocus = focus.has(table.name.toLowerCase()) || focus.has(db.name.toLowerCase());
+      if (tierMode) {
+        if (tier === 'system') {
+          dictNames.push(`${table.name} [sys]`);
+          continue;
+        }
+        if (tier === 'cold' && !isFocus) {
+          lowCount++;
+          if (lowNames.length < 120) lowNames.push(`${table.name} [low]`);
+          continue;
+        }
+        if (tier === 'bridge' && !isFocus) {
+          dictNames.push(`${table.name} [bridge]`);
+          continue;
+        }
+        if (tier === 'config' && !isFocus) {
+          // 字典表：表名 + 取值说明（注释能抽到时），不占列明细预算。
+          const gloss = extractEnumGloss(table.comment);
+          const alias = scoped ? context?.tableMeta[lower(table.name)]?.alias?.trim() : undefined;
+          dictNames.push(`${table.name}${alias ? `(${alias})` : ''}${gloss ? `: ${gloss}` : ''} [dict]`);
+          continue;
+        }
+        // active / config 被 focus / 未知档 → 走完整明细（受预算护栏）
+        if (shown >= 120) {
+          lines.push(`- … ${tables.length - renderedSoFar()} more tables (use search_objects)`);
+          break;
+        }
+        shown++;
+        const withColumns = detailBudget > 0 && table.type === 'table';
+        if (withColumns) detailBudget--;
+        lines.push(formatTable(table, withColumns, scoped, table.type === 'table' && !withColumns));
+        continue;
+      }
       if (compactOthers && !isFocus) {
         otherCount++;
         if (otherNames.length < 120) otherNames.push(table.name);
         continue;
       }
       if (shown >= 120) {
-        lines.push(`- … ${tables.length - shown} more tables (use search_objects)`);
+        lines.push(`- … ${tables.length - shown - otherCount} more tables (use search_objects)`);
         break;
       }
       shown++;
       const withColumns = detailBudget > 0 && table.type === 'table';
       if (withColumns) detailBudget--;
       lines.push(formatTable(table, withColumns, scoped));
+    }
+    if (dictNames.length) {
+      const shownDicts = dictNames.slice(0, 60);
+      const more = dictNames.length > shownDicts.length ? `, … ${dictNames.length - shownDicts.length} more` : '';
+      lines.push(`- dictionary/bridge/internal (names only unless relevant to the question; call inspect_schema when you need columns): ${shownDicts.join(', ')}${more}`);
+    }
+    if (lowNames.length) {
+      const shownLow = lowNames.slice(0, 120);
+      const more = lowCount > shownLow.length ? `, … ${lowCount - shownLow.length} more` : '';
+      lines.push(`- low-frequency tables (present and queryable, name only — ask or call inspect_schema before using them): ${shownLow.join(', ')}${more}`);
     }
     if (compactOthers && otherNames.length) {
       const more = otherCount > otherNames.length ? `, … ${otherCount - otherNames.length} more` : '';
@@ -277,13 +415,13 @@ export function compressSchema(
   return lines.join('\n');
 }
 
-function formatTable(table: TableInfo, withColumns: boolean, context?: AgentContextBundle): string {
+function formatTable(table: TableInfo, withColumns: boolean, context?: AgentContextBundle, columnsDroppedByBudget = false): string {
   const kind = table.type === 'view' ? 'view' : 'table';
-  const meta = context?.tableMeta[lower(table.name)];
-  const alias = meta?.alias?.trim();
+  const note0 = context?.tableMeta[lower(table.name)];
+  const alias = note0?.alias?.trim();
   // 用户填写的业务描述优先于数据库原生 comment：前者是为模型准备的语义，后者常常只是列名重复。
-  const note = meta?.description?.trim() || table.comment;
-  const base = `- ${kind} ${table.name}${alias ? ` (${alias})` : ''}${note ? ` — ${note}` : ''}${table.rowEstimate !== undefined ? ` (~${table.rowEstimate} rows)` : ''}`;
+  const note = note0?.description?.trim() || table.comment;
+  const base = `- ${kind} ${table.name}${alias ? ` (${alias})` : ''}${note ? ` — ${note}` : ''}${table.rowEstimate !== undefined ? ` (~${table.rowEstimate} rows)` : ''}${columnsDroppedByBudget && table.columns?.length ? ' [core; columns omitted: context budget]' : ''}`;
   if (!withColumns || !table.columns?.length) return base;
   const columnMeta = context?.columnMeta[lower(table.name)];
   const visible = context ? table.columns.filter((c) => !isColumnDisabled(context, table.name, c.name)) : table.columns;
@@ -374,13 +512,17 @@ export function formatBusinessContext(opts: { context?: AgentContextBundle; glos
 }
 
 export function buildSystemPrompt(opts: SystemPromptOptions): string {
-  const { connection, databases, memories, glossary, sqlExamples, context, mode, attachmentTables = [], question, contextWindow } = opts;
+  const { connection, databases, memories, glossary, sqlExamples, context, mode, attachmentTables = [], question, contextWindow, maxOutputTokens, tiers } = opts;
   const totalTables = (databases ?? []).reduce((sum, db) => sum + (db.tables?.length ?? 0), 0);
   const totalColumns = (databases ?? []).reduce((sum, db) => sum + (db.tables ?? []).reduce((n, table) => n + (table.columns?.length ?? 0), 0), 0);
+  const hasTiers = Boolean(tiers && Object.keys(tiers).length);
   // 已知模型窗口时按「整库完整展开的 token 估算」决定是否聚焦：展开后占用超过窗口可读余量的
   // 一定比例才聚焦，因此 1M 窗口的整库明细不再被无谓裁剪（旧实现只按表数/列数写死）。
   // 窗口未知（无模型档案）时退回旧的表数/列数启发式，保证没有档案的模型行为与改造前一致。
-  const focusEnabled = schemaFocusEnabled({ contextWindow, totalTables, totalColumns });
+  // 有分档时不靠窗口裁剪：展开形状由分档决定，只让问题命中的表优先拿列明细。
+  const focusEnabled = hasTiers
+    ? Boolean(question || attachmentTables.length)
+    : schemaFocusEnabled({ contextWindow, totalTables, totalColumns });
   const focusTables = focusEnabled
     ? focusTablesForQuestion({ question, databases, context, memories, glossary, sqlExamples, attachments: attachmentTables })
     : [...attachmentTables];
@@ -416,6 +558,13 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
 - After schema/data changes, run a verification query and report the observed result.`
     : '';
 
+  const schemaPreamble = hasTiers
+    ? // 分档模式下不是「按问题裁剪」，而是「按用途决定形状」，别把两句话说反。
+      '(Each table is shown with the detail its tier deserves — see the tier legend below. Names-only entries still exist and are queryable; call inspect_schema for their columns.)\n'
+    : focusTables.length
+      ? '(Column detail is prioritized for tables relevant to this question; other tables are listed by name — call inspect_schema when you need their columns.)\n'
+      : '';
+
   return `You are AiDB Agent, embedded in a cross-platform database studio. You can inspect and fully operate the user's databases through tools. Every tool call, argument and result is visible to the user.
 
 Rules:
@@ -435,7 +584,7 @@ Permission mode: ${MODE_TEXT[mode]}
 ${attachmentTables.length ? `Tables explicitly attached by the user: ${attachmentTables.join(', ')}` : ''}
 
 ## Schema
-${focusTables.length ? '(Column detail is prioritized for tables relevant to this question; other tables are listed by name — call inspect_schema when you need their columns.)\n' : ''}${compressSchema(databases, focusTables, 15, context)}
+${schemaPreamble}${compressSchema(databases, focusTables, opts.maxTablesWithColumns ?? 15, context, tiers, contextWindow, maxOutputTokens)}
 ${business ? `\n${business}\n` : ''}
 ## Memories recalled for this turn
 ${formatMemoriesForPrompt(memories)}
