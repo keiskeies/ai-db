@@ -377,7 +377,7 @@ function statsRuntime(
     requestApproval: async () => ({ decision: 'allow', scope: 'once' }),
     emit: (event) => events.push(event),
     generateId: () => 'turn_1',
-    ...(extra.maxSteps ? { maxSteps: extra.maxSteps } : {}),
+    ...(extra.maxSteps !== undefined ? { maxSteps: extra.maxSteps } : {}),
     ...(extra.now ? { now: extra.now } : {}),
   });
   return { provider, runtime };
@@ -664,4 +664,72 @@ test('非行式结果超预算时保留前缀而不是整块丢弃', async () =>
   const body = JSON.parse(msg).data as string;
   assert.match(body, /^AI_DB 说明/, '要留下正文开头');
   assert.match(body, /…\(truncated\)/);
+});
+
+test('行式结果里首行超预算时保留该行 JSON 前缀，而不是整行丢弃（GROUP_CONCAT 场景）', async () => {
+  // 单行巨大：GROUP_CONCAT 把整表列拼成一行，序列化后远超预算
+  const giantRow = [Array.from({ length: 2000 }, (_, i) => `col_${i}=${'v'.repeat(40)}`).join(',')];
+  const msg = await toolMessageForRows(giantRow, () => 1_500);
+  assert.ok(msg.length <= 1_500, `实际 ${msg.length} 字符，越过预算`);
+  assert.match(msg, /row truncated/, '要显式标注这行被截断');
+  assert.match(msg, /LIMIT\/OFFSET/, '要给出怎么拿剩余数据的下一步');
+  const body = JSON.parse(msg);
+  assert.match(String(body.data), /^col_0=/, '要保留该行的 text 前缀（开头几个列）');
+});
+
+test('行式结果里首行超预算但空间足够放开头时，内容不是空壳 omitted', async () => {
+  const giantRow = [{ name: 't_orders', cols: Array.from({ length: 3000 }, (_, i) => `c${i}`).join(',') }];
+  const msg = await toolMessageForRows(giantRow, () => 2_000);
+  const body = JSON.parse(msg);
+  assert.match(String(body.data), /t_orders/, '要能看到表名');
+  assert.match(String(body.data), /c0/, '要能看到列前缀');
+});
+
+test('maxSteps=0 表示无步数上限：跑完脚本里所有工具调用，不受步数卡停', async () => {
+  const events: AgentEvent[] = [];
+  // 5 步工具调用，最后跟一个真正收敛的终局脚本；若 maxSteps 是某个固定值会提前卡停
+  const scripts = [
+    ...Array.from({ length: 5 }, (_, i) => [
+      { type: 'tool_call' as const, call: { id: `call_${i}`, name: 'run_sql', args: { connectionId: 'c1', sql: 'SELECT 1' } } },
+      { type: 'done' as const, stopReason: 'tool_use' },
+    ]),
+    [{ type: 'text' as const, text: 'done' }, { type: 'done' as const, stopReason: 'end_turn' }],
+  ];
+  const { provider, runtime } = statsRuntime(scripts, events, { maxSteps: 0 });
+  const outcome = await runtime.run({ ...baseInput, sessionAllowed: new Set(), alwaysAllowed: new Set() });
+  assert.equal(provider.requests.length, 6, '5 个工具脚本 + 1 个最终回答 = 6 次模型调用');
+  assert.equal(outcome.steps, 6, '跑完 5 个工具轮 + 1 个终止回答 = 6 步，不受固定步数卡停');
+});
+
+test('contextTokenBudget 触发时折叠最早的工具往返并加注说明', async () => {
+  const events: AgentEvent[] = [];
+  // 每一轮有一个 run_sql 工具调用并上报递增的 tokensIn（contextTokens 用最近一次）；
+  // 最后一轮把值抬过阈值，并收敛到一个 end_turn 终局脚本。
+  // 注意：压缩触发看两件事——(a) 服务商上报的 contextTokens 越过阈值（窗口压力信号），
+  // (b) 本地保存的消息缓冲真的超过该预算（估计算子，单位与本预算一致）。测试用很小的
+  // 缓冲预算，让「真的被折叠」这条路径被走到。
+  const scripts = [
+    ...Array.from({ length: 3 }, (_, i) => [
+      { type: 'tool_call' as const, call: { id: `c${i}`, name: 'run_sql', args: { connectionId: 'c1', sql: `SELECT ${i}` } } },
+      { type: 'usage' as const, tokensIn: 85_000 + i * 10_000, tokensOut: 10 },
+      { type: 'done' as const, stopReason: 'tool_use' },
+    ]),
+    [{ type: 'text' as const, text: 'done' }, { type: 'done' as const, stopReason: 'end_turn' }],
+  ];
+  // 缓冲预算 150：contextTokens 任意一轮（≥85k）都远超它，且本地消息缓冲也超过它 → 真折叠
+  const provider = new ScriptedProvider(scripts);
+  const runtime = new AgentRuntime({
+    provider,
+    buildSystem: () => 'system',
+    executeTool: async () => ({ ok: true, summary: 'ok', data: {}, meta: { durationMs: 1 } }),
+    requestApproval: async () => ({ decision: 'allow', scope: 'once' }),
+    emit: (event) => events.push(event),
+    generateId: () => 'id',
+    contextTokenBudget: 150,
+  });
+  const outcome = await runtime.run({ ...baseInput, sessionAllowed: new Set(), alwaysAllowed: new Set() });
+  // 压缩会在某一步把一条 user 占位说明插进上下文（见 compactMessages）
+  const anyCompacted = events.some((e) => e.type === 'text_delta' && /上下文已随预算压缩/.test(e.text));
+  assert.equal(anyCompacted, true, '超过预算后应触发中途压缩');
+  assert.ok(outcome.steps >= 4, '压缩后回合仍继续跑完后续步骤，而不是被截停');
 });

@@ -978,6 +978,7 @@
   "上下文压缩阈值（tokens）": "Context compression threshold (tokens)",
   "上下文已更新，下一回合生效": "The context has been updated and will take effect in the next round",
   "上下文窗口": "Context window",
+  "0 = 无步数上限，交给上下文压缩与时间预算兜底": "0 = No step limit; rely on context compaction and the time budget as a safety net",
   "上半年": "First half",
   "上周": "Last week",
   "上季度": "Last quarter",

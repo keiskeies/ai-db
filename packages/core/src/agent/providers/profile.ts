@@ -125,3 +125,20 @@ export function modelResultCharBudget(options: { contextWindow?: number; usedTok
   return Math.min(MAX_RESULT_CHARS, Math.max(MIN_RESULT_CHARS, Math.floor(room * RESULT_SHARE * CHARS_PER_TOKEN)));
 }
 
+/**
+ * 长工具回合的中途总上下文 token 预算。窗口扣掉输出与提示词余量「之后」的剩余空间，
+ * runtime 在 contextTokens 超过它时压缩最早的工具往返。没声明窗口返回 0（= 不压缩，
+ * 行为与改造前一致）；声明了窗口就把它作为压缩触发线，保证长回合不会顶穿窗口。
+ *
+ * 用 0 而不是 undefined 表示「关闭」，方便 runtime 里一档 `if (budget > 0)` 就够。
+ * 窗口的过载线取「窗口 − 输出 − 提示词余量」，比结果预算抓得更紧一点，给压缩留出
+ * 执行余量——压缩本身也要占一点 token，不能在刚好顶满窗口时才动手。
+ */
+export function midContextTokenBudget(contextWindow: number | undefined, maxOutputTokens?: number): number {
+  if (!contextWindow || contextWindow <= 0) return 0;
+  const output = maxOutputTokens ?? FALLBACK_MAX_OUTPUT_TOKENS;
+  const budget = contextWindow - output - PROMPT_RESERVE_TOKENS;
+  // 留 10% 剪辑余量（压缩前后的边界抖动），同时至少比 0 大
+  return Math.max(1, Math.floor(budget * 0.9));
+}
+

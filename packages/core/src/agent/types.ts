@@ -256,6 +256,13 @@ export interface AgentRuntimeDeps {
    * 省略时 runtime 用固定的 16000 兜底。
    */
   resultCharBudget?: (usedContextTokens: number) => number;
+  /**
+   * 本回合累积的可控词元预算。上下文占用触及它时，runtime 会压缩/丢弃最早的
+   * 工具结果，保证长回合（尤其 maxSteps=0 无限制）不会把窗口顶穿、也不会在
+   * 循环中途被服务商硬截断。省略时不做中途压缩（行为与改造前一致）。
+   * 0 或空也表示「不设限、不压缩」。
+   */
+  contextTokenBudget?: number;
   reasoning?: ProviderReasoning;
   /** 本轮下发给模型的工具；缺省使用全局 40+ 工具目录。 */
   tools?: ProviderTool[];

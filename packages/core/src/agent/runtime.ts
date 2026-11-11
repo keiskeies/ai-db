@@ -90,6 +90,29 @@ function serializeForModel(result: ToolResult, extra?: Record<string, unknown>, 
 
   const omitted = (reason: string) => envelope(`(result omitted: ${reason})${RESULT_CONTINUATION_HINT}`);
 
+  /**
+   * 行式结果里「连第一行都装不进预算」时的兜底（典型是 GROUP_CONCAT 把整表列并成
+   * 一行、或宽表单行超长）。整行丢掉会让模型连这一行的列名都看不到，只能瞎猜；
+   * 这里保留该行的 JSON 前缀，并用显式占位符标注「行被截」，模型至少知道这行开头
+   * 长什么样、该不该换更窄的查询去取全。
+   */
+  const singleRowPrefix = (omittedReason: string): string => {
+    const single = rows?.[0];
+    const text = typeof single === 'object' && single !== null ? JSON.stringify(single) : String(single ?? '');
+    if (!text) return omitted(omittedReason);
+    // 用和下面非行式路径一致的「实测回退」：JSON 转义会让正文变长，先估再试，越界就再让。
+    const tail = `…(row truncated)${RESULT_CONTINUATION_HINT}`;
+    let room = budget - envelope('').length - tail.length - 12;
+    if (room <= 40) return omitted(omittedReason);
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const built = envelope(`${text.slice(0, room)}${tail}`);
+      if (built.length <= budget) return `${built}\n`;
+      room -= built.length - budget + 8;
+      if (room <= 40) break;
+    }
+    return omitted(omittedReason);
+  };
+
   if (rows?.length) {
     const packed: unknown[] = [];
     // 估算就带上最终会出现的 rowRange / totalRows，装箱才不会差出几十字符。
@@ -100,12 +123,12 @@ function serializeForModel(result: ToolResult, extra?: Record<string, unknown>, 
       packed.push(row);
       bytes += size;
     }
-    if (!packed.length) return omitted('the current context budget is too small for even one row; narrow the query or request fewer rows');
+    if (!packed.length) return singleRowPrefix('the current context budget is too small for even one row; narrow the query or request fewer columns');
     const built = `${envelope({ rows: packed, totalRows: rows.length, rowRange: `1-${packed.length}` })}\n${RESULT_CONTINUATION_HINT}`;
     // 装箱是估算，越界就丢掉最后一行重来，绝不把超预算的内容发给模型。
     if (built.length <= budget) return built;
     packed.pop();
-    if (!packed.length) return omitted('the current context budget is too small for even one row; narrow the query or request fewer rows');
+    if (!packed.length) return singleRowPrefix('the current context budget is too small for even one row; narrow the query or request fewer columns');
     return `${envelope({ rows: packed, totalRows: rows.length, rowRange: `1-${packed.length}` })}\n${RESULT_CONTINUATION_HINT}`;
   }
 
@@ -159,6 +182,71 @@ function parseMissingIdentifier(message: string): { kind: 'column' | 'table'; na
     if (match?.[1]) return { kind: 'table', name: match[1].split('.').pop() ?? match[1] };
   }
   return undefined;
+}
+
+/**
+ * 长回合中途压缩消息历史（不依赖任何 summarizer，无额外 LLM 调用）。
+ *
+ * 策略：从最老的开始，成对丢弃「assistant(工具调用) + 对应 tool 结果」，直到总 token
+ * 落回预算内；首尾 user（历史起点令牌 + 当前回合提问）与最近几轮工具往返被保留。
+ * 丢弃的最老结果用一条靠前的 user 占位说明顶替，让模型知道「前面有些结果因上下文
+ * 预算被归档了」——否则它可能误以为那些步骤没发生过、或结果对不上而重复查询。
+ *
+ * 代价可接受：长工具回合的后续步骤通常只需要最近结果与当前计划；早先的查询数值
+ * 若真被引用，模型会再查一次（这正是截断提示想让它做的）。
+ */
+function compactMessages(messages: ProviderMessage[], budget: number): ProviderMessage[] {
+  const cjk = (s: string) => (s.match(/[一-鿿]/g) || []).length;
+  const estimate = (m: ProviderMessage): number => {
+    const text = 'content' in m ? String(m.content ?? '') : '';
+    return 20 + Math.max(2, Math.ceil(cjk(text) * 1.3 + (text.length - cjk(text)) / 4)) + ('images' in m ? (m.images?.length ?? 0) * 1000 : 0);
+  };
+  const total = (list: ProviderMessage[]) => list.reduce((sum, m) => sum + estimate(m), 0);
+  if (total(messages) <= budget) return messages;
+
+  const firstUserIdx = messages.findIndex((m) => m.role === 'user');
+  const out: ProviderMessage[] = [...messages];
+  const trimmed: string[] = [];
+
+  // 迭代地从最老开始，删「assistant(工具) + 随后最近的 tool」，直到达标。
+  let guard = 0;
+  while (total(out) > budget && guard < 200) {
+    guard++;
+    let found = false;
+    for (let i = 1; i < out.length - 1; i++) {
+      if (out[i].role === 'tool') {
+        // tool 之前最近的 assistant（成对宿主的另一侧）
+        let host = -1;
+        for (let j = i - 1; j >= 0; j--) if (out[j].role === 'assistant') { host = j; break; }
+        const start = host >= 0 ? host : i;
+        out.splice(start, i - start + 1);
+        trimmed.push(start === host ? 'assistant+tool' : 'tool');
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      // 无可成对删的 tool（只剩 user/纯文本 assistant），删最老非 user
+      for (let i = 1; i < out.length - 1; i++) {
+        if (out[i].role !== 'user') { out.splice(i, 1); trimmed.push('message'); found = true; break; }
+      }
+    }
+    if (!found) break; // 剩头尾 user，删无可删
+  }
+
+  if (trimmed.length) {
+    // 在第一个 user 之后插一条说明，功劳真话：别让模型以为归档步骤从没发生。
+    const note = `[context trimmed] 早先的 ${trimmed.length} 段工具往返因接近上下文预算被折叠，结果与中间推理已归档。回答仍不确定的数值时，请务必重新查询，不要凭印象。`;
+    out.splice(firstUserIdx + 1, 0, { role: 'user', content: note });
+  }
+
+  // 极端：单条消息本身超预算（超宽单行）。保头尾 user，中间宁可空。
+  if (total(out) > budget) {
+    const tail = out.length > firstUserIdx + 1 ? out.slice(-1) : [];
+    const head = firstUserIdx >= 0 ? out.slice(0, firstUserIdx + 1) : [];
+    return [...head, ...tail];
+  }
+  return out;
 }
 
 /** 只用于修复提示的轻量编辑距离，候选量很小。 */
@@ -303,7 +391,7 @@ export class AgentRuntime {
     const started = now();
     const turnId = deps.generateId();
     const maxSteps = deps.maxSteps ?? 12;
-    const messages: ProviderMessage[] = [
+    let messages: ProviderMessage[] = [
       ...input.history,
       { role: 'user', content: input.userText, ...(input.images?.length ? { images: input.images } : {}) },
     ];
@@ -429,10 +517,29 @@ export class AgentRuntime {
       );
     };
 
-    for (let step = 0; step < maxSteps; step++) {
+    // 0 表示「无步数上限」：一直跑到模型主动结束、用户中止、或预算压缩后仍超窗为止。
+    // 无限制不代表失去约束——真正约束来自弧 token 预算（contextTokenBudget，见下）与
+    // 时间预算（deadlineAt），它们让长回合在明显失控前就停下来。
+    for (let step = 0; maxSteps === 0 || step < maxSteps; step++) {
       if (input.signal?.aborted) return aborted();
       steps = step + 1;
       modelCalls++;
+
+      // 中途压缩：上下文占用越过窗口预算时，把最早的几段「assistant+工具结果」折叠成一行说明，
+      // 而不是让它们把窗口顶穿到最后服务商硬报 context 超限。长回合（尤其无步数上限）真正
+      // 靠这一手保命——单条结果预算（resultCharBudget）只放缓新数据进窗，不回收已进窗的旧数据。
+      const tokenBudget = deps.contextTokenBudget;
+      if (tokenBudget && tokenBudget > 0 && contextTokens > 0 && contextTokens > tokenBudget) {
+        const before = messages.length;
+        messages = compactMessages(messages, tokenBudget);
+        if (messages.length !== before) {
+          deps.emit({
+            type: 'text_delta',
+            text: `\n[上下文已随预算压缩：早期工具结果被归档，共 ${before - messages.length} 条历史消息。不确定的数值会重新查询。]\n`,
+          });
+        }
+      }
+
       const request = {
         system: deps.buildSystem(input),
         messages,
@@ -629,7 +736,9 @@ export class AgentRuntime {
     }
 
     if (!finalText) {
-      finalText = '已达到本次最大工具步数（' + maxSteps + '），我先停在这里。可以继续提问，我会接着处理。';
+      // maxSteps=0 不会停在这里（循环只有在模型结束/中止时退出），但仍防御性地覆盖：
+      // 若未来某处还在意步数上限，这里不能说出误导的「已达最大步数」。
+      finalText = maxSteps === 0 ? '本回合已结束。' : '已达到本次最大工具步数（' + maxSteps + '），我先停在这里。可以继续提问，我会接着处理。';
       deps.emit({ type: 'text_delta', text: finalText });
     }
     return finish('done');

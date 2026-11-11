@@ -14,6 +14,7 @@ import {
   providerTools,
   maxOutputTokensOf,
   modelResultCharBudget,
+  midContextTokenBudget,
   resolvePeriod,
   suggestFollowUps,
   supportsInput,
@@ -527,6 +528,9 @@ export class AgentHost {
           maxOutputTokens: maxOutputTokensOf(settings.agent, profile),
           usedTokens,
         }),
+      // 长回合的中途压缩线：contextTokens 超过它时折叠最早的工具往返，防止窗口顶穿。
+      // 声明了上下文窗口的模型才有意义；没声明 → 0 = 不压缩，行为与改造前一致。
+      contextTokenBudget: midContextTokenBudget(profile?.contextWindow, maxOutputTokensOf(settings.agent, profile)),
       reasoning: activeReasoningTier(settings.agent, profile),
       generateId: () => randomUUID(),
       buildSystem: (run: AgentRunInput) => {

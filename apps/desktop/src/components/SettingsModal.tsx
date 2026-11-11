@@ -892,7 +892,8 @@ export function SettingsModal() {
                 <div className="form-grid">
                   <div className="field">
                     <label>{t('maxSteps')}</label>
-                    <input className="input" type="number" min={1} max={40} value={form.agent.maxSteps} onChange={(e) => setAgent({ maxSteps: Number(e.target.value) })} />
+                    <input className="input" type="number" min={0} max={1000} value={form.agent.maxSteps} onChange={(e) => setAgent({ maxSteps: Number(e.target.value) })} />
+                    <div className="muted" style={{ fontSize: 10, marginTop: 3 }}>{tr("0 = 无步数上限，交给上下文压缩与时间预算兜底")}</div>
                   </div>
                   <div className="field">
                     <label>Temperature</label>
