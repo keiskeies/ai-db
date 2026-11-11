@@ -4,7 +4,7 @@ import { isAgentContextActive } from '../types';
 import { engineMeta } from '../engines';
 import { schemaTokenBudget } from './providers/profile';
 import { isColumnDisabled, isTableDisabled } from './context';
-import { extractEnumGloss, TIER_GUIDE, type TableTiers } from './schemaTiers';
+import { tableEnumGloss, TIER_GUIDE, type TableTiers } from './schemaTiers';
 
 export interface SystemPromptOptions {
   connection?: ConnectionConfig;
@@ -364,7 +364,8 @@ export function compressSchema(
         }
         if (tier === 'config' && !isFocus) {
           // 字典表：表名 + 取值说明（注释能抽到时），不占列明细预算。
-          const gloss = extractEnumGloss(table.comment);
+          // 字典表：表名 + 取值说明（表注释抽不到时退到列注释），不占列明细预算。
+          const gloss = tableEnumGloss(table);
           const alias = scoped ? context?.tableMeta[lower(table.name)]?.alias?.trim() : undefined;
           dictNames.push(`${table.name}${alias ? `(${alias})` : ''}${gloss ? `: ${gloss}` : ''} [dict]`);
           continue;

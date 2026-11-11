@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyTable, extractEnumGloss, TIER_GUIDE, type TableTiers } from '../src/agent/schemaTiers';
+import { classifyTable, extractEnumGloss, tableEnumGloss, TIER_GUIDE, type TableTiers } from '../src/agent/schemaTiers';
 import { buildSystemPrompt, compressSchema, tierDetailBudget } from '../src/agent/prompt';
 import type { ColumnInfo, DatabaseSchema, TableInfo } from '../src/types';
 
@@ -109,6 +109,44 @@ test('extractEnumGloss reads value meanings from comments in the common spelling
   assert.equal(extractEnumGloss(''), undefined);
 });
 
+// ---------- tableEnumGloss ----------
+
+test('tableEnumGloss falls back to column comments when the table comment is mute', () => {
+  // 真实字典表：表注释只有「状态字典」，取值含义挂在列注释上。只读表注释会让
+  // 这类表拿不到取值，而字典档存在的全部理由就是让模型看到取值。
+  const dict = table('pay_channel', {
+    comment: '支付方式字典',
+    columns: [column('id', 'INT', { primaryKey: true }), column('status', 'TINYINT', { comment: '0=支付宝 1=微信 2=对公转账' })],
+  });
+  assert.equal(tableEnumGloss(dict), 'status: 0=支付宝, 1=微信, 2=对公转账');
+  // 表注释能抽到时优先用它：那是建表人的第一手描述，不加列名前缀。
+  assert.equal(
+    tableEnumGloss(table('pay_channel', { comment: '支付方式 0=支付宝 1=微信', columns: [column('status', 'TINYINT', { comment: '1=有效 2=停用' })] })),
+    '0=支付宝, 1=微信',
+  );
+  // 非枚举列（长文本/大整数）不参与，避免把自由文本当成取值。
+  assert.equal(
+    tableEnumGloss(table('t', { columns: [column('remark', 'TEXT', { comment: '备注 1=甲 2=乙' })] })),
+    undefined,
+  );
+  // 多列时各带列名前缀，别让模型把两组取值混成一谈。
+  const two = table('t', {
+    columns: [column('status', 'TINYINT', { comment: '1=有效 2=停用' }), column('channel', 'VARCHAR(16)', { comment: '1=APP 2=H5' })],
+  });
+  assert.equal(tableEnumGloss(two), 'status: 1=有效, 2=停用 | channel: 1=APP, 2=H5');
+  assert.equal(tableEnumGloss(table('t', { columns: [column('a', 'TINYINT')] })), undefined);
+});
+
+test('tableEnumGloss caps what one dictionary row can carry', () => {
+  // 每表最多 3 列，且总长封顶后整条丢弃：名行清单不能变成注释转储。
+  const many = table('t', {
+    columns: Array.from({ length: 6 }, (_, i) => column(`c${i}`, 'TINYINT', { comment: `${i}=aaaaaaaaaa ${i + 10}=bbbbbbbbbb` })),
+  });
+  const gloss = tableEnumGloss(many) ?? '';
+  assert.ok(gloss.split(' | ').length <= 3, `最多挂 3 列取值：${gloss}`);
+  assert.ok(gloss.length <= 200, `单表取值说明要限长：${gloss.length} 字符`);
+});
+
 // ---------- tierDetailBudget ----------
 
 test('tierDetailBudget sizes column detail from the window instead of a fixed table count', () => {
@@ -178,6 +216,18 @@ test('tier mode gives each table a shape instead of a binary expand/skip', () =>
   // 冷表：名行 + [low]，表存在这件事不能让模型不知道。
   assert.match(out, /order_logs \[low\]/);
   assert.ok(!out.includes('other tables'), 'tier 模式下不并成 other tables 行，标记会丢');
+});
+
+test('a dict table glossed only in column comments still carries its values', () => {
+  // 落到 prompt 才算数：字典档的价值全在取值含义能不能进到模型眼前。
+  const schemas: DatabaseSchema[] = [
+    {
+      name: 'shop',
+      tables: [table('order_status_dict', { comment: '订单状态字典', rowEstimate: 6, columns: [column('code', 'TINYINT', { comment: '0-待支付 1-已支付 2-已退款' })] })],
+    },
+  ];
+  const out = compressSchema(schemas, [], 15, undefined, { order_status_dict: { tier: 'config', reason: '字典' } }, 128_000);
+  assert.match(out, /order_status_dict: code: 0=待支付, 1=已支付, 2=已退款 \[dict\]/);
 });
 
 test('a focused table wins its columns back even when tiered low', () => {

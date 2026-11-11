@@ -34,24 +34,28 @@ const SYSTEM_NAME = /^(pg_|sqlite_|mysql\.|information_schema|sys\.|oracle\.|fly
 /** 业务核心命名：和 selectCoreTables 的 KEY_TABLE 同源，命中即业务实体。 */
 const BUSINESS_NAME = /(order|user|customer|product|item|payment|pay|refund|account|transaction|invoice|inventory|stock|shipment|delivery|cart|member|tenant|org|company)/i;
 
-/** 枚举感知的列：小整数或短字符串，才可能承载字典取值。 */
+/**
+ * 枚举感知的列：小整数或短字符串，才可能承载字典取值。
+ * 不含 TEXT —— 自由文本列不可能是取值域，它的注释里出现「2020:已上线」这类
+ * 数字+词的组合会被误读成枚举说明，反而制造错误含义。
+ */
 function isEnumish(type: string): boolean {
   const t = (type || '').toLowerCase();
   if (/tinyint|smallint|(^|[^a-z])int($|[^a-z])|integer|mediumint/.test(t)) return true;
   const varchar = /(?:var)?char\s*\((\d+)\)|varchar2\s*\((\d+)\)/.exec(t);
   if (varchar) return Number(varchar[1] ?? varchar[2]) <= 64;
-  return /(^|[^a-z])(char|text|enum)([^a-z]|$)/.test(t);
+  return /(^|[^a-z])(char|enum)([^a-z]|$)/.test(t);
 }
 
 /**
  * 从注释里抽取枚举含义：`状态 0-待支付 1-已支付` / `状态: 0=待支付, 1=已支付` /
  * `0:待支付 1:已支付`。返回 "0=待支付, 1=已支付" 这种紧凑形式；抽不到返回 undefined。
- * 只认注释，不做采样——采样要查库，属于 init 的执行器扩展（见 docs/20 §5）。
+ * 只认注释，不做采样——采样要查库，属于 init 的执行器扩展（见 docs/20 §7）。
  *
  * 标签必须以字母/汉字开头：允许数字开头会把 `2024-01-05` 这类日期切成 `024=01`，
  * 也正因为如此标签内不能含空格（否则 `0-待支付 1-已支付` 会吞成一条）。
  */
-export function extractEnumGloss(comment: string | undefined): string | undefined {
+export function extractEnumGloss(comment: string | undefined, maxPairs = 12): string | undefined {
   const text = (comment ?? '').trim();
   if (!text) return undefined;
   const pairs: string[] = [];
@@ -59,9 +63,40 @@ export function extractEnumGloss(comment: string | undefined): string | undefine
   for (const match of text.matchAll(pattern)) {
     const label = (match[2] ?? '').trim().replace(/[，,。.、;；]+$/, '');
     if (label) pairs.push(`${match[1]}=${label}`);
-    if (pairs.length >= 12) break;
+    if (pairs.length >= maxPairs) break;
   }
   return pairs.length >= 2 ? pairs.join(', ') : undefined;
+}
+
+/** 列注释是次要来源：每张表最多挂 3 列，避免 schema 段变成注释转储。 */
+const GLOSS_COLUMNS = 3;
+/** 单表取值说明的总长上限（字符）：超了就整条丢掉，宁缺毋滥。 */
+const GLOSS_MAX_CHARS = 200;
+
+/**
+ * 一张表的取值说明：先看表注释，抽不到再看列注释。
+ *
+ * 列注释是更常见的位置——真实字典表的 `status` 列注释写着「0=待支付 1=已支付」，
+ * 表注释往往只有「状态字典」四个字。只看表注释会让大半字典表拿不到取值含义，
+ * 而这正是本档存在的理由。多列时带列名前缀，避免模型把两组取值混成一谈；
+ * 总长封顶后丢弃，防把名行撑成注释墙。
+ */
+export function tableEnumGloss(table: TableInfo): string | undefined {
+  const tableGloss = extractEnumGloss(table.comment);
+  if (tableGloss) return tableGloss;
+  const parts: string[] = [];
+  let length = 0;
+  for (const column of table.columns ?? []) {
+    if (parts.length >= GLOSS_COLUMNS) break;
+    if (!isEnumish(column.type)) continue;
+    const gloss = extractEnumGloss(column.comment, 6);
+    if (!gloss) continue;
+    const part = `${column.name}: ${gloss}`;
+    if (length + part.length + 3 > GLOSS_MAX_CHARS) break;
+    length += part.length + 3;
+    parts.push(part);
+  }
+  return parts.length ? parts.join(' | ') : undefined;
 }
 
 interface ClassifyInput {
