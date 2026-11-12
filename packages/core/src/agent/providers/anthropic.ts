@@ -1,5 +1,6 @@
 import type { LlmProvider, ProviderEvent, ProviderMessage, ProviderRequest, ToolCall } from '../types';
 import { joinUrl, mapHttpError, normalizeCacheUsage, ProviderError, readSse, resolveStallMs, watchRequestStall } from './common';
+import { DEFAULT_MAX_OUTPUT_TOKENS } from './profile';
 
 export interface AnthropicConfig {
   apiKey?: string;
@@ -71,7 +72,8 @@ export class AnthropicProvider implements LlmProvider {
     if (!this.cfg.apiKey) throw new ProviderError('缺少 Anthropic API Key', { code: 'NO_API_KEY' });
     const budget = req.reasoning ? Number(req.reasoning.value) : NaN;
     const thinking = Number.isFinite(budget) && budget >= 1024 ? Math.floor(budget) : undefined;
-    const requested = req.maxTokens ?? this.cfg.maxTokens ?? 4096;
+    // 兜底值 = 设置页写着的那个默认档位，不再另有一个界面上看不见的 4096。
+    const requested = req.maxTokens ?? this.cfg.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
     const stallMs = resolveStallMs(this.cfg.stallMs);
     // 只看响应头阶段的静默；拿到头之后交给 readSse 逐块判定
     const requestWatch = watchRequestStall(signal, stallMs);

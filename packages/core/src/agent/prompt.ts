@@ -2,7 +2,7 @@ import type { AgentContextData, ProviderMessage, ProviderRequest } from './types
 import type { AgentContextBundle, ColumnInfo, ConnectionConfig, DatabaseSchema, Memory, PermissionMode, TableInfo } from '../types';
 import { isAgentContextActive } from '../types';
 import { engineMeta } from '../engines';
-import { schemaTokenBudget } from './providers/profile';
+import { contextWindowOf, schemaTokenBudget } from './providers/profile';
 import { isColumnDisabled, isTableDisabled } from './context';
 import { tableEnumGloss, TIER_GUIDE, type TableTiers } from './schemaTiers';
 
@@ -114,16 +114,17 @@ function fullSchemaTokens(totalTables: number): number {
   return NAME_LINE_TOKENS * totalTables;
 }
 
-/** 决定是否启用「按问题聚焦列明细」。 */
-export function schemaFocusEnabled(input: { contextWindow?: number; totalTables: number; totalColumns: number }): boolean {
-  const { contextWindow, totalTables, totalColumns } = input;
-  // 无窗口档案 → 退回旧启发式，行为与改造前一致。
-  if (!contextWindow || contextWindow <= 0) return totalTables > 150 || totalColumns > 2500;
-  // 已知窗口：整库完整展开（= 每表一条名行）超过「窗口余量的 10%」才聚焦。
+/**
+ * 决定是否启用「按问题聚焦列明细」。窗口没填按默认档位（256K）算。
+ * 只看表数：列明细本来就只展开预算容得下的前若干张，总列数不影响整库展开的体积。
+ */
+export function schemaFocusEnabled(input: { contextWindow?: number; totalTables: number }): boolean {
+  const { totalTables } = input;
+  // 整库完整展开（= 每表一条名行）超过「窗口余量的 10%」才聚焦。
   // 1M 窗口余量约 0.7M tokens，可容 ~5800 张表的名行 → 通常的几千表大库不再被裁剪；
   // 32K/128K 小窗口用同一比例折算出更低阈值，表一多就尽早聚焦收拢名行。
   const expanded = fullSchemaTokens(totalTables);
-  const windowHeadroom = contextWindow * 0.7; // 输出 + 系统/历史留白约 30%
+  const windowHeadroom = contextWindowOf(input) * 0.7; // 输出 + 系统/历史留白约 30%
   return expanded > windowHeadroom * 0.1;
 }
 
@@ -137,12 +138,12 @@ export function schemaFocusEnabled(input: { contextWindow?: number; totalTables:
 export function tierDetailBudget(input: {
   contextWindow?: number;
   candidates: Array<{ columns: number }>;
-  /** schema 段 token 上限（schemaTokenBudget 算出）；0 = 不设限。 */
+  /** schema 段 token 上限（schemaTokenBudget 算出）。 */
   schemaTokens?: number;
 }): number {
-  const { contextWindow, candidates, schemaTokens } = input;
-  // 没有窗口档案 → 退回旧的固定上限，行为与改造前一致。
-  if (!contextWindow || contextWindow <= 0) return Math.min(candidates.length, 15);
+  const { candidates, schemaTokens } = input;
+  // schemaTokens 没给 = 调用方没算护栏，此时全部展开（与旧行为一致）。
+  // 「没填窗口档案」不走这一支：窗口按默认档位算，护栏照算。
   if (!schemaTokens) return candidates.length;
   const perTable = (columns: number) => {
     const cols = Math.min(columns, 48);
@@ -515,15 +516,15 @@ export function formatBusinessContext(opts: { context?: AgentContextBundle; glos
 export function buildSystemPrompt(opts: SystemPromptOptions): string {
   const { connection, databases, memories, glossary, sqlExamples, context, mode, attachmentTables = [], question, contextWindow, maxOutputTokens, tiers } = opts;
   const totalTables = (databases ?? []).reduce((sum, db) => sum + (db.tables?.length ?? 0), 0);
-  const totalColumns = (databases ?? []).reduce((sum, db) => sum + (db.tables ?? []).reduce((n, table) => n + (table.columns?.length ?? 0), 0), 0);
   const hasTiers = Boolean(tiers && Object.keys(tiers).length);
-  // 已知模型窗口时按「整库完整展开的 token 估算」决定是否聚焦：展开后占用超过窗口可读余量的
-  // 一定比例才聚焦，因此 1M 窗口的整库明细不再被无谓裁剪（旧实现只按表数/列数写死）。
-  // 窗口未知（无模型档案）时退回旧的表数/列数启发式，保证没有档案的模型行为与改造前一致。
+  // 按「整库完整展开的 token 估算」决定是否聚焦：展开后占用超过窗口可读余量的一定比例
+  // 才聚焦，因此 1M 窗口的整库明细不再被无谓裁剪（旧实现只按表数/列数写死）。
+  // 没填档案时窗口取默认档位 256K —— 不再存在「窗口未知 → 退回旧启发式」这条分支，
+  // 那条分支让设置页上写的数字只对一部分模型生效。
   // 有分档时不靠窗口裁剪：展开形状由分档决定，只让问题命中的表优先拿列明细。
   const focusEnabled = hasTiers
     ? Boolean(question || attachmentTables.length)
-    : schemaFocusEnabled({ contextWindow, totalTables, totalColumns });
+    : schemaFocusEnabled({ contextWindow, totalTables });
   const focusTables = focusEnabled
     ? focusTablesForQuestion({ question, databases, context, memories, glossary, sqlExamples, attachments: attachmentTables })
     : [...attachmentTables];

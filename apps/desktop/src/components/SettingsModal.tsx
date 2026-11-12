@@ -26,8 +26,11 @@ import {
 } from 'lucide-react';
 import type { AgentModelConfig, AgentModelEntry, AppSettings, AuditEntry, BackupInfo, ModelInputModality, ModelProfile, ModelReasoningTier, ProviderKind, ProviderPreset } from '@aidb/core';
 import {
+  DEFAULT_CONTEXT_WINDOW,
+  DEFAULT_MAX_OUTPUT_TOKENS,
   DEFAULT_REASONING_TIERS,
   TIER_LEVELS,
+  contextWindowOf,
   formatTokenSize,
   matchPreset,
   parseTokenSize,
@@ -1276,8 +1279,8 @@ function ModelProfileEditor({
           <input
             className="input"
             key={`ctx-${model}`}
-            defaultValue={profile?.contextWindow ? formatTokenSize(profile.contextWindow) : ''}
-            placeholder="256K"
+            defaultValue={formatTokenSize(contextWindowOf(profile))}
+            placeholder={formatTokenSize(DEFAULT_CONTEXT_WINDOW)}
             onBlur={(e) => onPatch({ contextWindow: parseTokenSize(e.target.value) })}
             data-testid="model-context-window"
           />
@@ -1287,8 +1290,8 @@ function ModelProfileEditor({
           <input
             className="input"
             key={`max-${model}`}
-            defaultValue={profile?.maxOutputTokens ? formatTokenSize(profile.maxOutputTokens) : ''}
-            placeholder="32K"
+            defaultValue={formatTokenSize(profile?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS)}
+            placeholder={formatTokenSize(DEFAULT_MAX_OUTPUT_TOKENS)}
             onBlur={(e) => onPatch({ maxOutputTokens: parseTokenSize(e.target.value) })}
             data-testid="model-max-output"
           />

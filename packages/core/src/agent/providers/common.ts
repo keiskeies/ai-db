@@ -1,3 +1,5 @@
+import { DEFAULT_MAX_OUTPUT_TOKENS, formatTokenSize } from './profile';
+
 export class ProviderError extends Error {
   code: string;
   status?: number;
@@ -172,6 +174,14 @@ function parseFrame(raw: string): SseFrame | null {
   return { event, data: data.join('\n') };
 }
 
+/**
+ * 服务商抱怨「输出/上下文太长」时的补话。
+ *
+ * 没填档案时 max_tokens 下发的是默认档位 32K（设置页预填的那个值）。大多数端点吃得下，
+ * 但小窗口或低配额的端点会直接 400 拒掉——这时错误里只有一句服务商原文，用户不知道该改哪。
+ * 与其让人猜，不如直接说出改哪儿。命中关键词才补，正常报错不掺话。
+ */
+const LIMIT_HINT = /max_tokens|maximum tokens|too long|context.length|too many tokens/i;
 export function mapHttpError(status: number, body: string): ProviderError {
   let detail = body.slice(0, 400);
   try {
@@ -179,6 +189,9 @@ export function mapHttpError(status: number, body: string): ProviderError {
     detail = parsed.error?.message ?? parsed.message ?? detail;
   } catch {
     /* keep raw */
+  }
+  if (status === 400 && LIMIT_HINT.test(detail)) {
+    detail += `（若该端点不接受这么大的输出上限，到 设置 → 模型能力 把「最大输出 token 数」调小；没填时按默认档位 ${formatTokenSize(DEFAULT_MAX_OUTPUT_TOKENS)} 下发）`;
   }
   const retryable = status === 429 || status >= 500;
   const code = status === 401 || status === 403 ? 'PROVIDER_AUTH' : status === 429 ? 'PROVIDER_RATE_LIMIT' : 'PROVIDER_HTTP';

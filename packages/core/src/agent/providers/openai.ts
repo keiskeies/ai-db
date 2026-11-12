@@ -1,5 +1,6 @@
 import type { LlmProvider, ProviderEvent, ProviderMessage, ProviderRequest, ToolCall } from '../types';
 import { isPrivateEndpoint, joinUrl, mapHttpError, normalizeCacheUsage, ProviderError, readSse, resolveStallMs, watchRequestStall } from './common';
+import { DEFAULT_MAX_OUTPUT_TOKENS } from './profile';
 
 /** 从 OpenAI 兼容响应的 usage 里取缓存命中量；各家字段位置不同，这里统一认。 */
 function readCacheUsage(usage: any): { hit?: number; miss?: number } {
@@ -94,7 +95,8 @@ export class OpenAIProvider implements LlmProvider {
         model: this.cfg.model,
         messages: toOpenAIMessages(req.system, req.messages),
         temperature: req.temperature ?? 0.2,
-        max_tokens: req.maxTokens ?? this.cfg.maxTokens ?? 4096,
+        // 兜底值 = 设置页写着的那个默认档位，不再另有一个界面上看不见的 4096。
+        max_tokens: req.maxTokens ?? this.cfg.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
         ...(req.reasoning?.value ? { reasoning_effort: req.reasoning.value } : {}),
         ...(req.tools.length ? { tools: req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } })), tool_choice: 'auto' } : {}),
         stream: true,

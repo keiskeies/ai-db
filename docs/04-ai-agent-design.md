@@ -414,8 +414,10 @@ pinned → +0.3 且不衰减
   超出预算时按**整行**装箱（不切坏 JSON 行），带 `totalRows` / `rowRange` / `meta.truncated`，
   并附一句续查提示（改用显式 `LIMIT/OFFSET` 或更窄的 `WHERE`，长文本列单独 `SELECT ... LIMIT 1`），
   让模型知道数据被截了、下一步怎么取剩下的 —— 静默截断只会让它拿半截数据下结论。
-  **前提**：`contextWindow` 只有模型档案里填了、或服务商 `/models` 探测得到时才知道（见 9.0.1）；
-  没有档案时退回固定 16000 字符，不瞎猜窗口。
+  **窗口来源**：`contextWindow` 优先取服务商 `/models` 探测值或模型档案里的填写值；**都没填时按默认档位
+  256K/32K 算**（`DEFAULT_CONTEXT_WINDOW`/`DEFAULT_MAX_OUTPUT_TOKENS`，`providers/profile.ts`），
+  这两个数同时是设置页输入框的预填值与占位文案 —— 界面上写出来的数字就是参与计算的数字，
+  不再存在「显示 256K、实际按 16000 字符截」这种分裂。
 - **压缩**：会话 > 阈值（默认 24k tokens）→ 生成摘要（保留目标、决策、schema 变更、未完成事项）写入 `sessions.summary`，丢弃早期工具大结果。
 
 ## 9. Provider
@@ -444,12 +446,12 @@ pinned → +0.3 且不衰减
 模型列表由 Bridge 代理拉取：`POST /api/agent/models {kind, baseUrl, apiKey?}` → `listProviderModels()`（OpenAI 兼容读 `/models`，Anthropic 读 `/v1/models` 带 `x-api-key`，Ollama 优先 `/api/tags` 失败再退 `/v1/models`），仅接受 http/https、8s 超时、去重排序上限 500；未填密钥时复用已保存的同协议密钥，本机/内网端点（Ollama、LM Studio、vLLM）允许无密钥调用。
 
 ### 9.0.1 模型能力档案（`settings.agent.modelProfiles`）
-`listProviderModels()` 除模型名外还返回 `infos[]`：从服务商 `/models` 的 `context_length`、`max_output_tokens`、`capabilities`、`input_modalities`、`reasoning.efforts` 等字段提取上下文窗口、最大输出、输入模态与推理档位。设置页选中模型时用它预填 `ModelProfile`，之后全部可手改：
+`listProviderModels()` 除模型名外还返回 `infos[]`：从服务商 `/models` 的 `context_length`、`max_output_tokens`、`capabilities`、`input_modalities`、`reasoning.efforts` 等字段提取上下文窗口、最大输出、输入模态与推理档位。设置页选中模型时用它预填 `ModelProfile`，之后全部可手改。**没探测到、也没手填的两个字段用默认档位 256K/32K**（界面上预填出来，用户改一下就生效）：
 
 | 字段 | 作用 |
 |---|---|
-| `contextWindow` | 与 `compactionThreshold` 取小，收紧 `compactHistory` 的历史预算（`window − maxOutput − 8000`） |
-| `maxOutputTokens` | 下发 `max_tokens`（OpenAI 兼容）/ `max_tokens`（Anthropic），未配置时仍为 4096 |
+| `contextWindow` | 与 `compactionThreshold` 取小，收紧 `compactHistory` 的历史预算（`window − maxOutput − 8000`）；同时决定单条工具结果预算、中途压缩线与 schema 段上限。缺省 = `DEFAULT_CONTEXT_WINDOW`（256K） |
+| `maxOutputTokens` | 下发 `max_tokens`（OpenAI 兼容）/ `max_tokens`（Anthropic）。缺省 = `DEFAULT_MAX_OUTPUT_TOKENS`（32K）——`maxOutputTokensOf()` 是唯一的定义处，provider 里不再有第二个兜底值 |
 | `inputs` | 含 `image` 才允许聊天面板贴图；Bridge 侧同样校验，缺失时返回 `MODEL_NO_VISION` |
 | `reasoning` + `reasoningTiers` | 档位 → API 参数值映射；`reasoningTier` 记录当前选择 |
 

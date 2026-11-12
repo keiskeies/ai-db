@@ -45,7 +45,7 @@
 
 ## 3. 约束
 
-- **不新增魔法常数来替代表属性**。本方案里参与决策的量只有：表自身可观测的属性（命名、列名、列数、行数估计、外键方向、查询历史命中、用户是否标注过）、模型档案里的 `contextWindow`/`maxOutputTokens`，以及 `profile.ts` 里**已存在**的 `PROMPT_RESERVE_TOKENS`、`FALLBACK_MAX_OUTPUT_TOKENS`。新增的两个数（`SCHEMA_ROOM_SHARE = 0.35`、`MIN_SCHEMA_TOKENS = 1200`）与 `historyTokenBudget` 同族同类，放在同一处，并且**只当护栏用**——它们不参与「这张表是什么」的判断。
+- **不新增魔法常数来替代表属性**。本方案里参与决策的量只有：表自身可观测的属性（命名、列名、列数、行数估计、外键方向、查询历史命中、用户是否标注过）、模型档案里的 `contextWindow`/`maxOutputTokens`，以及 `profile.ts` 里**已存在**的 `PROMPT_RESERVE_TOKENS`、`DEFAULT_MAX_OUTPUT_TOKENS`（后者由原来的 `FALLBACK_MAX_OUTPUT_TOKENS` 更名而来，并升格为设置页预填的默认档位，见 `docs/04` §9.0.1）。新增的两个数（`SCHEMA_ROOM_SHARE = 0.35`、`MIN_SCHEMA_TOKENS = 1200`）与 `historyTokenBudget` 同族同类，放在同一处，并且**只当护栏用**——它们不参与「这张表是什么」的判断。
 - 无 brief / 无档时，`compressSchema` 的输出必须与改动前**逐字节一致**（有单测钉住）。
 - tier 模式下省略行的计数必须按「真正没渲染的表」算（`76e7168`）。
 - 文案中文；prompt 内的 schema 段维持英文（与既有 system 段一致，不混语种）。
@@ -121,7 +121,7 @@ column-comment → status: 0=待支付, 1=已支付, 2=已退款
 
 ### 5.4 窗口只做护栏：`schemaTokenBudget` + `tierDetailBudget`
 
-`schemaTokenBudget({contextWindow, maxOutputTokens})`（`providers/profile.ts:126`）：
+`schemaTokenBudget({contextWindow, maxOutputTokens})`（`providers/profile.ts:148`）：
 
 ```
 room   = window - maxOutputTokens - PROMPT_RESERVE_TOKENS     // 与 historyTokenBudget 同一分母
@@ -130,7 +130,7 @@ budget = max(MIN_SCHEMA_TOKENS, floor(room * SCHEMA_ROOM_SHARE))
 
 分母和 `historyTokenBudget` / `midContextTokenBudget` **共用同一套余量常量**，所以 schema 段和 history 段不可能各自算出自己的比例、加起来把窗口撑爆 —— 这是过去几处阈值各拍各的留下的真实隐患，顺手收掉了。
 
-`tierDetailBudget`（`prompt.ts:137`）再把这个 token 上限换算成「多少张表可以展开列明细」，按**实际列数**计费（`40 + min(columns,48) * 8`），不拍平均列数：同样预算下窄表能多容纳几张，宽表少几张。名行的固定开销（`NAME_LINE_TOKENS = 12`/张）先扣掉再买明细，避免「明细买满、名行溢出」。
+`tierDetailBudget`（`prompt.ts:138`）再把这个 token 上限换算成「多少张表可以展开列明细」，按**实际列数**计费（`40 + min(columns,48) * 8`），不拍平均列数：同样预算下窄表能多容纳几张，宽表少几张。名行的固定开销（`NAME_LINE_TOKENS = 12`/张）先扣掉再买明细，避免「明细买满、名行溢出」。
 
 `compressSchema` 因此变成**两趟**：先排好每张表的归属（哪个库、是否 focus、什么档），再算明细预算 —— 因为「谁竞争预算」取决于分档结果。`candidates` 沿用排序结果，focus 命中与用户标注过的表排在最前，所以预算不够时**先砍的绝不是本轮问题要的表**。
 

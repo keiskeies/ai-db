@@ -514,12 +514,14 @@ export interface ModelReasoningTier {
 
 /**
  * 单个模型的能力档案，按模型名存在 AgentSettings.modelProfiles 里。
- * 字段缺省代表未知，调用方必须按最保守的行为处理（不发推理参数、不收图）。
+ * 推理与输入模态缺省代表未知，调用方必须按最保守的行为处理（不发推理参数、不收图）；
+ * 窗口与输出上限相反，缺省用 `providers/profile.ts` 的默认档位（256K/32K），
+ * 与设置页输入框预填的值同一个来源。
  */
 export interface ModelProfile {
-  /** 上下文窗口（tokens）。 */
+  /** 上下文窗口（tokens）；没填按 DEFAULT_CONTEXT_WINDOW 算。 */
   contextWindow?: number;
-  /** 单次回复的最大输出（tokens）。 */
+  /** 单次回复的最大输出（tokens）；没填按 DEFAULT_MAX_OUTPUT_TOKENS 算。 */
   maxOutputTokens?: number;
   /** 支持的输入类型；缺省按「仅文本」处理。 */
   inputs?: ModelInputModality[];

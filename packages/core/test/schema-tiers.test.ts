@@ -161,8 +161,9 @@ test('tierDetailBudget sizes column detail from the window instead of a fixed ta
     tierDetailBudget({ contextWindow: 32_000, candidates: skinny, schemaTokens: 2_000 }) > small,
     '窄表应比宽表容纳更多张',
   );
-  // 没有窗口档案 → 退回旧的 15 上限；有窗口但没算出上限 → 不设限。
-  assert.equal(tierDetailBudget({ candidates: wide }), 15);
+  // 没算出上限（调用方没传 schemaTokens）→ 不设限。注意这跟「没填窗口档案」是两回事：
+  // 后者按默认档位算出护栏，不再退回旧的写死 15 张。
+  assert.equal(tierDetailBudget({ candidates: wide }), 60);
   assert.equal(tierDetailBudget({ contextWindow: 32_000, candidates: wide }), 60);
   assert.equal(tierDetailBudget({ contextWindow: 32_000, candidates: [{ columns: 4 }], schemaTokens: 10_000 }), 1);
 });

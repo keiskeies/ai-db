@@ -40,7 +40,7 @@ import {
 import type { AgentMessageBlock, AgentPlanItem, PermissionMode, QuestionSuggestion, Risk, TableInfo, ToolResult } from '@aidb/core';
 import { COMMANDS, engineMeta, suggestionLabel } from '@aidb/core';
 import { getI18nLocale } from '../i18n';
-import { getModelProfile, supportsInput } from '@aidb/core';
+import { contextWindowOf, getModelProfile, supportsInput } from '@aidb/core';
 import { api, attachmentObjectUrl, type StoredAttachment } from '../lib/api';
 import { deliverExport } from '../lib/exportDelivery';
 import { desktopBridge, desktopDialogUi } from '../lib/desktop';
@@ -2107,7 +2107,9 @@ export function AgentPanel() {
             ) : null}
           </div>
         </div>
-        <ComposerStats live={live} session={sessionMeta} contextWindow={profile?.contextWindow} disclaimer={t('aiDisclaimer')} />
+        {/* 窗口没填时用 core 的默认档位：算预算的是同一个数，占用读数也必须用它，
+            否则界面显示「无窗口」而实际按 256K 压缩，两边对不上。 */}
+        <ComposerStats live={live} session={sessionMeta} contextWindow={contextWindowOf(profile)} disclaimer={t('aiDisclaimer')} />
       </div>
 
       {sessionsOpen ? (

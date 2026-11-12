@@ -13,6 +13,7 @@ import {
   schemaFocusEnabled,
 } from '../src/agent/prompt';
 import { extractHeuristicMemories, rankMemories } from '../src/agent/memory';
+import { DEFAULT_CONTEXT_WINDOW } from '../src/agent/providers/profile';
 import { isAgentContextActive, type AgentContextEntry, type DatabaseSchema, type Memory } from '../src/types';
 
 const iso = new Date('2026-10-27T00:00:00.000Z').toISOString();
@@ -387,10 +388,20 @@ test('schema focus is window-aware: 1M window keeps full detail, small window fo
   const roomy = buildSystemPrompt({ databases: [big], mode: 'ask', memories: [], question: '查一下订单', contextWindow: 1_048_576 });
   assert.ok(!roomy.includes('Column detail is prioritized'), '1M 窗口的整库明细不再被无谓裁剪');
 
-  // schemaFocusEnabled 无窗口档案时退回旧的表数/列数启发式
-  assert.equal(schemaFocusEnabled({ contextWindow: 0, totalTables: 100, totalColumns: 300 }), false);
-  assert.equal(schemaFocusEnabled({ contextWindow: 0, totalTables: 151, totalColumns: 80 }), true, '无档案时用旧的 150 表阈值');
-  assert.equal(schemaFocusEnabled({ contextWindow: 0, totalTables: 10, totalColumns: 3000 }), true, '无档案时用旧的 2500 列阈值');
+  // schemaFocusEnabled 没填窗口时按默认档位（256K）算，不再退回旧的表数/列数启发式
+  assert.equal(schemaFocusEnabled({ contextWindow: 0, totalTables: 100 }), false);
+  assert.equal(
+    schemaFocusEnabled({ contextWindow: 0, totalTables: 10 }),
+    false,
+    '旧启发式看总列数（>2500 就聚焦）；现在只看整库名行是否超过窗口可读余量',
+  );
+  assert.equal(schemaFocusEnabled({ contextWindow: 0, totalTables: 1600 }), true, '256K 默认档下约 1530 张表起聚焦');
+  assert.equal(schemaFocusEnabled({ contextWindow: 0, totalTables: 1500 }), false, '压线之下不聚焦');
+  assert.equal(
+    schemaFocusEnabled({ contextWindow: 0, totalTables: 1600 }),
+    schemaFocusEnabled({ contextWindow: DEFAULT_CONTEXT_WINDOW, totalTables: 1600 }),
+    '没填与填了默认档位必须等价',
+  );
 });
 
 test('anti-pattern glossary entries become a separate hard-constraint section', () => {

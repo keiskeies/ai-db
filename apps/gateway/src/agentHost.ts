@@ -486,9 +486,8 @@ export class AgentHost {
       maxSteps,
       temperature: settings.agent.temperature,
       maxTokens: maxOutputTokensOf(settings.agent, profile),
-      // 单条工具结果给模型看的字符预算：模型档案声明了上下文窗口才谈得上「智能计算」，
-      // 窗口越大开局给得越多，跑到后半程按已用 tokens 自动收窄。没配档案时
-      // 退回原来的 16000 固定值（设置 → 模型能力 里填了上下文窗口即可启用）。
+      // 单条工具结果给模型看的字符预算：窗口越大开局给得越多，跑到后半程按已用 tokens
+      // 自动收窄。没填档案时按默认档位（256K/32K）算——就是设置页输入框里预填的那两个数。
       resultCharBudget: (usedTokens) =>
         modelResultCharBudget({
           contextWindow: profile?.contextWindow,
@@ -496,7 +495,7 @@ export class AgentHost {
           usedTokens,
         }),
       // 长回合的中途压缩线：contextTokens 超过它时折叠最早的工具往返，防止窗口顶穿。
-      // 声明了上下文窗口的模型才有意义；没声明 → 0 = 不压缩，行为与改造前一致。
+      // 没填档案也开着（按默认档位算）——以前这条在最常见配置下是关的。
       contextTokenBudget: midContextTokenBudget(profile?.contextWindow, maxOutputTokensOf(settings.agent, profile)),
       reasoning: activeReasoningTier(settings.agent, profile),
       generateId: () => randomUUID(),
