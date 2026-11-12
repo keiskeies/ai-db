@@ -18,6 +18,7 @@ import type {
 import { DEFAULT_SETTINGS, engineMeta, normalizeLocale } from '@aidb/core';
 import { ApiError, api, streamTurn, type BootstrapData, type UnavailableEngine } from './lib/api';
 import { NO_APPROVAL, enqueueApproval, settleApproval } from './lib/approvalQueue';
+import type { TimelineItem } from './lib/agentTimeline';
 import { startSchemaEvents } from './lib/schemaEvents';
 import { getI18nLocale, setI18nLocale, translate, type I18nKey, type I18nVars } from './i18n';
 import { t as tr } from './i18n';
@@ -42,11 +43,29 @@ export interface LiveTool {
   result?: ToolResult;
 }
 
+/**
+ * 一条回合时间线上的项目。顺序就是发生顺序——这是「思考-输出-sql-思考-输出-sql-结论」
+ * 能渲染出来的唯一前提。
+ *
+ * 曾经没有这个数组：正文一条道累积到回合结束（live.text），工具另存一条（live.tools），
+ * 界面只能把工具堆上、文字堆下，「哪句话在哪个工具之前说」当场丢了。
+ * 用户原话：所有文字都挤在下面，也不知道上面在干什么，执行和解释都对应不上。
+ *
+ * 类型定义在 lib/agentTimeline（渲染侧也要它，那边不该反向依赖 store），这里只是 re-export。
+ */
+export type { TimelineItem } from './lib/agentTimeline';
+
 export interface LiveTurn {
   userText: string;
   text: string;
   thinking: string;
   tools: LiveTool[];
+  /** 已交付的时间线（思考/正文/工具/计划，按发生顺序）。 */
+  timeline: TimelineItem[];
+  /** 当前这一步还没交付的正文；step_text 一到就清空并入 timeline。 */
+  stream: string;
+  /** 当前这一步还没交付的思考；step_thinking 一到就清空并入 timeline。 */
+  streamThinking: string;
   plan: AgentPlanItem[];
   status: 'streaming' | 'awaiting' | 'done' | 'aborted' | 'error';
   /** 中止原因：连接停摆不是用户点的停止，界面不能都说成「已中止」。 */
@@ -1035,21 +1054,43 @@ export const useApp = create<AppStore>((set, get) => ({
   handleAgentEvent: (event) => {
     set((prev) => {
       const live = prev.live
-        ? { ...prev.live, tools: prev.live.tools.map((t) => ({ ...t })), plan: [...prev.live.plan], memories: [...prev.live.memories] }
+        ? {
+            ...prev.live,
+            tools: prev.live.tools.map((t) => ({ ...t })),
+            plan: [...prev.live.plan],
+            memories: [...prev.live.memories],
+            timeline: [...prev.live.timeline],
+          }
         : undefined;
       if (!live) return {};
+      /** 已入账的正文，用于把 live.text 保持成「整回合」而不是「当前这一步」。 */
+      const committedText = () => live.timeline.filter((item) => item.kind === 'text').map((item) => item.text).join('\n\n');
       switch (event.type) {
         case 'start':
           live.status = 'streaming';
           break;
         case 'text_delta':
           live.text += event.text;
+          live.stream += event.text;
           break;
         case 'text_replace':
-          live.text = event.text;
+          // XML 兜底改写的是**当前这一步**的正文。以前这里直接 live.text = event.text，
+          // 于是第二步触发兜底时会把第一步说过的话从屏幕上抹掉。
+          live.stream = event.text;
+          live.text = [committedText(), event.text].filter(Boolean).join('\n\n');
           break;
         case 'thinking_delta':
           live.thinking += event.text;
+          live.streamThinking += event.text;
+          break;
+        // 步骤边界：这一步的正文/思考说完了，下面接它的工具。顺序即渲染顺序。
+        case 'step_text':
+          live.timeline.push({ kind: 'text', text: event.text, step: event.step });
+          live.stream = '';
+          break;
+        case 'step_thinking':
+          live.timeline.push({ kind: 'thinking', text: event.text, step: event.step });
+          live.streamThinking = '';
           break;
         case 'tool_call':
           live.tools.push({
@@ -1060,6 +1101,7 @@ export const useApp = create<AppStore>((set, get) => ({
             status: 'running',
             summary: event.summary,
           });
+          live.timeline.push({ kind: 'tool', callId: event.callId });
           break;
         case 'tool_result': {
           const tool = live.tools.find((t) => t.callId === event.callId);
@@ -1172,6 +1214,9 @@ export const useApp = create<AppStore>((set, get) => ({
           text: '',
           thinking: '',
           tools: [],
+          timeline: [],
+          stream: '',
+          streamThinking: '',
           plan: [],
           status: 'streaming',
           startedAt: Date.now(),

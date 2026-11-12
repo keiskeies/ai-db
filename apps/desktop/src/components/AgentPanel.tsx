@@ -37,7 +37,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import type { AgentMessageBlock, PermissionMode, QuestionSuggestion, Risk, TableInfo, ToolResult } from '@aidb/core';
+import type { AgentMessageBlock, AgentPlanItem, PermissionMode, QuestionSuggestion, Risk, TableInfo, ToolResult } from '@aidb/core';
 import { COMMANDS, engineMeta, suggestionLabel } from '@aidb/core';
 import { getI18nLocale } from '../i18n';
 import { getModelProfile, supportsInput } from '@aidb/core';
@@ -45,6 +45,15 @@ import { api, attachmentObjectUrl, type StoredAttachment } from '../lib/api';
 import { deliverExport } from '../lib/exportDelivery';
 import { desktopBridge, desktopDialogUi } from '../lib/desktop';
 import { formatBytes, formatCell, formatDuration, formatRelative } from '../lib/format';
+import {
+  groupTools,
+  isChartResult,
+  turnFromBlocks,
+  turnFromLive,
+  type TurnGroup,
+  type TurnTool,
+  type TurnView,
+} from '../lib/agentTimeline';
 import { useApp, type LiveTool, type LiveTurn } from '../store';
 import { askConfirm } from './AskDialog';
 import { ChartView, type ChartSpec } from './ChartView';
@@ -302,14 +311,16 @@ function agentActivity(live: LiveTurn): ActivityState {
   }
   const running = [...live.tools].reverse().find((tool) => tool.status === 'running');
   if (running) return describeTool(running);
-  if (live.text) {
+  // 看的是「当前这一步」还没交付的 stream，不是整回合累计的 text/thinking：
+  // 那两个只会越加越长，第二步开始思考时状态条还挂着「正在撰写回答」。
+  if (live.stream) {
     return {
       icon: <Sparkles size={11} />,
       label: live.tools.length ? tr("正在梳理查询结果，撰写回答") : tr("正在组织语言，撰写回答"),
       tone: 'answer',
     };
   }
-  if (live.thinking) {
+  if (live.streamThinking) {
     return {
       icon: <Brain size={11} />,
       label: live.tools.length ? tr("正在阅读执行结果，思考下一步") : tr("正在理解你的问题，梳理思路"),
@@ -776,56 +787,208 @@ function PlanCard({ items }: { items: Array<{ id: string; text: string; status: 
   );
 }
 
-function AssistantBlocks({ blocks, messageId }: { blocks: AgentMessageBlock[]; messageId: string }) {
-  const openQuery = useApp((s) => s.openQuery);
-  const results = new Map<string, ToolResult>();
-  for (const block of blocks) if (block.type === 'tool_result' && block.callId) results.set(block.callId, block.result as ToolResult);
-  const thinking = blocks.find((b) => b.type === 'thinking')?.text;
-  // 模型每更新一次计划都会追加一个 plan block；只渲染最后一份，避免多张旧计划卡堆叠。
-  const latestPlan = [...blocks].reverse().find((block) => block.type === 'plan');
+function ToolEntryView({ call, onOpenEditor }: { call: TurnTool; onOpenEditor: (sql: string) => void }) {
+  return (
+    <ToolCard
+      tool={call.tool}
+      args={call.args}
+      risk={call.risk}
+      status={call.status}
+      result={call.result}
+      summary={call.summary}
+      live={call.live}
+      chartMoved={isChartResult(call.result)}
+      onOpenEditor={onOpenEditor}
+    />
+  );
+}
+
+/**
+ * 按发生顺序渲染的一条时间线：这一步的思考、这一步说的话、它的工具卡，依次排开。
+ *
+ * 折叠的粒度是关键：**只折工具卡，正文不折**。用户原话是「把执行步骤隐藏起来不主动展开，
+ * 感觉偷偷摸摸就干完了」——被藏起来的应该是 SQL 和结果表格那类细节，而不是模型的解释。
+ * 所以正文直接摊在流里，思考与工具各自是一个 can-fold 的块，位置仍在真实顺序上。
+ *
+ * 同一个 step 的条目再套一层 .turn-step：只靠相邻关系认「这句解释对应哪条 SQL」还是太费劲，
+ * 一道左轨把一步的东西框在一起，扫一眼就知道哪几块是同一轮。
+ */
+function TurnTimeline({
+  view,
+  streaming,
+  testId,
+  running,
+  fold = 'step',
+  onOpenEditor,
+}: {
+  view: TurnView;
+  streaming?: boolean;
+  testId?: string;
+  running?: boolean;
+  /**
+   * 工具卡怎么折：
+   * - 'step'（默认）：同一步一套左轨，工具卡在那一步里就地折一段。
+   * - 'none'：什么都不折，调用方自己负责外壳。旧数据（没有分段块）走这条——
+   *   它排不出步，套轨只会多一层缩进；而且调用方已经把全部内容包进一个
+   *   「执行过程」了，这里再折一次就是折叠套折叠。
+   */
+  fold?: 'step' | 'none';
+  onOpenEditor: (sql: string) => void;
+}) {
+  const lastIndex = view.entries.length - 1;
+  type StepNode = { key: string; step?: number; groups: TurnGroup[] };
+  const nodes: StepNode[] = [];
+  const open = (step?: number): StepNode => {
+    const node: StepNode = { key: `step_${step ?? 'live'}_${nodes.length}`, ...(step === undefined ? {} : { step }), groups: [] };
+    nodes.push(node);
+    return node;
+  };
+  const grouped = fold === 'step';
+  groupTools(view.entries).forEach((group) => {
+    const step = group.kind === 'tools' ? undefined : group.entry.step;
+    if (step !== undefined && grouped) {
+      // 同一步的思考与正文并到一块；换了步号就另起一段（正在生成的尾巴没有 step，
+      // 也另起：它跟在上一步后面会被误读成那一步已经讲完了）。
+      const tail = nodes.at(-1);
+      (tail && tail.step === step ? tail : open(step)).groups.push(group);
+      return;
+    }
+    // 工具属于上面那一步：它是那一步的模型调用发出来的。并进去，
+    // 「我先按 status 分组」和它那条 SQL 才在一个框里——这正是「执行和解释对应不上」的反面。
+    const tail = nodes.at(-1);
+    (grouped && tail && tail.step !== undefined ? tail : open()).groups.push(group);
+  });
   return (
     <>
-      {thinking ? (
-        <details className="thinking">
-          <summary><Brain size={11} /> {tr(" 思考过程")}</summary>
-          <div className="thinking-body">{thinking}</div>
-        </details>
-      ) : null}
-      {blocks.map((block, index) => {
-        if (block.type === 'tool_call') {
-          const result = block.callId ? results.get(block.callId) : undefined;
-          const chartMoved = Boolean((result?.data as Record<string, any> | undefined)?.chart);
+      {nodes.map((node) =>
+        grouped ? (
+          <div className="turn-step" data-step={node.step} data-testid="turn-step" key={node.key}>
+            <StepNodeView node={node} lastIndex={lastIndex} streaming={streaming} testId={testId} running={running} foldTools onOpenEditor={onOpenEditor} />
+          </div>
+        ) : (
+          <StepNodeView key={node.key} node={node} lastIndex={lastIndex} streaming={streaming} running={running} foldTools={false} onOpenEditor={onOpenEditor} />
+        ),
+      )}
+    </>
+  );
+}
+
+function StepNodeView({
+  node,
+  lastIndex,
+  streaming,
+  testId,
+  running,
+  foldTools,
+  onOpenEditor,
+}: {
+  node: { key: string; step?: number; groups: TurnGroup[] };
+  lastIndex: number;
+  streaming?: boolean;
+  testId?: string;
+  running?: boolean;
+  foldTools: boolean;
+  onOpenEditor: (sql: string) => void;
+}) {
+  return (
+    <>
+      {node.groups.map((group) => {
+        if (group.kind === 'tools') {
+          const cards = group.calls.map((call) => <ToolEntryView key={call.callId} call={call} onOpenEditor={onOpenEditor} />);
+          if (!foldTools) return <div className="turn-tools" key={`tools_${group.start}`}>{cards}</div>;
           return (
-            <ToolCard
-              key={`${messageId}_${block.callId ?? index}`}
-              tool={block.tool ?? 'tool'}
-              args={block.args}
-              risk={block.risk}
-              status={result ? (result.ok ? 'ok' : 'error') : 'error'}
-              result={result}
-              chartMoved={chartMoved}
-              onOpenEditor={(sql) => openQuery(undefined, sql)}
-            />
+            <ExecutionSection key={`tools_${group.start}`} count={group.calls.length} running={running} testId={testId}>
+              {cards}
+            </ExecutionSection>
           );
         }
-        if (block.type === 'plan') {
-          return block === latestPlan ? <PlanCard key={`${messageId}_plan_${index}`} items={block.items ?? []} /> : null;
+        const entry = group.entry;
+        const isLast = group.index === lastIndex;
+        if (entry.kind === 'text') {
+          return (
+            <div className="prose step-text" key={entry.key} data-testid="step-text">
+              <Markdown>{entry.text}</Markdown>
+              {streaming && isLast ? <span className="typing-caret" /> : null}
+            </div>
+          );
         }
-        return null;
+        return (
+          <details className="thinking step-thinking" key={entry.key} data-testid="step-thinking" open={streaming && isLast ? true : undefined}>
+            <summary><Brain size={11} /> {tr(" 思考过程")}</summary>
+            <div className="thinking-body">{entry.text}</div>
+          </details>
+        );
       })}
     </>
   );
 }
 
-/** 图表类工具的结果会被提到结论区，这里按调用顺序收集。 */
-function chartBlocks(blocks: AgentMessageBlock[]): Array<{ key: string; result: ToolResult }> {
-  const out: Array<{ key: string; result: ToolResult }> = [];
-  for (const block of blocks) {
-    if (block.type !== 'tool_result' || !block.callId) continue;
-    const result = block.result as ToolResult;
-    if ((result?.data as Record<string, any> | undefined)?.chart) out.push({ key: block.callId, result });
+/**
+ * 整条回合的外壳：计划卡不折（用户点名要随时看得见 AI 打算干什么），
+ * 正文摊开、工具卡按位置折起来，图表跟在它们后面。
+ * 旧数据（没有分段块）排不出顺序，退回原来的「工具一坨、文字一坨」形状。
+ */
+function TurnBody({
+  view,
+  fallbackText,
+  streaming,
+  running,
+  testId,
+  children,
+}: {
+  view: TurnView;
+  fallbackText?: string;
+  streaming?: boolean;
+  running?: boolean;
+  testId?: string;
+  children?: ReactNode;
+}) {
+  const openQuery = useApp((s) => s.openQuery);
+  const onOpenEditor = (sql: string) => openQuery(undefined, sql);
+  if (!view.stepped) {
+    const hasExecution = view.toolCount > 0 || Boolean(view.legacyThinking) || Boolean(view.plan);
+    return (
+      <>
+        {hasExecution ? (
+          <ExecutionSection count={view.toolCount} running={running} testId={testId}>
+            {view.plan ? <PlanCard items={view.plan} /> : null}
+            {view.legacyThinking ? (
+              <details className="thinking" open={running && view.toolCount === 0 ? true : undefined}>
+                <summary><Brain size={11} /> {tr(" 思考过程")}</summary>
+                <div className="thinking-body">{view.legacyThinking}</div>
+              </details>
+            ) : null}
+            <TurnTimeline view={view} streaming={streaming} fold="none" onOpenEditor={onOpenEditor} />
+          </ExecutionSection>
+        ) : null}
+        {fallbackText ? <Markdown>{fallbackText}</Markdown> : null}
+        {view.charts.map((chart) => (
+          <div className="agent-chart" data-testid="agent-chart" key={chart.key}>
+            <ResultView result={chart.result} chartHeight={CHART_BODY_HEIGHT} onOpenEditor={onOpenEditor} />
+          </div>
+        ))}
+        {children}
+      </>
+    );
   }
-  return out;
+  return (
+    <>
+      {view.plan ? <PlanCard items={view.plan} /> : null}
+      {/* 这里**不**渲染 view.legacyThinking，是有意的：
+          - live 回合的 legacyThinking 是整回合累计的思考，分段块已经把它按步拆开了，
+            再渲染一遍就是同一坨文字在时间线上面重复出现；
+          - 落库消息里「没有 step 的 thinking」和「分段思考块」互斥（Bridge 只在
+            没有分段思考块时才补那一坨，见 agentHost 的 finalBlocks），所以分段分支
+            本来就不会带着它。 */}
+      <TurnTimeline view={view} streaming={streaming} running={running} testId={testId} onOpenEditor={onOpenEditor} />
+      {view.charts.map((chart) => (
+        <div className="agent-chart" data-testid="agent-chart" key={chart.key}>
+          <ResultView result={chart.result} chartHeight={CHART_BODY_HEIGHT} onOpenEditor={onOpenEditor} />
+        </div>
+      ))}
+      {children}
+    </>
+  );
 }
 
 /**
@@ -1398,28 +1561,20 @@ export function AgentPanel() {
         .filter((id): id is string => Boolean(id));
       return <UserMessage key={message.id} text={message.content} images={images.length ? images : undefined} />;
     }
-    const toolCount = message.blocks.filter((b) => b.type === 'tool_call').length;
-    const artifacts = chartBlocks(message.blocks);
-    const hasExecution = toolCount > 0 || message.blocks.some((b) => b.type === 'thinking' || b.type === 'plan');
+    const view = turnFromBlocks(message.blocks);
     return (
       <AssistantShell key={message.id}>
-        {hasExecution ? (
-          <ExecutionSection count={toolCount} testId="execution-section">
-            <AssistantBlocks blocks={message.blocks} messageId={message.id} />
-          </ExecutionSection>
-        ) : null}
-        {message.content ? <Markdown>{message.content}</Markdown> : null}
-        {artifacts.map((artifact) => (
-          <div className="agent-chart" data-testid="agent-chart" key={artifact.key}>
-            <ResultView result={artifact.result} chartHeight={CHART_BODY_HEIGHT} onOpenEditor={(sql) => openQuery(undefined, sql)} />
-          </div>
-        ))}
-        {message.content ? <AnswerActions text={message.content} /> : null}
-        {toolCount ? (
-          <div className="turn-end">
-            {toolCount}{tr(" 次工具调用 ")}{message.tokens ? ` · ↓${message.tokens.toLocaleString()} tokens` : ''}
-          </div>
-        ) : null}
+        {/* 分段消息不再另渲染 message.content：finalText 就是各步正文拼起来的那一份，
+            时间线里已经按顺序说过一遍了，再贴一坨等于同一段话出现两次。
+            旧数据没有分段块，TurnBody 只在那种情况下才用 fallbackText。 */}
+        <TurnBody view={view} fallbackText={message.content} testId="execution-section">
+          {message.content ? <AnswerActions text={message.content} /> : null}
+          {view.toolCount ? (
+            <div className="turn-end">
+              {view.toolCount}{tr(" 次工具调用 ")}{message.tokens ? ` · ↓${message.tokens.toLocaleString()} tokens` : ''}
+            </div>
+          ) : null}
+        </TurnBody>
       </AssistantShell>
     );
   };
@@ -1542,69 +1697,34 @@ export function AgentPanel() {
               <>
                 <UserMessage text={live.userText} images={live.userImages} />
                 <AssistantShell>
-                  {live.thinking || live.tools.length || live.plan.length ? (
-                    <ExecutionSection count={live.tools.length} running={busy} testId="execution-section-live">
-                      {live.thinking ? (
-                        <details className="thinking" open={!live.text && !live.tools.length}>
-                          <summary><Brain size={11} /> {t('thinking')}</summary>
-                          <div className="thinking-body">{live.thinking}</div>
-                        </details>
-                      ) : null}
-                      {live.tools.map((tool) => (
-                        <ToolCard
-                          key={tool.callId}
-                          tool={tool.tool}
-                          args={tool.args}
-                          risk={tool.risk}
-                          status={tool.status}
-                          result={tool.result}
-                          summary={tool.summary}
-                          live
-                          chartMoved={Boolean((tool.result?.data as Record<string, any> | undefined)?.chart)}
-                          onOpenEditor={(sql) => openQuery(undefined, sql)}
-                        />
-                      ))}
-                    </ExecutionSection>
-                  ) : null}
-                  {live.text ? (
-                    <div className="prose">
-                      <Markdown>{live.text}</Markdown>
-                      {busy ? <span className="typing-caret" /> : null}
-                    </div>
-                  ) : null}
-                  {live.tools
-                    .filter((tool) => (tool.result?.data as Record<string, any> | undefined)?.chart)
-                    .map((tool) => (
-                      <div className="agent-chart" data-testid="agent-chart" key={`art_${tool.callId}`}>
-                        <ResultView result={tool.result!} chartHeight={CHART_BODY_HEIGHT} onOpenEditor={(sql) => openQuery(undefined, sql)} />
+                  <TurnBody view={turnFromLive(live)} fallbackText={live.text} streaming={busy} running={busy} testId="execution-section-live">
+                    {live.error ? <div className="risk-banner">{live.error}</div> : null}
+                    {!busy && live.text ? <AnswerActions text={live.text} /> : null}
+                    {live.memories.length ? (
+                      <details className="memory-refs" data-testid="live-memories">
+                        <summary>
+                          <Brain size={10} /> {tr(" 参考 ")}{live.memories.length}{tr(" 条记忆 ")}</summary>
+                        <div className="memory-refs-list">
+                          {live.memories.map((m) => (
+                            <span key={m.id} className="memory-pill"><Brain size={9} /> {m.title}</span>
+                          ))}
+                        </div>
+                      </details>
+                    ) : null}
+                    {!busy ? (
+                      <div className="turn-end">
+                        {live.status === 'aborted'
+                          ? live.abortCause === 'stalled'
+                            ? t('stalled')
+                            : t('aborted')
+                          : live.status === 'error'
+                            ? t('failed')
+                            : t('completed')}{' '}
+                        · {live.tools.length}{tr(" 次工具 · ")}{formatDuration(Date.now() - live.startedAt)}
+                        {live.tokensIn || live.tokensOut ? ` · ↑${live.tokensIn} ↓${live.tokensOut}` : ''}
                       </div>
-                    ))}
-                  {live.error ? <div className="risk-banner">{live.error}</div> : null}
-                  {!busy && live.text ? <AnswerActions text={live.text} /> : null}
-                  {live.memories.length ? (
-                    <details className="memory-refs" data-testid="live-memories">
-                      <summary>
-                        <Brain size={10} /> {tr(" 参考 ")}{live.memories.length}{tr(" 条记忆 ")}</summary>
-                      <div className="memory-refs-list">
-                        {live.memories.map((m) => (
-                          <span key={m.id} className="memory-pill"><Brain size={9} /> {m.title}</span>
-                        ))}
-                      </div>
-                    </details>
-                  ) : null}
-                  {!busy ? (
-                    <div className="turn-end">
-                      {live.status === 'aborted'
-                        ? live.abortCause === 'stalled'
-                          ? t('stalled')
-                          : t('aborted')
-                        : live.status === 'error'
-                          ? t('failed')
-                          : t('completed')}{' '}
-                      · {live.tools.length}{tr(" 次工具 · ")}{formatDuration(Date.now() - live.startedAt)}
-                      {live.tokensIn || live.tokensOut ? ` · ↑${live.tokensIn} ↓${live.tokensOut}` : ''}
-                    </div>
-                  ) : null}
+                    ) : null}
+                  </TurnBody>
                 </AssistantShell>
               </>
             ) : null}

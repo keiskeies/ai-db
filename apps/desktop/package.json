@@ -11,7 +11,7 @@
     "package": "npm run build && electron-builder",
     "preview": "vite preview --port 4173 --strictPort",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/layout.test.ts test/approval-queue.test.ts test/store-approval.test.ts test/updater.test.ts"
+    "test": "node --import tsx --test test/layout.test.ts test/approval-queue.test.ts test/pairingCountdown.test.ts test/store-approval.test.ts test/live-timeline.test.ts test/agent-timeline.test.ts test/updater.test.ts"
   },
   "dependencies": {
     "@aidb/core": "*",

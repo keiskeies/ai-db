@@ -450,6 +450,12 @@ args: { connectionId, database?, sql, x?, y?, periods? (1-12, 默认 3), method?
 
 本方案取 A；B 列为后续可选。
 
+> **后续改动（本节按下线时的实现保留）**：这个「执行详情」抽屉已经撤掉了——把工具调用收进一个要点开的抽屉，
+> 正是「不知道 AI 现在在干啥，感觉偷偷摸摸就干完了」的来源。现在工具卡就地摊在消息里，
+> 与思考、正文按 `blocks` 的真实顺序交错（一步一套左轨），SQL 与耗时不必再点一次才看得见。
+> 渲染契约见 [`docs/03-ui-ux-design.md` §6.2](./03-ui-ux-design.md)，回归钉在 `apps/desktop/test/agent-timeline.test.ts`；
+> e2e 反过来断言那个入口不再存在（`scripts/e2e.mjs` 的 `重复的执行详情入口已移除`）。
+
 - [x] `AgentPanel.tsx`：`ExecutionDetail` 组件 + 时间线（入口挂在既有的 `.turn-end` 行上，不新增第二个按钮）
 - [x] `i18n.ts`（`executionDetail` / `hideExecutionDetail`）、`app.css`（`.exec-*`）
 - [x] e2e：跑一轮后展开详情，断言工具条数与耗时文本（`scripts/e2e.mjs`，探针版 `.tools/probes/p4p5-ui.mjs` 逐行比对 API 里的 `tool_call` 序列）
@@ -513,7 +519,7 @@ P1（4d，核心）  ──┴─→ P2（2d，推荐引擎依赖 P1 的启用�
 | 类型检查 | `npm run typecheck`（4 workspace） | 无 `any` 泄漏 |
 | 构建 | `npm run build` | — |
 | 文档契约 | `node scripts/verify-docs.mjs` | 工具数 22 → 24；新章节存在；内部链接有效 |
-| 浏览器 e2e | `npm run e2e`（**重定向到文件后 `echo $?`**，勿用 `| tail`，会吞掉退出码） | 上下文面板增删改；推荐气泡点击填入；图表三 tab；PNG 导出；执行详情抽屉；会话重命名 |
+| 浏览器 e2e | `npm run e2e`（**重定向到文件后 `echo $?`**，勿用 `| tail`，会吞掉退出码） | 上下文面板增删改；推荐气泡点击填入；图表三 tab；PNG 导出；执行过程就地展开（见 §6 的后续改动）；会话重命名 |
 | 人工 | 真实 MySQL `media` 库 | **只读验证**：配置别名 / 描述 / 关系后问数，对比配置前后的 SQL 正确性；**不在生产库做任何写操作** |
 
 准确率对照实验（P1 验收标准）：在 `media` 库上准备 10 个业务问题（含术语、跨表、枚举释义），分别在「无上下文」与「有上下文」两种配置下运行，记录：SQL 可执行率、表选择正确率、是否需要人工纠正。目标：可执行率与表选择正确率均提升，且**无上下文时结果与改动前完全一致**（回归零差异）。

@@ -1909,7 +1909,6 @@
   "已请求取消": "Cancellation requested",
   "已读取 {sections} 组指标、{sessions} 个会话": "Read {sections} group metrics, {sessions} sessions",
   "已读取对象定义": "Object definition read",
-  "已超时（可继续）": "Timed out (can continue)",
   "已达到本次最大工具步数（": "The maximum number of tool steps has been reached (",
   "已连接": "Connected",
   "已选 ": "Selected",

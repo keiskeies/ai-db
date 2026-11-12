@@ -122,11 +122,21 @@ interface LiveTool {
   result?: ToolResult;
 }
 
+/** 与桌面端 store.ts 的 TimelineItem 同一形状：顺序即发生顺序。 */
+type TimelineItem =
+  | { kind: 'thinking'; text: string; step?: number }
+  | { kind: 'text'; text: string; step?: number }
+  | { kind: 'tool'; callId: string };
+
 interface LiveTurn {
   userText: string;
   text: string;
   thinking: string;
   tools: LiveTool[];
+  timeline: TimelineItem[];
+  /** 当前这一步还没交付的正文/思考（step_text / step_thinking 一到就清空并入 timeline）。 */
+  stream: string;
+  streamThinking: string;
   plan: AgentPlanItem[];
   status: 'streaming' | 'awaiting' | 'done' | 'aborted' | 'error';
   /** 中止事由：连接停摆不是用户点的停止，不能一律显示「已中止」。 */
@@ -909,19 +919,34 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
     }
     setLive((prev) => {
       if (!prev) return prev;
-      const next: LiveTurn = { ...prev, tools: prev.tools.map((t) => ({ ...t })), plan: [...prev.plan], memories: [...prev.memories] };
+      const next: LiveTurn = { ...prev, tools: prev.tools.map((t) => ({ ...t })), plan: [...prev.plan], memories: [...prev.memories], timeline: [...prev.timeline] };
+      /** 已入账正文；text_replace 只能改写当前这一步，不能把前面说过的话抹掉。 */
+      const committedText = () => next.timeline.filter((item) => item.kind === 'text').map((item) => item.text).join('\n\n');
       switch (event.type) {
         case 'text_delta':
           next.text += event.text;
+          next.stream += event.text;
           break;
         case 'text_replace':
-          next.text = event.text;
+          next.stream = event.text;
+          next.text = [committedText(), event.text].filter(Boolean).join('\n\n');
           break;
         case 'thinking_delta':
           next.thinking += event.text;
+          next.streamThinking += event.text;
+          break;
+        // 步骤边界：这一步的话说完了，下面接它的工具。顺序即渲染顺序。
+        case 'step_text':
+          next.timeline.push({ kind: 'text', text: event.text, step: event.step });
+          next.stream = '';
+          break;
+        case 'step_thinking':
+          next.timeline.push({ kind: 'thinking', text: event.text, step: event.step });
+          next.streamThinking = '';
           break;
         case 'tool_call':
           next.tools.push({ callId: event.callId, tool: event.tool, args: event.args, risk: event.risk, status: 'running', summary: event.summary });
+          next.timeline.push({ kind: 'tool', callId: event.callId });
           break;
         case 'tool_result': {
           const tool = next.tools.find((t) => t.callId === event.callId);
@@ -1167,6 +1192,9 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
         text: '',
         thinking: '',
         tools: [],
+        timeline: [],
+        stream: '',
+        streamThinking: '',
         plan: [],
         status: 'streaming',
         startedAt: Date.now(),
@@ -2190,16 +2218,33 @@ function ChatScreen({
                   ))}
                 </View>
               ) : null}
-              {live.thinking || live.tools.length || live.plan.length ? (
-                <ExecutionSection count={live.tools.length} running={busy}>
-                  {live.thinking ? <ThinkingBlock text={live.thinking} /> : null}
-                  {live.tools.map((tool) => (
-                    <MobileToolCard key={tool.callId} tool={tool.tool} args={tool.args} risk={tool.risk} status={tool.status} result={tool.result} summary={tool.summary} showChart={!chartOf(tool.result)} />
-                  ))}
-                  {live.plan.length ? <PlanCard items={live.plan} /> : null}
-                </ExecutionSection>
-              ) : null}
-              {live.text ? <Markdown text={live.text} /> : busy ? (
+              {(() => {
+                const turn = mobileTurnFromLive(live);
+                if (turn.stepped) {
+                  // 计划卡不折：它要一直看得见，不该跟着步骤滚走
+                  return (
+                    <>
+                      {live.plan.length ? <PlanCard items={live.plan} /> : null}
+                      <MobileTurnTimeline entries={turn.entries} running={busy} />
+                    </>
+                  );
+                }
+                return (
+                  <>
+                    {live.thinking || live.tools.length || live.plan.length ? (
+                      <ExecutionSection count={live.tools.length} running={busy}>
+                        {live.thinking ? <ThinkingBlock text={live.thinking} /> : null}
+                        {live.tools.map((tool) => (
+                          <MobileToolCard key={tool.callId} tool={tool.tool} args={tool.args} risk={tool.risk} status={tool.status} result={tool.result} summary={tool.summary} showChart={!chartOf(tool.result)} />
+                        ))}
+                        {live.plan.length ? <PlanCard items={live.plan} /> : null}
+                      </ExecutionSection>
+                    ) : null}
+                    {live.text ? <Markdown text={live.text} /> : null}
+                  </>
+                );
+              })()}
+              {busy && !live.stream ? (
                 <View style={styles.loadingRow}>
                   <Loader2 size={12} color={colors.agent} />
                   <Text style={styles.listMeta}>{live.status === 'awaiting' ? '等待授权…' : '正在处理…'}</Text>
@@ -4634,14 +4679,171 @@ function chartOf(result?: ToolResult): ChartShape | undefined {
   return (data?.chart as ChartShape | undefined) ?? undefined;
 }
 
-function AssistantMessage({ message }: { message: AgentMessage }) {
+/**
+ * 一条回合的时间线（思考 / 正文 / 工具，按发生顺序）。与桌面端 AgentPanel 的
+ * TurnView 同一套结构，理由也一样：正文和工具分两堆渲染会把顺序抹掉，
+ * 读的人不知道上面在干什么。
+ */
+interface MobileTurnEntry {
+  kind: 'thinking' | 'text' | 'tool';
+  key: string;
+  text?: string;
+  /** 这一步属于第几步。桌面端用它把同一步的思考/解释/SQL 框进同一段，移动端同一套口径。 */
+  step?: number;
+  call?: { callId: string; tool: string; args: unknown; risk?: Risk; status: LiveTool['status']; result?: ToolResult; summary?: string };
+}
+
+function mobileTurnFromBlocks(blocks: AgentMessageBlock[]): { entries: MobileTurnEntry[]; plan?: AgentPlanItem[]; toolCount: number; stepped: boolean; legacyThinking?: string } {
   const results = new Map<string, ToolResult>();
-  for (const block of message.blocks) if (block.type === 'tool_result' && block.callId) results.set(block.callId, block.result as ToolResult);
-  const thinking = message.blocks.find((b) => b.type === 'thinking')?.text;
-  const tools = message.blocks.filter((b) => b.type === 'tool_call').length;
+  for (const block of blocks) if (block.type === 'tool_result' && block.callId) results.set(block.callId, block.result as ToolResult);
+  const entries: MobileTurnEntry[] = [];
+  let toolCount = 0;
+  blocks.forEach((block, index) => {
+    const key = `${block.type}_${index}`;
+    if (block.type === 'text' && block.text) {
+      entries.push({ kind: 'text', key, text: block.text, step: block.step });
+      return;
+    }
+    if (block.type === 'thinking' && block.text) {
+      if (block.step === undefined) return;
+      entries.push({ kind: 'thinking', key, text: block.text, step: block.step });
+      return;
+    }
+    if (block.type !== 'tool_call' || !block.callId) return;
+    toolCount += 1;
+    const result = results.get(block.callId);
+    entries.push({
+      kind: 'tool',
+      key,
+      call: { callId: block.callId, tool: block.tool ?? 'tool', args: block.args, risk: block.risk, status: result ? (result.ok ? 'ok' : 'error') : 'error', result },
+    });
+  });
+  return {
+    entries,
+    toolCount,
+    stepped: entries.some((entry) => entry.kind === 'text' || entry.kind === 'thinking'),
+    legacyThinking: blocks.find((block) => block.type === 'thinking' && block.step === undefined)?.text,
+  };
+}
+
+function mobileTurnFromLive(live: LiveTurn): { entries: MobileTurnEntry[]; toolCount: number; stepped: boolean } {
+  const byId = new Map(live.tools.map((tool) => [tool.callId, tool]));
+  const entries: MobileTurnEntry[] = [];
+  live.timeline.forEach((item, index) => {
+    if (item.kind === 'tool') {
+      const tool = byId.get(item.callId);
+      if (!tool) return;
+      entries.push({ kind: 'tool', key: `tool_${tool.callId}`, call: { ...tool } });
+      return;
+    }
+    entries.push({ kind: item.kind, key: `${item.kind}_${index}`, text: item.text, step: item.step });
+  });
+  if (live.streamThinking) entries.push({ kind: 'thinking', key: 'thinking_live', text: live.streamThinking });
+  if (live.stream) entries.push({ kind: 'text', key: 'text_live', text: live.stream });
+  return { entries, toolCount: live.tools.length, stepped: entries.some((entry) => entry.kind === 'text' || entry.kind === 'thinking') };
+}
+
+/**
+ * 连续的工具条目折成一段执行过程；正文与思考摊在流里，位置保持真实顺序。
+ * 同一个 step 的条目再套一层带左轨的容器（桌面端 .turn-step 同一套做法）：
+ * 「这句解释对应哪条 SQL」只靠相邻关系看不出来，框在一起才看得出是同一轮。
+ */
+function MobileTurnTimeline({ entries, running }: { entries: MobileTurnEntry[]; running?: boolean }) {
+  const stepNodes: React.ReactNode[] = [];
+  let current: { key: string; step?: number; entries: MobileTurnEntry[] } | null = null;
+  const pushStep = () => {
+    if (!current || !current.entries.length) {
+      current = null;
+      return;
+    }
+    const node = current;
+    current = null;
+    // 只有带步号的才套左轨：旧数据排不出步，套上去只是多一层没意义的缩进，
+    // 而且那条本来就被外层「执行过程」包着。
+    stepNodes.push(
+      node.step === undefined ? (
+        <StepEntries key={node.key} entries={node.entries} running={running} />
+      ) : (
+        <View key={node.key} style={styles.turnStep}>
+          <StepEntries entries={node.entries} running={running} />
+        </View>
+      ),
+    );
+  };
+  entries.forEach((entry) => {
+    if (entry.step !== undefined) {
+      if (!current || current.step !== entry.step) {
+        pushStep();
+        current = { key: `step_${entry.step}_${stepNodes.length}`, step: entry.step, entries: [] };
+      }
+      current.entries.push(entry);
+      return;
+    }
+    if (entry.kind === 'tool') {
+      // 工具属于上面那一步：它是那一步的模型调用发出来的。并进去，
+      // 「我先按 status 分组」和它那条 SQL 才在同一个框里。
+      if (current && current.step !== undefined) current.entries.push(entry);
+      else {
+        current = { key: `tools_${stepNodes.length}`, entries: [entry] };
+        pushStep();
+      }
+      return;
+    }
+    // 正在生成的半截正文/思考（没有 step）自己占一段：跟在上一步后面会被读成那一步讲完了
+    pushStep();
+    stepNodes.push(<StepEntries key={`live_${stepNodes.length}`} entries={[entry]} running={running} />);
+  });
+  pushStep();
+  return <>{stepNodes}</>;
+}
+
+function StepEntries({ entries, running }: { entries: MobileTurnEntry[]; running?: boolean }) {
+  const nodes: React.ReactNode[] = [];
+  let pending: MobileTurnEntry[] = [];
+  const flush = () => {
+    if (!pending.length) return;
+    nodes.push(
+      <ExecutionSection key={`tools_${nodes.length}`} count={pending.length} running={running}>
+        {pending.map((entry) => (
+          <MobileToolCard
+            key={entry.call!.callId}
+            tool={entry.call!.tool}
+            args={entry.call!.args}
+            risk={entry.call!.risk}
+            status={entry.call!.status}
+            result={entry.call!.result}
+            summary={entry.call!.summary}
+            showChart={!chartOf(entry.call!.result)}
+          />
+        ))}
+      </ExecutionSection>,
+    );
+    pending = [];
+  };
+  entries.forEach((entry) => {
+    if (entry.kind === 'tool') {
+      pending.push(entry);
+      return;
+    }
+    flush();
+    nodes.push(
+      entry.kind === 'text' ? (
+        <Markdown key={entry.key} text={entry.text ?? ''} />
+      ) : (
+        <ThinkingBlock key={entry.key} text={entry.text ?? ''} />
+      ),
+    );
+  });
+  flush();
+  return <>{nodes}</>;
+}
+
+function AssistantMessage({ message }: { message: AgentMessage }) {
+  const turn = mobileTurnFromBlocks(message.blocks);
+  const tools = turn.toolCount;
   // 模型每更新一次计划都会追加一个 plan block；只渲染最后一份，避免旧计划卡堆叠。
   const latestPlan = [...message.blocks].reverse().find((block) => block.type === 'plan');
-  const hasExecution = Boolean(thinking) || tools > 0 || Boolean(latestPlan);
+  const hasExecution = Boolean(turn.legacyThinking) || tools > 0 || Boolean(latestPlan);
   const charts = message.blocks
     .filter((block) => block.type === 'tool_result')
     .map((block, index) => ({ key: block.callId ?? String(index), chart: chartOf(block.result as ToolResult | undefined) }))
@@ -4653,28 +4855,17 @@ function AssistantMessage({ message }: { message: AgentMessage }) {
         <Text style={styles.listMeta}>AiDB Agent</Text>
       </View>
       <View style={{ paddingLeft: 26, gap: 10 }}>
-        {hasExecution ? (
+        {/* 分段消息不再另渲染 content：message.content 就是各步正文拼起来的那一份，
+            时间线里已经按顺序说过一遍。旧数据没有分段块，才用它兜底。 */}
+        {turn.stepped ? <MobileTurnTimeline entries={turn.entries} /> : null}
+        {turn.stepped ? null : hasExecution ? (
           <ExecutionSection count={tools} running={false}>
-            {thinking ? <ThinkingBlock text={thinking} /> : null}
-            {message.blocks.map((block, index) => {
-              if (block.type !== 'tool_call') return null;
-              const result = block.callId ? results.get(block.callId) : undefined;
-              return (
-                <MobileToolCard
-                  key={`${message.id}_${block.callId ?? index}`}
-                  tool={block.tool ?? 'tool'}
-                  args={block.args}
-                  risk={block.risk}
-                  status={result ? (result.ok ? 'ok' : 'error') : 'error'}
-                  result={result}
-                  showChart={!chartOf(result)}
-                />
-              );
-            })}
+            {turn.legacyThinking ? <ThinkingBlock text={turn.legacyThinking} /> : null}
+            <MobileTurnTimeline entries={turn.entries} />
             {latestPlan ? <PlanCard items={latestPlan.items ?? []} /> : null}
           </ExecutionSection>
         ) : null}
-        {message.content ? <Markdown text={message.content} /> : null}
+        {turn.stepped ? null : message.content ? <Markdown text={message.content} /> : null}
         {charts.map((item) => (
           <MobileChart key={`${message.id}_chart_${item.key}`} chart={item.chart} />
         ))}
@@ -5801,6 +5992,8 @@ const makeStyles = () => StyleSheet.create({
   jumpWrap: { position: 'absolute', left: 0, right: 0, bottom: 12, alignItems: 'center' },
   jumpButton: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 30, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.elevated, shadowColor: '#000', shadowOpacity: 0.28, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 4 },
   jumpText: { color: colors.secondary, fontSize: 10.5 },
+  // 一步一套左轨：思考、这句解释、它的 SQL 挤在一起，才看得出是同一轮（桌面端 .turn-step 同做法）
+  turnStep: { gap: 7, paddingLeft: 9, borderLeftWidth: 1, borderLeftColor: colors.border },
   execution: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, backgroundColor: colors.panel, overflow: 'hidden' },
   executionHead: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 9, paddingVertical: 7 },
   executionTitle: { color: colors.muted, fontSize: 10.5, flex: 1 },

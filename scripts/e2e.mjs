@@ -2421,8 +2421,17 @@ await page.evaluate(() => {
 });
 await page.fill('[data-testid="agent-input"]', '看看有哪些表');
 await page.click('[data-testid="agent-send"]');
-await page.waitForSelector('[data-testid="agent-activity"]', { timeout: 10000 });
-check('live activity bar appears while the agent works', (await page.locator('[data-testid="agent-activity"] .activity-label').textContent()) !== '');
+// 原来的写法是 waitForSelector 再 textContent：本地模型一轮只要几十毫秒，
+// 两次读取之间状态条可以合法地出现又消失（回合结束 live 被清掉），
+// 于是断言超时——机器一忙就红，跟代码对不对没关系。
+// 状态条文案本来就被上面的 MutationObserver 全量记下来了，以它为准；
+// 观察器一条都没记到 = 状态条真的没出现过，那才是真问题。
+await page.waitForFunction(() => (window.__activityLabels?.size ?? 0) > 0 || document.querySelector('[data-testid="agent-activity"]'), null, { timeout: 15000 });
+const firstActivityLabel = await page.evaluate(() => {
+  const live = document.querySelector('[data-testid="agent-activity"] .activity-label')?.textContent;
+  return live || [...(window.__activityLabels ?? [])][0] || '';
+});
+check('live activity bar appears while the agent works', firstActivityLabel !== '', firstActivityLabel);
 await page.waitForFunction(() => document.querySelector('.agent-transcript')?.textContent?.includes('张表'), { timeout: 25000 });
 await page.waitForFunction(() => !document.querySelector('[data-testid="agent-activity"]'), { timeout: 10000 });
 const activityLabels = await page.evaluate(() => {
@@ -2645,8 +2654,21 @@ await page.locator('.agent-transcript').evaluate((el) => { el.scrollTop = 0; });
 await page.waitForTimeout(250);
 check('scrolling up reveals the jump-to-bottom button', await page.locator('[data-testid="agent-scroll-bottom"]').isVisible());
 await page.locator('[data-testid="agent-scroll-bottom"]').click();
-await page.waitForTimeout(700);
-const bottomGap = await page.locator('.agent-transcript').evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+// 「回到底部」是平滑滚动（behavior: 'smooth'），落地时间随机器负载变化。
+// 原来固定等 700ms 再读一次 gap：机器一忙就采到半程（实测 2/2/3/5px，断言 ≤4px → 偶发红）。
+// 实测空闲时 ~600ms 收敛到 0，所以改成等它自己停：gap 连续两次不变即认为滚动结束。
+const bottomGap = await page.evaluate(async () => {
+  const el = document.querySelector('.agent-transcript');
+  const gap = () => el.scrollHeight - el.scrollTop - el.clientHeight;
+  let last = gap();
+  for (let i = 0; i < 60; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const now = gap();
+    if (now === last && now <= 4) return now;
+    last = now;
+  }
+  return last;
+});
 check('jump button returns to the latest output', bottomGap <= 4, `${Math.round(bottomGap)}px from bottom`);
 await page.setViewportSize({ width: 1440, height: 900 });
 await page.locator('[data-testid="splitter-agent"]').dblclick();
@@ -2686,13 +2708,25 @@ await page.waitForFunction(
 );
 await page.waitForFunction(() => !document.querySelector('[data-testid="agent-activity"]'), null, { timeout: 10000 });
 check('重复的执行详情入口已移除', (await page.locator('[data-testid="exec-toggle"]').count()) === 0);
-await page.locator('[data-testid="execution-section"]').evaluateAll((els) => els.forEach((el) => el.setAttribute('open', '')));
+// 交错渲染之后，一条消息里有**多个**执行段（每一步一个），而且回合刚结束那一瞬
+// 屏幕上是 live 渲染（testid=execution-section-live），要等 store 拉完会话详情才换成
+// 落库消息（testid=execution-section）。所以：先等换完，再打开所有折叠，
+// 而且点之前重开一次——中途任何一次重渲染都可能把 <details> 的 open 冲掉。
+await page.waitForFunction(() => !document.querySelector('[data-testid="execution-section-live"]'), null, { timeout: 15000 });
+const openAllFolds = () =>
+  page.evaluate(() => {
+    document.querySelectorAll('details').forEach((el) => el.setAttribute('open', ''));
+  });
+await openAllFolds();
 const sqlToolCards = page.locator('[data-testid="tool-card"]').filter({ hasText: 'run_sql' });
 check('执行过程提供 run_sql 工具卡', (await sqlToolCards.count()) > 0, `${await sqlToolCards.count()} cards`);
 let resultRows = 0;
 for (let index = 0; index < Math.min(await sqlToolCards.count(), 5); index++) {
   const card = sqlToolCards.nth(index);
-  if ((await card.locator('.tool-body').count()) === 0) await card.locator('.tool-head').click();
+  if ((await card.locator('.tool-body').count()) === 0) {
+    await openAllFolds();
+    await card.locator('.tool-head').click({ timeout: 10000 });
+  }
   resultRows = Math.max(resultRows, await card.locator('.tool-table tbody tr').count());
 }
 check('展开工具卡能看到真实结果行', resultRows > 0, `${resultRows} rows`);
@@ -3215,7 +3249,11 @@ await mobileContext.addInitScript(() => { localStorage.setItem('aidb.mobile.loca
 }
 mobile.on('console', (msg) => msg.type() === 'error' && consoleErrors.push(`mobile: ${msg.text()}`));
 mobile.on('pageerror', (err) => consoleErrors.push(`mobile: ${err.message}`));
-await mobile.goto(mobileBase, { waitUntil: 'networkidle' });
+// 不用 networkidle：移动 web 的扫码 worker 会去 cdn.jsdelivr.net 拉 jsqr，离线/CDN 不通时
+// 那条请求一直挂着，networkidle 永远到不了 → 整个 e2e 在 30s 后超时死在这里，
+// 而页面本身 300ms 就渲染好了（本机实测）。等「真的渲染出配对页」比等网络空闲更准。
+await mobile.goto(mobileBase, { waitUntil: 'domcontentloaded' });
+await mobile.waitForFunction(() => document.body?.innerText.includes('Bridge'), null, { timeout: 30000 });
 await mobile.waitForTimeout(1800);
 const pairingText = await mobile.locator('body').innerText();
 check('mobile pairing screen', pairingText.includes('Bridge 地址') && pairingText.includes('配对码'));

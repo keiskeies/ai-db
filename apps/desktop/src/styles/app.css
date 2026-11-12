@@ -636,6 +636,16 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 .execution[open] .execution-chevron { transform: rotate(90deg); }
 .execution-body { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 6px; }
 .agent-chart { margin-top: 2px; }
+/*
+ * 一步 = 一个框：这一步的思考、这句解释、它的 SQL 挤在同一条左轨里。
+ * 顺序对了还不够，「这句话对应哪条 SQL」得看得出来是同一轮，所以用一道轨把
+ * 因果关系框出来，而不是指望用户自己按相邻关系去猜。
+ */
+.turn-step { display: flex; flex-direction: column; gap: 6px; padding-left: 9px; border-left: 1px solid var(--border-subtle); }
+.turn-step + .turn-step { margin-top: 2px; }
+.turn-step .step-text { padding: 1px 0; }
+/* 旧数据那条形：工具卡不折（外层已经有一个「执行过程」了），只需要竖着排开 */
+.turn-tools { display: flex; flex-direction: column; gap: 6px; }
 .turn-end { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 10px; }
 .turn-end::before, .turn-end::after { content: ''; height: 1px; background: var(--border-subtle); flex: 1; }
 .typing-caret { display: inline-block; width: 6px; height: 13px; background: var(--agent); margin-left: 2px; vertical-align: -1px; animation: blink 1s step-end infinite; }
