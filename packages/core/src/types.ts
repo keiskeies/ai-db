@@ -762,6 +762,16 @@ export interface AgentPlanItem {
   status: 'todo' | 'doing' | 'done';
 }
 
+/**
+ * 服务端为「没做完的回合」落检查点时记录的原因，与 buildResumeCheckpoint 的 cause 同名同义。
+ *
+ * 它和 AgentStopReason 不是一张表：那份说的是「模型这一行为什么停」，这份说的是
+ * 「服务端留下了一份可续跑的进度」。用户点停止属于前者、不属于后者——那种回合不写检查点。
+ * 'stalled' 与 'disconnected' 也必须分开：前者是模型端不回话，后者是界面那侧断开，
+ * 排查方向完全相反。
+ */
+export type AgentResumeCause = 'stalled' | 'truncated' | 'empty' | 'disconnected' | 'max_steps';
+
 export interface AgentSessionMeta {
   id: string;
   connectionId?: string;
@@ -783,6 +793,15 @@ export interface AgentSessionMeta {
   cacheMissTokens: number;
   /** 最近一次模型调用的输入 tokens，即重开会话时仍要显示的上下文占用。 */
   contextTokens: number;
+  /**
+   * 上一回合**没做完**就结束的原因；只有服务端确实落了续跑检查点时才有值。
+   *
+   * 存在的理由：界面上的「继续」不能只挂在 live 上。回合结束时 live 会被历史替换掉
+   * （sendAgent 的 finally），而最需要这句提示的两种情况恰好都没有 live——
+   * 关页面走掉的人回来时本地什么都没留下，重开会话只能看到持久化的消息。
+   * 新回合一开始就清空，所以它说的永远是「最后一次回合」。
+   */
+  resume?: AgentResumeCause;
   createdAt: string;
   updatedAt: string;
 }

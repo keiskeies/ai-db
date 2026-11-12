@@ -204,3 +204,20 @@ test('通道静默（客户端自己断的）也算没做完：要给「继续�
   send({ type: 'text_delta', text: '先读结构' });
   assert.equal(isUnfinishedStop('channel_idle'), true);
 });
+
+test('「继续」不能只挂在 live 上：回合正常结束后 live 会被历史替换掉', () => {
+  // 这是本文件最初漏掉的那一条：上面所有断言都在证明 live.stop 带对了值，
+  // 而 sendAgent 的 finally 里 `set({ ..., live: undefined })` 会把整个 live 丢掉。
+  // 于是提示只在「历史读取失败」那条冷门分支里出现过，正常跑完的回合一次都没有。
+  const panel = agentPanel;
+  assert.match(panel, /function SessionResumeNotice/, '会话级续跑入口必须存在');
+  const notice = panel.slice(panel.indexOf('function SessionResumeNotice'), panel.indexOf('function PlanCard'));
+  assert.doesNotMatch(notice, /live[.:]/, '它读的是会话元信息，不是 live——live 这时候已经不在了');
+  assert.match(notice, /data-testid="turn-continue"/);
+  // 渲染条件必须只看 !live：加 busy 判断会让「刚结束、live 还在」的两个入口同时出现
+  assert.match(panel, /!live && sessionMeta\?\.resume \? <SessionResumeNotice/, '渲染条件是「没有 live 且会话标着没做完」');
+  assert.match(panel, /onContinue=\{\(\) => void sendAgent\(tr\("继续"\), undefined\)\} \/> : null\}\n\n            \{!busy && followUps/,
+    '会话级入口渲染在回合之后、追问之前');
+  // 原因不必重复：服务端那条续跑检查点已经作为正常消息渲染在上面
+  assert.match(panel, /上一件事还没做完/, '只补一句引导，不再解释原因');
+});

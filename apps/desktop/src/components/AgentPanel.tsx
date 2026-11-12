@@ -835,6 +835,26 @@ function TurnStopNotice({ live, onContinue }: { live: LiveTurn; onContinue: () =
 }
 
 /**
+ * 会话级「继续」入口：上一回合没做完、而且本地已经没有 live 在场时的唯一出路。
+ *
+ * 为什么不能只靠 TurnStopNotice：那个组件挂在 live 上，而 sendAgent 的 finally 会用
+ * 服务端历史把 live 换掉——回合正常结束那一刻，提示就跟着一起消失了。而最需要它的
+ * 两种情况恰好根本没有 live：关页面走掉的人回来时本地什么都没留下，重开会话只看得见
+ * 持久化的消息。原因也不必在这里重复一遍：服务端那条续跑检查点已经作为一条正常消息
+ * 渲染在上面，写明白了断在哪、还剩什么、下一步做什么。这里只补一个入口。
+ */
+function SessionResumeNotice({ onContinue }: { onContinue: () => void }) {
+  return (
+    <div className="turn-notice" data-testid="session-resume-notice">
+      <span className="turn-notice-text">{tr("上一件事还没做完。")}</span>
+      <button className="btn small" onClick={onContinue} data-testid="turn-continue">
+        {tr("继续")}
+      </button>
+    </div>
+  );
+}
+
+/**
  * 计划卡。`running` 决定未完成项要不要继续转圈：
  *
  * 未完成 ≠ 正在进行。回合早就结束了，计划里那项 `doing` 只是**没人结算它**——
@@ -1808,6 +1828,8 @@ export function AgentPanel() {
                 </AssistantShell>
               </>
             ) : null}
+
+            {!live && sessionMeta?.resume ? <SessionResumeNotice onContinue={() => void sendAgent(tr("继续"), undefined)} /> : null}
 
             {!busy && followUps.length ? (
               <div className="followups" data-testid="agent-followups">

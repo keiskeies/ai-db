@@ -17,6 +17,7 @@ import {
   type AgentModelConfig,
   type AgentModelEntry,
   type AgentSessionMeta,
+  type AgentResumeCause,
   type AppSettings,
   type ArtifactInfo,
   type ArtifactRunInfo,
@@ -343,6 +344,7 @@ interface SessionRow {
   cache_hit_tokens: number | null;
   cache_miss_tokens: number | null;
   context_tokens: number | null;
+  resume_cause: AgentResumeCause | null;
   created_at: string;
   updated_at: string;
   archived: number;
@@ -630,6 +632,9 @@ export class Store {
     this.ensureColumn('agent_sessions', 'cache_hit_tokens', 'INTEGER DEFAULT 0');
     this.ensureColumn('agent_sessions', 'cache_miss_tokens', 'INTEGER DEFAULT 0');
     this.ensureColumn('agent_sessions', 'context_tokens', 'INTEGER DEFAULT 0');
+    // 「上一回合没做完」必须跨连接保留：界面上的「继续」过去只挂在 live 上，
+    // 回合一结束 live 就被历史替换掉，关页面走掉的人回来时什么提示都看不到。
+    this.ensureColumn('agent_sessions', 'resume_cause', 'TEXT');
     this.ensureColumn('query_history', 'favorite', 'INTEGER DEFAULT 0');
     this.ensureColumn('artifact_schedules', 'notify_channels', 'TEXT');
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_history_recent ON query_history(favorite, created_at DESC)');
@@ -1211,6 +1216,7 @@ export class Store {
       cacheHitTokens: row.cache_hit_tokens ?? 0,
       cacheMissTokens: row.cache_miss_tokens ?? 0,
       contextTokens: row.context_tokens ?? 0,
+      resume: row.resume_cause ?? undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -1259,7 +1265,7 @@ export class Store {
 
   updateSession(
     id: string,
-    patch: Partial<Pick<AgentSessionMeta, 'connectionId' | 'database' | 'title' | 'summary' | 'model' | 'permissionMode' | 'status' | 'tokensIn' | 'tokensOut' | 'turns' | 'steps' | 'cacheHitTokens' | 'cacheMissTokens' | 'contextTokens'>> & { archived?: boolean },
+    patch: Partial<Pick<AgentSessionMeta, 'connectionId' | 'database' | 'title' | 'summary' | 'model' | 'permissionMode' | 'status' | 'tokensIn' | 'tokensOut' | 'turns' | 'steps' | 'cacheHitTokens' | 'cacheMissTokens' | 'contextTokens'>> & { archived?: boolean; resume?: AgentResumeCause | null },
   ): AgentSessionMeta {
     const map: Record<string, string> = {
       connectionId: 'connection_id',
@@ -1277,6 +1283,9 @@ export class Store {
       cacheMissTokens: 'cache_miss_tokens',
       contextTokens: 'context_tokens',
       archived: 'archived',
+      // 传 null 表示清空：新回合开始时必须清掉上一回合的「可以继续」，
+      // 而 undefined 在这套 patch 语义里是「本次不改」，清不掉。
+      resume: 'resume_cause',
     };
     const sets: string[] = ['updated_at = ?'];
     const params: unknown[] = [iso()];

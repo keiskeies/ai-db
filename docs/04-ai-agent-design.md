@@ -90,9 +90,18 @@ for (step = 0; step < maxSteps; step++) {
 | --- | --- | --- | --- |
 | `end_turn` | 模型说完了 | — | 不写 |
 | `max_output_tokens` | 回复撞到输出上限被截断 | 先自动接着做一次；仍截断才报 `OUTPUT_TRUNCATED` | 写（`cause: truncated`） |
-| `max_steps` | 跑满 `maxSteps` | — | 不写 |
+| `max_steps` | 跑满 `maxSteps` | — | 写（`cause: max_steps`） |
 | `empty_response` | 既无正文也无工具调用 | — | 写（`cause: empty`） |
-| `channel_idle` | 客户端侧连接静默到上限 | 断开读取，不当成用户中止 | 不写（见下） |
+| `channel_idle` | 客户端侧连接静默到上限 | 断开读取，不当成用户中止 | 写（`cause: disconnected`） |
+
+跑满步数也写检查点，是为了消掉一处自相矛盾：界面按 `stop` 判定「未完成（可继续）」并给出
+「继续」按钮，服务端却什么都没留，点下去等于让模型从半截正文里猜自己刚才在干什么。
+
+写了检查点的回合同时把原因记在 `agent_sessions.resume_cause` 上（`AgentSessionMeta.resume`），
+新回合一开始就清空。这一列存在的理由是「继续」必须活过连接：提示过去只挂在客户端的 `live`
+上，而 `sendAgent` 收尾时会用服务端历史替换掉 `live`——回合正常结束那一刻提示就没了，
+关页面走掉的人回来时本地更是什么都没有。现在重开会话，检查点作为一条正常消息在上面说清
+断在哪、还剩什么，下面补一个「继续」入口。
 
 截断那一步的工具调用**一律不执行**：provider 只能把残缺的 JSON 兜成 `{}`，
 `run_sql` 会带着空 sql 跑一趟，换来一条看不懂的报错。
@@ -100,8 +109,11 @@ for (step = 0; step < maxSteps; step++) {
 界面据此决定三件事：计划卡还转不转圈（只有回合真的在跑才动画）、结尾行写「已完成」还是
 「未完成（可继续）」、以及给不给一键「继续」。运行中的回合另有两句实话：距最后一个事件
 30 秒起报告「已经等了多久」（只报告，不判定失败——一次全表扫描本来就可能几分钟没事件），
-90 秒无字节则由 `readWithIdleCeiling` 判定通道已死。后者与停摆同族，但服务端不知道客户端
-为什么走，按「用户中止」处理，所以那一条路径上没有结构化检查点，只有历史里的半截正文。
+90 秒无字节则由 `readWithIdleCeiling` 判定通道已死。后者在 runtime 眼里与用户点停止一模一样
+（都只是 `signal.aborted`，`abortCause` 一律 `user`），区别只存在于传输层：SSE 路由的
+`res.on('close')` 用 `host.abort(sessionId, 'disconnected')` 把它记下来，回合结束时据此落
+`cause: disconnected` 的检查点。同一个回合只认第一次登记——用户点停止之后流才会关闭并再报
+一次 `disconnected`，那时不能改口。
 
 单条 SQL / 单次 HTTP / 子进程仍然有自己的超时（查询默认 30s），那是「一个操作多久算卡住」，
 与回合活多久无关。等待用户审批的 5 分钟自动拒绝也保留：那期间确实没有任何进展。

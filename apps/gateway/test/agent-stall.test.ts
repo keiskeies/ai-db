@@ -4,6 +4,7 @@ import { createServer, type Server } from 'node:http';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import type { AgentEvent, AgentRunInput } from '@aidb/core';
 import { createGateway } from '../src/server';
 import { AgentHost, buildResumeCheckpoint, type AgentHostOptions } from '../src/agentHost';
@@ -107,6 +108,9 @@ async function useStubProvider(baseUrl: string): Promise<void> {
   });
 }
 
+/** 回合 SSE 路由那一段源码：路由里的 cause 只能这样钉住。 */
+const turnRouteSource = readFileSync(join(import.meta.dirname, '../src/routes.ts'), 'utf8');
+
 const PLAN = [
   { text: '读取 backend 的 53 张表结构', status: 'done' },
   { text: '为每张表补表注释', status: 'doing' },
@@ -128,7 +132,7 @@ async function withStallMs<T>(ms: string, run: () => Promise<T>): Promise<T> {
 test('连接停摆：reason 不谎报「用户中止」，并落下可续跑的检查点消息', async () => {
   const stub = await hangingProvider(PLAN);
   await useStubProvider(stub.baseUrl);
-  await withStallMs('400', async () => {
+  await withStallMs('3000', async () => {
     const host = makeHost();
     const session = gateway.store.createSession({ title: '给 53 张表补注释' });
     const events: AgentEvent[] = [];
@@ -157,7 +161,7 @@ test('连接停摆：reason 不谎报「用户中止」，并落下可续跑的�
 test('停摆检查点会被回灌进下一轮的历史，模型能接着干而不是重来', async () => {
   const stub = await hangingProvider(PLAN);
   await useStubProvider(stub.baseUrl);
-  await withStallMs('400', async () => {
+  await withStallMs('3000', async () => {
     const host = makeHost();
     const session = gateway.store.createSession({ title: '续跑' });
     await host.startTurn(session.id, { text: '补注释' }, () => undefined);
@@ -273,4 +277,155 @@ test('空返回原因的检查点如实说「没有给出内容」', () => {
 test('省略 cause 时仍是停摆措辞：老调用方不会因为新字段改变文案', () => {
   const text = buildResumeCheckpoint({ plan: [], steps: 1, toolCalls: 0, elapsedMs: 1000, toolTrace: [] });
   assert.match(text, /连接无响应/);
+});
+
+test('界面连接断开（不是用户点停止）：也落检查点，并且说是连接中断', async () => {
+  // 半开连接、客户端的 90 秒静默上限、用户关页面——runtime 眼里都只是 signal.aborted，
+  // abortCause 一律 'user'。区别只在传输层，由 abort() 带 cause 补回来。
+  const stub = await hangingProvider(PLAN);
+  await useStubProvider(stub.baseUrl);
+  await withStallMs('600000', async () => {
+    const host = makeHost();
+    const session = gateway.store.createSession({ title: '客户端断开' });
+    const events: AgentEvent[] = [];
+
+    const turn = host.startTurn(session.id, { text: '补注释' }, (event) => events.push(event));
+    await stub.started;
+    // 这一句就是 SSE 路由 res.on('close') 里做的事
+    host.abort(session.id, 'disconnected');
+    await turn;
+
+    const abortedEvent = events.find((event) => event.type === 'aborted');
+    assert.ok(abortedEvent && abortedEvent.type === 'aborted');
+    // runtime 仍然只能报 user：它看见的就是一个被 abort 的 signal，不欠它传输层的信息
+    assert.equal(abortedEvent.cause, 'user');
+
+    const checkpoint = gateway.store.listMessages(session.id).filter((m) => m.role === 'assistant').at(-1);
+    assert.ok(checkpoint, '断线必须留检查点：用户重开页面点「继续」时，模型不能只看半截正文');
+    // 只查标题：正文里本来就要解释「客户端判定通道无响应后主动断开」，
+    // 拿整篇 doesNotMatch(/无响应/) 会把这句正确的说明也判成错。
+    const headline = checkpoint.content.split('\n')[0];
+    assert.match(headline, /客户端连接中断/);
+    assert.doesNotMatch(headline, /无响应/, '断线不是模型不回话，标题写错了会把人送去查模型');
+    assert.match(checkpoint.content, /没有人点过停止/, '要给模型一句实话，否则它会以为用户不要了');
+    assert.match(checkpoint.content, /为每张表补表注释/, '计划状态照旧要写全');
+  });
+});
+
+test('SSE 连接关闭时按 disconnected 中止，而不是默认成用户停止', () => {
+  // 路由那行只有一个 token 的差别，通不过任何行为测试：显式断言钉住。
+  const closeHandler = /res\.on\('close', \(\) => \{[\s\S]{0,420}?host\.abort\(([\s\S]{0,60}?)\);/.exec(turnRouteSource);
+  assert.ok(closeHandler, '找不到回合 SSE 的 close 处理');
+  assert.match(closeHandler![1], /'disconnected'/, '连接被对端掐断时不能再走默认的「用户中止」');
+});
+
+test('用户点停止时不写检查点，即便随后连接也跟着关闭', async () => {
+  // 两条中止会先后到达：先 POST /abort（cause 记为 user），随后流关闭再报一次 disconnected。
+  // 只认第一次记录，否则用户明确喊停的回合也会被写成「可以继续」。
+  const stub = await hangingProvider(PLAN);
+  await useStubProvider(stub.baseUrl);
+  await withStallMs('600000', async () => {
+    const host = makeHost();
+    const session = gateway.store.createSession({ title: '先停止后断线' });
+    const turn = host.startTurn(session.id, { text: '补注释' }, () => undefined);
+    await stub.started;
+    host.abort(session.id); // 用户点的
+    host.abort(session.id, 'disconnected'); // 流随后关闭，重复登记不该改口
+    await turn;
+
+    const assistant = gateway.store.listMessages(session.id).filter((m) => m.role === 'assistant');
+    assert.ok(
+      assistant.every((m) => !/继续」可接着做/.test(m.content)),
+      '用户主动停止不该被塞续跑检查点，也不该被后来的断线登记改口',
+    );
+  });
+});
+
+// ---------- 检查点必须活过连接 ----------
+//
+// 「继续」过去只挂在客户端的 live 上，而 sendAgent 收尾时会用服务端历史替换掉 live。
+// 于是回合正常结束那一刻提示就没了，关页面走掉的人回来时本地更是什么都没有——
+// 服务端留了检查点，界面却已经没有地方挂「继续」。原因必须落在 agent_sessions 上。
+
+test('写了检查点的回合把原因记在会话上，重开会话才给得出「继续」', async () => {
+  const stub = await hangingProvider(PLAN);
+  await useStubProvider(stub.baseUrl);
+  await withStallMs('3000', async () => {
+    const host = makeHost();
+    const session = gateway.store.createSession({ title: '跨连接续跑' });
+    await host.startTurn(session.id, { text: '补注释' }, () => undefined);
+
+    // getSession 走的是完整读路径（rowToSession），不是内存里的对象
+    assert.equal(gateway.store.getSession(session.id)?.resume, 'stalled');
+  });
+});
+
+test('下一回合开始时清空「可以继续」：旧提示不能一直挂着', async () => {
+  const stub = await hangingProvider(PLAN);
+  await useStubProvider(stub.baseUrl);
+  await withStallMs('3000', async () => {
+    const host = makeHost();
+    const session = gateway.store.createSession({ title: '清空旧提示' });
+    await host.startTurn(session.id, { text: '补注释' }, () => undefined);
+    assert.equal(gateway.store.getSession(session.id)?.resume, 'stalled');
+
+    // 用户点了「继续」。新回合跑起来时先清空，跑完再按新结果重写。
+    const cleared = gateway.store.updateSession(session.id, { status: 'running', resume: null });
+    assert.equal(cleared.resume, undefined, 'null 必须真的写进库，undefined 在这套 patch 语义里是「本次不改」');
+  });
+});
+
+test('用户点停止不写 resume：那不是「可以继续」，是用户自己喊的停', async () => {
+  const stub = await hangingProvider(PLAN);
+  await useStubProvider(stub.baseUrl);
+  await withStallMs('600000', async () => {
+    const host = makeHost();
+    const session = gateway.store.createSession({ title: '手动停止不留提示' });
+    const turn = host.startTurn(session.id, { text: '补注释' }, () => undefined);
+    await stub.started;
+    host.abort(session.id);
+    await turn;
+    assert.equal(gateway.store.getSession(session.id)?.resume, undefined);
+  });
+});
+
+test('跑满步数也落检查点：界面说「可继续」时服务端必须有东西可续', () => {
+  const text = buildResumeCheckpoint({
+    plan: PLAN.map((item, index) => ({ id: `p${index + 1}`, text: item.text, status: item.status as 'done' | 'doing' | 'todo' })),
+    steps: 12,
+    toolCalls: 40,
+    elapsedMs: 60_000,
+    toolTrace: ['run_sql'],
+    cause: 'max_steps',
+  });
+  assert.match(text, /跑满工具步数上限/);
+  assert.doesNotMatch(text, /无响应|超出输出上限/, '跑满步数既不是断线也不是截断');
+  assert.match(text, /批量写法/, '续跑要多绕几个回合，检查点就该教它合并');
+  assert.match(text, /为每张表补表注释/);
+});
+
+test('分类那段确实把 max_steps 认成没做完，而不是留成 undefined', () => {
+  // 整跑一遍回合要假模型 + 步数上限，而这个分支的错法只有一种：漏一条 stop。
+  // 分类那段是 result 与 disconnected 的纯表达式，直接从源码里取出来当真代码跑，
+  // 比对着源文件念一遍断言强——改坏了立刻红。
+  const src = readFileSync(join(import.meta.dirname, '../src/agentHost.ts'), 'utf8');
+  const head = 'const unfinished: AgentResumeCause | undefined =';
+  const from = src.indexOf(head);
+  assert.ok(from >= 0, '找不到续跑原因的分类表达式');
+  const body = src.slice(from + head.length, src.indexOf(';\n', from)).trim();
+  const classify = (result: any, disconnected: boolean): unknown => {
+    const unfinished = eval(body);
+    return unfinished;
+  };
+  assert.ok(body.startsWith('result.status'), '取出来的必须是那个三元表达式本体');
+  assert.ok(body.length < 900, '截取的片段过长，说明分号定位跑偏了');
+  const done = (stop: string) => ({ status: 'done', stop });
+  assert.equal(classify({ status: 'aborted', abortCause: 'stalled' }, false), 'stalled');
+  assert.equal(classify({ status: 'aborted', abortCause: 'user' }, true), 'disconnected');
+  assert.equal(classify(done('max_output_tokens'), false), 'truncated');
+  assert.equal(classify(done('empty_response'), false), 'empty');
+  assert.equal(classify(done('max_steps'), false), 'max_steps', '界面给「继续」时服务端必须留了东西可续');
+  // 反向也要钉住：说完了、以及用户自己喊的停，都不该留「可以继续」
+  assert.equal(classify(done('end_turn'), false), undefined);
+  assert.equal(classify({ status: 'aborted', abortCause: 'user' }, false), undefined);
 });

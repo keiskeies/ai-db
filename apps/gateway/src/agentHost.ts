@@ -27,6 +27,7 @@ import {
   type AgentEvent,
   type AgentMessageBlock,
   type AgentRunInput,
+  type AgentResumeCause,
   type AppSettings,
   type ApprovalDecision,
   type ApprovalPayload,
@@ -111,8 +112,8 @@ function humanDuration(ms: number): string {
  * 模型从历史里只能看到那半截，等于从零开始重新摸索——上一回合烧掉的时间白费。
  * 这条把「做到哪、剩下什么、下一步做什么」显式留在历史里，续跑才有落点。
  *
- * 触发条件是「非用户主动停止且没跑完」：连接停摆、输出被 max_tokens 截断、空响应。
- * 用户点停止不写检查点——那是他自己的决定，不该替他留一句「可以继续」。
+ * 触发条件是「非用户主动停止且没跑完」：连接停摆、客户端连接断开、输出被 max_tokens
+ * 截断、空响应、跑满步数。用户点停止不写检查点——那是他自己的决定，不该替他留一句「可以继续」。
  *
  * 措辞同时面向两类读者：模型（拿它当上下文继续干）和人（看懂为什么断在这里）。
  */
@@ -123,7 +124,7 @@ export function buildResumeCheckpoint(input: {
   elapsedMs: number;
   toolTrace: string[];
   /** 断在哪件事上；决定标题与正文的说法，不能一律写成「连接无响应」。 */
-  cause?: 'stalled' | 'truncated' | 'empty';
+  cause?: AgentResumeCause;
 }): string {
   const { plan, steps, toolCalls, elapsedMs, toolTrace, cause = 'stalled' } = input;
   const headline =
@@ -131,12 +132,20 @@ export function buildResumeCheckpoint(input: {
       ? '本回合因模型回复超出输出上限而未完成（进度已保留，回复「继续」可接着做）'
       : cause === 'empty'
         ? '本回合模型没有给出内容就返回了（进度已保留，回复「继续」可接着做）'
-        : '本回合因模型连接无响应而中止（进度已保留，回复「继续」可接着做）';
+        : cause === 'disconnected'
+          ? '本回合因客户端连接中断而未完成（进度已保留，回复「继续」可接着做）'
+          : cause === 'max_steps'
+            ? '本回合跑满工具步数上限而未完成（进度已保留，回复「继续」可接着做）'
+            : '本回合因模型连接无响应而中止（进度已保留，回复「继续」可接着做）';
   const why =
     cause === 'truncated'
       ? `已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）后，模型的回复连续写到超出单次输出上限，最后一步没有执行。这不是执行出错，也不是模型放弃——已完成的部分都算数。`
       : cause === 'empty'
         ? `已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）后，模型返回了一条空回复。已完成的部分都算数。`
+      : cause === 'disconnected'
+        ? `已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）后，界面那一侧的连接断了（页面关闭，或客户端判定通道无响应后主动断开），本回合因此中止。**没有人点过停止**，已完成的部分都算数。`
+      : cause === 'max_steps'
+        ? `已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）后，到达本次允许的工具步数上限，剩下的步骤没有执行。这不是执行出错，也不是模型放弃——已完成的部分都算数。续跑时把同类操作合并成批量写法，同样的工作量能少花很多步。`
         : `已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）后，模型端连续无响应，连接被判定为已死。这不是执行出错，也不是模型放弃——已完成的部分都算数。`;
   const lines: string[] = [`## ${headline}`, '', why];
   if (plan.length) {
@@ -264,6 +273,16 @@ export function visibleAgentTools(settings: Pick<AppSettings, 'features'>, allow
 
 export class AgentHost {
   private active = new Map<string, AbortController>();
+  /**
+   * 回合被中止的那一下是**谁动的手**：用户点了停止，还是连接没了。
+   *
+   * 两条路径以前都汇到 abort() 再统一记成「用户中止」，但它们在 SSE 上分得清清楚楚：
+   * 点停止是显式的 POST /abort，而客户端的静默上限（readWithIdleCeiling）与关页面
+   * 都只是连接断开——res.on('close')，且此前没收到过任何 abort 请求。
+   * 混在一起的代价是断线那一档落不下续跑检查点：用户回来点「继续」，
+   * 模型只看得到半截正文，上一回合烧掉的时间白烧。
+   */
+  private abortCauses = new Map<string, 'user' | 'disconnected'>();
   private approvals = new Map<string, PendingApproval>();
   /** "本会话允许"：跨回合保留，直到会话删除或进程退出。 */
   private sessionAllowed = new Map<string, Set<string>>();
@@ -280,9 +299,18 @@ export class AgentHost {
     return this.active.has(sessionId);
   }
 
-  abort(sessionId: string): boolean {
+  /**
+   * 中止一个回合，并记下是**谁**中止的。
+   *
+   * cause 默认 'user'：显式的 POST /abort 就是用户点的。SSE 路由在连接断开时传
+   * 'disconnected'——那条路径上没人点过停止，客户端可能只是被静默上限掐断、或用户关了页面。
+   * 同一个回合只认第一次记录：用户点停止之后，流随后才会关闭并再报一次 'disconnected'，
+   * 那时不能改口。
+   */
+  abort(sessionId: string, cause: 'user' | 'disconnected' = 'user'): boolean {
     const controller = this.active.get(sessionId);
     if (!controller) return false;
+    if (!this.abortCauses.has(sessionId)) this.abortCauses.set(sessionId, cause);
     controller.abort();
     // 立即落状态：provider 卡住时 runtime 可能迟迟不返回，UI 不能一直显示“运行中”
     this.opts.store.updateSession(sessionId, { status: 'aborted' });
@@ -426,6 +454,9 @@ export class AgentHost {
       title,
       permissionMode: mode,
       status: 'running',
+      // 上一回合的「可以继续」到这就过期了：新回合要么跑出新的检查点，要么正常做完，
+      // 两种都不该在跑的过程中还挂着旧提示。null 而不是 undefined——后者是「不改」。
+      resume: null,
       model: settings.agent.provider === 'local' ? 'local' : settings.agent.model,
     });
     store.appendMessage({
@@ -617,19 +648,31 @@ export class AgentHost {
       const hasStepThinking = blocks.some((b) => b.type === 'thinking' && b.step !== undefined);
       const finalBlocks = thinking && !hasStepThinking ? [{ type: 'thinking' as const, text: thinking }, ...blocks] : blocks;
       store.appendMessage({ sessionId, role: 'assistant', content: result.text, blocks: finalBlocks, tokens: result.usage.tokensOut });
-      // 回合**没跑完就结束**时补一条续跑检查点。三种情况共用这一手：连接停摆、回复被
-      // 输出上限截断、模型空返回。共同点是「进度还在，但事没做完」，没有检查点的话，
-      // 用户点「继续」时模型只能看到半截正文，等于把已烧掉的时间扔掉重来。
+      // 回合**没跑完就结束**时补一条续跑检查点。五种情况共用这一手：连接停摆、界面那侧
+      // 连接断开、回复被输出上限截断、模型空返回、跑满步数。共同点是「进度还在，但事没做完」，
+      // 没有检查点的话，用户点「继续」时模型只能看到半截正文，等于把已烧掉的时间扔掉重来。
       // 必须写在半截正文之后：正文是模型说过的话，检查点是「它本来还要做什么」，
       // 两者顺序颠倒会让下一轮的上下文读起来像倒叙。
-      const unfinished: 'stalled' | 'truncated' | 'empty' | undefined =
+      // 界面那侧的连接断开（关页面 / 客户端判定通道静默后主动断开）在 runtime 眼里与
+      // 用户点停止一模一样——都只是 signal.aborted，所以 abortCause 一律是 'user'。
+      // 区别只存在于传输层，只能由 abort() 记下的那一份来补：没人点过停止的中止，
+      // 就该留检查点，否则用户重开页面点「继续」时模型只看得到半截正文。
+      const disconnected = this.abortCauses.get(sessionId) === 'disconnected';
+      const unfinished: AgentResumeCause | undefined =
         result.status === 'aborted' && result.abortCause === 'stalled'
           ? 'stalled'
-          : result.stop === 'max_output_tokens'
-            ? 'truncated'
-            : result.stop === 'empty_response'
-              ? 'empty'
-              : undefined;
+          : result.status === 'aborted' && disconnected
+            ? 'disconnected'
+            : result.stop === 'max_output_tokens'
+              ? 'truncated'
+              : result.stop === 'empty_response'
+                ? 'empty'
+                : // 跑满步数过去不写检查点，于是出现一整套自相矛盾：界面按 stop 判定为
+                  // 「未完成（可继续）」并给出「继续」按钮，服务端那边却什么都没留，
+                  // 点下去等于让模型从半截正文里猜自己刚才在干什么。
+                  result.stop === 'max_steps'
+                  ? 'max_steps'
+                  : undefined;
       if (unfinished) {
         store.appendMessage({
           sessionId,
@@ -660,6 +703,9 @@ export class AgentHost {
         cacheMissTokens: (previous?.cacheMissTokens ?? 0) + (result.usage.cacheMissTokens ?? 0),
         // 上下文占用取最近一次调用的输入，重开会话时状态条才有可显示的值
         contextTokens: result.contextTokens,
+        // 「可以继续」要跨连接活下来：界面上的提示挂在 live 上，而回合一结束 live 就会被
+        // 历史替换掉；关页面走掉的人回来时本地什么都没有。只有落了检查点的回合才写。
+        resume: unfinished ?? null,
         model: settings.agent.provider === 'local' ? 'local' : settings.agent.model,
       });
       if (result.status === 'done' && settings.agent.followUpSuggestions) {
@@ -672,6 +718,9 @@ export class AgentHost {
       emit({ type: 'error', code: err?.code ?? 'AGENT_ERROR', message: err?.message ?? 'Agent 运行失败', retryable: false });
     } finally {
       this.active.delete(sessionId);
+      // 中止原因的登记只在写检查点时读一次，回合结束就该清掉：会话 id 会被复用，
+      // 留着上一回合的 'disconnected' 会让下一次正常结束的回合也被写成断线。
+      this.abortCauses.delete(sessionId);
       for (const [id, pending] of this.approvals) {
         if (pending.sessionId !== sessionId) continue;
         clearTimeout(pending.timer);
@@ -718,6 +767,8 @@ export class AgentHost {
       status: 'running',
       title: session.title === '新会话' || !session.title ? `AI_DB · ${database || conn.name}` : session.title,
       model: 'init',
+      // /init 不写续跑检查点，跑完这一趟，上一回合留下的「可以继续」就不再是最新事实了
+      resume: null,
     });
     store.appendMessage({ sessionId, role: 'user', content: rawText });
     emit({ type: 'start', turnId, sessionId, model: 'init' });

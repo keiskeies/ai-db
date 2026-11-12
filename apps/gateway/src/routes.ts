@@ -2444,7 +2444,10 @@ export function createApiRouter(deps: ApiDeps): Router {
         if (!res.writableEnded) {
           finished = true;
           clearInterval(heartbeat);
-          host.abort(sessionId);
+          // 走到这里说明流是被**对端**掐的：客户端的静默上限、用户关页面、或半开连接。
+          // 用户一次停止都没点过，所以记成 disconnected 而不是 user——回合结束时
+          // 据此落续跑检查点（见 AgentHost.abortCauses）。
+          host.abort(sessionId, 'disconnected');
         }
       });
       try {

@@ -3617,5 +3617,6 @@
   "模型这一轮没有返回任何内容。": "The model returned nothing this round.",
   "继续": "Continue",
   "本轮已结束，但历史读取失败（网络或网关异常），这里显示的是本地缓存的进度，可能与实际不完全一致。": "This turn ended, but loading the history failed (network or gateway error). What you see here is the locally cached progress and may not fully match the server.",
-  "与服务端的连接连续 {0} 秒没有任何响应，本次回复已断开。已完成的部分仍然保留，回复「继续」可接着做。": "The server connection has gone silent for {0}s, so this reply was closed. Completed parts are kept — reply “continue” to pick up where it left off."
+  "与服务端的连接连续 {0} 秒没有任何响应，本次回复已断开。已完成的部分仍然保留，回复「继续」可接着做。": "The server connection has gone silent for {0}s, so this reply was closed. Completed parts are kept — reply “continue” to pick up where it left off.",
+  "上一件事还没做完。": "The previous task is not finished yet."
 }
