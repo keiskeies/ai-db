@@ -8,11 +8,13 @@ import type {
   AgentEvent,
   AgentRunInput,
   AgentRuntimeDeps,
+  AgentStopReason,
   ApprovalDecision,
   ProviderMessage,
   ToolCall,
   ToolResult,
 } from './types';
+import { isTruncatedStop } from './types';
 
 export interface AgentRunResult {
   text: string;
@@ -34,6 +36,11 @@ export interface AgentRunResult {
   modelDurationMs: number;
   toolCalls: number;
   plan: AgentPlanItem[];
+  /**
+   * 回合结束的原因。status 为 'done' 时尤其要看它：截断与跑满步数同样是 done，
+   * 但都不代表模型真的把事做完了。
+   */
+  stop?: AgentStopReason;
   /** 中止原因；只有 status 为 aborted 时才有值，上次调用方据此决定是否写续跑检查点。 */
   abortCause?: AgentAbortCause;
   error?: { code: string; message: string };
@@ -41,6 +48,11 @@ export interface AgentRunResult {
 
 /** 没有 deps.resultCharBudget 时的兜底，与改造前的写死值一致。 */
 const MAX_MODEL_RESULT_CHARS = 16000;
+/**
+ * 被 max_tokens 截断后自动续跑的次数。1 次足够覆盖「就差一口气」的多数情况；
+ * 再多就是在替模型反复重写同一段回复，既烧 tokens 也看不出问题在哪，不如如实报错。
+ */
+const MAX_TRUNCATION_RESUMES = 1;
 const MAX_SQL_REPAIRS = 2;
 /** 裁剪后仍要告诉模型怎么拿剩下的数据，否则它只能反复补问同一件事。 */
 const RESULT_CONTINUATION_HINT =
@@ -413,6 +425,8 @@ export class AgentRuntime {
     let sqlRepairs = 0;
     let plan: AgentPlanItem[] = [];
     let toolsSincePlan = 0;
+    /** 本回合被 max_tokens 截断过几次；见循环里的截断续跑。 */
+    let truncatedSteps = 0;
 
     const usageSummary = () => ({
       tokensIn,
@@ -491,13 +505,13 @@ export class AgentRuntime {
       commitStepThinking();
     };
 
-    const finish = (status: AgentRunResult['status'], error?: AgentRunResult['error']): AgentRunResult => {
+    const finish = (status: AgentRunResult['status'], error?: AgentRunResult['error'], stop: AgentStopReason = 'end_turn'): AgentRunResult => {
       commitStep();
       emitTurnUsage();
       if (status === 'done') {
-        deps.emit({ type: 'done', turnId, durationMs: now() - started, summary: finalText.slice(0, 280) });
+        deps.emit({ type: 'done', turnId, durationMs: now() - started, summary: finalText.slice(0, 280), stop });
       }
-      return { text: finalText.trim(), status, usage: usageSummary(), steps, modelCalls, contextTokens, modelDurationMs, toolCalls: toolCount, plan, error };
+      return { text: finalText.trim(), status, stop, usage: usageSummary(), steps, modelCalls, contextTokens, modelDurationMs, toolCalls: toolCount, plan, error };
     };
 
     /**
@@ -576,11 +590,14 @@ export class AgentRuntime {
       // stepText / stepThinking 是回合层的变量（见 commitStep 注释）：上一步在出口处
       // 已经把它们交付并清空，这里直接复用，不能再声明一次把外层遮掉。
       let providerError: { code: string; message: string } | undefined;
+      /** 服务商给的结束原因；'length'/'max_tokens' 意味着这一步是被拦腰截断的。 */
+      let stepStopReason: string | undefined;
       const callStarted = now();
 
       try {
         for await (const ev of deps.provider.stream(request, input.signal)) {
           if (input.signal?.aborted) break;
+          if (ev.type === 'done') stepStopReason = ev.stopReason;
           if (ev.type === 'text') {
             stepText += ev.text;
             deps.emit({ type: 'text_delta', text: ev.text });
@@ -641,9 +658,66 @@ export class AgentRuntime {
           deps.emit({ type: 'text_replace', text: stepText });
         }
       }
+
+      /**
+       * 输出被 max_tokens 截断 —— 「莫名其妙就停了」的头号来源。
+       *
+       * 这一步的 calls 全部**不执行**：截断点通常就在工具参数里，provider 只能把残缺的
+       * JSON 兜成 `{}`（见各 provider 的 safeJson），于是 run_sql 会带着空 sql 跑一趟，
+       * 换来一条看不懂的报错，而模型以为自己已经发起了调用。
+       * 先自动续一次：把「你被截断了」明确回灌给它，并让它把剩下的拆小。多数情况一次就过。
+       * 续一次仍然截断，说明不是「差一口气」而是这个回合的回复本身超限，再猜下去只是原地打转
+       * ——这时如实报错，让上层留下可续跑的检查点。
+       */
+      if (isTruncatedStop(stepStopReason)) {
+        truncatedSteps += 1;
+        // commitStep 会清空 stepText，所以先把半截正文取出来入上下文：不带着它，
+        // 模型下一轮看不到自己说到哪，会从头再说一遍，越续越长。
+        const partial = stepText;
+        commitStep();
+        if (truncatedSteps <= MAX_TRUNCATION_RESUMES) {
+          if (partial.trim()) messages.push({ role: 'assistant', content: partial });
+          messages.push({
+            role: 'user',
+            content:
+              '[系统] 你上一条回复超出了单次输出上限，在写完之前被截断了，刚才那一步没有执行。'
+              + '请从被截断的地方接着做：把剩下的拆成更小的步骤，一次只发起一个工具调用，'
+              + '长 SQL 与长文本尽量精简；不要重复已经说完的内容，也不要重新解释已完成的部分。',
+          });
+          stepText = '';
+          deps.emit({
+            type: 'text_delta',
+            text: '\n\n[输出被截断，正在自动接着往下做]\n',
+          });
+          continue;
+        }
+        const message =
+          `模型连续 ${truncatedSteps} 次把回复写到超出输出上限，仍未写完，这一步没有执行。`
+          + '已完成的部分都算数；回复「继续」可以接着做，'
+          + '或在 设置 → 模型能力 把「最大输出 token 数」调大一些。';
+        deps.emit({ type: 'text_delta', text: `\n\n${message}\n` });
+        emitTurnUsage();
+        deps.emit({ type: 'error', code: 'OUTPUT_TRUNCATED', message, retryable: true, stop: 'max_output_tokens' });
+        return {
+          text: finalText.trim(),
+          status: 'error',
+          stop: 'max_output_tokens',
+          usage: usageSummary(),
+          steps,
+          modelCalls,
+          contextTokens,
+          modelDurationMs,
+          toolCalls: toolCount,
+          plan,
+          error: { code: 'OUTPUT_TRUNCATED', message },
+        };
+      }
+
       // 正文入账交给 commitStepText（下面那一步边界），这里不再自己拼一次，否则
       // XML 兜底改写过的文本会在 finalText 里出现两遍。
-      if (!calls.length) return finish('done');
+      // 空响应要如实标出来：模型这一轮既没说正文也没发起工具调用，和「我说完了」不是一回事
+      // ——界面拿它决定「这一步到底完成了没有」。
+      if (!calls.length) return finish('done', undefined, stepText.trim() ? 'end_turn' : 'empty_response');
 
       // 步骤边界：这一步的话说完了，下面就是它的工具。放在这里而不是循环末尾——
       // 工具执行期间也可能被中止，先把边界发出去，中止后界面里这段还在。
@@ -776,7 +850,9 @@ export class AgentRuntime {
       finalText = maxSteps === 0 ? '本回合已结束。' : '已达到本次最大工具步数（' + maxSteps + '），我先停在这里。可以继续提问，我会接着处理。';
       deps.emit({ type: 'text_delta', text: finalText });
     }
-    return finish('done');
+    // 走到这里是循环自己跑满步数退出的，不是模型说完了。计划没做完也是这个原因，
+    // 界面要能区分「做完了」和「额度用完了」。
+    return finish('done', undefined, maxSteps === 0 ? 'end_turn' : 'max_steps');
   }
 }
 

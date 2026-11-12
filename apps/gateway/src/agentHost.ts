@@ -105,15 +105,14 @@ function humanDuration(ms: number): string {
 }
 
 /**
- * 连接停摆中止时写进会话的「续跑检查点」。
+ * 回合没跑完就结束时写进会话的「续跑检查点」。
  *
- * 为什么要单独写一条：abort 之后 runtime 只留下半截正文，用户再问「继续」时，
+ * 为什么要单独写一条：回合中止/截断后 runtime 只留下半截正文，用户再问「继续」时，
  * 模型从历史里只能看到那半截，等于从零开始重新摸索——上一回合烧掉的时间白费。
  * 这条把「做到哪、剩下什么、下一步做什么」显式留在历史里，续跑才有落点。
  *
- * 曾经触发条件是「跑满时间预算」，现在只剩模型连接停摆一种：回合本身不再有截止时间，
- * 只有连接真的不动了才会中止。用户点停止不写检查点——那是他自己的决定，不该替他
- * 留一句「可以继续」。
+ * 触发条件是「非用户主动停止且没跑完」：连接停摆、输出被 max_tokens 截断、空响应。
+ * 用户点停止不写检查点——那是他自己的决定，不该替他留一句「可以继续」。
  *
  * 措辞同时面向两类读者：模型（拿它当上下文继续干）和人（看懂为什么断在这里）。
  */
@@ -123,13 +122,23 @@ export function buildResumeCheckpoint(input: {
   toolCalls: number;
   elapsedMs: number;
   toolTrace: string[];
+  /** 断在哪件事上；决定标题与正文的说法，不能一律写成「连接无响应」。 */
+  cause?: 'stalled' | 'truncated' | 'empty';
 }): string {
-  const { plan, steps, toolCalls, elapsedMs, toolTrace } = input;
-  const lines: string[] = [
-    `## 本回合因模型连接无响应而中止（进度已保留，回复「继续」可接着做）`,
-    ``,
-    `已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）后，模型端连续无响应，连接被判定为已死。这不是执行出错，也不是模型放弃——已完成的部分都算数。`,
-  ];
+  const { plan, steps, toolCalls, elapsedMs, toolTrace, cause = 'stalled' } = input;
+  const headline =
+    cause === 'truncated'
+      ? '本回合因模型回复超出输出上限而未完成（进度已保留，回复「继续」可接着做）'
+      : cause === 'empty'
+        ? '本回合模型没有给出内容就返回了（进度已保留，回复「继续」可接着做）'
+        : '本回合因模型连接无响应而中止（进度已保留，回复「继续」可接着做）';
+  const why =
+    cause === 'truncated'
+      ? `已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）后，模型的回复连续写到超出单次输出上限，最后一步没有执行。这不是执行出错，也不是模型放弃——已完成的部分都算数。`
+      : cause === 'empty'
+        ? `已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）后，模型返回了一条空回复。已完成的部分都算数。`
+        : `已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）后，模型端连续无响应，连接被判定为已死。这不是执行出错，也不是模型放弃——已完成的部分都算数。`;
+  const lines: string[] = [`## ${headline}`, '', why];
   if (plan.length) {
     lines.push('', '计划状态：');
     for (const item of plan) {
@@ -608,9 +617,20 @@ export class AgentHost {
       const hasStepThinking = blocks.some((b) => b.type === 'thinking' && b.step !== undefined);
       const finalBlocks = thinking && !hasStepThinking ? [{ type: 'thinking' as const, text: thinking }, ...blocks] : blocks;
       store.appendMessage({ sessionId, role: 'assistant', content: result.text, blocks: finalBlocks, tokens: result.usage.tokensOut });
-      // 连接停摆中止时补一条续跑检查点。必须写在半截正文之后：正文是模型说过的话，
-      // 检查点是「它本来还要做什么」，两者顺序颠倒会让下一轮的上下文读起来像倒叙。
-      if (result.status === 'aborted' && result.abortCause === 'stalled') {
+      // 回合**没跑完就结束**时补一条续跑检查点。三种情况共用这一手：连接停摆、回复被
+      // 输出上限截断、模型空返回。共同点是「进度还在，但事没做完」，没有检查点的话，
+      // 用户点「继续」时模型只能看到半截正文，等于把已烧掉的时间扔掉重来。
+      // 必须写在半截正文之后：正文是模型说过的话，检查点是「它本来还要做什么」，
+      // 两者顺序颠倒会让下一轮的上下文读起来像倒叙。
+      const unfinished: 'stalled' | 'truncated' | 'empty' | undefined =
+        result.status === 'aborted' && result.abortCause === 'stalled'
+          ? 'stalled'
+          : result.stop === 'max_output_tokens'
+            ? 'truncated'
+            : result.stop === 'empty_response'
+              ? 'empty'
+              : undefined;
+      if (unfinished) {
         store.appendMessage({
           sessionId,
           role: 'assistant',
@@ -620,6 +640,7 @@ export class AgentHost {
             toolCalls: result.toolCalls,
             elapsedMs: Date.now() - startedAt,
             toolTrace: blocks.filter((b) => b.type === 'tool_call').map((b) => b.tool).filter(Boolean) as string[],
+            cause: unfinished,
           }),
         });
       }

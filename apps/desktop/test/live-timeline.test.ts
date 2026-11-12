@@ -43,6 +43,7 @@ const startLive = () => {
       plan: [],
       status: 'streaming' as const,
       startedAt: Date.now(),
+      lastEventAt: Date.now(),
       tokensIn: 0,
       tokensOut: 0,
       steps: 0,

@@ -736,3 +736,117 @@ test('contextTokenBudget 触发时折叠最早的工具往返并加注说明', a
   assert.equal(anyCompacted, true, '超过预算后应触发中途压缩');
   assert.ok(outcome.steps >= 4, '压缩后回合仍继续跑完后续步骤，而不是被截停');
 });
+
+// ---------- 输出被截断：「莫名其妙就停了」的头号来源 ----------
+//
+// 事故原话：「agent 总是莫名其妙就停止了，也不知道什么原因，但目标计划的 item icon 还在转圈圈」。
+// 排查下来，最常见的一档不是连接断了，而是模型这一步把回复写到超出 max_tokens：
+// provider 把残缺的 JSON 兜成 `{}`，半截工具调用既不执行也没人解释，回合就以 done 收场，
+// 界面只能显示「已完成」。所以这里要钉住三件事：截断必须被认出来、自动续一次、
+// 续不动就如实报错并且**绝不执行半截参数**。
+
+const truncatedCall: ToolCall = { id: 'call_trunc', name: 'run_sql', args: {} };
+
+test('输出被截断时自动接着做一轮，而不是当成正常完成', async () => {
+  const events: AgentEvent[] = [];
+  const scripts = [
+    // 第一步：说了一半 + 一个只写出名字的调用，然后被 max_tokens 拦腰截断
+    [
+      { type: 'text' as const, text: '我先查 A 组表的结构，然后是 B 组：' },
+      { type: 'tool_call' as const, call: truncatedCall },
+      { type: 'done' as const, stopReason: 'length' },
+    ],
+    // 第二步：模型收到「你被截断了」之后正常收敛
+    [{ type: 'text' as const, text: '剩下 3 张表查完，结论如上' }, { type: 'done' as const, stopReason: 'end_turn' }],
+  ];
+  let executed = 0;
+  const { provider, runtime } = statsRuntime(scripts, events, {
+    executeTool: async () => {
+      executed++;
+      return result();
+    },
+  });
+  const outcome = await runtime.run({ ...baseInput, sessionAllowed: new Set(), alwaysAllowed: new Set() });
+
+  assert.equal(outcome.status, 'done');
+  assert.equal(outcome.stop, 'end_turn', '续跑成功收下尾，就该算真说完');
+  assert.equal(executed, 0, '半截参数不能执行：run_sql 带空 sql 跑一趟只会换来看不懂的报错');
+  assert.equal(provider.calls, 2, '被截断的那一步要重问一次');
+  // 续跑提示必须带着「上一说到哪」，否则模型会从头再说一遍，越续越长
+  const resumed = provider.requests[1]?.messages ?? [];
+  const assistantPartial = resumed.filter((m) => m.role === 'assistant').map((m) => String(m.content)).join('\n');
+  assert.match(assistantPartial, /我先查 A 组表的结构/, '半截正文要回灌，给模型一个接续的落点');
+  const userNudge = resumed.filter((m) => m.role === 'user').map((m) => String(m.content)).join('\n');
+  assert.match(userNudge, /超出了单次输出上限/);
+  assert.match(userNudge, /一次只发起一个工具调用/);
+  assert.ok(
+    events.some((e) => e.type === 'text_delta' && /输出被截断，正在自动接着往下做/.test(e.text)),
+    '用户得看得见界面自动续了一次，不然还是「莫名其妙」',
+  );
+  assert.ok(!events.some((e) => e.type === 'error'), '一次截断就报错太急：多数情况续一次就过');
+  assert.match(outcome.text, /我先查 A 组表的结构/, '半截正文已经发过 text_delta，也必须留在 result.text 里');
+  assert.match(outcome.text, /剩下 3 张表查完/);
+});
+
+test('连着两次都写不完：如实报 OUTPUT_TRUNCATED、可续跑，不再原地重试', async () => {
+  const events: AgentEvent[] = [];
+  // 脚本只有一份且每次都截断（ScriptedProvider 会重复最后一条）
+  const scripts = [[{ type: 'text' as const, text: '又写到一半……' }, { type: 'done' as const, stopReason: 'length' }]];
+  const { provider, runtime } = statsRuntime(scripts, events);
+  const outcome = await runtime.run({ ...baseInput, sessionAllowed: new Set(), alwaysAllowed: new Set() });
+
+  assert.equal(outcome.status, 'error');
+  assert.equal(outcome.stop, 'max_output_tokens');
+  assert.equal(outcome.error?.code, 'OUTPUT_TRUNCATED');
+  assert.equal(provider.calls, 2, '只续一次；仍然截断就说明不是差一口气，再猜下去是原地打转');
+  const errorEvent = events.find((e) => e.type === 'error');
+  assert.ok(errorEvent && errorEvent.type === 'error');
+  assert.equal(errorEvent.code, 'OUTPUT_TRUNCATED');
+  assert.equal(errorEvent.retryable, true, '必须标可重试，界面才知道该给「继续」');
+  assert.equal(errorEvent.stop, 'max_output_tokens', '这条回合没有 done 事件，stop 只能挂在 error 上带出去');
+  assert.match(errorEvent.message, /最大输出 token 数/, '要说清改法，而不是只说失败了');
+  assert.ok(events.some((e) => e.type === 'turn_usage'), '出错收场的回合也要定格状态条');
+  assert.ok(!events.some((e) => e.type === 'done'), '没做完就不要发 done——否则界面又会写「已完成」');
+});
+
+test('done 事件分得清「说完了」与「什么都没返回」', async () => {
+  const withText: AgentEvent[] = [];
+  const said = statsRuntime([[{ type: 'text' as const, text: '查完了' }, { type: 'done' as const, stopReason: 'end_turn' }]], withText);
+  const saidOutcome = await said.runtime.run({ ...baseInput, sessionAllowed: new Set(), alwaysAllowed: new Set() });
+  assert.equal(saidOutcome.stop, 'end_turn');
+  const saidDone = withText.find((e) => e.type === 'done');
+  assert.ok(saidDone && saidDone.type === 'done');
+  assert.equal(saidDone.stop, 'end_turn');
+
+  const emptyEvents: AgentEvent[] = [];
+  // 只有 usage 与 done：没正文、没调用。这就是「屏幕全空、图标转圈」那一档。
+  const quiet = statsRuntime([[{ type: 'usage' as const, tokensIn: 10, tokensOut: 0 }, { type: 'done' as const, stopReason: 'end_turn' }]], emptyEvents);
+  const emptyOutcome = await quiet.runtime.run({ ...baseInput, sessionAllowed: new Set(), alwaysAllowed: new Set() });
+  assert.equal(emptyOutcome.status, 'done', '服务商层面确实正常结束了');
+  assert.equal(emptyOutcome.stop, 'empty_response', '但模型什么都没给，不能混成 end_turn');
+  const doneEvent = emptyEvents.find((e) => e.type === 'done');
+  assert.ok(doneEvent && doneEvent.type === 'done');
+  assert.equal(doneEvent.stop, 'empty_response', '界面靠这个字段决定要不要给「继续」，不能丢');
+});
+
+test('跑满步数上限是 max_steps，不是「已完成」', async () => {
+  const events: AgentEvent[] = [];
+  const { runtime } = statsRuntime(grindingScripts(2), events, { maxSteps: 2 });
+  const outcome = await runtime.run({ ...baseInput, sessionAllowed: new Set(), alwaysAllowed: new Set() });
+  assert.equal(outcome.status, 'done');
+  assert.equal(outcome.stop, 'max_steps', '还剩步骤没做，界面不能再写已完成');
+  const doneEvent = events.find((e) => e.type === 'done');
+  assert.ok(doneEvent && doneEvent.type === 'done');
+  assert.equal(doneEvent.stop, 'max_steps');
+});
+
+test('无步数上限跑完时仍然算 end_turn', async () => {
+  const events: AgentEvent[] = [];
+  const scripts = [
+    [{ type: 'tool_call' as const, call: { id: 'c0', name: 'run_sql', args: { connectionId: 'c1', sql: 'SELECT 1' } } }, { type: 'done' as const, stopReason: 'tool_use' }],
+    [{ type: 'text' as const, text: '好了' }, { type: 'done' as const, stopReason: 'end_turn' }],
+  ];
+  const { runtime } = statsRuntime(scripts, events, { maxSteps: 0 });
+  const outcome = await runtime.run({ ...baseInput, sessionAllowed: new Set(), alwaysAllowed: new Set() });
+  assert.equal(outcome.stop, 'end_turn');
+});

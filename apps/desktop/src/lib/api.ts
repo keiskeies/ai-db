@@ -166,6 +166,65 @@ export interface TurnPayload {
   database?: string;
 }
 
+/**
+ * 一段 SSE 流上「连续多少字节都没来」就算这条通道死了。
+ *
+ * 存在的理由：`reader.read()` 在没有字节时会永远等下去。半开的 TCP（网关被杀、
+ * 笔记本休眠唤醒、代理悄悄断了）不会产生 error、也不会产生 done，于是 while 循环
+ * 永远卡在这里——回合状态一直停在 streaming，界面上那颗图标就一直转，
+ * 正是「莫名其妙停了、也说不出原因」里最没法查的一档。
+ *
+ * 阈值按服务端的心跳定：routes.ts 每 15 秒写一帧 `: ping`，而且那个定时器与回合
+ * 进展无关，所以大查询、等审批、模型慢慢想——都在照常发字节。连续错过 6 次心跳
+ * 就不是「慢」而是「通了个鬼」，可以放手了。
+ */
+const TURN_IDLE_CEILING_MS = 90_000;
+
+/** 带静默上限的一次读取；超时抛错，用户中止仍然原样抛 AbortError。导出只为让这条分支可测。 */
+export async function readWithIdleCeiling(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal?: AbortSignal,
+  /** 只给测试用：默认值就是线上阈值，没必要让用例等 90 秒。 */
+  idleMs = TURN_IDLE_CEILING_MS,
+): Promise<Uint8Array | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await new Promise<Uint8Array | undefined>((resolve, reject) => {
+      timer = setTimeout(() => {
+        // 先取消再抛：不 cancel 的话底层连接会一直挂着，网关那边的 close 也不触发，
+        // 于是它那边的回合还在跑（网关靠 close 才 abort）。
+        void reader.cancel().catch(() => undefined);
+        reject(
+          new ApiError(tr("与服务端的连接连续 {0} 秒没有任何响应，本次回复已断开。已完成的部分仍然保留，回复「继续」可接着做。", [Math.round(idleMs / 1000)]), {
+            code: 'TURN_CHANNEL_IDLE',
+          }),
+        );
+      }, idleMs);
+      // 用户点停止：把 AbortError 照原样抛出去，别让上面那段超时文案盖掉「用户中止」
+      const onAbort = () => {
+        void reader.cancel().catch(() => undefined);
+        reject(signal?.reason ?? Object.assign(new Error('Aborted'), { name: 'AbortError' }));
+      };
+      if (signal) {
+        if (signal.aborted) onAbort();
+        else signal.addEventListener('abort', onAbort, { once: true });
+      }
+      reader.read().then(
+        ({ done, value }) => {
+          if (signal) signal.removeEventListener('abort', onAbort);
+          resolve(done ? undefined : value);
+        },
+        (err) => {
+          if (signal) signal.removeEventListener('abort', onAbort);
+          reject(err);
+        },
+      );
+    });
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function streamTurn(sessionId: string, payload: TurnPayload, onEvent: (event: AgentEvent) => void, signal?: AbortSignal): Promise<void> {
   const res = await fetch(`/api/agent/sessions/${sessionId}/turns`, {
     method: 'POST',
@@ -190,9 +249,11 @@ export async function streamTurn(sessionId: string, payload: TurnPayload, onEven
   const decoder = new TextDecoder();
   let buffer = '';
   while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
+    // 用带上限的读取而不是裸 reader.read()：半开的连接既不报错也不结束，
+    // 裸读会永远等下去，界面上就是「图标转到天荒地老」。
+    const chunk = await readWithIdleCeiling(reader, signal);
+    if (chunk === undefined) break;
+    buffer = (buffer + decoder.decode(chunk, { stream: true })).replace(/\r\n/g, '\n');
     let idx = buffer.indexOf('\n\n');
     while (idx !== -1) {
       const frame = buffer.slice(0, idx).trim();

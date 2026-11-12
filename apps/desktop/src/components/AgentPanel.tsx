@@ -40,7 +40,7 @@ import {
 import type { AgentMessageBlock, AgentPlanItem, PermissionMode, QuestionSuggestion, Risk, TableInfo, ToolResult } from '@aidb/core';
 import { COMMANDS, engineMeta, suggestionLabel } from '@aidb/core';
 import { getI18nLocale } from '../i18n';
-import { contextWindowOf, getModelProfile, supportsInput } from '@aidb/core';
+import { contextWindowOf, getModelProfile, isUnfinishedStop, supportsInput } from '@aidb/core';
 import { api, attachmentObjectUrl, type StoredAttachment } from '../lib/api';
 import { deliverExport } from '../lib/exportDelivery';
 import { desktopBridge, desktopDialogUi } from '../lib/desktop';
@@ -333,6 +333,30 @@ function agentActivity(live: LiveTurn): ActivityState {
 }
 
 /**
+ * 运行中但很久没事件时的一句说明。
+ *
+ * 「莫名其妙停了」有一半其实是「还在等，只是界面什么都不说」：一次全表扫描、
+ * 一条几百万行的导出，中间几分钟可以一个事件都不发，用户只能盯着转圈的图标猜。
+ * 这里只报告**已经等了多久**，绝不替用户判定失败——健康长回合被界面提前喊成出错，
+ * 比安静更糟（原来会自己好的回合被人为掐掉）。满 3 分钟才补一句可以中止。
+ */
+function quietTurnNotice(live: LiveTurn, now: number): string | null {
+  if (live.status !== 'streaming' && live.status !== 'awaiting') return null;
+  // 没有 lastEventAt 就什么都别说。退回 startedAt 会把「一直在出事件、只是这回合很长」
+  // 报成「已经很久没动静」——那正是这次要修掉的那类谎话。
+  if (!live.lastEventAt) return null;
+  const quiet = Math.floor((now - live.lastEventAt) / 1000);
+  if (quiet < 30) return null;
+  const running = [...live.tools].reverse().find((tool) => tool.status === 'running');
+  const base = running
+    ? tr("「{0}」已经执行 {1}s 没有新进展", [toolLabel(running.tool), String(quiet)])
+    : tr("模型已经 {0}s 没有新输出，仍在等待回应", [String(quiet)]);
+  return quiet >= 180
+    ? `${base}。${tr("大表查询确实可能要几分钟；不想再等可以点下方停止，已完成的部分不会丢。")}`
+    : `${base}。`;
+}
+
+/**
  * 计划固定在输入框上方的状态条里：回答正文会不断把计划卡顶出视野，
  * 这里始终显示当前步骤，点开再看完整清单。
  */
@@ -350,10 +374,12 @@ function LiveActivity({ live }: { live: LiveTurn }) {
   const current = plan.find((item) => item.status === 'doing');
   const planLabel = current?.text ?? (plan.length && done === plan.length ? tr("计划已完成") : tr("正在准备下一步"));
   const label = plan.length ? planLabel : activity.label;
+  const quiet = quietTurnNotice(live, now);
   return (
     <div
       className={`agent-activity tone-${activity.tone}${plan.length ? ' has-plan' : ''}`}
       data-testid="agent-activity"
+      data-quiet={quiet ? 'true' : undefined}
       role="status"
       aria-live="polite"
     >
@@ -365,6 +391,11 @@ function LiveActivity({ live }: { live: LiveTurn }) {
           <span className="activity-dots" aria-hidden="true"><i /><i /><i /></span>
         </div>
         {plan.length ? <div className="activity-sub" key={activity.label}>{activity.label}</div> : null}
+        {quiet ? (
+          <div className="activity-sub activity-quiet" data-testid="agent-quiet-notice">
+            {quiet}
+          </div>
+        ) : null}
       </div>
       {seconds >= 1 ? <span className="activity-elapsed">{seconds}s</span> : null}
       {plan.length ? (
@@ -769,11 +800,54 @@ function ToolCard({
   );
 }
 
-function PlanCard({ items }: { items: Array<{ id: string; text: string; status: string }> }) {
+/**
+ * 回合结束后的一句实话 + 续跑入口。
+ *
+ * 这里存在的原因：`status === 'done'` 会把三件事说成一件——模型真说完了、回复被
+ * 输出上限拦腰截断、工具步数跑到上限。后两种是「事没做完」，但过去界面一律显示
+ * 「已完成」，用户只能看到计划还剩两项没打勾、也不知道为什么停。现在按 stop 分别说清，
+ * 并给一个一键续跑（服务端同时留了续跑检查点，续跑不用从头再来）。
+ */
+function TurnStopNotice({ live, onContinue }: { live: LiveTurn; onContinue: () => void }) {
+  const unfinished = live.status === 'aborted' ? live.abortCause === 'stalled' : isUnfinishedStop(live.stop);
+  // 有 live.error 时不再另写一句：runtime 发的那条已经把原因和改法说清了，
+  // 这里再补一行只是同一件事说两遍。
+  const notice = live.error
+    ? null
+    : live.status === 'aborted' && live.abortCause === 'stalled'
+      ? tr("模型连接无响应，本回合已停止。已完成的步骤都算数。")
+      : live.stop === 'max_steps'
+        ? tr("已达到本次工具步数上限，剩下的步骤还没做。")
+        : live.stop === 'empty_response' && !live.text.trim() && !live.tools.length
+          ? tr("模型这一轮没有返回任何内容。")
+          : null;
+  if (!notice && !unfinished) return null;
+  return (
+    <div className="turn-notice" data-testid="turn-stop-notice" data-stop={live.stop ?? live.abortCause}>
+      {notice ? <span className="turn-notice-text">{notice}</span> : null}
+      {unfinished ? (
+        <button className="btn small" onClick={onContinue} data-testid="turn-continue">
+          {tr("继续")}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * 计划卡。`running` 决定未完成项要不要继续转圈：
+ *
+ * 未完成 ≠ 正在进行。回合早就结束了，计划里那项 `doing` 只是**没人结算它**——
+ * 模型常常只在开头建一次计划、结束时也不再 update_plan。以前图标只看 status，
+ * 于是任何一次停止（截断、跑满步数、报错、用户中止）之后，那颗点都会永远转下去，
+ * 读起来像「还在跑」，而这正是「莫名其妙停了但界面说没停」的来源。
+ * 现在只有回合真的在跑时才动画，停下来就是停下来。
+ */
+function PlanCard({ items, running = false }: { items: Array<{ id: string; text: string; status: string }>; running?: boolean }) {
   if (!items.length) return null;
   const done = items.filter((item) => item.status === 'done').length;
   return (
-    <div className="plan-card" data-testid="plan-card">
+    <div className={`plan-card${running ? '' : ' settled'}`} data-testid="plan-card" data-running={running || undefined}>
       <div className="plan-title" data-testid="plan-progress">
         <Check size={11} /> {tr(" 计划 · ")}{done}/{items.length}
       </div>
@@ -951,7 +1025,7 @@ function TurnBody({
       <>
         {hasExecution ? (
           <ExecutionSection count={view.toolCount} running={running} testId={testId}>
-            {view.plan ? <PlanCard items={view.plan} /> : null}
+            {view.plan ? <PlanCard items={view.plan} running={running} /> : null}
             {view.legacyThinking ? (
               <details className="thinking" open={running && view.toolCount === 0 ? true : undefined}>
                 <summary><Brain size={11} /> {tr(" 思考过程")}</summary>
@@ -973,7 +1047,7 @@ function TurnBody({
   }
   return (
     <>
-      {view.plan ? <PlanCard items={view.plan} /> : null}
+      {view.plan ? <PlanCard items={view.plan} running={running} /> : null}
       {/* 这里**不**渲染 view.legacyThinking，是有意的：
           - live 回合的 legacyThinking 是整回合累计的思考，分段块已经把它按步拆开了，
             再渲染一遍就是同一坨文字在时间线上面重复出现；
@@ -1698,6 +1772,7 @@ export function AgentPanel() {
                 <UserMessage text={live.userText} images={live.userImages} />
                 <AssistantShell>
                   <TurnBody view={turnFromLive(live)} fallbackText={live.text} streaming={busy} running={busy} testId="execution-section-live">
+                    {!busy ? <TurnStopNotice live={live} onContinue={() => void sendAgent(tr("继续"), undefined)} /> : null}
                     {live.error ? <div className="risk-banner">{live.error}</div> : null}
                     {!busy && live.text ? <AnswerActions text={live.text} /> : null}
                     {live.memories.length ? (
@@ -1717,9 +1792,14 @@ export function AgentPanel() {
                           ? live.abortCause === 'stalled'
                             ? t('stalled')
                             : t('aborted')
-                          : live.status === 'error'
-                            ? t('failed')
-                            : t('completed')}{' '}
+                          // done + 没做完，以及截断那类 error，都不能写「已完成/已失败」：
+                          // 前者是计划还剩两项没打勾时最刺眼的一行字，后者会让人以为
+                          // 执行出了错，而实际只差把话说完。
+                          : isUnfinishedStop(live.stop)
+                            ? t('stoppedUnfinished')
+                            : live.status === 'error'
+                              ? t('failed')
+                              : t('completed')}{' '}
                         · {live.tools.length}{tr(" 次工具 · ")}{formatDuration(Date.now() - live.startedAt)}
                         {live.tokensIn || live.tokensOut ? ` · ↑${live.tokensIn} ↓${live.tokensOut}` : ''}
                       </div>

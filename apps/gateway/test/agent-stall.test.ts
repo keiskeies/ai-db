@@ -230,3 +230,47 @@ test('检查点说「无响应」，不再提任何「时间预算耗尽」', ()
   assert.match(text, /inspect_schema ×2/, '工具去重计数仍然要有');
   assert.doesNotMatch(text, /时间预算|上限/, '回合没有上限，检查点不能暗示还有');
 });
+
+// ---------- 停摆之外的两种「没跑完」：截断与空返回 ----------
+//
+// 检查点过去只为停摆而写，于是「模型把回复写到超出 max_tokens」这一档什么也没留下：
+// 界面写着已完成，用户点继续时模型只看得到半截正文。现在三种原因共用同一手检查点，
+// 但**必须各说各的话**——把截断写成「连接无响应」会把用户送去查网络，而问题在输出上限。
+
+test('截断原因的检查点说「超出输出上限」，不含糊成连接无响应', () => {
+  const text = buildResumeCheckpoint({
+    plan: PLAN.map((item, index) => ({ id: `p${index + 1}`, text: item.text, status: item.status as 'done' | 'doing' | 'todo' })),
+    steps: 9,
+    toolCalls: 21,
+    elapsedMs: 120_000,
+    toolTrace: ['run_sql'],
+    cause: 'truncated',
+  });
+  assert.match(text, /超出输出上限/);
+  assert.doesNotMatch(text, /无响应/, '截断不是断线：写「无响应」会把用户送去查网络');
+  assert.match(text, /回复「继续」可接着做/);
+  assert.match(text, /已跑 9 步、21 次工具调用（共 2 分 0 秒）/);
+  assert.match(text, /不是执行出错/, '要说清这不是模型的失败，已完成的部分仍算数');
+  assert.match(text, /为每张表补表注释/, '计划状态与下一步照旧要写全');
+});
+
+test('空返回原因的检查点如实说「没有给出内容」', () => {
+  const text = buildResumeCheckpoint({
+    plan: [],
+    steps: 1,
+    toolCalls: 0,
+    elapsedMs: 1_000,
+    toolTrace: [],
+    cause: 'empty',
+  });
+  assert.match(text, /没有给出内容/);
+  assert.doesNotMatch(text, /无响应|超出输出上限/);
+  // 没登记计划时必须教模型下一步先建计划，否则「继续」连落点都没有
+  assert.match(text, /没有登记计划/);
+  assert.match(text, /update_plan/);
+});
+
+test('省略 cause 时仍是停摆措辞：老调用方不会因为新字段改变文案', () => {
+  const text = buildResumeCheckpoint({ plan: [], steps: 1, toolCalls: 0, elapsedMs: 1000, toolTrace: [] });
+  assert.match(text, /连接无响应/);
+});

@@ -181,6 +181,58 @@ export interface ApprovalPayload {
  */
 export type AgentAbortCause = 'stalled' | 'user';
 
+/**
+ * 一个「正常返回」的回合究竟是怎么结束的。
+ *
+ * 存在这条类型的理由：'done' 曾经把三种完全不同的事混成同一个状态——模型真说完了、
+ * 输出被 max_tokens 拦腰截断（常发生在工具调用写一半时，界面看起来就是「莫名其妙停了，
+ * 计划还转着圈」）、工具步数跑到上限。前两种尤其必须区分：截断不是结束，是事故。
+ */
+export type AgentStopReason =
+  /** 模型自己说完了。 */
+  | 'end_turn'
+  /** 输出撞到 max_tokens 被截断；工具调用可能只写了一半。 */
+  | 'max_output_tokens'
+  /** 跑满 maxSteps 步数上限。 */
+  | 'max_steps'
+  /**
+   * 模型这一轮既没说正文也没发起工具调用，等于空转一圈就返回。
+   *
+   * 它和 end_turn 必须分开：end_turn 是「我做完了」，空回复是「我什么都没给」。
+   * 混在一起时界面只能显示一个空的完成，计划卡还停在执行中——正是
+   * 「莫名其妙停了、也说不出原因」里最难查的那一种。
+   *
+   * 调用失败不在这份表里：那种出口自己带 code（PROVIDER_ERROR 等），且刻意不写
+   * 续跑检查点——失败的原因可能是鉴权、额度或参数，替用户留一句「可以继续」没意义。
+   */
+  | 'empty_response'
+  /**
+   * 与服务端的连接静默到上限，客户端主动断开（客户端侧观察，服务商不会发这个值）。
+   *
+   * 半开的 TCP 既不报错也不结束，不认出来就只能永远等在 read() 上。它和停摆同族：
+   * 用户没点停止、事也没做完。区别在服务端那边——这条路径上服务端不知道客户端为什么走，
+   * 按「用户中止」处理，因此**不会**留下结构化检查点；会话历史里仍有半截正文，
+   * 「继续」有落点，只是没有计划状态清单。
+   */
+  | 'channel_idle';
+
+/** 服务商 stop_reason 里表示「输出被截断」的取值（OpenAI 系 length，Anthropic 系 max_tokens）。 */
+export function isTruncatedStop(reason: string | undefined): boolean {
+  if (!reason) return false;
+  return /^(length|max_tokens|max_output_tokens|incomplete)$/i.test(reason);
+}
+
+/**
+ * 回合没做完就结束的那些原因。界面据此给「继续」，服务端据此写续跑检查点。
+ *
+ * end_turn 不在里面：那是模型自己说完了，不该催用户继续。
+ */
+export const UNFINISHED_STOP_REASONS = ['max_output_tokens', 'max_steps', 'empty_response', 'channel_idle'] as const;
+
+export function isUnfinishedStop(reason: AgentStopReason | undefined): boolean {
+  return Boolean(reason && (UNFINISHED_STOP_REASONS as readonly string[]).includes(reason));
+}
+
 export type AgentEvent =
   | { type: 'start'; turnId: string; sessionId: string; model: string }
   | { type: 'text_delta'; text: string }
@@ -221,10 +273,23 @@ export type AgentEvent =
       /** 本回合模型调用的总耗时（不含工具执行），用于算真实的 tok/s。 */
       modelDurationMs: number;
     }
-  | { type: 'done'; turnId: string; durationMs: number; summary?: string }
+  /**
+   * 回合结束。`stop` 说明**为什么**结束；老客户端忽略这个字段仍然能正常渲染。
+   *
+   * 界面不能只靠 status==='done' 决定要不要让计划继续转圈：截断与跑满步数也是 done，
+   * 但那不代表计划做完了。
+   */
+  | { type: 'done'; turnId: string; durationMs: number; summary?: string; stop?: AgentStopReason }
   /** cause 让界面不必从 reason 里猜是超时还是用户点的停止。 */
   | { type: 'aborted'; turnId: string; reason: string; cause?: AgentAbortCause }
-  | { type: 'error'; code: string; message: string; retryable?: boolean };
+  /**
+   * 服务商报错终止。
+   *
+   * `stop` 不是装饰：输出连写两次都超出上限时，回合是以 error 收场的（没有 done 事件），
+   * 界面若只看 done 事件上的 stop，恰好在这个最需要「继续」按钮的分支里给不出按钮。
+   * 只有如实知道回合没做完的分支才填它——普通调用失败不填，那种情况没有续跑检查点。
+   */
+  | { type: 'error'; code: string; message: string; retryable?: boolean; stop?: AgentStopReason };
 
 export interface AgentRunInput {
   sessionId: string;

@@ -5,6 +5,7 @@ import type {
   AgentMessage,
   AgentPlanItem,
   AgentSessionMeta,
+  AgentStopReason,
   AppSettings,
   ConnectionConfig,
   DatabaseSchema,
@@ -70,6 +71,17 @@ export interface LiveTurn {
   status: 'streaming' | 'awaiting' | 'done' | 'aborted' | 'error';
   /** 中止原因：连接停摆不是用户点的停止，界面不能都说成「已中止」。 */
   abortCause?: 'stalled' | 'user';
+  /**
+   * 回合结束的原因。'done' 不足以说明「做完了」：截断与跑满步数同样是 done，
+   * 界面据此决定计划卡该不该继续转圈、要不要给「继续」。
+   */
+  stop?: AgentStopReason;
+  /**
+   * 最后一个事件到达的时刻。运行中的回合用它算「已经多久没动静」：
+   * 一次大查询本来就可能几分钟不出事件，所以界面只报告等了多久，
+   * 不擅自判定失败——但不能再什么都不说，那是「莫名其妙停止」最难查的一部分。
+   */
+  lastEventAt: number;
   error?: string;
   startedAt: number;
   /** 回合结束时间；流式期间缺省，状态条的 tok/s 用它定格。 */
@@ -1073,6 +1085,8 @@ export const useApp = create<AppStore>((set, get) => ({
           }
         : undefined;
       if (!live) return {};
+      // 每个事件都刷新「最后一次有动静」的时刻：静默多久是界面判断「该说句话了」的唯一依据。
+      live.lastEventAt = Date.now();
       /** 已入账的正文，用于把 live.text 保持成「整回合」而不是「当前这一步」。 */
       const committedText = () => live.timeline.filter((item) => item.kind === 'text').map((item) => item.text).join('\n\n');
       switch (event.type) {
@@ -1175,6 +1189,7 @@ export const useApp = create<AppStore>((set, get) => ({
           break;
         case 'done':
           live.status = 'done';
+          live.stop = event.stop ?? 'end_turn';
           live.endedAt = Date.now();
           break;
         case 'aborted':
@@ -1185,6 +1200,9 @@ export const useApp = create<AppStore>((set, get) => ({
         case 'error':
           live.status = 'error';
           live.error = event.message;
+          // 截断这类错误是「没做完」而不是「做错了」：stop 一路带过来，
+          // 界面才知道这里该给「继续」，而不是只给一句红色的失败。
+          if (event.stop) live.stop = event.stop;
           live.endedAt = Date.now();
           return { live, ...NO_APPROVAL };
         default:
@@ -1230,6 +1248,7 @@ export const useApp = create<AppStore>((set, get) => ({
           plan: [],
           status: 'streaming',
           startedAt: Date.now(),
+          lastEventAt: Date.now(),
           tokensIn: 0,
           tokensOut: 0,
           steps: 0,
@@ -1251,7 +1270,14 @@ export const useApp = create<AppStore>((set, get) => ({
     } catch (err) {
       if ((err as Error)?.name !== 'AbortError') {
         get().notify('error', get().t('agentError'), errorText(err));
-        set((prev) => (prev.live ? { live: { ...prev.live, status: 'error', error: errorText(err) } } : {}));
+        // 通道静默到上限（客户端自己断的）与截断同族：事没做完，要给「继续」。
+        // 不认这一条的话，这条路径上只有红色的失败文案，用户照样不知道下一步做什么。
+        const channelIdle = (err as { code?: string })?.code === 'TURN_CHANNEL_IDLE';
+        set((prev) =>
+          prev.live
+            ? { live: { ...prev.live, status: 'error' as const, error: errorText(err), endedAt: Date.now(), ...(channelIdle ? { stop: 'channel_idle' as const } : {}) } }
+            : {},
+        );
       }
     } finally {
       currentAbort = undefined;
@@ -1266,7 +1292,23 @@ export const useApp = create<AppStore>((set, get) => ({
           // 等待期间用户可能已切到新会话/另一条会话，旧回合的收尾结果不能再写回。
           if (get().agentSessionId === sid) set({ agentSessionMeta: detail.session, agentMessages: detail.messages, live: undefined });
         } catch {
-          /* keep live state */
+          // 拉不回历史时保留 live 是对的，但不能原样保留：status 还停在 streaming，
+          // 界面就会一直转圈且没有任何解释——正是「莫名其妙停了、图标还在转」这一类。
+          // 就地定稿，并把原因写成一条错误，让用户看得见也复制得走。
+          const sidNow = get().agentSessionId;
+          if (sidNow === sid) {
+            const live = get().live;
+            if (live && (live.status === 'streaming' || live.status === 'awaiting')) {
+              set({
+                live: {
+                  ...live,
+                  status: 'error',
+                  endedAt: Date.now(),
+                  error: live.error ?? tr("本轮已结束，但历史读取失败（网络或网关异常），这里显示的是本地缓存的进度，可能与实际不完全一致。"),
+                },
+              });
+            }
+          }
         }
       }
       await get().refreshSessions();

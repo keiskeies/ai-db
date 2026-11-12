@@ -3608,5 +3608,14 @@
   "，用逗号或空格分隔。删除不可撤销，请先用查询确认范围。 ": ", separated by commas or spaces. Deletion is irrevocable, please confirm the scope with query first.",
   "，能力信息已自动预填": ", the capability information has been automatically prefilled",
   "；下方可逐个删除，删空后整键会消失。 ": "; You can delete them one by one below, and the whole key will disappear after deleting.",
-  "；设计见 docs/16-capability-contract.md。 ": ";See docs/16-capability-contract.md for design."
+  "；设计见 docs/16-capability-contract.md。 ": ";See docs/16-capability-contract.md for design.",
+  "「{0}」已经执行 {1}s 没有新进展": "\"{0}\" has been running for {1}s without new progress",
+  "模型已经 {0}s 没有新输出，仍在等待回应": "The model has produced no output for {0}s; still waiting for a response",
+  "大表查询确实可能要几分钟；不想再等可以点下方停止，已完成的部分不会丢。": "Large-table queries can genuinely take minutes. If you would rather not wait, press stop below — completed steps are not lost.",
+  "模型连接无响应，本回合已停止。已完成的步骤都算数。": "The model connection went silent and this turn stopped. Completed steps still count.",
+  "已达到本次工具步数上限，剩下的步骤还没做。": "The tool step limit for this turn was reached; the remaining steps were not done.",
+  "模型这一轮没有返回任何内容。": "The model returned nothing this round.",
+  "继续": "Continue",
+  "本轮已结束，但历史读取失败（网络或网关异常），这里显示的是本地缓存的进度，可能与实际不完全一致。": "This turn ended, but loading the history failed (network or gateway error). What you see here is the locally cached progress and may not fully match the server.",
+  "与服务端的连接连续 {0} 秒没有任何响应，本次回复已断开。已完成的部分仍然保留，回复「继续」可接着做。": "The server connection has gone silent for {0}s, so this reply was closed. Completed parts are kept — reply “continue” to pick up where it left off."
 }
