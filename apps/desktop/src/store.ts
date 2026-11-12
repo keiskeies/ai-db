@@ -545,7 +545,17 @@ export const useApp = create<AppStore>((set, get) => ({
       return;
     }
     try {
-      if (conn && !engineMeta(conn.engine).fileBased) {
+      // conn 不在本地列表时不能直接发不带 database 的 /schema：
+      // engineMeta 对未知引擎回落到 sqlite，于是这条请求对 MySQL/PG 这类
+      // 「合法地没有默认库」的连接只能回 400 NO_DATABASE。先补拉一次连接列表再判引擎。
+      const resolved = conn ?? (await api.connections()).connections.find((c) => c.id === connectionId);
+      if (!resolved) {
+        // 补拉一次连接列表仍没有它 = 已被删除（调用方拿的是删除前的快照）。
+        // 静默返回：deleteConnection 已经把这条连接的 tab/schema 一起清了，
+        // 没有任何东西需要刷新，弹一条错只会为一个用户已经做完的操作报错。
+        return;
+      }
+      if (!engineMeta(resolved.engine).fileBased) {
         const { databases } = await api.databases(connectionId);
         const previouslyLoaded = (get().loadedDatabases[connectionId] ?? []).filter((name) => databases.includes(name));
         const keep = refresh ? [] : previouslyLoaded;
@@ -562,8 +572,8 @@ export const useApp = create<AppStore>((set, get) => ({
           ? previouslyLoaded.length
             ? previouslyLoaded
             : single
-          : conn.database && databases.includes(conn.database)
-            ? [conn.database]
+          : resolved.database && databases.includes(resolved.database)
+            ? [resolved.database]
             : single;
         // 只预取默认库的表，不再自动展开它；展开状态由用户的点击决定并持久化
         for (const name of targets) void get().loadSchema(connectionId, refresh, name);

@@ -706,6 +706,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
   const wsRef = useRef<WebSocket | null>(null);
   const sessionIdRef = useRef<string | undefined>(undefined);
   const activeConnectionIdRef = useRef<string | undefined>(undefined);
+  const activeDatabaseRef = useRef<string | undefined>(undefined);
   const schemaInFlightRef = useRef(false);
   const preferredDatabaseRef = useRef<string | undefined>(undefined);
   const pendingDatabasePickerRef = useRef(false);
@@ -735,6 +736,10 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
   useEffect(() => {
     activeConnectionIdRef.current = activeConnectionId;
   }, [activeConnectionId]);
+
+  useEffect(() => {
+    activeDatabaseRef.current = activeDatabase;
+  }, [activeDatabase]);
 
   const refreshSessions = async () => {
     try {
@@ -992,7 +997,10 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
           if (disposed) return;
           setConnected(true);
           // 断线期间的事件不会补发；重连后补刷一次当前连接。
-          if (activeConnectionIdRef.current) void loadSchema(activeConnectionIdRef.current);
+          // 库必须一起带上，并且从 ref 读：这个 effect 的依赖是 [client]，
+          // 闭包里的 activeDatabase 会停在首屏那一刻（常常还是 undefined）。
+          // 不带库 = MySQL 这类没有默认库的连接直接 400 NO_DATABASE。
+          if (activeConnectionIdRef.current) void loadSchema(activeConnectionIdRef.current, activeDatabaseRef.current);
         };
         ws.onmessage = (event) => {
           try {
@@ -1413,7 +1421,8 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
                     <ChevronDown size={12} color={colors.muted} />
                   </Pressable>
                 ) : null}
-                <Pressable testID="m-data-refresh" style={styles.iconButton} onPress={() => activeConnectionId && void loadSchema(activeConnectionId)}>
+                {/* 刷新必须带上当前库：不带库的请求对没有默认库的 MySQL 连接直接 400 */}
+                <Pressable testID="m-data-refresh" style={styles.iconButton} onPress={() => activeConnectionId && void loadSchema(activeConnectionId, activeDatabase)}>
                   <RefreshCw size={15} color={colors.text} />
                 </Pressable>
               </View>

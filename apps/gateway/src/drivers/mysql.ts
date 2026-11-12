@@ -130,7 +130,15 @@ export class MysqlDriver implements Driver {
 
   async describe(database?: string): Promise<TableInfo[]> {
     const db = database ?? this.opts.database;
-    if (!db) throw new DbError('MySQL 连接未指定数据库', { code: 'NO_DATABASE' });
+    if (!db) {
+      // 这句是「本次请求没带库」，不是「这条连接没配库」——连接可以完全不配默认库，
+      // 那是合法配置（侧栏逐库展开就是靠 /databases + 每次带 database 走）。
+      // 原文案写成「连接未指定数据库」，用户会去改连接配置，而真正缺的是调用方的参数。
+      throw new DbError('MySQL 内省必须指定数据库', {
+        code: 'NO_DATABASE',
+        hint: '调用方未提供 database 参数，且该连接没有默认库。先取 /connections/:id/databases，再带 ?database= 重试。',
+      });
+    }
     const pool = this.pool(db);
     try {
       const [tableRows] = await pool.query(
