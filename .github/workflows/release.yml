@@ -316,15 +316,19 @@ jobs:
             if (-not (Test-Path $dir)) { Write-Error "missing $dir"; exit 1 }
             # zip 根目录用产品名而不是 win-unpacked，解压出来的文件夹才体面
             Rename-Item $dir 'AiDB Studio'
+            # zip 直接落在 release/ 下（上传步骤的 glob 是 release/*.zip）：
+            # 从 release/ 里以 ..\ 输出会写到 apps/desktop/，glob 匹配不到还不报错
             Push-Location release
             try {
-              & $7z a -tzip -mx=1 "..\AiDB-Studio-$ver-$($p.arch)-portable.zip" '.\AiDB Studio' | Out-Null
+              & $7z a -tzip -mx=1 "AiDB-Studio-$ver-$($p.arch)-portable.zip" '.\AiDB Studio' | Out-Null
             } finally {
               Pop-Location
               Rename-Item 'release/AiDB Studio' $p.unpacked
             }
           }
-          Get-ChildItem release/*-portable.zip | Format-Table Name, Length
+          $zips = @(Get-ChildItem release/*-portable.zip)
+          if ($zips.Count -ne 2) { Write-Error "expected 2 portable zips, got $($zips.Count)"; exit 1 }
+          $zips | Format-Table Name, Length
 
       - name: Report packaging error
         if: failure()
