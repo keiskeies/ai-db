@@ -295,6 +295,37 @@ jobs:
           fi
           echo "::warning::Windows arm64 不含 node-oracledb 绑定（上游无 win32-arm64 预编译），该包内 Oracle 驱动不可用"
 
+      - name: Pack Windows portable zips
+        # 绿色版：把校验过的 win-unpacked 目录以产品名打成 zip，解压后运行里面的 exe 即可。
+        # NSIS 安装器写 HKCU 的卸载项和快捷方式，绿色版没有这一步；Electron 本体不碰
+        # 注册表，用户数据照旧在 %APPDATA%\AiDB Studio。zip 名以 -portable.zip 结尾，
+        # 不会被 pickAsset 的 -setup.exe 后缀匹配到，不影响自动更新通道。
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: apps/desktop
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $7z = Join-Path ${env:ProgramFiles} '7-Zip\7z.exe'
+          $ver = node -p "require('./package.json').version"
+          $pairs = @(
+            @{ unpacked = 'win-unpacked';       arch = 'x64' },
+            @{ unpacked = 'win-arm64-unpacked'; arch = 'arm64' }
+          )
+          foreach ($p in $pairs) {
+            $dir = "release/$($p.unpacked)"
+            if (-not (Test-Path $dir)) { Write-Error "missing $dir"; exit 1 }
+            # zip 根目录用产品名而不是 win-unpacked，解压出来的文件夹才体面
+            Rename-Item $dir 'AiDB Studio'
+            Push-Location release
+            try {
+              & $7z a -tzip -mx=1 "..\AiDB-Studio-$ver-$($p.arch)-portable.zip" '.\AiDB Studio' | Out-Null
+            } finally {
+              Pop-Location
+              Rename-Item 'release/AiDB Studio' $p.unpacked
+            }
+          }
+          Get-ChildItem release/*-portable.zip | Format-Table Name, Length
+
       - name: Report packaging error
         if: failure()
         shell: bash
@@ -312,6 +343,7 @@ jobs:
           name: aidb-${{ matrix.artifact }}
           path: |
             apps/desktop/release/*.exe
+            apps/desktop/release/*.zip
             apps/desktop/release/*.dmg
             apps/desktop/release/*.AppImage
             apps/desktop/release/*.deb
@@ -325,7 +357,7 @@ jobs:
     name: Publish GitHub release
     needs: desktop
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/tags/v0.0.5'
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -370,50 +402,42 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          name: AiDB Studio v0.0.5
+          name: AiDB Studio ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
           draft: false
           prerelease: false
           generate_release_notes: false
           body: |
-            AiDB Studio **v0.0.5** — the app can update itself now, and the readme speaks 20 languages.
+            AiDB Studio **v0.0.6** — Windows builds now come in two flavors: the usual installer, and a portable zip you can run straight from any folder.
             
             **Installers**
             
             | Platform | Architecture | Files |
             |---|---|---|
-            | Windows | x64 | `AiDB-Studio-0.0.5-x64-setup.exe` |
-            | Windows | arm64 | `AiDB-Studio-0.0.5-arm64-setup.exe` |
-            | macOS | Apple Silicon | `AiDB-Studio-0.0.5-arm64.dmg` |
-            | macOS | Intel | `AiDB-Studio-0.0.5-x64.dmg` |
-            | Linux | x64 | `AiDB-Studio-0.0.5-x86_64.AppImage` · `-amd64.deb` · `-x86_64.rpm` |
-            | Linux | arm64 | `AiDB-Studio-0.0.5-arm64.AppImage` · `-arm64.deb` · `-aarch64.rpm` |
+            | Windows | x64 | `AiDB-Studio-0.0.6-x64-setup.exe` · `AiDB-Studio-0.0.6-x64-portable.zip` |
+            | Windows | arm64 | `AiDB-Studio-0.0.6-arm64-setup.exe` · `AiDB-Studio-0.0.6-arm64-portable.zip` |
+            | macOS | Apple Silicon | `AiDB-Studio-0.0.6-arm64.dmg` |
+            | macOS | Intel | `AiDB-Studio-0.0.6-x64.dmg` |
+            | Linux | x64 | `AiDB-Studio-0.0.6-x86_64.AppImage` · `-amd64.deb` · `-x86_64.rpm` |
+            | Linux | arm64 | `AiDB-Studio-0.0.6-arm64.AppImage` · `-arm64.deb` · `-aarch64.rpm` |
             
-            **In-app updates**
-            - Settings → About has a new update card. It asks GitHub for the newest release, and on Windows (NSIS) and Linux (AppImage) it downloads and installs the update for you — differentially, so an update is usually a few hundred kilobytes instead of the full 140 MB installer.
-            - macOS, deb/rpm installs and dev builds get the version check plus a link to this page: the macOS build is unsigned (Squirrel.Mac refuses to replace an unsigned app), and `/opt` belongs to the package manager.
-            - Every release now publishes `latest.yml` (and `latest-linux.yml` / `latest-linux-arm64.yml`, `latest-arm64.yml` for Windows arm64) next to the installers. That metadata is what the updater reads.
+            **Portable Windows builds**
+            - Unzip, run `AiDB Studio.exe` — nothing is installed and nothing touches the registry. The NSIS installer is what writes the uninstall entry and shortcuts; the portable build skips all of that.
+            - Connections and history still live in `%APPDATA%\AiDB Studio`, so the portable build picks up data from an existing install (and vice versa).
+            - The auto-updater replaces NSIS installs in place; a portable folder updates by unzipping the new zip over the old one.
             
-            **Upgrading from 0.0.4**
-            - This is the last manual install: 0.0.4 shipped without the updater and its release carries no update metadata. From 0.0.5 on, Windows and AppImage builds update themselves.
-            - Installer file names lost their spaces (`AiDB.Studio-...` → `AiDB-Studio-...`) so the metadata and the uploaded asset names match exactly.
-            
-            **Docs**
-            - The README now exists in 20 languages, matching the interface languages. English and Chinese stay the full documents; the other 18 are short landing pages that link to them.
-            
-            **Platform notes**
-            - Oracle needs a prebuilt node-oracledb binding, and upstream ships none for macOS Intel or Windows arm64. On those two installers the engine is greyed out in the new-connection dialog with the reason; every other engine behaves the same everywhere. Linux arm64 does ship the binding.
-            - Windows on ARM can also run the x64 installer through the system emulator, and that build keeps Oracle.
-            - Linux: deb and rpm install through the distribution package manager; the AppImage is portable but needs FUSE 2 (or run it with `--appimage-extract-and-run`). A graphical session is required either way — WSL2 needs WSLg.
+            **Platform notes** (unchanged from 0.0.5)
+            - Oracle needs a prebuilt node-oracledb binding, and upstream ships none for macOS Intel or Windows arm64. On those two builds the engine is greyed out in the new-connection dialog with the reason.
+            - Linux: the AppImage is portable but needs FUSE 2 (or `--appimage-extract-and-run`); WSL2 needs WSLg.
             - Android and iOS are still built through EAS and are not part of this release.
             
             **Verification**
-            - 6 desktop combinations (3 operating systems x 2 architectures), 480 Bridge tests, 18 desktop unit tests, 391 documentation-contract checks.
-            - Before publishing, CI asserts that every `latest*.yml` points at an asset that actually exists in the release.
+            - 6 desktop combinations (3 operating systems x 2 architectures); every `latest*.yml` is checked against the uploaded assets before publishing, and the portable zips are built from the same verified unpacked directories as the installers.
             
             Installers are built by GitHub Actions from this tag.
           files: |
             dist-release/*.exe
+            dist-release/*.zip
             dist-release/*.dmg
             dist-release/*.AppImage
             dist-release/*.deb
