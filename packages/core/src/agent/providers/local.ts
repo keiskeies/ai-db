@@ -1882,7 +1882,7 @@ export class LocalProvider implements LlmProvider {
         const series = data?.chart?.series ?? [];
         const top = [...series].sort((a, b) => b.value - a.value).slice(0, 3);
         yield* finish(
-          `图表已生成并显示在上方工具卡中：**${data?.chart?.title ?? '分析图'}**。\n\n` +
+          `图表已生成并显示在上方：**${data?.chart?.title ?? '分析图'}**。\n\n` +
             (top.length ? top.map((point) => `- ${point.label}: ${point.value.toLocaleString()}`).join('\n') : '没有可绘制的数据。'),
         );
         return;

@@ -408,7 +408,7 @@ test('分类那段确实把 max_steps 认成没做完，而不是留成 undefine
   // 整跑一遍回合要假模型 + 步数上限，而这个分支的错法只有一种：漏一条 stop。
   // 分类那段是 result 与 disconnected 的纯表达式，直接从源码里取出来当真代码跑，
   // 比对着源文件念一遍断言强——改坏了立刻红。
-  const src = readFileSync(join(import.meta.dirname, '../src/agentHost.ts'), 'utf8');
+  const src = readFileSync(join(import.meta.dirname, '../src/agentHost.ts'), 'utf8').replace(/\r\n/g, '\n'); // autocrlf 工作区是 CRLF，下面按 ';\n' 定位
   const head = 'const unfinished: AgentResumeCause | undefined =';
   const from = src.indexOf(head);
   assert.ok(from >= 0, '找不到续跑原因的分类表达式');

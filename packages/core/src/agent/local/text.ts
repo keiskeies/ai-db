@@ -71,7 +71,7 @@ const zh: LocalText = {
     grouped: (head, groups, total, window, top, topValue) =>
       `按 ${head} 分成 ${groups} 组${total ? `，合计 **${total}**` : ''}${window}。最高的是 ${top}${topValue ? `（${topValue}）` : ''}。`,
   },
-  chartAnswer: (title, lines, note) => `图表已生成并显示在上方工具卡中：**${title}**。\n\n${lines || '没有可绘制的数据。'}${note}`,
+  chartAnswer: (title, lines, note) => `图表已生成并显示在上方：**${title}**。\n\n${lines || '没有可绘制的数据。'}${note}`,
   analyzeAnswer: (i) =>
     `${i.what}按 \`${i.axis}\` 统计：合计 **${i.sum}**，均值 ${i.avg}，最高 ${i.argmax}（${i.max}），最低 ${i.argmin}（${i.min}）。数字由 Bridge 计算，不是估算。\n\n\`\`\`sql\n${i.sql}\n\`\`\``,
   forecastAnswer: (method, lines, note) => `按**${method}**外推：\n\n${lines || '（没有可外推的数据）'}\n\n> ${note}`,

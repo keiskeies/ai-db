@@ -1619,7 +1619,7 @@
   "图片上传失败": "Image upload failed",
   "图片读取失败（{0}）": "Image reading failed ({0})",
   "图表": "Chart",
-  "图表已生成并显示在上方工具卡中：**{0}**。\n\n": "The chart has been generated and displayed in the tool card above: **{0}**.",
+  "图表已生成并显示在上方：**{0}**。\n\n": "The chart has been generated and displayed above: **{0}**.",
   "图表类型": "Chart type",
   "在": "In",
   "在 @BotFather 创建 Bot 拿 token；chatId 可用 @channelusername 或数字 ID。": "Create Bot in @BotFather and get token; chatId can be @channelusername or numeric ID.",

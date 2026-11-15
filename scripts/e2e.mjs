@@ -2577,7 +2577,19 @@ check('agent renders a chart artifact', (await page.locator('[data-testid="agent
 const execSections = page.locator('[data-testid="execution-section"]');
 const lastExec = execSections.last();
 check('execution steps fold away by default', (await lastExec.evaluate((el) => el.hasAttribute('open'))) === false);
-check('chart is hoisted into the conclusion, not nested in a tool card', (await page.locator('.tool-card [data-testid="chart-card"]').count()) === 0 && (await page.locator('[data-testid="agent-chart"]').count()) > 0);
+// 等回合落定再验图文顺序：live 渲染还没换成落库消息时，结论可能没写完
+await page.waitForFunction(() => !document.querySelector('[data-testid="agent-activity"]') && !document.querySelector('[data-testid="execution-section-live"]'), null, { timeout: 30000 });
+check('chart renders inline, not nested in a tool card', (await page.locator('.tool-card [data-testid="chart-card"]').count()) === 0 && (await page.locator('[data-testid="agent-chart"]').count()) > 0);
+const interleaved = await page.evaluate(() => {
+  const chart = [...document.querySelectorAll('[data-testid="agent-chart"]')].at(-1);
+  if (!chart) return 'no chart';
+  if (!chart.closest('.turn-step')) return 'chart outside its step rail';
+  const texts = [...document.querySelectorAll('[data-testid="step-text"]')];
+  const before = texts.some((el) => el.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const after = texts.some((el) => chart.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+  return before && after ? 'ok' : `text before=${before} after=${after}`;
+});
+check('chart interleaves with text: explanation before, conclusion after', interleaved === 'ok', interleaved);
 
 const settledChart = await page.locator('[data-testid="agent-chart"] [data-testid="chart-svg"], [data-testid="agent-chart"] .pie-row').first().boundingBox();
 check('agent chart is a stable 300px tall', Boolean(settledChart) && Math.abs(settledChart.height - 300) <= 1, settledChart ? `${Math.round(settledChart.width)}x${Math.round(settledChart.height)}` : 'no chart');
@@ -3273,6 +3285,31 @@ await mobile.getByTestId('m-send').click();
 await mobile.waitForFunction(() => document.body.innerText.includes('张表'), { timeout: 30000 });
 check('mobile agent answers', true);
 await mobile.screenshot({ path: join(shots, 'mobile-agent.png') });
+
+// 等上一回合落库再发问：上一回合延迟的会话刷新会提前清掉新回合的 live，脚注窗口不可靠
+await mobile.waitForFunction(() => (document.body.innerText.match(/AiDB Agent/g) ?? []).length >= 1, null, { timeout: 30000 });
+await mobile.getByTestId('m-chat-input').fill('按 status 统计 orders 并画柱状图');
+await mobile.getByTestId('m-send').click();
+// 断言落库后的最终形态：第二条头像行 + 图表在位，比 live 脚注窗口确定
+await mobile.waitForFunction(() => (document.body.innerText.match(/AiDB Agent/g) ?? []).length >= 2 && document.querySelector('[data-testid="m-agent-chart"]'), null, { timeout: 30000 });
+await mobile.waitForTimeout(400);
+check('mobile agent renders a chart', (await mobile.locator('[data-testid="m-agent-chart"]').count()) > 0);
+const mobileInterleaved = await mobile.evaluate(() => {
+  const chart = [...document.querySelectorAll('[data-testid="m-agent-chart"]')].at(-1);
+  if (!chart) return 'no chart';
+  const heads = [...document.querySelectorAll('[data-testid="m-execution-section"]')];
+  if (heads.some((head) => head.parentElement?.contains(chart))) return 'chart inside execution fold';
+  let scope = chart.parentElement;
+  while (scope && !scope.querySelector('[data-testid="m-execution-section"]')) scope = scope.parentElement;
+  const texts = [...(scope ?? document).querySelectorAll('div[dir="auto"]')].filter((el) => (el.textContent ?? '').trim().length > 0 && !el.querySelector('div[dir="auto"]'));
+  const before = texts.some((el) => el.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const after = texts.some((el) => chart.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+  return before && after ? 'ok' : `text before=${before} after=${after}`;
+});
+check('mobile chart interleaves with text, not hoisted to the end', mobileInterleaved === 'ok', mobileInterleaved);
+await mobile.evaluate(() => [...document.querySelectorAll('[data-testid="m-agent-chart"]')].at(-1)?.scrollIntoView({ block: 'center' }));
+await mobile.waitForTimeout(400);
+await mobile.screenshot({ path: join(shots, 'mobile-agent.png') });
 await mobile.getByTestId('m-commands').click();
 await mobile.getByTestId('m-command-report').click();
 check('mobile command picker inserts a purpose token', (await mobile.getByTestId('m-chat-input').inputValue()) === '/report ');
@@ -3508,11 +3545,14 @@ if (electronBinary) {
   let exportDetail = 'not attempted';
   let pdfDetail = 'not attempted';
   let lastError = '';
+  // 常驻安装版与未打包 Electron 共用默认 userData：单实例锁会让 E2E 的实例立刻退出
+  // （表现为 launch 报 target closed）。和 AIDB_HOME 一样给 Electron 独立 profile。
+  const electronProfile = join(home, 'electron-profile');
   for (let attempt = 1; attempt <= 2 && !electronOk; attempt++) {
     let app;
     try {
       const openPayload = Buffer.from(JSON.stringify({ table: 'orders' })).toString('base64');
-      app = await electron.launch({ executablePath: electronBinary, args: [join(root, 'apps/desktop'), '--no-sandbox', `--open-table=${openPayload}`], env, timeout: 90000 });
+      app = await electron.launch({ executablePath: electronBinary, args: [join(root, 'apps/desktop'), '--no-sandbox', `--user-data-dir=${electronProfile}`, `--open-table=${openPayload}`], env, timeout: 90000 });
       const window = await app.firstWindow();
       await window.waitForSelector('[data-testid="app-root"]', { timeout: 45000 });
       await window.waitForTimeout(1500);
@@ -3533,7 +3573,7 @@ if (electronBinary) {
         }
         check('electron can create a table shortcut', Boolean(shortcut?.ok && /--open-table=/.test(shortcutArgs)), `${shortcut?.ok} ${shortcutArgs.slice(0, 60)}`);
         const secondPayload = Buffer.from(JSON.stringify({ table: 'users' })).toString('base64');
-        const second = spawn(electronBinary, [join(root, 'apps/desktop'), '--no-sandbox', `--open-table=${secondPayload}`], { env, stdio: 'ignore' });
+        const second = spawn(electronBinary, [join(root, 'apps/desktop'), '--no-sandbox', `--user-data-dir=${electronProfile}`, `--open-table=${secondPayload}`], { env, stdio: 'ignore' });
         const secondExit = await new Promise((resolve) => {
           const timer = setTimeout(() => resolve('timeout'), 20000);
           second.once('exit', (code) => {

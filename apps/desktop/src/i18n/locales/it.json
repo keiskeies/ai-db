@@ -1616,7 +1616,7 @@
   "图片上传失败": "Caricamento immagine fallito",
   "图片读取失败（{0}）": "Lettura dell'immagine fallita ({0})",
   "图表": "Grafico",
-  "图表已生成并显示在上方工具卡中：**{0}**。\n\n": "Il grafico è stato generato e visualizzato nella scheda dello strumento sopra: **{0}**.\n\n",
+  "图表已生成并显示在上方：**{0}**。\n\n": "Il grafico è stato generato e visualizzato sopra: **{0}**.\n\n",
   "图表类型": "Tipo di grafico",
   "在": "In",
   "在 @BotFather 创建 Bot 拿 token；chatId 可用 @channelusername 或数字 ID。": "Crea un Bot in @BotFather e ottieni il token; chatId può essere @channelusername o ID numerico.",

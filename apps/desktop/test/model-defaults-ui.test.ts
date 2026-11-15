@@ -17,7 +17,7 @@ import { DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS, formatTokenSize } fr
 
 const here = dirname(fileURLToPath(import.meta.url));
 // test/ → desktop/ → apps/ → 仓库根
-const root = resolve(here, '../../..');const source = (rel: string) => readFileSync(join(root, rel), 'utf8');
+const root = resolve(here, '../../..');const source = (rel: string) => readFileSync(join(root, rel), 'utf8').replace(/\r\n/g, '\n'); // autocrlf 工作区是 CRLF，源码断言按 LF 写
 
 const settingsModal = source('apps/desktop/src/components/SettingsModal.tsx');
 const agentPanel = source('apps/desktop/src/components/AgentPanel.tsx');

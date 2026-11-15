@@ -47,7 +47,6 @@ import { desktopBridge, desktopDialogUi } from '../lib/desktop';
 import { formatBytes, formatCell, formatDuration, formatRelative } from '../lib/format';
 import {
   groupTools,
-  isChartResult,
   turnFromBlocks,
   turnFromLive,
   type TurnGroup,
@@ -558,12 +557,10 @@ function MiniTable({ data, max = 8 }: { data: { columns?: Array<{ name: string }
   );
 }
 
-function ResultView({ result, onOpenEditor, showChart = true, chartHeight }: { result: ToolResult; onOpenEditor?: (sql: string) => void; showChart?: boolean; chartHeight?: number }) {
+function ResultView({ result, onOpenEditor, chartHeight }: { result: ToolResult; onOpenEditor?: (sql: string) => void; chartHeight?: number }) {
   const data = result.data as Record<string, any> | undefined;
   const sql = typeof data?.sql === 'string' ? data.sql : undefined;
-  const chartData = data?.chart as ChartSpec | undefined;
-  // 图表已经提到结论区时，执行步骤里不再重复渲染
-  const chart = showChart ? chartData : undefined;
+  const chart = data?.chart as ChartSpec | undefined;
   const connectionId = useApp((s) => s.activeConnectionId);
   const notify = useApp((s) => s.notify);
   const detail = data?.columns && Array.isArray(data?.rows) ? data : undefined;
@@ -588,7 +585,7 @@ function ResultView({ result, onOpenEditor, showChart = true, chartHeight }: { r
   };
   return (
     <div>
-      {/* 图表已提升到结论区，工具摘要和耗时留在执行过程里，不再压在图表上方 */}
+      {/* 带图表时摘要行由图表块自己的头部渲染，这里不重复 */}
       {!chart ? (
         <div className="tool-result-line">
           <span className={result.ok ? 'ok' : 'err'}>{result.ok ? '✓' : '✗'}</span>
@@ -735,7 +732,6 @@ function ToolCard({
   summary,
   live,
   onOpenEditor,
-  chartMoved,
 }: {
   tool: string;
   args: unknown;
@@ -745,10 +741,9 @@ function ToolCard({
   summary?: string;
   live?: boolean;
   onOpenEditor?: (sql: string) => void;
-  chartMoved?: boolean;
 }) {
   const artifact = result?.data as Record<string, any> | undefined;
-  const hasArtifact = Boolean((artifact?.chart && !chartMoved) || (Array.isArray(artifact?.findings) && artifact.findings.length));
+  const hasArtifact = Boolean(Array.isArray(artifact?.findings) && artifact.findings.length);
   const setSettingsOpen = useApp((s) => s.setSettingsOpen);
   const setMcpPathHint = useApp((s) => s.setMcpPathHint);
   const needsMcpRoot = result?.error?.code === 'MCP_FS_NO_ROOTS' || result?.error?.code === 'MCP_PATH_DENIED';
@@ -778,7 +773,7 @@ function ToolCard({
           {result ? (
             <>
               <div className="tool-section-label">{tr("结果")}</div>
-              <ResultView result={result} onOpenEditor={onOpenEditor} showChart={!chartMoved} />
+              <ResultView result={result} onOpenEditor={onOpenEditor} />
               {needsMcpRoot ? (
                 <button
                   className="btn ghost small"
@@ -891,7 +886,6 @@ function ToolEntryView({ call, onOpenEditor }: { call: TurnTool; onOpenEditor: (
       result={call.result}
       summary={call.summary}
       live={call.live}
-      chartMoved={isChartResult(call.result)}
       onOpenEditor={onOpenEditor}
     />
   );
@@ -900,7 +894,7 @@ function ToolEntryView({ call, onOpenEditor }: { call: TurnTool; onOpenEditor: (
 /**
  * 按发生顺序渲染的一条时间线：这一步的思考、这一步说的话、它的工具卡，依次排开。
  *
- * 折叠的粒度是关键：**只折工具卡，正文不折**。用户原话是「把执行步骤隐藏起来不主动展开，
+ * 折叠的粒度是关键：**只折工具卡，正文与图表不折**。用户原话是「把执行步骤隐藏起来不主动展开，
  * 感觉偷偷摸摸就干完了」——被藏起来的应该是 SQL 和结果表格那类细节，而不是模型的解释。
  * 所以正文直接摊在流里，思考与工具各自是一个 can-fold 的块，位置仍在真实顺序上。
  *
@@ -939,7 +933,7 @@ function TurnTimeline({
   };
   const grouped = fold === 'step';
   groupTools(view.entries).forEach((group) => {
-    const step = group.kind === 'tools' ? undefined : group.entry.step;
+    const step = group.kind === 'tools' || group.entry.kind === 'chart' ? undefined : group.entry.step;
     if (step !== undefined && grouped) {
       // 同一步的思考与正文并到一块；换了步号就另起一段（正在生成的尾巴没有 step，
       // 也另起：它跟在上一步后面会被误读成那一步已经讲完了）。
@@ -947,7 +941,7 @@ function TurnTimeline({
       (tail && tail.step === step ? tail : open(step)).groups.push(group);
       return;
     }
-    // 工具属于上面那一步：它是那一步的模型调用发出来的。并进去，
+    // 工具与图表属于上面那一步：它们是那一步的模型调用发出来的。并进去，
     // 「我先按 status 分组」和它那条 SQL 才在一个框里——这正是「执行和解释对应不上」的反面。
     const tail = nodes.at(-1);
     (grouped && tail && tail.step !== undefined ? tail : open()).groups.push(group);
@@ -964,6 +958,23 @@ function TurnTimeline({
         ),
       )}
     </>
+  );
+}
+
+/** 图表块：在产生它的那一格就地渲染，头部留一行工具出处，不折进执行过程。 */
+function ChartBlock({ call, onOpenEditor }: { call: TurnTool; onOpenEditor: (sql: string) => void }) {
+  const result = call.result;
+  if (!result) return null;
+  return (
+    <div className="agent-chart" data-testid="agent-chart">
+      <div className="tool-result-line agent-chart-head">
+        <span className={result.ok ? 'ok' : 'err'}>{result.ok ? '✓' : '✗'}</span>
+        <span className="chart-tool">{call.tool}</span>
+        <span>{localizeSummary(result.summary)}</span>
+        <span className="muted">· {formatDuration(result.meta.durationMs)}</span>
+      </div>
+      <ResultView result={result} chartHeight={CHART_BODY_HEIGHT} onOpenEditor={onOpenEditor} />
+    </div>
   );
 }
 
@@ -998,6 +1009,10 @@ function StepNodeView({
         }
         const entry = group.entry;
         const isLast = group.index === lastIndex;
+        if (entry.kind === 'chart') {
+          // 旧数据外壳（fold='none'）把图表统一放在正文后面，这里不重复渲染
+          return foldTools ? <ChartBlock key={entry.key} call={entry.call} onOpenEditor={onOpenEditor} /> : null;
+        }
         if (entry.kind === 'text') {
           return (
             <div className="prose step-text" key={entry.key} data-testid="step-text">
@@ -1019,8 +1034,9 @@ function StepNodeView({
 
 /**
  * 整条回合的外壳：计划卡不折（用户点名要随时看得见 AI 打算干什么），
- * 正文摊开、工具卡按位置折起来，图表跟在它们后面。
- * 旧数据（没有分段块）排不出顺序，退回原来的「工具一坨、文字一坨」形状。
+ * 正文摊开、工具卡按位置折起来，图表在产生它的那一格就地渲染，图文穿插。
+ * 旧数据（没有分段块）排不出顺序，退回原来的「工具一坨、文字一坨」形状，
+ * 图表仍统一放在正文后面（那种数据里图文的相对位置本来就不可知）。
  */
 function TurnBody({
   view,
@@ -1040,11 +1056,12 @@ function TurnBody({
   const openQuery = useApp((s) => s.openQuery);
   const onOpenEditor = (sql: string) => openQuery(undefined, sql);
   if (!view.stepped) {
-    const hasExecution = view.toolCount > 0 || Boolean(view.legacyThinking) || Boolean(view.plan);
+    const foldedTools = view.entries.filter((entry) => entry.kind === 'tool').length;
+    const hasExecution = foldedTools > 0 || Boolean(view.legacyThinking) || Boolean(view.plan);
     return (
       <>
         {hasExecution ? (
-          <ExecutionSection count={view.toolCount} running={running} testId={testId}>
+          <ExecutionSection count={foldedTools} running={running} testId={testId}>
             {view.plan ? <PlanCard items={view.plan} running={running} /> : null}
             {view.legacyThinking ? (
               <details className="thinking" open={running && view.toolCount === 0 ? true : undefined}>
@@ -1056,10 +1073,8 @@ function TurnBody({
           </ExecutionSection>
         ) : null}
         {fallbackText ? <Markdown>{fallbackText}</Markdown> : null}
-        {view.charts.map((chart) => (
-          <div className="agent-chart" data-testid="agent-chart" key={chart.key}>
-            <ResultView result={chart.result} chartHeight={CHART_BODY_HEIGHT} onOpenEditor={onOpenEditor} />
-          </div>
+        {view.entries.filter((entry) => entry.kind === 'chart').map((entry) => (
+          <ChartBlock key={entry.key} call={entry.call} onOpenEditor={onOpenEditor} />
         ))}
         {children}
       </>
@@ -1075,11 +1090,6 @@ function TurnBody({
             没有分段思考块时才补那一坨，见 agentHost 的 finalBlocks），所以分段分支
             本来就不会带着它。 */}
       <TurnTimeline view={view} streaming={streaming} running={running} testId={testId} onOpenEditor={onOpenEditor} />
-      {view.charts.map((chart) => (
-        <div className="agent-chart" data-testid="agent-chart" key={chart.key}>
-          <ResultView result={chart.result} chartHeight={CHART_BODY_HEIGHT} onOpenEditor={onOpenEditor} />
-        </div>
-      ))}
       {children}
     </>
   );
@@ -1174,13 +1184,10 @@ function AnswerActions({ text }: { text: string }) {
     const question = findQuestion();
     const docTitle = question ? (question.length > 120 ? `${question.slice(0, 120)}…` : question) : tr("AiDB 回答");
     let body = '';
-    const charts: string[] = [];
     if (content) {
-      const chartRoots = [...content.querySelectorAll('.agent-chart')];
-      if (!chartRoots.length) chartRoots.push(...content.querySelectorAll('[data-testid="chart-card"]'));
-      for (const chart of chartRoots) charts.push(chart.outerHTML);
+      // 图表留在正文里的原位导出：图文穿插就是用户读到的顺序，不再抽到文末
       const clone = content.cloneNode(true) as HTMLElement;
-      clone.querySelectorAll('.answer-actions, .agent-chart, [data-testid="chart-card"], .turn-end, .execution-section, .risk-banner, .tool-card, details').forEach((node) => node.remove());
+      clone.querySelectorAll('.answer-actions, .turn-end, .execution-section, .risk-banner, .tool-card, details').forEach((node) => node.remove());
       body = clone.innerHTML;
     }
     const css = Array.from(document.styleSheets)
@@ -1203,7 +1210,7 @@ body{background:#fff;color:#111;font:14px/1.7 "Microsoft YaHei",Arial,sans-serif
 article{max-width:960px;margin:0 auto}.agent-chart{margin:20px 0}.answer-actions{display:none}
 .answer-question{font-size:18px;line-height:1.5;font-weight:650;color:#111;margin:0 0 18px;padding:0 0 12px;border-bottom:1px solid #dfe7e4}
 @media print{body{background:#fff;color:#111;margin:0}.chart-card,.agent-chart{break-inside:avoid}}
-</style></head><body><article>${question ? `<h1 class="answer-question">${escapeHtml(question)}</h1>` : ''}${body}${charts.map((chart) => `<section class="chart">${chart}</section>`).join('')}</article></body></html>`;
+</style></head><body><article>${question ? `<h1 class="answer-question">${escapeHtml(question)}</h1>` : ''}${body}</article></body></html>`;
   };
   const exportPdf = async () => {
     const html = buildHtml();

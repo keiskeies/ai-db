@@ -33,7 +33,7 @@ const { readWithIdleCeiling, ApiError } = await import('../src/lib/api');
 const here = dirname(fileURLToPath(import.meta.url));
 // test/ → desktop/ → apps/ → 仓库根
 const root = resolve(here, '../../..');
-const source = (rel: string) => readFileSync(join(root, rel), 'utf8');
+const source = (rel: string) => readFileSync(join(root, rel), 'utf8').replace(/\r\n/g, '\n'); // autocrlf 工作区是 CRLF，源码断言按 LF 写
 const routes = source('apps/gateway/src/routes.ts');
 const apiSource = source('apps/desktop/src/lib/api.ts');
 

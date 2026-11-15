@@ -1616,7 +1616,7 @@
   "图片上传失败": "Das Hochladen des Bildes ist fehlgeschlagen",
   "图片读取失败（{0}）": "Das Lesen des Bildes ist fehlgeschlagen ({0})",
   "图表": "Diagramm",
-  "图表已生成并显示在上方工具卡中：**{0}**。\n\n": "Das Diagramm wurde erstellt und in der obigen Tool-Karte angezeigt: **{0}**.\n\n",
+  "图表已生成并显示在上方：**{0}**。\n\n": "Das Diagramm wurde erstellt und oben angezeigt: **{0}**.\n\n",
   "图表类型": "Diagrammtyp",
   "在": "In",
   "在 @BotFather 创建 Bot 拿 token；chatId 可用 @channelusername 或数字 ID。": "Bot in @BotFather erstellen und Token erhalten; chatId kann @channelusername oder eine numerische ID sein.",

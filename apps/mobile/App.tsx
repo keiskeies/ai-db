@@ -2238,10 +2238,11 @@ function ChatScreen({
                     </>
                   );
                 }
+                const cardTools = turn.entries.filter((entry) => entry.kind === 'tool').length;
                 return (
                   <>
-                    {live.thinking || live.tools.length || live.plan.length ? (
-                      <ExecutionSection count={live.tools.length} running={busy}>
+                    {live.thinking || cardTools || live.plan.length ? (
+                      <ExecutionSection count={cardTools} running={busy}>
                         {live.thinking ? <ThinkingBlock text={live.thinking} /> : null}
                         {live.tools.map((tool) => (
                           <MobileToolCard key={tool.callId} tool={tool.tool} args={tool.args} risk={tool.risk} status={tool.status} result={tool.result} summary={tool.summary} showChart={!chartOf(tool.result)} />
@@ -2250,6 +2251,9 @@ function ChatScreen({
                       </ExecutionSection>
                     ) : null}
                     {live.text ? <Markdown text={live.text} /> : null}
+                    {live.tools.filter((tool) => chartOf(tool.result)).map((tool) => (
+                      <MobileChart key={`chart_${tool.callId}`} chart={chartOf(tool.result)!} />
+                    ))}
                   </>
                 );
               })()}
@@ -2259,9 +2263,6 @@ function ChatScreen({
                   <Text style={styles.listMeta}>{live.status === 'awaiting' ? '等待授权…' : '正在处理…'}</Text>
                 </View>
               ) : null}
-              {live.tools.filter((tool) => chartOf(tool.result)).map((tool) => (
-                <MobileChart key={`chart_${tool.callId}`} chart={chartOf(tool.result)!} />
-              ))}
               {live.error ? <Text style={styles.error}>{live.error}</Text> : null}
               {!busy ? (
                 <Text style={styles.turnEnd}>
@@ -4689,12 +4690,12 @@ function chartOf(result?: ToolResult): ChartShape | undefined {
 }
 
 /**
- * 一条回合的时间线（思考 / 正文 / 工具，按发生顺序）。与桌面端 AgentPanel 的
+ * 一条回合的时间线（思考 / 正文 / 工具 / 图表，按发生顺序）。与桌面端 AgentPanel 的
  * TurnView 同一套结构，理由也一样：正文和工具分两堆渲染会把顺序抹掉，
  * 读的人不知道上面在干什么。
  */
 interface MobileTurnEntry {
-  kind: 'thinking' | 'text' | 'tool';
+  kind: 'thinking' | 'text' | 'tool' | 'chart';
   key: string;
   text?: string;
   /** 这一步属于第几步。桌面端用它把同一步的思考/解释/SQL 框进同一段，移动端同一套口径。 */
@@ -4722,11 +4723,21 @@ function mobileTurnFromBlocks(blocks: AgentMessageBlock[]): { entries: MobileTur
     toolCount += 1;
     const result = results.get(block.callId);
     entries.push({
-      kind: 'tool',
+      // 图表结果不钻工具卡：它在这一格就地渲染，正文才能和图穿插着读
+      kind: chartOf(result) ? 'chart' : 'tool',
       key,
       call: { callId: block.callId, tool: block.tool ?? 'tool', args: block.args, risk: block.risk, status: result ? (result.ok ? 'ok' : 'error') : 'error', result },
     });
   });
+  // 旧数据在步边界先正文后思考（旧 runtime 交付反序）；同步内正文→思考相邻是它的签名，纠正回先想后说。
+  for (let i = 0; i + 1 < entries.length; i++) {
+    const a = entries[i];
+    const b = entries[i + 1];
+    if (a.kind === 'text' && b.kind === 'thinking' && a.step !== undefined && a.step === b.step) {
+      entries[i] = b;
+      entries[i + 1] = a;
+    }
+  }
   return {
     entries,
     toolCount,
@@ -4742,7 +4753,7 @@ function mobileTurnFromLive(live: LiveTurn): { entries: MobileTurnEntry[]; toolC
     if (item.kind === 'tool') {
       const tool = byId.get(item.callId);
       if (!tool) return;
-      entries.push({ kind: 'tool', key: `tool_${tool.callId}`, call: { ...tool } });
+      entries.push({ kind: chartOf(tool.result) ? 'chart' : 'tool', key: `tool_${tool.callId}`, call: { ...tool } });
       return;
     }
     entries.push({ kind: item.kind, key: `${item.kind}_${index}`, text: item.text, step: item.step });
@@ -4753,11 +4764,11 @@ function mobileTurnFromLive(live: LiveTurn): { entries: MobileTurnEntry[]; toolC
 }
 
 /**
- * 连续的工具条目折成一段执行过程；正文与思考摊在流里，位置保持真实顺序。
+ * 连续的工具条目折成一段执行过程；正文、思考与图表摊在流里，位置保持真实顺序。
  * 同一个 step 的条目再套一层带左轨的容器（桌面端 .turn-step 同一套做法）：
  * 「这句解释对应哪条 SQL」只靠相邻关系看不出来，框在一起才看得出是同一轮。
  */
-function MobileTurnTimeline({ entries, running }: { entries: MobileTurnEntry[]; running?: boolean }) {
+function MobileTurnTimeline({ entries, running, inlineCharts = true }: { entries: MobileTurnEntry[]; running?: boolean; inlineCharts?: boolean }) {
   const stepNodes: React.ReactNode[] = [];
   let current: { key: string; step?: number; entries: MobileTurnEntry[] } | null = null;
   const pushStep = () => {
@@ -4771,10 +4782,10 @@ function MobileTurnTimeline({ entries, running }: { entries: MobileTurnEntry[]; 
     // 而且那条本来就被外层「执行过程」包着。
     stepNodes.push(
       node.step === undefined ? (
-        <StepEntries key={node.key} entries={node.entries} running={running} />
+        <StepEntries key={node.key} entries={node.entries} running={running} inlineCharts={inlineCharts} />
       ) : (
         <View key={node.key} style={styles.turnStep}>
-          <StepEntries entries={node.entries} running={running} />
+          <StepEntries entries={node.entries} running={running} inlineCharts={inlineCharts} />
         </View>
       ),
     );
@@ -4788,7 +4799,7 @@ function MobileTurnTimeline({ entries, running }: { entries: MobileTurnEntry[]; 
       current.entries.push(entry);
       return;
     }
-    if (entry.kind === 'tool') {
+    if (entry.kind === 'tool' || entry.kind === 'chart') {
       // 工具属于上面那一步：它是那一步的模型调用发出来的。并进去，
       // 「我先按 status 分组」和它那条 SQL 才在同一个框里。
       if (current && current.step !== undefined) current.entries.push(entry);
@@ -4800,13 +4811,13 @@ function MobileTurnTimeline({ entries, running }: { entries: MobileTurnEntry[]; 
     }
     // 正在生成的半截正文/思考（没有 step）自己占一段：跟在上一步后面会被读成那一步讲完了
     pushStep();
-    stepNodes.push(<StepEntries key={`live_${stepNodes.length}`} entries={[entry]} running={running} />);
+    stepNodes.push(<StepEntries key={`live_${stepNodes.length}`} entries={[entry]} running={running} inlineCharts={inlineCharts} />);
   });
   pushStep();
   return <>{stepNodes}</>;
 }
 
-function StepEntries({ entries, running }: { entries: MobileTurnEntry[]; running?: boolean }) {
+function StepEntries({ entries, running, inlineCharts = true }: { entries: MobileTurnEntry[]; running?: boolean; inlineCharts?: boolean }) {
   const nodes: React.ReactNode[] = [];
   let pending: MobileTurnEntry[] = [];
   const flush = () => {
@@ -4822,7 +4833,6 @@ function StepEntries({ entries, running }: { entries: MobileTurnEntry[]; running
             status={entry.call!.status}
             result={entry.call!.result}
             summary={entry.call!.summary}
-            showChart={!chartOf(entry.call!.result)}
           />
         ))}
       </ExecutionSection>,
@@ -4835,6 +4845,14 @@ function StepEntries({ entries, running }: { entries: MobileTurnEntry[]; running
       return;
     }
     flush();
+    if (entry.kind === 'chart') {
+      // 旧数据（没有步号）把图表统一挪到正文末尾；只有带步的时间线才就地渲染
+      if (inlineCharts) {
+        const chart = chartOf(entry.call!.result);
+        if (chart) nodes.push(<MobileChart key={entry.key} chart={chart} />);
+      }
+      return;
+    }
     nodes.push(
       entry.kind === 'text' ? (
         <Markdown key={entry.key} text={entry.text ?? ''} />
@@ -4850,13 +4868,10 @@ function StepEntries({ entries, running }: { entries: MobileTurnEntry[]; running
 function AssistantMessage({ message }: { message: AgentMessage }) {
   const turn = mobileTurnFromBlocks(message.blocks);
   const tools = turn.toolCount;
+  const cardTools = turn.entries.filter((entry) => entry.kind === 'tool').length;
   // 模型每更新一次计划都会追加一个 plan block；只渲染最后一份，避免旧计划卡堆叠。
   const latestPlan = [...message.blocks].reverse().find((block) => block.type === 'plan');
-  const hasExecution = Boolean(turn.legacyThinking) || tools > 0 || Boolean(latestPlan);
-  const charts = message.blocks
-    .filter((block) => block.type === 'tool_result')
-    .map((block, index) => ({ key: block.callId ?? String(index), chart: chartOf(block.result as ToolResult | undefined) }))
-    .filter((item): item is { key: string; chart: ChartShape } => Boolean(item.chart));
+  const hasExecution = Boolean(turn.legacyThinking) || cardTools > 0 || Boolean(latestPlan);
   return (
     <View style={{ gap: 10 }}>
       <View style={{ flexDirection: 'row', gap: 7, alignItems: 'center' }}>
@@ -4868,16 +4883,16 @@ function AssistantMessage({ message }: { message: AgentMessage }) {
             时间线里已经按顺序说过一遍。旧数据没有分段块，才用它兜底。 */}
         {turn.stepped ? <MobileTurnTimeline entries={turn.entries} /> : null}
         {turn.stepped ? null : hasExecution ? (
-          <ExecutionSection count={tools} running={false}>
+          <ExecutionSection count={cardTools} running={false}>
             {turn.legacyThinking ? <ThinkingBlock text={turn.legacyThinking} /> : null}
-            <MobileTurnTimeline entries={turn.entries} />
+            <MobileTurnTimeline entries={turn.entries} inlineCharts={false} />
             {latestPlan ? <PlanCard items={latestPlan.items ?? []} /> : null}
           </ExecutionSection>
         ) : null}
         {turn.stepped ? null : message.content ? <Markdown text={message.content} /> : null}
-        {charts.map((item) => (
-          <MobileChart key={`${message.id}_chart_${item.key}`} chart={item.chart} />
-        ))}
+        {turn.stepped ? null : turn.entries
+          .filter((entry) => entry.kind === 'chart')
+          .map((entry) => <MobileChart key={`${message.id}_chart_${entry.call!.callId}`} chart={chartOf(entry.call!.result)!} />)}
         {tools ? <Text style={styles.turnEnd}>{tools} 次工具调用</Text> : null}
       </View>
     </View>
@@ -5475,7 +5490,7 @@ function MobileChart({ chart }: { chart: ChartShape }) {
   const axisHint = [chart.xLabel, chart.yLabel].filter(Boolean).join(' × ');
   const hasData = history.length > 0 || Boolean(chart.heatmap?.values.length) || Boolean(chart.scatter?.length);
   return (
-    <View style={{ marginTop: 7, gap: 5 }}>
+    <View testID="m-agent-chart" style={{ marginTop: 7, gap: 5 }}>
       <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6 }}>
         <Text style={styles.chartTitle} numberOfLines={2}>{chart.title ?? '图表'}</Text>
         {axisHint ? <Text style={styles.chartAxisHint} numberOfLines={1}>{axisHint}</Text> : null}

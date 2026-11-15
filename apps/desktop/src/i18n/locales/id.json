@@ -1616,7 +1616,7 @@
   "图片上传失败": "Unggah gambar gagal",
   "图片读取失败（{0}）": "Pembacaan gambar gagal ({0})",
   "图表": "Diagram",
-  "图表已生成并显示在上方工具卡中：**{0}**。\n\n": "Diagram telah dihasilkan dan ditampilkan di kartu alat di atas: **{0}**.\n\n",
+  "图表已生成并显示在上方：**{0}**。\n\n": "Diagram telah dihasilkan dan ditampilkan di atas: **{0}**.\n\n",
   "图表类型": "Jenis grafik",
   "在": "Di",
   "在 @BotFather 创建 Bot 拿 token；chatId 可用 @channelusername 或数字 ID。": "Buat Bot di @BotFather dan dapatkan token; chatId bisa berupa @channelusername atau ID numerik.",

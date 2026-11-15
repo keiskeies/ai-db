@@ -1616,7 +1616,7 @@
   "图片上传失败": "Afbeelding uploaden mislukt",
   "图片读取失败（{0}）": "Afbeelding lezen mislukt ({0})",
   "图表": "Grafiek",
-  "图表已生成并显示在上方工具卡中：**{0}**。\n\n": "De grafiek is gegenereerd en weergegeven in de toolkaart hierboven: **{0}**.\n\n",
+  "图表已生成并显示在上方：**{0}**。\n\n": "De grafiek is gegenereerd en hierboven weergegeven: **{0}**.\n\n",
   "图表类型": "Grafiektype",
   "在": "In",
   "在 @BotFather 创建 Bot 拿 token；chatId 可用 @channelusername 或数字 ID。": "Maak een Bot in @BotFather en krijg een token; chatId kan @channelusername of numeriek ID zijn.",

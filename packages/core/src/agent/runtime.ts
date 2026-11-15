@@ -501,8 +501,9 @@ export class AgentRuntime {
       stepThinking = '';
     };
     const commitStep = (): void => {
-      commitStepText();
+      // 思考先于正文：模型先想后说；反序交付会让思考块挂到正文后面，回合末尾凭空多一段思考。
       commitStepThinking();
+      commitStepText();
     };
 
     const finish = (status: AgentRunResult['status'], error?: AgentRunResult['error'], stop: AgentStopReason = 'end_turn'): AgentRunResult => {

@@ -1616,7 +1616,7 @@
   "图片上传失败": "Przesyłanie obrazu nie powiodło się",
   "图片读取失败（{0}）": "Odczyt obrazu nie powiódł się ({0})",
   "图表": "Wykres",
-  "图表已生成并显示在上方工具卡中：**{0}**。\n\n": "Wykres został wygenerowany i wyświetlony w powyższej karcie narzędzia: **{0}**.\n\n",
+  "图表已生成并显示在上方：**{0}**。\n\n": "Wykres został wygenerowany i wyświetlony powyżej: **{0}**.\n\n",
   "图表类型": "Typ wykresu",
   "在": "W",
   "在 @BotFather 创建 Bot 拿 token；chatId 可用 @channelusername 或数字 ID。": "Utwórz bota w @BotFather i zdobądź token; chatId może być @nazwaKanału lub numeryczne ID.",

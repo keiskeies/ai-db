@@ -1616,7 +1616,7 @@
   "图片上传失败": "Tải hình ảnh thất bại",
   "图片读取失败（{0}）": "Đọc hình ảnh thất bại ({0})",
   "图表": "Biểu đồ",
-  "图表已生成并显示在上方工具卡中：**{0}**。\n\n": "Biểu đồ đã được tạo và hiển thị trong thẻ công cụ phía trên: **{0}**.\n\n",
+  "图表已生成并显示在上方：**{0}**。\n\n": "Biểu đồ đã được tạo và hiển thị ở trên: **{0}**.\n\n",
   "图表类型": "Loại biểu đồ",
   "在": "Trong",
   "在 @BotFather 创建 Bot 拿 token；chatId 可用 @channelusername 或数字 ID。": "Tạo Bot trong @BotFather và nhận token; chatId có thể là @tênkênh hoặc ID số.",

@@ -1,13 +1,15 @@
 import type { AgentMessageBlock, AgentPlanItem, Risk, ToolResult } from '@aidb/core';
 
 /**
- * 一条回合的渲染形状：按发生顺序排列的条目 + 提出时间线的图表。
+ * 一条回合的渲染形状：按发生顺序排列的条目，图表也在它产生的位置上。
  *
  * 为什么要这个中间层：runtime 的事件流本来就是 思考→说话→工具→思考→说话→工具→结论，
  * 但界面以前按「类型」分堆——工具卡堆在折叠里、正文整段堆在折叠外，两边各自有序、
  * 合起来顺序没了。用户读到的就是「所有文字挤在下面，不知道上面在干什么，执行和解释
  * 都对应不上」。这里把两种来源（live 事件的 timeline / 落库的 blocks）归一成同一个序列，
- * 顺序由数据本身决定，渲染不再自己排。
+ * 顺序由数据本身决定，渲染不再自己排。图表同理：它曾被单独抽出、堆在正文末尾，
+ * 正文说「如下图」时图却在几屏之外；现在图表结果自成一体（kind: 'chart'），
+ * 留在它被画出来的那一格，图文按真实顺序穿插。
  *
  * 单独成模块而不是留在 AgentPanel 里，是因为「顺序」这件事必须能被钉住：
  * 分堆的 bug 只在真实顺序上看得见，藏在组件里就没法测，下次改渲染又会溜回来。
@@ -27,13 +29,13 @@ export interface TurnTool {
 export type TurnEntry =
   | { kind: 'thinking'; key: string; text: string; step?: number }
   | { kind: 'text'; key: string; text: string; step?: number }
-  | { kind: 'tool'; key: string; call: TurnTool };
+  | { kind: 'tool'; key: string; call: TurnTool }
+  | { kind: 'chart'; key: string; call: TurnTool };
 
 export interface TurnView {
   /** 按发生顺序排列的时间线条目。 */
   entries: TurnEntry[];
   plan?: AgentPlanItem[];
-  charts: Array<{ key: string; result: ToolResult }>;
   toolCount: number;
   /** false = 这条消息来自分段块出现之前存的旧数据，走老版渲染。 */
   stepped: boolean;
@@ -75,12 +77,6 @@ export function isChartResult(result?: ToolResult): boolean {
   return Boolean((result?.data as Record<string, any> | undefined)?.chart);
 }
 
-export function chartsOfResults(results: Iterable<{ callId: string; result?: ToolResult }>): Array<{ key: string; result: ToolResult }> {
-  const out: Array<{ key: string; result: ToolResult }> = [];
-  for (const item of results) if (item.result && isChartResult(item.result)) out.push({ key: item.callId, result: item.result });
-  return out;
-}
-
 /** 落库消息 → 时间线。blocks 数组的写入顺序就是事件顺序（见 gateway agentHost.wrappedEmit）。 */
 export function turnFromBlocks(blocks: AgentMessageBlock[]): TurnView {
   const results = new Map<string, ToolResult>();
@@ -103,7 +99,8 @@ export function turnFromBlocks(blocks: AgentMessageBlock[]): TurnView {
     toolCount += 1;
     const result = results.get(block.callId);
     entries.push({
-      kind: 'tool',
+      // 图表结果不钻工具卡：它在这一格就地渲染，正文才能和图穿插着读
+      kind: isChartResult(result) ? 'chart' : 'tool',
       key,
       call: {
         callId: block.callId,
@@ -116,15 +113,20 @@ export function turnFromBlocks(blocks: AgentMessageBlock[]): TurnView {
       },
     });
   });
+  // 旧数据在步边界先正文后思考（旧 runtime 交付反序）；同步内正文→思考相邻是它的签名，纠正回先想后说。
+  for (let i = 0; i + 1 < entries.length; i++) {
+    const a = entries[i];
+    const b = entries[i + 1];
+    if (a.kind === 'text' && b.kind === 'thinking' && a.step !== undefined && a.step === b.step) {
+      entries[i] = b;
+      entries[i + 1] = a;
+    }
+  }
   const stepped = entries.some((entry) => entry.kind === 'text' || entry.kind === 'thinking');
   const plan = [...blocks].reverse().find((block) => block.type === 'plan')?.items;
-  const charts = chartsOfResults(
-    blocks.filter((block) => block.type === 'tool_result' && block.callId).map((block) => ({ callId: block.callId!, result: results.get(block.callId!) })),
-  );
   return {
     entries,
     ...(plan ? { plan } : {}),
-    charts,
     toolCount,
     stepped,
     legacyThinking: blocks.find((block) => block.type === 'thinking' && block.step === undefined)?.text,
@@ -140,7 +142,7 @@ export function turnFromLive(live: LiveTurnLike): TurnView {
       const tool = byId.get(item.callId);
       if (!tool) return;
       entries.push({
-        kind: 'tool',
+        kind: isChartResult(tool.result) ? 'chart' : 'tool',
         key: `tool_${item.callId}`,
         call: { callId: tool.callId, tool: tool.tool, args: tool.args, risk: tool.risk, status: tool.status, result: tool.result, summary: tool.summary, live: true },
       });
@@ -155,7 +157,6 @@ export function turnFromLive(live: LiveTurnLike): TurnView {
   return {
     entries,
     ...(live.plan.length ? { plan: live.plan } : {}),
-    charts: chartsOfResults(live.tools),
     toolCount: live.tools.length,
     stepped,
     ...(live.thinking ? { legacyThinking: live.thinking } : {}),
@@ -169,7 +170,7 @@ export type TurnGroup =
 
 /**
  * 分组只决定「谁可以被折起来」，不改变顺序：
- * 连续的工具卡合成一段可折叠的执行过程，正文与思考各自独立、**不折**——
+ * 连续的工具卡合成一段可折叠的执行过程，正文、思考与图表各自独立、**不折**——
  * 被藏起来的该是 SQL 与结果表格那类细节，不是模型的解释（「偷偷摸摸就干完了」）。
  */
 export function groupTools(entries: TurnEntry[]): TurnGroup[] {

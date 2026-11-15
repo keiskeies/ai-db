@@ -639,6 +639,8 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 .execution[open] .execution-chevron { transform: rotate(90deg); }
 .execution-body { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 6px; }
 .agent-chart { margin-top: 2px; }
+.agent-chart-head { margin-bottom: 4px; }
+.agent-chart-head .chart-tool { font-family: var(--font-mono); font-weight: 600; color: var(--text-secondary); }
 /*
  * 一步 = 一个框：这一步的思考、这句解释、它的 SQL 挤在同一条左轨里。
  * 顺序对了还不够，「这句话对应哪条 SQL」得看得出来是同一轮，所以用一道轨把

@@ -65,11 +65,31 @@ test('tool_result 不另占一格：一次调用在时间线上只出现一次',
   assert.equal(tool && tool.kind === 'tool' && tool.call.status, 'ok', '结果回填进调用那一格');
 });
 
-test('图表从工具卡里提出来，位置不再跟着工具走', () => {
+test('图表结果留在发生的位置：独立一格，不钻工具卡', () => {
   const view = turnFromBlocks([text('看图', 1), call('c1', 'generate_chart'), result('c1', 'generate_chart', chartResult)]);
-  assert.equal(view.charts.length, 1, '图表要能被提到时间线外面渲染（它塞进 .tool-card 会被压扁）');
-  const toolEntry = view.entries.find((entry) => entry.kind === 'tool');
-  assert.ok(toolEntry && toolEntry.kind === 'tool' && toolEntry.call.result, '卡片本体仍在顺序上，只是内容被提走');
+  assert.deepEqual(kinds(view), ['text', 'chart'], '图表在时间线上自成一体，渲染才能把它放在正文中间');
+  const chartEntry = view.entries[1];
+  assert.ok(chartEntry && chartEntry.kind === 'chart' && chartEntry.call.result, '图表那一格带着完整结果');
+  assert.equal(view.toolCount, 1, '图表也是一次工具调用，计数不减');
+});
+
+test('连续工具被图表打断：图表前后各自折一段，图表自己不折', () => {
+  const view = turnFromBlocks([
+    text('先查再画', 1),
+    call('c1'),
+    result('c1'),
+    call('c2', 'render_chart'),
+    result('c2', 'render_chart', chartResult),
+    call('c3'),
+    result('c3'),
+    text('结论', 2),
+  ]);
+  const groups = groupTools(view.entries);
+  assert.deepEqual(
+    groups.map((group) => (group.kind === 'tools' ? `tools:${group.calls.length}` : group.entry.kind)),
+    ['text', 'tools:1', 'chart', 'tools:1', 'text'],
+    '图表不参与折叠，它两边的工具卡也不能隔着它合成一段',
+  );
 });
 
 test('半路中止的调用：没有结果也要留在时间线上，并且标成失败', () => {
@@ -88,6 +108,17 @@ test('旧数据（整回合一条 thinking、正文没有 step）仍走老渲染
   assert.deepEqual(kinds(view), ['text']);
 });
 
+test('旧版反序落库（同一步内正文→思考相邻）纠正回先想后说', () => {
+  const view = turnFromBlocks([
+    text('一句话思路。', 1),
+    thinking('先想清楚', 1),
+    call('c1', 'render_chart'),
+    result('c1', 'render_chart', chartResult),
+    text('总结。', 2),
+    thinking('收尾思考', 2),
+  ]);
+  assert.deepEqual(kinds(view), ['thinking', 'text', 'chart', 'thinking', 'text'], '旧 runtime 先交正文后交思考，落库反序；渲染前纠正回模型真实顺序');
+});
 test('计划块留在视图上，但不占时间线的一格', () => {
   const items = [{ id: 'p1', text: '读表结构', status: 'done' }];
   const view = turnFromBlocks([{ type: 'plan', items }, text('先看表', 1), call('c1')]);
@@ -129,6 +160,16 @@ test('live 回合：时间线顺序 = 事件到达顺序，正在生成的接在
 test('时间线引用了不存在的工具调用时跳过它，不渲染空气泡', () => {
   const view = turnFromLive(live({ tools: [], timeline: [{ kind: 'tool', callId: 'gone' }], stream: '还在说' }));
   assert.deepEqual(kinds(view), ['text']);
+});
+
+test('live 回合的图表同样留在事件到达的位置', () => {
+  const view = turnFromLive(
+    live({
+      tools: [{ callId: 'c1', tool: 'render_chart', args: {}, status: 'ok', result: chartResult }],
+      timeline: [{ kind: 'text', text: '画好了', step: 1 }, { kind: 'tool', callId: 'c1' }],
+    }),
+  );
+  assert.deepEqual(kinds(view), ['text', 'chart']);
 });
 
 test('连续工具折成一段，正文与思考各自独立且不参与折叠', () => {
