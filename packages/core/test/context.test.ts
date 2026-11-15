@@ -416,3 +416,20 @@ test('anti-pattern glossary entries become a separate hard-constraint section', 
   const terms = out.split('### Anti-patterns')[0];
   assert.ok(!terms.includes('反例：订单数'), '反例不应混进普通术语段');
 });
+
+test('formatGlossary renders synonyms alongside the term and keeps bare terms unchanged', () => {
+  const out = formatGlossary([
+    mem({ id: 'g1', kind: 'glossary', title: 'JS', content: 'JumpServer 堡垒机', synonyms: ['堡垒机', '跳板机'] }),
+    mem({ id: 'g2', kind: 'glossary', title: 'GMV', content: '成交总额' }),
+  ]);
+  assert.match(out, /- JS \(synonyms: 堡垒机 \/ 跳板机\) → JumpServer 堡垒机/);
+  assert.match(out, /- GMV → 成交总额/);
+});
+
+test('focusTablesForQuestion recalls tables named only in a term synonym', () => {
+  const glossary = [mem({ id: 'g', kind: 'glossary', title: 'JS', content: 'JumpServer 堡垒机', synonyms: ['audit_log'] })];
+  const withSynonyms = focusTablesForQuestion({ question: '堡垒机清单', databases: schema, glossary });
+  assert.ok(withSynonyms.includes('audit_log'), 'synonym naming the table is a strong signal');
+  const bare = focusTablesForQuestion({ question: '堡垒机清单', databases: schema, glossary: [{ ...glossary[0], synonyms: [] }] });
+  assert.ok(!bare.includes('audit_log'), 'without the synonym there is no signal for that table');
+});

@@ -369,6 +369,7 @@ interface MemoryRow {
   title: string;
   content: string;
   tags: string | null;
+  synonyms: string | null;
   importance: number;
   confidence: number;
   source_session: string | null;
@@ -696,6 +697,8 @@ export class Store {
     this.ensureColumn('jobs', 'payload', 'TEXT');
     // 出站 MCP 配对凭据需要受限 scope；旧库补列后默认值 'full'，移动端不受影响。
     this.ensureColumn('devices', 'scope', "TEXT NOT NULL DEFAULT 'full'");
+    // 术语同义词要跨重启保留，否则召回与 prompt 的加成会静默消失
+    this.ensureColumn('memories', 'synonyms', 'TEXT');
     this.db.exec('PRAGMA user_version = 9');
   }
 
@@ -1388,6 +1391,12 @@ export class Store {
     } catch {
       tags = [];
     }
+    let synonyms: string[] = [];
+    try {
+      synonyms = row.synonyms ? (JSON.parse(row.synonyms) as string[]) : [];
+    } catch {
+      synonyms = [];
+    }
     return {
       id: row.id,
       scopeType: row.scope_type,
@@ -1396,6 +1405,7 @@ export class Store {
       title: row.title,
       content: row.content,
       tags,
+      synonyms,
       importance: row.importance,
       confidence: row.confidence,
       sourceSession: row.source_session ?? undefined,
@@ -1422,8 +1432,8 @@ export class Store {
       params.push(opts.scopeType);
     }
     if (opts.q) {
-      clauses.push('(title LIKE ? OR content LIKE ? OR tags LIKE ?)');
-      params.push(`%${opts.q}%`, `%${opts.q}%`, `%${opts.q}%`);
+      clauses.push('(title LIKE ? OR content LIKE ? OR tags LIKE ? OR synonyms LIKE ?)');
+      params.push(`%${opts.q}%`, `%${opts.q}%`, `%${opts.q}%`, `%${opts.q}%`);
     }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const limit = Math.min(500, Math.max(1, opts.limit ?? 200));
@@ -1450,8 +1460,8 @@ export class Store {
     const now = iso();
     const id = randomUUID();
     this.exec(
-      `INSERT INTO memories (id,scope_type,scope_key,kind,title,content,tags,importance,confidence,source_session,source_message,pinned,archived,use_count,last_used_at,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,0,0,0,NULL,?,?)`,
+      `INSERT INTO memories (id,scope_type,scope_key,kind,title,content,tags,synonyms,importance,confidence,source_session,source_message,pinned,archived,use_count,last_used_at,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,0,0,NULL,?,?)`,
       [
         id,
         scopeType,
@@ -1460,6 +1470,7 @@ export class Store {
         candidate.title.slice(0, 200),
         candidate.content,
         JSON.stringify(candidate.tags ?? []),
+        JSON.stringify(candidate.synonyms ?? []),
         Math.min(1, Math.max(0, candidate.importance ?? 0.5)),
         Math.min(1, Math.max(0, candidate.confidence ?? 0.7)),
         ctx.sessionId ?? null,
@@ -1489,11 +1500,13 @@ export class Store {
     if (duplicate) {
       const merged = mergeMemoryContent(duplicate, candidate);
       const tags = [...new Set([...(duplicate.tags ?? []), ...(candidate.tags ?? [])])];
-      this.exec('UPDATE memories SET title=?, content=?, importance=?, tags=?, confidence=?, updated_at=? WHERE id=?', [
+      const synonyms = [...new Set([...(duplicate.synonyms ?? []), ...(candidate.synonyms ?? [])])];
+      this.exec('UPDATE memories SET title=?, content=?, importance=?, tags=?, synonyms=?, confidence=?, updated_at=? WHERE id=?', [
         merged.title,
         merged.content,
         merged.importance,
         JSON.stringify(tags),
+        JSON.stringify(synonyms),
         Math.max(duplicate.confidence, candidate.confidence ?? 0.7),
         merged.updatedAt,
         duplicate.id,
@@ -1505,7 +1518,7 @@ export class Store {
 
   updateMemory(
     id: string,
-    patch: Partial<Pick<Memory, 'title' | 'content' | 'kind' | 'importance' | 'confidence' | 'pinned' | 'archived' | 'tags'>>,
+    patch: Partial<Pick<Memory, 'title' | 'content' | 'kind' | 'importance' | 'confidence' | 'pinned' | 'archived' | 'tags' | 'synonyms'>>,
   ): Memory {
     const sets: string[] = [];
     const params: unknown[] = [];
@@ -1518,12 +1531,13 @@ export class Store {
       pinned: 'pinned',
       archived: 'archived',
       tags: 'tags',
+      synonyms: 'synonyms',
     };
     for (const [key, column] of Object.entries(mapping)) {
       if (!(key in patch)) continue;
       let value = (patch as Record<string, unknown>)[key];
       if (value === undefined) continue;
-      if (key === 'tags') value = JSON.stringify(value ?? []);
+      if (key === 'tags' || key === 'synonyms') value = JSON.stringify(value ?? []);
       if (typeof value === 'boolean') value = value ? 1 : 0;
       sets.push(`${column} = ?`);
       params.push(value);

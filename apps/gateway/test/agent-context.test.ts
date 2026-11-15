@@ -234,8 +234,8 @@ test('猜你想问 is generated locally from the loaded schema', async () => {
   assert.ok(res.body.suggestions.length > 0, 'demo 库应能生成推荐问题');
   assert.ok(res.body.suggestions.length <= 6, '默认上限 6 条');
   for (const s of res.body.suggestions) {
-    assert.ok(s.id && s.prompt && s.reason && s.kind && s.table, `推荐项字段完整：${JSON.stringify(s)}`);
-    assert.ok(['trend', 'group', 'topn', 'quality', 'relation'].includes(s.kind), `未知类型 ${s.kind}`);
+    assert.ok(s.id && s.prompt && s.reason && s.kind && (s.kind === 'recent' || s.table), `推荐项字段完整：${JSON.stringify(s)}`);
+    assert.ok(['trend', 'group', 'topn', 'quality', 'relation', 'recent'].includes(s.kind), `未知类型 ${s.kind}`);
   }
   assert.equal(new Set(res.body.suggestions.map((s) => s.prompt)).size, res.body.suggestions.length, '推荐问题不得重复');
 
@@ -261,4 +261,27 @@ test('猜你想问 is generated locally from the loaded schema', async () => {
   assert.ok(mine.length === 0 || mine.every((s) => s.prompt.includes('探针别名表')), '推荐语应使用业务别名');
 
   await api(`/agent/context?connectionId=${demo.id}`, { method: 'DELETE' });
+});
+
+test('历史会话的真实问题进入推荐问；sessionId 排除当前会话', async () => {
+  const past = gateway.store.createSession({ connectionId: demo.id, database, title: 'past' });
+  gateway.store.appendMessage({ sessionId: past.id, role: 'user', content: '上个月华东区的退款率为什么升高？' });
+  gateway.store.appendMessage({ sessionId: past.id, role: 'assistant', content: '退款率升高的原因……' });
+  const current = gateway.store.createSession({ connectionId: demo.id, database, title: 'current' });
+  gateway.store.appendMessage({ sessionId: current.id, role: 'user', content: '这个问题只属于当前会话，不应该被推荐回来' });
+
+  const res = await api<{ suggestions: any[] }>(
+    `/agent/suggest?connectionId=${demo.id}&database=${encodeURIComponent(database)}&locale=zh&limit=12&sessionId=${current.id}`,
+  );
+  assert.equal(res.status, 200);
+  const recent = res.body.suggestions.filter((s) => s.kind === 'recent');
+  assert.ok(recent.some((s) => s.prompt === '上个月华东区的退款率为什么升高？'), '历史会话的问题应进入推荐');
+  assert.ok(!res.body.suggestions.some((s) => s.prompt === '这个问题只属于当前会话，不应该被推荐回来'), '当前会话的问题不应被推回');
+  assert.match(recent[0].reason, /最近问过/, '推荐理由标明来源与次数');
+
+  const withoutExclusion = await api<{ suggestions: any[] }>(`/agent/suggest?connectionId=${demo.id}&database=${encodeURIComponent(database)}&locale=zh&limit=12`);
+  assert.ok(withoutExclusion.body.suggestions.some((s) => s.prompt === '这个问题只属于当前会话，不应该被推荐回来'), '不传 sessionId 时不做排除');
+
+  gateway.store.deleteSession(past.id);
+  gateway.store.deleteSession(current.id);
 });

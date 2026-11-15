@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { bundleAgentContext } from '../src/agent/context';
-import { disabledTableInSql, isDimensionColumn, isMeasureColumn, isTimeColumn, suggestFollowUps, suggestQuestions, tablesFromSql, type QuestionSuggestion } from '../src/agent/suggest';
+import { disabledTableInSql, isDimensionColumn, isMeasureColumn, isTimeColumn, suggestFollowUps, suggestQuestions, suggestionLabel, tablesFromSql, type QuestionSuggestion } from '../src/agent/suggest';
 import type { AgentContextEntry, ColumnInfo, DatabaseSchema, TableInfo } from '../src/types';
 
 const iso = new Date('2026-10-27T00:00:00.000Z').toISOString();
@@ -165,6 +165,62 @@ test('recently queried tables are recommended first', () => {
   const warm = suggestQuestions(schema, { limit: 4, history: ['audit_log'] });
   assert.ok(warm.some((s) => s.table === 'audit_log'), '最近查过的表应进入推荐');
   assert.notDeepEqual(kinds(cold), kinds(warm));
+});
+
+// ---------- recent questions ----------
+
+test('recent questions become suggestions with an Asked badge and frequency boost', () => {
+  const list = suggestQuestions(schema, { limit: 12, recentQuestions: ['上个月华东区的退款率为什么升高？', '上个月华东区的退款率为什么升高？', '帮我看看库存周转最慢的十种商品'] });
+  const recent = list.filter((s) => s.kind === 'recent');
+  assert.equal(recent.length, 2, '重复问题去重后只剩两条');
+  const repeated = recent.find((s) => s.prompt === '上个月华东区的退款率为什么升高？')!;
+  assert.ok(repeated, '重复问过的问题应保留');
+  assert.match(repeated.reason, /最近问过（2 次）/);
+  assert.equal(repeated.table, '', '历史问题无法确定关联表时留空');
+  assert.ok(list.indexOf(repeated) < list.indexOf(recent.find((s) => s !== repeated)!), '问得越多排得越前');
+  assert.equal(suggestionLabel('recent'), '问过');
+  assert.equal(suggestionLabel('recent', 'en'), 'Asked');
+});
+
+test('recent candidates are normalised, length-filtered and deduped against structural prompts', () => {
+  const structural = suggestQuestions(schema, { limit: 12 });
+  const structuralPrompt = structural[0].prompt;
+  const list = suggestQuestions(schema, {
+    limit: 12,
+    recentQuestions: [
+      '短',
+      'x'.repeat(81),
+      '   ',
+      structuralPrompt,
+      `  ${structuralPrompt}  `,
+      '帮我把上个月的订单按城市分组统计一下',
+    ],
+  });
+  const recent = list.filter((s) => s.kind === 'recent');
+  assert.equal(recent.length, 1, `只剩一条合法且不重复的历史问题：${JSON.stringify(recent.map((s) => s.prompt))}`);
+  assert.equal(recent[0].prompt, '帮我把上个月的订单按城市分组统计一下');
+});
+
+test('recent suggestions respect maxPerKind rotation and the overall limit', () => {
+  const questions = ['问题一：华东区上个月的退款率为什么升高', '问题二：库存周转最慢的十种商品是哪些', '问题三：最近一周新增用户的留存情况怎么样'];
+  const list = suggestQuestions(schema, { limit: 12, recentQuestions: questions });
+  assert.equal(list.filter((s) => s.kind === 'recent').length, 2, '默认每类最多 2 条，不挤掉结构多样性');
+  assert.equal(suggestQuestions(schema, { limit: 3, recentQuestions: questions }).length, 3);
+});
+
+test('recent questions still surface when the schema is unavailable', () => {
+  const list = suggestQuestions([], { recentQuestions: ['上个月华东区的退款率为什么升高？'] });
+  assert.equal(list.length, 1);
+  assert.equal(list[0].kind, 'recent');
+  assert.deepEqual(suggestQuestions(undefined, { recentQuestions: [] }), []);
+});
+
+test('callers without recentQuestions keep the old behaviour; en locale localises the reason', () => {
+  assert.ok(!suggestQuestions(schema, { limit: 6 }).some((s) => s.kind === 'recent'));
+  const english = suggestQuestions(schema, { limit: 12, recentQuestions: ['Why did refunds rise in the east region last month?'], locale: 'en' });
+  const recent = english.find((s) => s.kind === 'recent')!;
+  assert.ok(recent);
+  assert.match(recent.reason, /Asked recently \(1×\)/);
 });
 
 // ---------- follow-ups ----------

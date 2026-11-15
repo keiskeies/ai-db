@@ -45,6 +45,7 @@ import type {
   SkillRunFile,
   SkillSummary,
   TableInfo,
+  ToolResult,
 } from '@aidb/core';
 import { t as tr } from '../i18n';
 
@@ -828,6 +829,9 @@ export const api = {
   createMemory: (body: Record<string, unknown>) => request<{ memory: Memory; merged: boolean }>('/agent/memories', { method: 'POST', body: JSON.stringify(body) }),
   updateMemory: (id: string, body: Record<string, unknown>) => request<{ memory: Memory }>(`/agent/memories/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteMemory: (id: string) => request<void>(`/agent/memories/${id}`, { method: 'DELETE' }),
+  /** 图表一键解读/预测：不经过模型，执行器权威统计；失败时 ApiError.message 即人话原因。 */
+  chartInsight: (body: { connectionId: string; database?: string; sql: string; x?: string; y?: string; mode: 'analyze' | 'forecast'; periods?: number; method?: 'linear' | 'moving_average' | 'auto' }) =>
+    request<{ result: ToolResult }>('/agent/chart-insight', { method: 'POST', body: JSON.stringify(body) }),
 
   agentContext: (connectionId: string, database?: string) =>
     request<{ entries: AgentContextEntry[]; bundle: AgentContextBundle; active: boolean }>(
@@ -855,10 +859,11 @@ export const api = {
   bulkContextTables: (body: { connectionId: string; database?: string; tables: string[]; enabled: boolean }) =>
     request<{ touched: number }>('/agent/context/bulk', { method: 'POST', body: JSON.stringify(body) }),
   deleteContextEntry: (id: string) => request<void>(`/agent/context/entry/${id}`, { method: 'DELETE' }),
-  suggest: (params: { connectionId: string; database?: string; limit?: number; locale?: string }) => {
+  suggest: (params: { connectionId: string; database?: string; limit?: number; locale?: string; sessionId?: string }) => {
     const q = new URLSearchParams({ connectionId: params.connectionId });
     if (params.database) q.set('database', params.database);
     if (params.limit) q.set('limit', String(params.limit));
+    if (params.sessionId) q.set('sessionId', params.sessionId);
     q.set('locale', params.locale ?? 'en');
     return request<{ suggestions: QuestionSuggestion[] }>(`/agent/suggest?${q.toString()}`);
   },

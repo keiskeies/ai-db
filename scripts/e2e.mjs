@@ -2283,6 +2283,10 @@ await page.keyboard.press('ControlOrMeta+Enter');
 await page.waitForSelector('[data-testid="query-result-grid"]', { timeout: 20000 });
 const queryRows = await page.locator('[data-testid="query-result-grid"] tbody tr').count();
 check('SQL editor runs with Ctrl+Enter', queryRows >= 4, `${queryRows} rows`);
+// M2 解读断言基线：趁网格还挂载记录聚合结果的 n 列（切到图表页后网格会卸载）
+const queryCounts = await page.$$eval('[data-testid="query-result-grid"] tbody tr', (rows) =>
+  rows.map((row) => Number((row.querySelector('td.num')?.textContent ?? '0').replace(/[^\d.-]/g, ''))),
+);
 await page.screenshot({ path: join(shots, 'desktop-query.png') });
 
 await page.locator('.cm-content').click();
@@ -2401,6 +2405,56 @@ check(
 await page.setViewportSize({ width: 1440, height: 900 });
 await page.waitForTimeout(400);
 await page.screenshot({ path: join(shots, 'desktop-query-chart.png') });
+
+// M2 解读基线：重跑聚合 SQL（同一条 SQL 不会重置列选择，下面显式选 n）
+await page.locator('.cm-content').click();
+await page.keyboard.press('ControlOrMeta+A');
+await page.keyboard.type('SELECT status, COUNT(*) AS n, SUM(total_cents) AS total FROM orders GROUP BY status ORDER BY n DESC;');
+await page.keyboard.press('ControlOrMeta+Enter');
+await page.waitForSelector('[data-testid="query-result-grid"]', { timeout: 20000 });
+await page.locator('[data-testid="query-chart"]').click();
+await page.waitForSelector('.query-chart-panel .chart-card', { timeout: 10000 });
+// 重跑同一条 SQL 时 chartSetKey 不变、旧选择保留（scatter 可能留下 x=n）：
+// 显式选回 x=status、y=n，与基线列一致，也避免 x/y 同列让图表退化为空
+await page.click('[data-testid="chart-x"]');
+await page.locator('.select-menu').first().locator('[data-value="status"]').first().click();
+await page.click('[data-testid="chart-y"]');
+await page.locator('.select-menu').first().locator('[data-value="n"]').first().click();
+// M2 一键解读：统计条数字必须与 SQL 聚合一致（n 列的合计/均值），再点收起
+const expectedSum = queryCounts.reduce((s, v) => s + v, 0);
+const expectedAvg = Math.round((expectedSum / queryCounts.length) * 100) / 100;
+await page.click('[data-testid="chart-analyze"]');
+await page.waitForSelector('.query-chart-panel [data-testid="chart-insight-strip"]', { timeout: 15000 });
+const insightNums = await page.$$eval('.query-chart-panel .insight-stat b', (els) => els.slice(0, 2).map((el) => Number((el.textContent ?? '').replace(/,/g, ''))));
+check(
+  'chart analyze strip matches SQL aggregates',
+  insightNums[0] === expectedSum && insightNums[1] === expectedAvg,
+  `sum ${insightNums[0]}/${expectedSum}, avg ${insightNums[1]}/${expectedAvg}`,
+);
+await page.click('[data-testid="chart-analyze"]');
+await page.waitForFunction(() => !document.querySelector('.query-chart-panel [data-testid="chart-insight-strip"]'), null, { timeout: 5000 });
+check('chart analyze toggles off', true);
+
+// M2 一键预测：时间序列 SQL → 虚线预测段出现；切非 line 类型清除；再点收起
+await page.locator('.cm-content').click();
+await page.keyboard.press('ControlOrMeta+A');
+await page.keyboard.type("SELECT substr(created_at, 1, 7) AS month, COUNT(*) AS n FROM orders GROUP BY month ORDER BY month;");
+await page.keyboard.press('ControlOrMeta+Enter');
+await page.waitForSelector('[data-testid="query-result-grid"]', { timeout: 20000 });
+await page.locator('[data-testid="query-chart"]').click();
+await page.waitForSelector('.query-chart-panel .chart-card', { timeout: 10000 });
+await page.click('[data-testid="chart-forecast"]');
+await page.waitForSelector('.query-chart-panel [data-testid="chart-forecast-line"]', { timeout: 15000 });
+check('chart forecast draws the dashed forecast segment', true);
+await page.click('[data-testid="chart-type-bar"]');
+await page.waitForFunction(() => !document.querySelector('.query-chart-panel [data-testid="chart-forecast-line"]'), null, { timeout: 5000 });
+check('switching to a non-line type clears the forecast', true);
+await page.click('[data-testid="chart-type-line"]');
+await page.click('[data-testid="chart-forecast"]');
+await page.waitForSelector('.query-chart-panel [data-testid="chart-forecast-line"]', { timeout: 15000 });
+await page.click('[data-testid="chart-forecast"]');
+await page.waitForFunction(() => !document.querySelector('.query-chart-panel [data-testid="chart-forecast-line"]'), null, { timeout: 5000 });
+check('chart forecast toggles off', true);
 
 await page.getByRole('button', { name: /AI 优化/ }).click();
 await page.waitForTimeout(300);
@@ -2782,6 +2836,9 @@ const chipText = (await suggestChips.first().textContent()) ?? '';
 await suggestChips.first().evaluate((el) => el.click());
 await page.waitForFunction(() => (document.querySelector('[data-testid="agent-input"]')?.value ?? '').length > 4, null, { timeout: 5000 });
 check('点击推荐填入输入框且不自动发送', (await page.locator('[data-testid="agent-input"]').inputValue()).length > 4 && chipText.length > 0);
+// M4 历史问数：前面回合真实问过的问题进入推荐，带「问过」来源徽标（当前会话已被排除）
+const recentChip = page.locator('[data-testid="suggest-recent"]').first();
+check('历史问题进入猜你想问并带问过徽标', (await recentChip.count()) > 0 && ((await recentChip.textContent()) ?? '').includes('问过'), ((await recentChip.textContent()) ?? '').slice(0, 40));
 await page.fill('[data-testid="agent-input"]', '');
 
 // ---------------- P5 会话重命名与搜索 ----------------
@@ -2881,6 +2938,55 @@ check('清空业务上下文', ((await api(ctxUrl)).body.entries ?? []).length =
 await page.locator('.tools-modal .icon-btn').first().click();
 await page.waitForTimeout(400);
 check('业务上下文面板可关闭', (await page.locator('.tools-modal').count()) === 0);
+
+// ---------------- M3 示例库运营：行内编辑 + CSV 导入导出 ----------------
+await page.click('[data-testid="ribbon"] button[title="视图"]');
+await page.waitForSelector('.tools-modal', { timeout: 10000 });
+await page.locator('.tools-nav button').filter({ hasText: 'Agent 上下文' }).click();
+await page.waitForSelector('[data-testid="ctx-connection"]', { timeout: 8000 });
+await page.click('[data-testid="ctx-tab-terms"]');
+await page.fill('input[placeholder="术语，如 JS"]', 'E2E 成交额');
+await page.fill('input[placeholder="释义，如 JumpServer 堡垒机"]', 'GMV 口径为 SUM(total_cents)');
+await page.fill('[data-testid="ctx-term-synonyms"]', '成交额, 销售额');
+await page.locator('.tool-pane button').filter({ hasText: '添加术语' }).click();
+await page.waitForSelector('.ctx-grid tr:has-text("E2E 成交额") .ctx-synonyms .badge', { timeout: 8000 });
+check('术语同义词 chips 可见', (await page.locator('.ctx-grid tr', { hasText: 'E2E 成交额' }).locator('.ctx-synonyms .badge').count()) === 2);
+await page.fill('input[placeholder*="标准问题"]', 'E2E 每月订单数');
+await page.fill('textarea.ctx-sql', 'SELECT substr(created_at, 1, 7) AS m, COUNT(*) AS n FROM orders GROUP BY m');
+await page.locator('.tool-pane button').filter({ hasText: '添加示例' }).click();
+await page.waitForSelector('.ctx-grid tr:has-text("E2E 每月订单数") pre.ctx-pre', { timeout: 8000 });
+check('示例 SQL 行可见', true);
+
+// 行内编辑：术语改标题+同义词，示例改 SQL
+await page.locator('.ctx-grid tr', { hasText: 'E2E 成交额' }).locator('[data-testid^="ctx-edit-term-"]').click();
+await page.fill('[data-testid="ctx-edit-title"]', 'E2E 成交额（改）');
+await page.fill('[data-testid="ctx-edit-synonyms"]', '成交额, 销售额, GMV');
+await page.click('[data-testid="ctx-edit-save"]');
+await page.waitForSelector('.ctx-grid tr:has-text("E2E 成交额（改）") .ctx-synonyms .badge:has-text("GMV")', { timeout: 8000 });
+check('术语行内编辑保存生效', true);
+await page.locator('.ctx-grid tr', { hasText: 'E2E 每月订单数' }).locator('[data-testid^="ctx-edit-example-"]').click();
+await page.fill('[data-testid="ctx-edit-content"]', 'SELECT substr(created_at, 1, 7) AS m, COUNT(*) AS n FROM orders GROUP BY m ORDER BY m');
+await page.click('[data-testid="ctx-edit-save"]');
+await page.waitForFunction(() => [...document.querySelectorAll('.ctx-grid pre.ctx-pre')].some((el) => el.textContent?.includes('ORDER BY m')), null, { timeout: 8000 });
+check('示例行内编辑保存生效', true);
+
+// 导出 CSV：BOM 开头、文件名带日期、编辑后的内容都在
+const [csvDownload] = await Promise.all([page.waitForEvent('download'), page.click('[data-testid="ctx-export-csv"]')]);
+check('CSV 文件名带日期', /^agent-context-\d{8}\.csv$/.test(csvDownload.suggestedFilename()), csvDownload.suggestedFilename());
+const csvPath = await csvDownload.path();
+const csvText = await readFile(csvPath, 'utf8');
+check('CSV 带 BOM 且包含编辑后的术语与示例', csvText.charCodeAt(0) === 0xfeff && csvText.includes('kind,title,content,synonyms') && csvText.includes('E2E 成交额（改）') && csvText.includes('成交额;销售额;GMV') && csvText.includes('ORDER BY m'), csvText.slice(0, 80).replace(/\r?\n/g, ' | '));
+
+// 删除两行后导入同一份 CSV，行必须恢复（服务端去重合并，导入幂等）
+await page.locator('.ctx-grid tr', { hasText: 'E2E 成交额（改）' }).locator('[title="删除"]').click();
+await page.locator('.ctx-grid tr', { hasText: 'E2E 每月订单数' }).locator('[title="删除"]').click();
+await page.waitForFunction(() => ![...document.querySelectorAll('.ctx-grid tr')].some((tr) => tr.textContent?.includes('E2E')), null, { timeout: 8000 });
+await page.setInputFiles('[data-testid="ctx-import-file"]', csvPath);
+await page.waitForSelector('.ctx-grid tr:has-text("E2E 成交额（改）")', { timeout: 20000 });
+await page.waitForSelector('.ctx-grid tr:has-text("E2E 每月订单数") pre.ctx-pre', { timeout: 20000 });
+check('CSV 导入恢复被删的行', (await page.locator('.ctx-grid tr', { hasText: 'E2E 成交额（改）' }).locator('.ctx-synonyms .badge').count()) === 3);
+await page.locator('.tools-modal .icon-btn').first().click();
+await page.waitForTimeout(400);
 
 await page.fill('[data-testid="agent-input"]', '给数据库做一次体检');
 await page.click('[data-testid="agent-send"]');
@@ -3248,6 +3354,61 @@ check('board stays within the 12-card limit', boardTotal.length <= 12, `${boardT
 await page.click('[data-testid="dashboard-discard"]');
 await page.waitForFunction(() => document.querySelectorAll('[data-testid="dashboard-card"][data-pinned="0"]').length === 0, null, { timeout: 20000 });
 check('discard clears drafts and keeps pinned cards', (await page.locator('[data-testid="dashboard-card"]').count()) === pinnedNodes);
+
+// ---------------- M5 仪表板拖拽重排 ----------------
+if ((await dashList()).length < 2) {
+  await api('/dashboards/cards', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: demo.id, title: 'E2E 拖拽卡', sql: 'SELECT status, COUNT(*) AS n FROM orders GROUP BY status', chartType: 'bar', pinned: true, source: 'manual' }),
+  });
+  await page.click('[data-testid="dashboard-refresh"]');
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid="dashboard-card"]').length >= 2, null, { timeout: 20000 });
+}
+const orderBefore = await page.$$eval('[data-testid="dashboard-card"]', (els) => els.map((el) => el.getAttribute('data-card-id')));
+// HTML5 DnD：把手 dragstart → 目标卡 dragover（乐观预览）→ drop（一次性持久化）→ dragend。
+// 分四段派发：React 18 的状态更新要在事件之间 flushing，同一同步块里 dragover 会读到旧的 dragId。
+await page.evaluate(() => {
+  window.__dt = new DataTransfer();
+  const grips = document.querySelectorAll('[data-testid="dashboard-card-grip"]');
+  grips[1].dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: window.__dt }));
+});
+await page.evaluate(() => {
+  const cards = document.querySelectorAll('[data-testid="dashboard-card"]');
+  cards[0].dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: window.__dt }));
+});
+await page.evaluate(() => {
+  const cards = document.querySelectorAll('[data-testid="dashboard-card"]');
+  cards[0].dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: window.__dt }));
+});
+await page.evaluate(() => {
+  const grips = document.querySelectorAll('[data-testid="dashboard-card-grip"]');
+  grips[0].dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: window.__dt }));
+});
+await page.waitForFunction((prev) => {
+  const ids = [...document.querySelectorAll('[data-testid="dashboard-card"]')].map((el) => el.getAttribute('data-card-id'));
+  return ids[0] === prev[1] && ids[1] === prev[0];
+}, orderBefore, { timeout: 10000 });
+check('拖拽把手把第二张卡拖到第一张前', true, orderBefore.slice(0, 2).join(' -> '));
+let persisted = [];
+for (let i = 0; i < 20; i++) {
+  persisted = (await dashList()).sort((a, b) => a.position - b.position).map((card) => card.id);
+  if (persisted[0] === orderBefore[1] && persisted[1] === orderBefore[0]) break;
+  await page.waitForTimeout(250);
+}
+check('拖拽顺序一次性持久化', persisted[0] === orderBefore[1] && persisted[1] === orderBefore[0], persisted.slice(0, 2).join(','));
+await page.click('[data-testid="dashboard-refresh"]');
+await page.waitForFunction((prev) => {
+  const ids = [...document.querySelectorAll('[data-testid="dashboard-card"]')].map((el) => el.getAttribute('data-card-id'));
+  return ids[0] === prev[1] && ids[1] === prev[0];
+}, orderBefore, { timeout: 20000 });
+check('刷新后拖拽顺序仍在', true);
+// ±1 按钮保留：把现在的第二张（原第一张）前移，恢复原顺序
+await page.locator('[data-testid="dashboard-card"]').nth(1).locator('button[title="前移"]').click();
+await page.waitForFunction((prev) => {
+  const ids = [...document.querySelectorAll('[data-testid="dashboard-card"]')].map((el) => el.getAttribute('data-card-id'));
+  return ids[0] === prev[0] && ids[1] === prev[1];
+}, orderBefore, { timeout: 10000 });
+check('前移按钮与拖拽共用同一排序 API', true);
 const scheduleOn = await api('/dashboards/schedule', { method: 'PUT', body: JSON.stringify({ connectionId: demo.id, intervalSeconds: 300 }) });
 check('scheduled refresh stores an interval with a 60s floor', scheduleOn.status === 200 && scheduleOn.body?.schedule?.intervalSeconds === 300, JSON.stringify(scheduleOn.body?.schedule ?? {}).slice(0, 120));
 const scheduleList = await api(`/dashboards/cards?connectionId=${demo.id}`);
@@ -3292,8 +3453,14 @@ await mobile.getByTestId('m-bridge-url').fill(bridge);
 await mobile.getByTestId('m-pair-code').fill(pair.body.code);
 await mobile.getByTestId('m-connect').click();
 await mobile.waitForFunction(() => document.body.innerText.includes('Bridge 在线'), { timeout: 40000 });
-await mobile.screenshot({ path: join(shots, 'mobile-chat.png') });
 check('mobile pairs and connects via Bridge', true);
+// M4 parity：移动端空会话同样给出猜你想问，历史问题带「问过」徽标
+await mobile.waitForFunction(() => document.querySelectorAll('[data-testid^="m-suggest-"]').length > 0, null, { timeout: 15000 });
+const mobileSuggestKinds = await mobile.$$eval('[data-testid^="m-suggest-"]', (els) => els.map((el) => el.getAttribute('data-testid')));
+check('mobile 猜你想问含历史问过', mobileSuggestKinds.includes('m-suggest-recent'), mobileSuggestKinds.join(','));
+const mobileRecentText = (await mobile.locator('[data-testid=m-suggest-recent]').first().textContent()) ?? '';
+check('mobile 历史问题带问过徽标', mobileRecentText.includes('问过'), mobileRecentText.slice(0, 40));
+await mobile.screenshot({ path: join(shots, 'mobile-chat.png') });
 
 await mobile.getByTestId('m-chat-input').fill('看看有哪些表');
 await mobile.getByTestId('m-send').click();
@@ -3322,6 +3489,54 @@ const mobileInterleaved = await mobile.evaluate(() => {
   return before && after ? 'ok' : `text before=${before} after=${after}`;
 });
 check('mobile chart interleaves with text, not hoisted to the end', mobileInterleaved === 'ok', mobileInterleaved);
+// M2 parity：移动端图表卡一键解读/预测与桌面一致。
+// live 回合落库时会重挂载图表（解读/预测本地状态清空），交互前先等持久化形态：
+// 持久化消息脚注是「N 次工具调用」，live 脚注是「已完成 · N 次工具 · Xs」，两者可区分。
+const waitMobileChartPersisted = () => mobile.waitForFunction(() => {
+  const charts = document.querySelectorAll('[data-testid="m-agent-chart"]');
+  if (!charts.length) return false;
+  let scope = charts[charts.length - 1].parentElement;
+  while (scope && !(scope.textContent ?? '').includes('AiDB Agent')) scope = scope.parentElement;
+  return Boolean(scope && (scope.textContent ?? '').includes('次工具调用'));
+}, null, { timeout: 60000 });
+await waitMobileChartPersisted();
+const mobileAgg = await api('/query', { method: 'POST', body: JSON.stringify({ connectionId: demo.id, sql: 'SELECT status, COUNT(*) AS n FROM orders GROUP BY status' }) });
+const mobileCounts = (mobileAgg.body?.batch?.sets?.[0]?.rows ?? []).map((row) => Number(row[1]));
+const mobileSum = mobileCounts.reduce((s, v) => s + v, 0);
+const mobileAvg = mobileCounts.length ? Math.round((mobileSum / mobileCounts.length) * 100) / 100 : 0;
+await mobile.evaluate(() => [...document.querySelectorAll('[data-testid="m-agent-chart"]')].at(-1)?.scrollIntoView({ block: 'center' }));
+await mobile.waitForTimeout(300);
+await mobile.locator('[data-testid="m-agent-chart"]').last().locator('[data-testid="m-chart-analyze"]').click();
+await mobile.waitForSelector('[data-testid="m-chart-insight-strip"]', { timeout: 15000 });
+const mobileInsightNums = await mobile.evaluate(() => {
+  const strip = document.querySelector('[data-testid="m-chart-insight-strip"]');
+  if (!strip) return [];
+  return [...strip.children].slice(0, 2).map((stat) => Number(([...stat.querySelectorAll('div[dir="auto"]')].at(-1)?.textContent ?? '').replace(/,/g, '')));
+});
+check('mobile 解读统计条与 SQL 聚合一致', mobileInsightNums[0] === mobileSum && mobileInsightNums[1] === mobileAvg, 'sum ' + mobileInsightNums[0] + '/' + mobileSum + ', avg ' + mobileInsightNums[1] + '/' + mobileAvg);
+await mobile.locator('[data-testid="m-agent-chart"]').last().locator('[data-testid="m-chart-analyze"]').click();
+await mobile.waitForFunction(() => !document.querySelector('[data-testid="m-chart-insight-strip"]'), null, { timeout: 5000 });
+check('mobile 解读再点收起', true);
+// 预测要时间序列：再问一轮月度趋势（真实模型），落库后点预测 → 虚线段 + 区间带
+await mobile.getByTestId('m-chat-input').fill('按月份统计 orders 并画折线图');
+await mobile.getByTestId('m-send').click();
+await mobile.waitForFunction(() => (document.body.innerText.match(/AiDB Agent/g) ?? []).length >= 3 && document.querySelectorAll('[data-testid="m-agent-chart"]').length >= 2, null, { timeout: 60000 });
+await waitMobileChartPersisted();
+await mobile.waitForTimeout(400);
+await mobile.evaluate(() => [...document.querySelectorAll('[data-testid="m-agent-chart"]')].at(-1)?.scrollIntoView({ block: 'center' }));
+await mobile.waitForTimeout(300);
+await mobile.locator('[data-testid="m-agent-chart"]').last().locator('[data-testid="m-chart-forecast"]').click();
+await mobile.waitForSelector('[data-testid="m-chart-forecast-line"]', { timeout: 15000 });
+check('mobile 预测画出虚线段与区间带', (await mobile.locator('[data-testid="m-chart-forecast-band"]').count()) > 0);
+await mobile.locator('[data-testid="m-agent-chart"]').last().locator('[data-testid="m-chart-type-bar"]').click();
+await mobile.waitForFunction(() => !document.querySelector('[data-testid="m-chart-forecast-line"]'), null, { timeout: 5000 });
+check('mobile 切非 line 类型清除预测', true);
+await mobile.locator('[data-testid="m-agent-chart"]').last().locator('[data-testid="m-chart-type-line"]').click();
+await mobile.locator('[data-testid="m-agent-chart"]').last().locator('[data-testid="m-chart-forecast"]').click();
+await mobile.waitForSelector('[data-testid="m-chart-forecast-line"]', { timeout: 15000 });
+await mobile.locator('[data-testid="m-agent-chart"]').last().locator('[data-testid="m-chart-forecast"]').click();
+await mobile.waitForFunction(() => !document.querySelector('[data-testid="m-chart-forecast-line"]'), null, { timeout: 5000 });
+check('mobile 预测再点收起', true);
 await mobile.evaluate(() => [...document.querySelectorAll('[data-testid="m-agent-chart"]')].at(-1)?.scrollIntoView({ block: 'center' }));
 await mobile.waitForTimeout(400);
 await mobile.screenshot({ path: join(shots, 'mobile-agent.png') });

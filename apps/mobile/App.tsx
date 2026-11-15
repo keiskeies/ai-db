@@ -67,13 +67,14 @@ import {
   Table2,
   TerminalSquare,
   Trash2,
+  TrendingUp,
   User,
   Users,
   Workflow,
   Wrench,
   X,
 } from 'lucide-react-native';
-import { COMMANDS, chartSuitability, localeInfo, normalizeLocale, parsePairingPayload, pipelineStepKind } from '@aidb/core';
+import { COMMANDS, chartSuitability, localeInfo, normalizeLocale, parsePairingPayload, pipelineStepKind, suggestionLabel } from '@aidb/core';
 import type {
   AgentEvent,
   AgentSettings,
@@ -83,6 +84,7 @@ import type {
   AgentSessionMeta,
   ChartKind,
   QueryBatchResult,
+  QuestionSuggestion,
   ConnectionConfig,
   Engine,
   Memory,
@@ -1286,6 +1288,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
   const provider = boot?.settings.agent.provider === 'local' ? 'Local' : boot?.settings.agent.provider;
 
   return (
+    <ChartInsightContext.Provider value={{ client, connectionId: activeConnectionId, database: activeDatabase }}>
     <KeyboardAvoidingView style={styles.app} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <Modal visible={commandOpen} transparent animationType="slide" onRequestClose={() => setCommandOpen(false)}>
         <View style={styles.modalBackdrop}>
@@ -1981,6 +1984,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
         </Modal>
       ) : null}
     </KeyboardAvoidingView>
+    </ChartInsightContext.Provider>
   );
 }
 
@@ -2101,6 +2105,29 @@ function ChatScreen({
 }) {
   const insets = useSafeAreaInsets();
   const [modelSheet, setModelSheet] = useState(false);
+  // 猜你想问与桌面同源：结构推荐 + 最近真实问过的问题（recent 带「问过」徽标）
+  const suggestCtx = React.useContext(ChartInsightContext);
+  const [suggestions, setSuggestions] = useState<QuestionSuggestion[]>([]);
+  useEffect(() => {
+    const client = suggestCtx?.client;
+    const connectionId = suggestCtx?.connectionId;
+    if (!client || !connectionId) {
+      setSuggestions([]);
+      return;
+    }
+    let cancelled = false;
+    client
+      .suggest({ connectionId, database: suggestCtx?.database, limit: 4, locale: currentLocale(), sessionId: sessionMeta?.id })
+      .then((res) => {
+        if (!cancelled) setSuggestions(res.suggestions);
+      })
+      .catch(() => {
+        if (!cancelled) setSuggestions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [suggestCtx?.client, suggestCtx?.connectionId, suggestCtx?.database, sessionMeta?.id, tables.length]);
   const modelOptions = useMemo(() => {
     const configs = agentSettings?.modelConfigs ?? [];
     const base = configs.flatMap((config) =>
@@ -2177,6 +2204,21 @@ function ChatScreen({
             <View style={styles.agentAvatarLarge}><Sparkles size={22} color={colors.agent} /></View>
             <Text style={styles.emptyTitle}>AI 数据库搭档</Text>
             <Text style={styles.emptyHint}>用自然语言查询、建表、排查。工具调用、审批与记忆在桌面与移动端同步。</Text>
+            {suggestions.length ? (
+              <View style={styles.suggestList}>
+                <Text style={styles.sectionLabel}>猜你想问</Text>
+                {suggestions.map((s) => {
+                  const label = suggestionLabel(s.kind, /^zh/i.test(currentLocale()) ? 'zh' : 'en');
+                  return (
+                    <Pressable key={s.id} testID={`m-suggest-${s.kind}`} style={styles.capItem} onPress={() => setInput(s.prompt)}>
+                      {s.kind === 'recent' ? <History size={12} color={colors.agent} /> : <Sparkles size={12} color={colors.agent} />}
+                      <Text style={[styles.capText, { flex: 1 }]} numberOfLines={1}>{s.prompt}</Text>
+                      <Text style={styles.suggestBadge}>{label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ) : null}
             <View style={styles.capList}>
               {[
                 '给数据库做一次体检',
@@ -4899,6 +4941,22 @@ function AssistantMessage({ message }: { message: AgentMessage }) {
   );
 }
 
+/** 图表一键解读/预测：Agent 消息流用当前会话的连接与库；仪表板等可用 insight prop 覆盖。 */
+const ChartInsightContext = React.createContext<{ client: BridgeClient; connectionId?: string; database?: string } | null>(null);
+
+interface MobileInsightAnalysis {
+  rowCount: number;
+  sum: number;
+  avg: number;
+  min: number;
+  max: number;
+  argmin: string;
+  argmax: string;
+  topShare: Array<{ label: string; value: number; share: number }>;
+  deltas: Array<{ label: string; value: number; delta: number; ratio: number | null }>;
+  isTimeSeries: boolean;
+}
+
 interface ChartShape {
   type?: string;
   title?: string;
@@ -4972,13 +5030,51 @@ const formatMetric = (value: number): string =>
     ? value.toLocaleString(undefined, { maximumFractionDigits: 2 })
     : Number(value).toLocaleString();
 
-function MobileChart({ chart }: { chart: ChartShape }) {
+function MobileChart({ chart: sourceChart, insight }: { chart: ChartShape; insight?: { connectionId: string; database?: string } }) {
+  const insightCtx = React.useContext(ChartInsightContext);
+  const insightScope = insight ?? (insightCtx?.connectionId ? { connectionId: insightCtx.connectionId, database: insightCtx.database } : undefined);
+  const canInsight = Boolean(insightCtx?.client && insightScope?.connectionId && sourceChart.sql);
   const [selection, setSelection] = React.useState<ChartSelection | null>(null);
-  const [type, setType] = React.useState<ChartKind>(() => normalizeChartType(chart.type));
+  const [analysis, setAnalysis] = React.useState<MobileInsightAnalysis | null>(null);
+  const [forecastOverlay, setForecastOverlay] = React.useState<{ forecast: NonNullable<ChartShape['forecast']>; note?: string } | null>(null);
+  const [insightBusy, setInsightBusy] = React.useState<'analyze' | 'forecast' | null>(null);
+  const [insightError, setInsightError] = React.useState<string | null>(null);
+  // 预测段合并进显示用 chart；移动端已渲染虚线 + 区间带，零新渲染代码
+  const chart = forecastOverlay ? { ...sourceChart, forecast: forecastOverlay.forecast, note: forecastOverlay.note ?? sourceChart.note } : sourceChart;
+  const [typeState, setType] = React.useState<ChartKind>(() => normalizeChartType(sourceChart.type));
+  const type: ChartKind = forecastOverlay ? 'line' : typeState;
   const fit = React.useMemo(
     () => chartSuitability({ series: chart.series, extraSeries: chart.extraSeries, scatter: chart.scatter, heatmap: chart.heatmap, forecast: chart.forecast }),
     [chart],
   );
+  const insightKey = `${insightScope?.connectionId ?? ''}|${insightScope?.database ?? ''}|${sourceChart.sql ?? ''}`;
+  React.useEffect(() => {
+    setAnalysis(null);
+    setForecastOverlay(null);
+    setInsightError(null);
+  }, [insightKey]);
+  const runInsight = async (mode: 'analyze' | 'forecast') => {
+    if (!insightCtx?.client || !insightScope?.connectionId || !sourceChart.sql) return;
+    if (mode === 'analyze' && analysis) { setAnalysis(null); return; }
+    if (mode === 'forecast' && forecastOverlay) { setForecastOverlay(null); return; }
+    setInsightBusy(mode);
+    setInsightError(null);
+    try {
+      const { result } = await insightCtx.client.chartInsight({ connectionId: insightScope.connectionId, database: insightScope.database, sql: sourceChart.sql, x: sourceChart.xLabel, y: sourceChart.yLabel, mode });
+      if (!result.ok) { setInsightError(result.error?.message ?? result.summary); return; }
+      if (mode === 'analyze') {
+        setAnalysis(result.data as MobileInsightAnalysis);
+      } else {
+        const data = result.data as { chart?: { forecast?: NonNullable<ChartShape['forecast']>; note?: string } };
+        if (data.chart?.forecast?.length) setForecastOverlay({ forecast: data.chart.forecast, note: data.chart.note });
+        else setInsightError(result.summary);
+      }
+    } catch (err) {
+      setInsightError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setInsightBusy(null);
+    }
+  };
   const W = 320;
   const H = 168;
   const padLeft = 38;
@@ -5349,8 +5445,8 @@ function MobileChart({ chart }: { chart: ChartShape }) {
         {grid}
         {selectedIndex >= 0 ? <Line x1={x(selectedIndex)} y1={padTop} x2={x(selectedIndex)} y2={padTop + innerH} stroke={colors.borderStrong} strokeWidth={1} /> : null}
         {columns.map((column, index) => <React.Fragment key={column.name}>{lineFor(column.values, dual && index === 1 ? y2 : y, column.color)}</React.Fragment>)}
-        {bandPath ? <Path d={bandPath} fill={palette[1]} fillOpacity={0.13} /> : null}
-        {forecastPath ? <Path d={forecastPath} fill="none" stroke={palette[1]} strokeWidth={2} strokeDasharray="4 3" /> : null}
+        {bandPath ? <Path testID="m-chart-forecast-band" d={bandPath} fill={palette[1]} fillOpacity={0.13} /> : null}
+        {forecastPath ? <Path testID="m-chart-forecast-line" d={forecastPath} fill="none" stroke={palette[1]} strokeWidth={2} strokeDasharray="4 3" /> : null}
         {selectedIndex >= 0 ? columns.map((column, columnIndex) => (
           selectedIndex < column.values.length ? (
             <Circle
@@ -5509,6 +5605,7 @@ function MobileChart({ chart }: { chart: ChartShape }) {
                 accessibilityState={{ selected: active, disabled: blocked }}
                 style={[styles.chartTypeChip, active && styles.chartTypeChipActive, blocked && styles.chartTypeChipBlocked]}
                 onPress={() => {
+                  if (item.value !== 'line') setForecastOverlay(null);
                   setType(item.value);
                   setSelection(null);
                 }}
@@ -5518,6 +5615,32 @@ function MobileChart({ chart }: { chart: ChartShape }) {
               </Pressable>
             );
           })}
+          {canInsight ? (
+            <>
+              <Pressable
+                testID="m-chart-analyze"
+                disabled={insightBusy != null}
+                accessibilityLabel={translate('解读')}
+                accessibilityState={{ selected: Boolean(analysis), disabled: insightBusy != null }}
+                style={[styles.chartTypeChip, analysis && styles.chartTypeChipActive, insightBusy != null && styles.chartTypeChipBlocked]}
+                onPress={() => void runInsight('analyze')}
+              >
+                {insightBusy === 'analyze' ? <Loader2 size={10} color={colors.accent} /> : <Sparkles size={10} color={analysis ? colors.accent : colors.secondary} />}
+                <Text style={[styles.chartTypeText, analysis && styles.chartTypeTextActive]}>{translate('解读')}</Text>
+              </Pressable>
+              <Pressable
+                testID="m-chart-forecast"
+                disabled={insightBusy != null}
+                accessibilityLabel={translate('预测')}
+                accessibilityState={{ selected: Boolean(forecastOverlay), disabled: insightBusy != null }}
+                style={[styles.chartTypeChip, forecastOverlay && styles.chartTypeChipActive, insightBusy != null && styles.chartTypeChipBlocked]}
+                onPress={() => void runInsight('forecast')}
+              >
+                {insightBusy === 'forecast' ? <Loader2 size={10} color={colors.accent} /> : <TrendingUp size={10} color={forecastOverlay ? colors.accent : colors.secondary} />}
+                <Text style={[styles.chartTypeText, forecastOverlay && styles.chartTypeTextActive]}>{translate('预测')}</Text>
+              </Pressable>
+            </>
+          ) : null}
         </ScrollView>
       ) : null}
       {empty ? (
@@ -5546,6 +5669,24 @@ function MobileChart({ chart }: { chart: ChartShape }) {
           ) : null}
         </View>
       )}
+      {analysis ? (
+        <View testID="m-chart-insight-strip" style={styles.chartInsightStrip}>
+          {([
+            { label: translate('合计'), value: formatMetric(analysis.sum) },
+            { label: translate('均值'), value: formatMetric(analysis.avg) },
+            { label: translate('最大'), value: formatMetric(analysis.max), hint: analysis.argmax },
+            { label: translate('最小'), value: formatMetric(analysis.min), hint: analysis.argmin },
+            ...analysis.topShare.slice(0, 3).map((item) => ({ label: item.label, value: `${(item.share * 100).toFixed(1)}%` })),
+            ...(analysis.isTimeSeries ? analysis.deltas.slice(-3).map((item) => ({ label: item.label, value: `${item.delta >= 0 ? '+' : ''}${formatMetric(item.delta)}`, tone: item.delta >= 0 ? ('up' as const) : ('down' as const) })) : []),
+          ] as Array<{ label: string; value: string; hint?: string; tone?: 'up' | 'down' }>).map((stat, index) => (
+            <View key={`${stat.label}-${index}`} style={styles.chartInsightStat}>
+              <Text style={styles.chartInsightLabel} numberOfLines={1}>{stat.label}{stat.hint ? ` · ${stat.hint}` : ''}</Text>
+              <Text style={[styles.chartInsightValue, stat.tone === 'up' && { color: colors.success }, stat.tone === 'down' && { color: colors.danger }]} numberOfLines={1}>{stat.value}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+      {insightError ? <Text testID="m-chart-insight-error" style={styles.chartInsightError}>{insightError}</Text> : null}
       {caption ? <Text style={styles.chartNote}>{caption}</Text> : null}
       {legend.length ? (
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -5971,6 +6112,8 @@ const makeStyles = () => StyleSheet.create({
   capList: { width: '100%', gap: 6, marginTop: 16 },
   capItem: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: 11, height: 38 },
   capText: { color: colors.secondary, fontSize: 12 },
+  suggestList: { width: '100%', gap: 6, marginTop: 16 },
+  suggestBadge: { color: colors.agent, fontSize: 9, fontWeight: '600', borderWidth: 1, borderColor: `${colors.agent}55`, borderRadius: radius.sm, paddingHorizontal: 5, paddingVertical: 2 },
   sectionLabel: { color: colors.muted, fontSize: 9.5, letterSpacing: 0.8, textTransform: 'uppercase', fontWeight: '600' },
   recentRow: { flexDirection: 'row', alignItems: 'center', gap: 7, height: 34, borderBottomWidth: 1, borderBottomColor: colors.border },
   recentText: { color: colors.secondary, fontSize: 11.5, flex: 1 },
@@ -6046,6 +6189,11 @@ const makeStyles = () => StyleSheet.create({
   chartTooltipValue: { color: colors.text, fontSize: 9.5, fontWeight: '600', marginLeft: 'auto' },
   chartEmpty: { borderWidth: 1, borderColor: colors.border, borderRadius: 8, backgroundColor: colors.panel, padding: 12 },
   chartNote: { color: colors.muted, fontSize: 9, lineHeight: 14 },
+  chartInsightStrip: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingVertical: 6, paddingHorizontal: 8, borderWidth: 1, borderColor: colors.border, borderRadius: 8, backgroundColor: colors.panel },
+  chartInsightStat: { flexDirection: 'row', alignItems: 'baseline', gap: 3 },
+  chartInsightLabel: { color: colors.muted, fontSize: 9 },
+  chartInsightValue: { color: colors.text, fontSize: 10, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  chartInsightError: { color: colors.danger, fontSize: 9.5, lineHeight: 14 },
   planCard: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, padding: 9, gap: 5, backgroundColor: colors.panel },
   planRow: { flexDirection: 'row', gap: 7, alignItems: 'flex-start' },
   planIcon: { color: colors.muted, fontSize: 10, width: 12 },

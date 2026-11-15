@@ -2329,6 +2329,43 @@ export function createApiRouter(deps: ApiDeps): Router {
     }),
   );
 
+  /**
+   * 图表卡一键解读/预测：合成 ToolCall 走执行器，统计与外推全部复用 analyze_chart / forecast_chart。
+   * 不经过模型（零 token），审计、只读强制、500 行护栏与 Agent 工具调用完全一致。
+   */
+  router.post(
+    '/agent/chart-insight',
+    ah(async (req, res) => {
+      const body = obj(req.body, 'body');
+      const connectionId = str(body.connectionId);
+      const sql = str(body.sql);
+      const mode = str(body.mode) ?? 'analyze';
+      if (!connectionId || !sql) throw Object.assign(new Error('connectionId 与 sql 必填'), { code: 'INVALID_INPUT', status: 400 });
+      if (mode !== 'analyze' && mode !== 'forecast') throw Object.assign(new Error('mode 只能是 analyze 或 forecast'), { code: 'INVALID_INPUT', status: 400 });
+      const args: Record<string, unknown> = { sql };
+      const x = str(body.x);
+      const y = str(body.y);
+      if (x) args.x = x;
+      if (y) args.y = y;
+      if (mode === 'forecast') {
+        if (body.periods !== undefined) {
+          const periods = Number(body.periods);
+          if (!Number.isInteger(periods) || periods < 1 || periods > 12) throw Object.assign(new Error('periods 必须是 1..12 的整数'), { code: 'INVALID_INPUT', status: 400 });
+          args.periods = periods;
+        }
+        if (body.method !== undefined) {
+          const method = String(body.method);
+          if (!['linear', 'moving_average', 'auto'].includes(method)) throw Object.assign(new Error('method 只能是 linear、moving_average 或 auto'), { code: 'INVALID_INPUT', status: 400 });
+          args.method = method;
+        }
+      }
+      const call = { id: `insight-${Date.now()}`, name: mode === 'analyze' ? 'analyze_chart' : 'forecast_chart', args };
+      const result = await executor.execute(call, { sessionId: 'chart-insight', connectionId, database: str(body.database) });
+      // 失败时顶层 error 与 result.error 同源：桌面 request() 只读顶层 error，人话提示不能丢。
+      res.status(result.ok ? 200 : 400).json(result.ok ? { result } : { result, error: result.error });
+    }),
+  );
+
   router.post(
     '/agent/models',
     ah(async (req, res) => {
@@ -2490,6 +2527,22 @@ export function createApiRouter(deps: ApiDeps): Router {
     res.status(ok ? 200 : 404).json({ ok });
   });
 
+  /** 同义词清洗：trim/去重/限长；坏条目丢弃而不是让整条记忆写入失败。 */
+  const cleanSynonyms = (value: unknown): string[] | undefined => {
+    if (!Array.isArray(value)) return undefined;
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const item of value) {
+      if (typeof item !== 'string') continue;
+      const text = item.trim().slice(0, 40);
+      if (!text || seen.has(text.toLowerCase())) continue;
+      seen.add(text.toLowerCase());
+      out.push(text);
+      if (out.length >= 12) break;
+    }
+    return out;
+  };
+
   router.get('/agent/memories', (req, res) => {
     res.json({
       memories: store.listMemories({
@@ -2515,6 +2568,7 @@ export function createApiRouter(deps: ApiDeps): Router {
         title,
         content,
         tags: Array.isArray(body.tags) ? (body.tags as string[]) : undefined,
+        synonyms: cleanSynonyms(body.synonyms),
         importance: typeof body.importance === 'number' ? body.importance : 0.6,
         scopeType: str(body.scopeType) as MemoryCandidate['scopeType'],
         scopeKey: str(body.scopeKey),
@@ -2536,6 +2590,7 @@ export function createApiRouter(deps: ApiDeps): Router {
         pinned: typeof body.pinned === 'boolean' ? body.pinned : undefined,
         archived: typeof body.archived === 'boolean' ? body.archived : undefined,
         tags: Array.isArray(body.tags) ? (body.tags as string[]) : undefined,
+        synonyms: cleanSynonyms(body.synonyms),
       });
       res.json({ memory });
     }),
@@ -2555,18 +2610,33 @@ export function createApiRouter(deps: ApiDeps): Router {
       const database = str(req.query.database);
       const limit = num(req.query.limit, 6, 1, 12);
       const locale = /^zh/i.test(String(req.query.locale ?? '')) ? 'zh' : 'en';
+      const sessionId = str(req.query.sessionId);
+      // 最近会话里真实问过的问题进入推荐问；排除当前会话，避免把刚问完的问题又推回来。
+      let recentQuestions: string[] = [];
+      try {
+        recentQuestions = store
+          .listSessions({ connectionId, limit: 8 })
+          .filter((s) => s.id !== sessionId)
+          .flatMap((s) => store.listMessages(s.id))
+          .filter((m) => m.role === 'user' && m.content.trim())
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .slice(0, 30)
+          .map((m) => m.content);
+      } catch {
+        recentQuestions = [];
+      }
       // 建议只是锦上添花：连接还没选库（MySQL 常见）或库不可达时，返回空建议而不是 400，
-      // 否则每次打开查询页都会在控制台留下一个失败请求。
+      // 否则每次打开查询页都会在控制台留下一个失败请求。历史问题不依赖 schema，仍可推荐。
       let schemas: Awaited<ReturnType<typeof manager.schema>> = [];
       try {
         schemas = await manager.schema(connectionId, database);
       } catch {
-        res.json({ suggestions: [] });
+        res.json({ suggestions: suggestQuestions([], { limit, recentQuestions, locale }) });
         return;
       }
       const history = store.listHistory({ connectionId, limit: 50 }).flatMap((h) => tablesFromSql(h.sql));
       res.json({
-        suggestions: suggestQuestions(schemas, { limit, history, bundle: store.agentContextBundle(connectionId, database), locale }),
+        suggestions: suggestQuestions(schemas, { limit, history, bundle: store.agentContextBundle(connectionId, database), locale, recentQuestions }),
       });
     }),
   );

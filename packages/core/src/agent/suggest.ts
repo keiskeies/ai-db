@@ -1,7 +1,7 @@
 import type { AgentContextBundle, ColumnInfo, DatabaseSchema, TableInfo } from '../types';
 import { applyTableVisibility, isColumnDisabled } from './context';
 
-export type SuggestionKind = 'trend' | 'group' | 'topn' | 'quality' | 'relation';
+export type SuggestionKind = 'trend' | 'group' | 'topn' | 'quality' | 'relation' | 'recent';
 
 export interface QuestionSuggestion {
   id: string;
@@ -23,6 +23,8 @@ export interface SuggestOptions {
   maxPerKind?: number;
   /** 推荐语语言；未指定时保持中文，避免改变已有调用与测试。 */
   locale?: 'zh' | 'en';
+  /** 用户最近真实问过的问题（新→旧）；进入「猜你想问」并带「问过」来源标识。 */
+  recentQuestions?: string[];
 }
 
 const TIME_TYPE = /(date|time|timestamp|year)/i;
@@ -95,7 +97,6 @@ interface Candidate extends QuestionSuggestion {
  * 只在「有把握」时推荐——找不到时间列就不编趋势问题，找不到外键就不编关联问题。
  */
 export function suggestQuestions(schemas: DatabaseSchema[] | undefined, opts: SuggestOptions = {}): QuestionSuggestion[] {
-  if (!schemas?.length) return [];
   const limit = Math.max(1, Math.min(12, opts.limit ?? 6));
   const maxPerKind = Math.max(1, opts.maxPerKind ?? 2);
   const bundle = opts.bundle;
@@ -104,7 +105,7 @@ export function suggestQuestions(schemas: DatabaseSchema[] | undefined, opts: Su
   const history = new Set((opts.history ?? []).map(lower));
   const candidates: Candidate[] = [];
 
-  for (const schema of schemas) {
+  for (const schema of schemas ?? []) {
     const tables = applyTableVisibility(schema.tables ?? [], bundle).filter((t) => t.type === 'table' && (t.columns?.length ?? 0) > 0);
     for (const table of tables) {
       const columns = visibleColumns(table, bundle);
@@ -152,6 +153,30 @@ export function suggestQuestions(schemas: DatabaseSchema[] | undefined, opts: Su
         push('relation', L(`检查 ${tLabel} 与 ${refLabel} 的关联完整性（是否存在孤儿记录）`, `Check referential integrity between ${tLabel} and ${refLabel} for orphan records`), L(`外键 ${fk.name ?? fk.columns.join(',')}`, `Foreign key ${fk.name ?? fk.columns.join(',')}`), 0.6, fk.refTable);
       }
     }
+  }
+
+  // 真实问过的问题比结构推断更贴近意图：基础分 0.95，重复出现每次 +0.05，封顶 1.05。
+  // 输入按新→旧，规范化后去重保留首次出现；与结构候选完全相同的 prompt 不再重复推荐。
+  const structuralPrompts = new Set(candidates.map((c) => lower(c.prompt)));
+  const recentSeen = new Map<string, { prompt: string; count: number }>();
+  for (const raw of opts.recentQuestions ?? []) {
+    const prompt = raw.trim().replace(/\s+/g, ' ');
+    if (prompt.length < 6 || prompt.length > 80) continue;
+    const key = lower(prompt);
+    if (structuralPrompts.has(key)) continue;
+    const found = recentSeen.get(key);
+    if (found) found.count += 1;
+    else recentSeen.set(key, { prompt, count: 1 });
+  }
+  for (const { prompt, count } of recentSeen.values()) {
+    candidates.push({
+      id: `recent::${lower(prompt)}`,
+      kind: 'recent',
+      prompt,
+      reason: L(`最近问过（${count} 次）`, `Asked recently (${count}×)`),
+      table: '',
+      score: Math.min(1.05, 0.95 + (count - 1) * 0.05),
+    });
   }
 
   if (!candidates.length) return [];
@@ -214,6 +239,7 @@ const KIND_LABEL: Record<SuggestionKind, string> = {
   topn: 'Top N',
   quality: '数据质量',
   relation: '关联完整性',
+  recent: '问过',
 };
 
 export function suggestionLabel(kind: SuggestionKind, locale: 'zh' | 'en' = 'zh'): string {
@@ -224,6 +250,7 @@ export function suggestionLabel(kind: SuggestionKind, locale: 'zh' | 'en' = 'zh'
       topn: 'Top N',
       quality: 'Data quality',
       relation: 'Relations',
+      recent: 'Asked',
     };
     return english[kind];
   }

@@ -220,7 +220,7 @@ export function focusTablesForQuestion(input: {
   // 召回的记忆/术语/SQL 示例本身已按问题过滤，正文里出现的表名作为强信号。
   const recalled = [...(input.glossary ?? []), ...(input.sqlExamples ?? []), ...(input.memories ?? [])];
   for (const memory of recalled) {
-    const text = `${memory.title} ${memory.content}`;
+    const text = `${memory.title} ${memory.content} ${(memory.synonyms ?? []).join(' ')}`;
     if (![...latin, ...cjk].some((term) => text.toLowerCase().includes(term))) continue;
     for (const table of all) {
       if (new RegExp(`\\b${table.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text)) add(table.name, 4);
@@ -462,7 +462,13 @@ export function formatGlossary(memories: Memory[] | undefined): string {
     .filter((m) => m.kind === 'glossary' && !ANTI_PATTERN_TITLE.test(m.title.trim()))
     .slice(0, GLOSSARY_LIMIT);
   if (!terms.length) return '';
-  return terms.map((m) => `- ${m.title.replace(/\s+/g, ' ').slice(0, 60)} → ${m.content.replace(/\s+/g, ' ').slice(0, GLOSSARY_CHARS)}`).join('\n');
+  return terms
+    .map((m) => {
+      const synonyms = (m.synonyms ?? []).map((s) => s.trim()).filter(Boolean).slice(0, 12);
+      const alias = synonyms.length ? ` (synonyms: ${synonyms.join(' / ')})` : '';
+      return `- ${m.title.replace(/\s+/g, ' ').slice(0, 60)}${alias} → ${m.content.replace(/\s+/g, ' ').slice(0, GLOSSARY_CHARS)}`;
+    })
+    .join('\n');
 }
 
 /** 术语中以“反例/不要/避免”开头的条目作为硬性负例，单独成段，避免被当成普通术语忽略。 */

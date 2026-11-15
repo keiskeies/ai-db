@@ -562,6 +562,7 @@ function ResultView({ result, onOpenEditor, chartHeight }: { result: ToolResult;
   const sql = typeof data?.sql === 'string' ? data.sql : undefined;
   const chart = data?.chart as ChartSpec | undefined;
   const connectionId = useApp((s) => s.activeConnectionId);
+  const database = useApp((s) => s.agentDatabase);
   const notify = useApp((s) => s.notify);
   const detail = data?.columns && Array.isArray(data?.rows) ? data : undefined;
   const chartSql = typeof data?.chartSql === 'string' ? data.chartSql : chart?.sql;
@@ -635,6 +636,7 @@ function ResultView({ result, onOpenEditor, chartHeight }: { result: ToolResult;
               height={chartHeight}
               enforceSuitability
               onExportCsv={chartSql && connectionId ? () => void exportCsv() : undefined}
+              insightSource={chartSql && connectionId ? { connectionId, database: database || undefined, sql: chartSql, x: chart.xLabel, y: chart.yLabel } : undefined}
             />
           ) : null}
           {active === 'rows' && detail ? <MiniTable data={detail} max={50} /> : null}
@@ -1449,7 +1451,7 @@ export function AgentPanel() {
     }
     let cancelled = false;
     api
-      .suggest({ connectionId: activeConnectionId, database: agentDatabase || activeConnection?.database, limit: 6, locale: getI18nLocale() })
+      .suggest({ connectionId: activeConnectionId, database: agentDatabase || activeConnection?.database, limit: 6, locale: getI18nLocale(), sessionId: agentSessionId ?? undefined })
       .then((res) => {
         if (!cancelled) setSuggestions(res.suggestions);
       })
@@ -1459,7 +1461,7 @@ export function AgentPanel() {
     return () => {
       cancelled = true;
     };
-  }, [activeConnectionId, activeConnection?.database, agentDatabase, tables.length, suggestionsSupported]);
+  }, [activeConnectionId, activeConnection?.database, agentDatabase, tables.length, suggestionsSupported, agentSessionId]);
 
   useEffect(() => {
     if (prefill) {
@@ -1766,7 +1768,7 @@ export function AgentPanel() {
                         const label = suggestionLabel(s.kind, /^zh/i.test(getI18nLocale()) ? 'zh' : 'en');
                         return (
                           <button key={s.id} className="suggest-chip" title={s.reason} onClick={() => setInput(s.prompt)} data-testid={`suggest-${s.kind}`}>
-                            <Sparkles size={10} />
+                            {s.kind === 'recent' ? <History size={10} /> : <Sparkles size={10} />}
                             <span className="truncate">{s.prompt}</span>
                             {/* 问题里已经写了「趋势」就不再重复挂同一个标签 */}
                             {s.prompt.includes(label) ? null : <em>{label}</em>}

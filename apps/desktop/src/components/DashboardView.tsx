@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronUp, Eye, FileDown, Heart, LayoutDashboard, Pin, PinOff, Plus, RefreshCw, Sparkles, Trash2, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import { ChevronDown, ChevronUp, Eye, FileDown, GripVertical, Heart, LayoutDashboard, Pin, PinOff, Plus, RefreshCw, Sparkles, Trash2, X } from 'lucide-react';
 import type { DashboardCard, DashboardCardResult, DashboardChartType, DashboardPreview, DashboardScheduleInfo, DashboardTimeRange } from '@aidb/core';
 import { DASHBOARD_CHART_TYPES } from '@aidb/core';
 import { api } from '../lib/api';
@@ -132,6 +132,12 @@ function DashboardCardView({
   onPatch,
   onMove,
   onOpenSql,
+  dragging,
+  dropTarget,
+  onGripDragStart,
+  onCardDragOver,
+  onCardDrop,
+  onCardDragEnd,
 }: {
   card: DashboardCard;
   limit: number;
@@ -142,6 +148,12 @@ function DashboardCardView({
   onPatch: (patch: Partial<DashboardCard>) => void;
   onMove: (direction: -1 | 1) => void;
   onOpenSql: () => void;
+  dragging: boolean;
+  dropTarget: boolean;
+  onGripDragStart: (event: DragEvent) => void;
+  onCardDragOver: (event: DragEvent) => void;
+  onCardDrop: (event: DragEvent) => void;
+  onCardDragEnd: () => void;
 }) {
   const spec = useMemo(
     () =>
@@ -154,7 +166,15 @@ function DashboardCardView({
   const columns = card.lastResult?.columns.map((column) => column.name) ?? [];
 
   return (
-    <div className={`dash-card ${card.span === 2 ? 'wide' : ''}`} data-testid="dashboard-card" data-pinned={card.pinned ? '1' : '0'}>
+    <div
+      className={`dash-card ${card.span === 2 ? 'wide' : ''} ${dragging ? 'dragging' : ''} ${dropTarget ? 'drop-target' : ''}`}
+      data-testid="dashboard-card"
+      data-card-id={card.id}
+      data-pinned={card.pinned ? '1' : '0'}
+      onDragOver={onCardDragOver}
+      onDrop={onCardDrop}
+      onDragEnd={onCardDragEnd}
+    >
       <div className="dash-card-body">
         {spec ? (
           <ChartView
@@ -164,6 +184,7 @@ function DashboardCardView({
             maxPoints={card.span === 2 ? 24 : 12}
             onTypeChange={(type) => onPatch({ chartType: type as DashboardChartType })}
             onOpenEditor={onOpenSql}
+            insightSource={{ connectionId: card.connectionId, database: card.database, sql: card.sql, x: card.x, y: card.y }}
           />
         ) : (
           <div className="dash-card-empty">
@@ -180,6 +201,15 @@ function DashboardCardView({
         )}
       </div>
       <div className="dash-card-foot">
+        <span
+          className="dash-grip"
+          title={tr("拖拽排序")}
+          draggable
+          onDragStart={onGripDragStart}
+          data-testid="dashboard-card-grip"
+        >
+          <GripVertical size={12} />
+        </span>
         <span className={`dash-tag ${card.source === 'ai' ? 'ai' : ''}`}>
           {card.source === 'ai' ? (card.pinned ? tr("AI · 已固定") : tr("AI 草稿")) : card.source === 'favorite' ? tr("收藏") : tr("手动")}
         </span>
@@ -589,6 +619,53 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
     }
   };
 
+  // 拖拽重排：只有把手可拖，避免与图表交互/文本选择冲突；
+  // 拖动过程本地即时重排预览，松手一次性持久化，失败回滚重载。
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dragOrder, setDragOrder] = useState<string[] | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+  const sortedIds = useMemo(() => [...cards].sort((a, b) => a.position - b.position).map((card) => card.id), [cards]);
+
+  const startCardDrag = (card: DashboardCard, event: DragEvent) => {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/aidb-card', card.id);
+    setDragId(card.id);
+    setDragOrder(sortedIds);
+  };
+
+  const previewCardDrag = (targetId: string, event: DragEvent) => {
+    if (!dragId || dragId === targetId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    setOverId(targetId);
+    setDragOrder((prev) => {
+      const base = prev ?? sortedIds;
+      const from = base.indexOf(dragId);
+      const to = base.indexOf(targetId);
+      if (from < 0 || to < 0 || from === to) return base;
+      const next = [...base];
+      next.splice(from, 1);
+      next.splice(to, 0, dragId);
+      return next;
+    });
+  };
+
+  const finishCardDrag = async () => {
+    const order = dragOrder;
+    setDragId(null);
+    setDragOrder(null);
+    setOverId(null);
+    if (!order || order.join('|') === sortedIds.join('|')) return;
+    setCards(order.map((id, index) => ({ ...cards.find((card) => card.id === id)!, position: index + 1 })));
+    try {
+      const response = await api.dashboardReorderCards(order);
+      setCards(response.cards);
+    } catch (err: any) {
+      notify('error', tr("排序失败"), err?.message);
+      void load();
+    }
+  };
+
   return (
     <section className="dash-view" data-testid="dashboard-view">
       <header className="dash-head">
@@ -827,8 +904,9 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
         </div>
       ) : (
         <div className="dash-grid" data-testid="dashboard-grid">
-          {[...cards]
-            .sort((a, b) => a.position - b.position)
+          {(dragOrder ?? sortedIds)
+            .map((id) => cards.find((card) => card.id === id))
+            .filter((card): card is DashboardCard => Boolean(card))
             .map((card) => (
               <DashboardCardView
                 key={card.id}
@@ -848,6 +926,15 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
                 onPatch={(patch) => patchCard(card, patch)}
                 onMove={(direction) => void move(card, direction)}
                 onOpenSql={() => openQuery(card.connectionId, card.sql, card.title, card.database)}
+                dragging={dragId === card.id}
+                dropTarget={overId === card.id && dragId !== card.id}
+                onGripDragStart={(event) => startCardDrag(card, event)}
+                onCardDragOver={(event) => previewCardDrag(card.id, event)}
+                onCardDrop={(event) => {
+                  event.preventDefault();
+                  void finishCardDrag();
+                }}
+                onCardDragEnd={() => void finishCardDrag()}
               />
             ))}
         </div>

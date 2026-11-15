@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEven
 import { createPortal } from 'react-dom';
 import { ArrowUpRight, X } from 'lucide-react';
 import { useApp, type ContextMenuItem } from '../store';
+import { api } from '../lib/api';
 import { ChartToolbar, type ChartType } from './ChartToolbar';
 import { CHART_TYPE_NAMES, chartSuitability, recommendChartType } from './chartSuitability';
 import { getI18nLocale, t as tr } from '../i18n';
@@ -27,6 +28,101 @@ export interface ChartSpec {
   forecast?: Array<{ label: string; value: number; lower: number; upper: number }>;
   /** forecast_chart 的方法说明，必须原样展示给用户 */
   note?: string;
+}
+
+/** 一键解读/预测的数据来源：连接 + 库 + 产出这张图的 SQL。传了 ChartView 才具备一键能力。 */
+export interface ChartInsightSource {
+  connectionId: string;
+  database?: string;
+  sql: string;
+  x?: string;
+  y?: string;
+}
+
+/** analyze_chart 的权威统计（执行器输出，前端不做二次统计）。 */
+interface InsightAnalysis {
+  rowCount: number;
+  sum: number;
+  avg: number;
+  min: number;
+  max: number;
+  argmin: string;
+  argmax: string;
+  topShare: Array<{ label: string; value: number; share: number }>;
+  deltas: Array<{ label: string; value: number; delta: number; ratio: number | null }>;
+  isTimeSeries: boolean;
+}
+
+interface InsightForecast {
+  forecast: NonNullable<ChartSpec['forecast']>;
+  note: string;
+}
+
+export interface ChartInsightState {
+  analysis: InsightAnalysis | null;
+  forecast: InsightForecast | null;
+  busy: 'analyze' | 'forecast' | null;
+  error: string | null;
+  toggleAnalyze: () => void;
+  toggleForecast: () => void;
+}
+
+/**
+ * 解读/预测状态自持：一处实现服务 Agent 结果卡、查询页、仪表板与放大态。
+ * 放大态通过受控 insight prop 共享同一份状态，小图与大图里的开关始终一致。
+ */
+function useChartInsight(source?: ChartInsightSource): ChartInsightState {
+  const [analysis, setAnalysis] = useState<InsightAnalysis | null>(null);
+  const [forecast, setForecast] = useState<InsightForecast | null>(null);
+  const [busy, setBusy] = useState<'analyze' | 'forecast' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const sourceKey = source ? [source.connectionId, source.database ?? '', source.sql, source.x ?? '', source.y ?? ''].join('\u0000') : '';
+  const keyRef = useRef(sourceKey);
+  keyRef.current = sourceKey;
+  useEffect(() => {
+    setAnalysis(null);
+    setForecast(null);
+    setError(null);
+  }, [sourceKey]);
+  const run = async (mode: 'analyze' | 'forecast') => {
+    if (!source) return;
+    const key = keyRef.current;
+    setBusy(mode);
+    setError(null);
+    try {
+      const { result } = await api.chartInsight({ ...source, mode });
+      if (keyRef.current !== key) return;
+      if (!result.ok) {
+        setError(result.error?.message ?? result.summary);
+        return;
+      }
+      if (mode === 'analyze') {
+        setAnalysis(result.data as InsightAnalysis);
+      } else {
+        const data = result.data as { chart?: { forecast?: InsightForecast['forecast']; note?: string } };
+        if (data.chart?.forecast?.length) setForecast({ forecast: data.chart.forecast, note: data.chart.note ?? '' });
+        else setError(result.summary);
+      }
+    } catch (err) {
+      if (keyRef.current === key) setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (keyRef.current === key) setBusy(null);
+    }
+  };
+  return {
+    analysis,
+    forecast,
+    busy,
+    error,
+    toggleAnalyze: () => {
+      if (analysis) setAnalysis(null);
+      else void run('analyze');
+    },
+    toggleForecast: () => {
+      if (forecast) setForecast(null);
+      else void run('forecast');
+    },
+  };
 }
 
 function seriesColors(chart: ChartSpec) {
@@ -86,9 +182,13 @@ export interface ChartViewProps {
   enforceSuitability?: boolean;
   /** 铺满父容器剩余高度：QueryView 图表页用，绘图区随结果区高度伸缩 */
   fill?: boolean;
+  /** 一键解读/预测的数据来源；不传则工具条不显示这两个按钮 */
+  insightSource?: ChartInsightSource;
+  /** 受控解读状态：放大态传入小图的状态，两处开关保持同步 */
+  insight?: ChartInsightState;
 }
 
-export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, zoomed = false, onExportCsv, onTypeChange, columns, x, y, onX, onY, maxHeight, height, enforceSuitability = false, fill = false }: ChartViewProps) {
+export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, zoomed = false, onExportCsv, onTypeChange, columns, x, y, onX, onY, maxHeight, height, enforceSuitability = false, fill = false, insightSource, insight: insightControlled }: ChartViewProps) {
   const suitability = useMemo(() => (enforceSuitability ? chartSuitability(chart) : undefined), [chart, enforceSuitability]);
   const correctedFrom = enforceSuitability && suitability && !suitability[chart.type]?.ok ? chart.type : undefined;
   const correctedType = correctedFrom && suitability ? recommendChartType(suitability) : undefined;
@@ -106,6 +206,9 @@ export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, z
   const bodyRef = useRef<HTMLDivElement>(null);
   const [fillHeight, setFillHeight] = useState<number | undefined>(undefined);
   const dark = useDocumentDark();
+  const ownInsight = useChartInsight(insightSource);
+  const insight = insightControlled ?? (insightSource ? ownInsight : null);
+  const displayChart = insight?.forecast ? { ...chart, forecast: insight.forecast.forecast, note: insight.forecast.note || chart.note } : chart;
 
   // 铺满模式：绘图区高度 = 图表卡剩余高度（结果区高度 - 对比列/加入仪表板横条 - 卡片自身工具条）。
   // 量的是 body 容器而不是窗口，分栏、切 tab、改窗口尺寸都会重新贴合。
@@ -127,7 +230,8 @@ export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, z
   }, [fill, zoomed]);
 
   // 多系列会在绘图区下方补一行图例，铺满时先把它从可用高度里扣掉，图例才不会被裁掉。
-  const type = typeOverride ?? localType;
+  // 预测段只有折线画法（虚线 + 区间带），开启预测时强制折线显示
+  const type = insight?.forecast ? 'line' : (typeOverride ?? localType);
   const showsLegend =
     Boolean(chart.extraSeries?.length) &&
     (type === 'bar' || type === 'stacked' || type === 'line' || type === 'radar');
@@ -152,6 +256,7 @@ export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, z
 
   const setType = (next: ChartType) => {
     if (enforceSuitability && suitability && !suitability[next].ok) return;
+    if (insight?.forecast && next !== 'line') insight.toggleForecast();
     setLocalType(next);
     onTypeChange?.(next);
   };
@@ -171,20 +276,25 @@ export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, z
       onExportPng={() => void exportPng(svgRef, chart.title, setExporting)}
       onZoom={zoomed ? undefined : () => setZoomOpen(true)}
       exporting={exporting}
+      onAnalyze={insight ? insight.toggleAnalyze : undefined}
+      onForecast={insight ? insight.toggleForecast : undefined}
+      insightBusy={insight?.busy ?? null}
+      analysisOn={Boolean(insight?.analysis)}
+      forecastOn={Boolean(insight?.forecast)}
     />
   );
 
   const body =
     type === 'pie' ? (
-      <PieBody chart={chart} maxPoints={maxPoints} height={bodyHeight ?? height} maxHeight={maxHeight} zoomed={zoomed} svgRef={svgRef} />
+      <PieBody chart={displayChart} maxPoints={maxPoints} height={bodyHeight ?? height} maxHeight={maxHeight} zoomed={zoomed} svgRef={svgRef} />
     ) : type === 'scatter' ? (
-      <ScatterBody chart={chart} maxPoints={maxPoints} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} height={bodyHeight ?? height} />
+      <ScatterBody chart={displayChart} maxPoints={maxPoints} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} height={bodyHeight ?? height} />
     ) : type === 'heatmap' ? (
-      <HeatmapBody chart={chart} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} height={bodyHeight ?? height} dark={dark} />
+      <HeatmapBody chart={displayChart} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} height={bodyHeight ?? height} dark={dark} />
     ) : type === 'radar' ? (
-      <RadarBody chart={chart} maxPoints={maxPoints} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} height={bodyHeight ?? height} />
+      <RadarBody chart={displayChart} maxPoints={maxPoints} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} height={bodyHeight ?? height} />
     ) : (
-      <AxisBody chart={chart} type={type} maxPoints={maxPoints} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} height={bodyHeight ?? height} />
+      <AxisBody chart={displayChart} type={type} maxPoints={maxPoints} zoomed={zoomed} svgRef={svgRef} maxHeight={maxHeight} height={bodyHeight ?? height} />
     );
 
   return (
@@ -215,12 +325,16 @@ export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, z
       <div className="chart-body" ref={bodyRef}>
         {body}
       </div>
+      {insight?.analysis ? <InsightStrip data={insight.analysis} /> : null}
+      {insight?.error ? (
+        <div className="chart-insight-error" data-testid="chart-insight-error" role="alert">{insight.error}</div>
+      ) : null}
       {hover ? (
         <div className="chart-hover-tip" data-testid="chart-hover-tip" style={{ left: hover.x, top: hover.y }}>
           {hover.text}
         </div>
       ) : null}
-      {chart.note ? <div className="chart-note" data-testid="chart-note">{chart.note}</div> : null}
+      {displayChart.note ? <div className="chart-note" data-testid="chart-note">{displayChart.note}</div> : null}
       <div className="chart-foot">
         <span className="truncate">{chart.xLabel} → {chart.yLabel}</span>
         {chart.sql && onOpenEditor ? (
@@ -233,12 +347,37 @@ export function ChartView({ chart, onOpenEditor, typeOverride, maxPoints = 12, z
           <div className="chart-modal" role="dialog" aria-label={chart.title} onClick={() => setZoomOpen(false)}>
             <div className="chart-modal-body" onClick={(e) => e.stopPropagation()}>
               <button className="icon-btn chart-modal-close" title={tr("关闭")} data-testid="chart-zoom-close" onClick={() => setZoomOpen(false)}><X size={14} /></button>
-              <ChartView chart={chart} onOpenEditor={onOpenEditor} typeOverride={type} maxPoints={60} zoomed onExportCsv={onExportCsv} columns={columns} x={x} y={y} onX={onX} onY={onY} />
+              <ChartView chart={chart} onOpenEditor={onOpenEditor} typeOverride={type} maxPoints={60} zoomed onExportCsv={onExportCsv} columns={columns} x={x} y={y} onX={onX} onY={onY} insightSource={insightSource} insight={insight ?? undefined} />
             </div>
           </div>,
           document.body,
         )
       ) : null}
+    </div>
+  );
+}
+
+/** 解读统计条：全部数字来自执行器 analyze_chart，前端只排版不重算。 */
+function InsightStrip({ data }: { data: InsightAnalysis }) {
+  return (
+    <div className="chart-insight-strip" data-testid="chart-insight-strip">
+      <span className="insight-stat"><em>{tr("合计")}</em><b>{formatExact(data.sum)}</b></span>
+      <span className="insight-stat"><em>{tr("均值")}</em><b>{formatExact(data.avg)}</b></span>
+      <span className="insight-stat"><em>{tr("最大")}</em><b>{formatExact(data.max)}</b><i>{data.argmax}</i></span>
+      <span className="insight-stat"><em>{tr("最小")}</em><b>{formatExact(data.min)}</b><i>{data.argmin}</i></span>
+      {data.topShare.length ? <span className="insight-cap">{tr("占比")}</span> : null}
+      {data.topShare.slice(0, 3).map((item) => (
+        <span className="insight-stat" key={item.label}><i>{item.label}</i><b>{formatPercent(item.share * 100)}</b></span>
+      ))}
+      {data.isTimeSeries && data.deltas.length ? <span className="insight-cap">{tr("环比")}</span> : null}
+      {data.isTimeSeries
+        ? data.deltas.slice(-3).map((item) => (
+            <span className="insight-stat" key={item.label}>
+              <i>{item.label}</i>
+              <b className={item.delta >= 0 ? 'up' : 'down'}>{item.delta >= 0 ? '+' : ''}{formatExact(item.delta)}</b>
+            </span>
+          ))
+        : null}
     </div>
   );
 }

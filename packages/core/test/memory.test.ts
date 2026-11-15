@@ -63,3 +63,13 @@ test('rejects secret-looking memory content', () => {
   assert.ok(looksLikeSecret('API_KEY=sk-123456'));
   assert.equal(extractHeuristicMemories('记住：数据库密码: abc123', {}).length, 0);
 });
+
+test('synonyms participate in recall so a question using only the alias still hits the term', () => {
+  const memories = [
+    mem({ id: 'g', kind: 'glossary', title: 'JS', content: 'JS = JumpServer 堡垒机', synonyms: ['堡垒机', '跳板机'] }),
+    mem({ id: 'n', title: 'unrelated', content: 'nothing here' }),
+  ];
+  const ranked = rankMemories('堡垒机有哪些资产', memories, { connectionId: 'c1', limit: 3 });
+  assert.ok(ranked.length >= 1);
+  assert.equal(ranked[0].id, 'g', 'synonym-only question recalls the term first');
+});

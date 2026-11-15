@@ -531,6 +531,15 @@ export function QueryView({ tab }: { tab: QueryTab }) {
     [set, chartX, chartY, chartType, extraY, chartDual],
   );
 
+  // 结果集换列后旧选择可能失效（甚至 x/y 退化为同一列让 buildChartSpec 返回 null），
+  // 图表页会整块空白；结果变化时重置列选择，回到默认 x=首列 y=首个数值列。
+  const chartSetKey = set ? `${set.statement ?? ''}\u0000${set.columns.map((c) => c.name).join(',')}` : '';
+  useEffect(() => {
+    setChartX('');
+    setChartY('');
+    setExtraY([]);
+  }, [chartSetKey]);
+
   // 图表背后的 SQL 就是卡片本身：钉到仪表板后每次打开都会重新执行，不是截图。
   const pinToDashboard = async () => {
     if (!chartSpec?.sql) {
@@ -900,6 +909,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
                   onX={setChartX}
                   onY={setChartY}
                   onExportCsv={() => void exportChartCsv(chartSpec.sql)}
+                  insightSource={chartSpec.sql ? { connectionId: tab.connectionId, database: tab.database || undefined, sql: chartSpec.sql, x: chartX || chartSpec.xLabel, y: chartY || chartSpec.yLabel } : undefined}
                 />
                 </>
               ) : (

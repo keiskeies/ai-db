@@ -141,6 +141,11 @@ export function MemoryDrawer() {
                   {memory.pinned ? <Pin size={11} style={{ color: 'var(--warning)' }} /> : null}
                 </div>
                 <div className="m-content">{memory.content}</div>
+                {memory.synonyms?.length ? (
+                  <div className="m-synonyms" title={tr("同义词")}>
+                    {memory.synonyms.map((s) => <span key={s} className="badge agent">{s}</span>)}
+                  </div>
+                ) : null}
                 <div className="m-foot">
                   <span>{memory.scopeType} · {memory.scopeKey === '*' ? 'global' : memory.scopeKey}</span>
                   <span>imp {memory.importance.toFixed(1)}</span>

@@ -16,6 +16,8 @@ import type {
   PipelineInfo,
   PipelineRunInfo,
   QueryBatchResult,
+  QuestionSuggestion,
+  ToolResult,
 } from '@aidb/core';
 
 export interface BridgeConfig {
@@ -334,6 +336,20 @@ export class BridgeClient {
 
   deleteMemory(id: string) {
     return this.request<void>(`/agent/memories/${id}`, { method: 'DELETE' });
+  }
+
+  /** 图表一键解读/预测：与桌面同一端点，执行器权威统计，不经过模型。 */
+  chartInsight(body: { connectionId: string; database?: string; sql: string; x?: string; y?: string; mode: 'analyze' | 'forecast'; periods?: number; method?: 'linear' | 'moving_average' | 'auto' }) {
+    return this.request<{ result: ToolResult }>('/agent/chart-insight', { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  suggest(params: { connectionId: string; database?: string; limit?: number; locale?: string; sessionId?: string }) {
+    const q = new URLSearchParams({ connectionId: params.connectionId });
+    if (params.database) q.set('database', params.database);
+    if (params.limit) q.set('limit', String(params.limit));
+    if (params.sessionId) q.set('sessionId', params.sessionId);
+    q.set('locale', params.locale ?? 'en');
+    return this.request<{ suggestions: QuestionSuggestion[] }>(`/agent/suggest?${q.toString()}`);
   }
 
   approve(id: string, decision: 'allow' | 'deny', scope: 'once' | 'session' | 'always') {

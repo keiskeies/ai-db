@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { BookMarked, Columns3, Link2, Loader2, Plus, Table2, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { BookMarked, Check, Columns3, Download, Link2, Loader2, Pencil, Plus, Table2, Trash2, Upload, X } from 'lucide-react';
 import {
   MEMORY_KIND_LABELS,
   bundleAgentContext,
@@ -10,6 +10,7 @@ import {
   type TableInfo,
 } from '@aidb/core';
 import { api } from '../../lib/api';
+import { parseCsv, toCsv } from '../../lib/csv';
 import { useApp } from '../../store';
 import { askConfirm } from '../AskDialog';
 import { Select, Option } from '../ui';
@@ -43,9 +44,11 @@ export function AgentContextTool() {
   const [busy, setBusy] = useState(false);
   const [terms, setTerms] = useState<Memory[]>([]);
   const [examples, setExamples] = useState<Memory[]>([]);
-  const [draftTerm, setDraftTerm] = useState({ title: '', content: '' });
+  const [draftTerm, setDraftTerm] = useState({ title: '', content: '', synonyms: '' });
   const [draftExample, setDraftExample] = useState({ title: '', content: '' });
   const [draftRelation, setDraftRelation] = useState({ table: '', column: '', refTable: '', refColumn: '', description: '' });
+  const [editing, setEditing] = useState<{ id: string; title: string; content: string; synonyms: string } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const conn = connections.find((c) => c.id === connId);
   const databases = schemas[connId] ?? [];
@@ -197,7 +200,7 @@ export function AgentContextTool() {
     })();
   };
 
-  const addMemory = (kind: 'glossary' | 'sql_example', draft: { title: string; content: string }, reset: () => void) => {
+  const addMemory = (kind: 'glossary' | 'sql_example', draft: { title: string; content: string; synonyms?: string }, reset: () => void) => {
     if (!draft.title.trim() || !draft.content.trim()) {
       notify('error', tr("内容不完整"), kind === 'glossary' ? tr("术语与释义都必填") : tr("问题与 SQL 都必填"));
       return;
@@ -205,7 +208,10 @@ export function AgentContextTool() {
     void (async () => {
       setBusy(true);
       try {
-        await api.createMemory({ kind, title: draft.title.trim(), content: draft.content.trim(), connectionId: connId, database });
+        const synonyms = kind === 'glossary' && draft.synonyms
+          ? draft.synonyms.split(/[,，;；]/).map((s) => s.trim()).filter(Boolean)
+          : undefined;
+        await api.createMemory({ kind, title: draft.title.trim(), content: draft.content.trim(), synonyms, connectionId: connId, database });
         reset();
         await reloadMemories();
         notify('success', tr("已保存"), kind === 'glossary' ? tr("术语已加入词典") : tr("示例 SQL 已加入校准库"));
@@ -226,6 +232,87 @@ export function AgentContextTool() {
         notify('error', tr("删除失败"), err?.message);
       }
     })();
+
+  const startEdit = (m: Memory) => setEditing({ id: m.id, title: m.title, content: m.content, synonyms: (m.synonyms ?? []).join(', ') });
+
+  const saveEdit = (m: Memory) => {
+    if (!editing) return;
+    if (!editing.title.trim() || !editing.content.trim()) {
+      notify('error', tr("内容不完整"), m.kind === 'glossary' ? tr("术语与释义都必填") : tr("问题与 SQL 都必填"));
+      return;
+    }
+    void (async () => {
+      setBusy(true);
+      try {
+        const body: Record<string, unknown> = { title: editing.title.trim(), content: editing.content.trim() };
+        if (m.kind === 'glossary') body.synonyms = editing.synonyms.split(/[,，;；]/).map((s) => s.trim()).filter(Boolean);
+        await api.updateMemory(m.id, body);
+        setEditing(null);
+        await reloadMemories();
+        notify('success', tr("已保存"), tr("记忆已更新"));
+      } catch (err: any) {
+        notify('error', tr("保存失败"), err?.message);
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
+
+  const exportCsv = () => {
+    const rows = [
+      ['kind', 'title', 'content', 'synonyms'],
+      ...terms.map((m) => [m.kind, m.title, m.content, (m.synonyms ?? []).join(';')]),
+      ...examples.map((m) => [m.kind, m.title, m.content, '']),
+    ];
+    const now = new Date();
+    const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+    const blob = new Blob(['\uFEFF' + toCsv(rows)], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `agent-context-${stamp}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importCsv = (file: File) => {
+    void (async () => {
+      setBusy(true);
+      try {
+        const rows = parseCsv(await file.text());
+        const start = rows[0]?.[0]?.trim().toLowerCase() === 'kind' ? 1 : 0;
+        const dataRows = rows.slice(start);
+        const truncated = dataRows.length > 500;
+        const bad: string[] = [];
+        let imported = 0;
+        let merged = 0;
+        for (const [idx, row] of dataRows.slice(0, 500).entries()) {
+          const lineNo = start + idx + 1;
+          const kind = (row[0] ?? '').trim();
+          const title = (row[1] ?? '').trim();
+          const content = (row[2] ?? '').trim();
+          if (kind !== 'glossary' && kind !== 'sql_example') { bad.push(tr("行 {0}：kind 必须是 glossary 或 sql_example", [lineNo])); continue; }
+          if (!title || !content) { bad.push(tr("行 {0}：title/content 不能为空", [lineNo])); continue; }
+          const synonyms = kind === 'glossary' ? (row[3] ?? '').split(/[;；]/).map((s) => s.trim()).filter(Boolean) : undefined;
+          try {
+            const res = await api.createMemory({ kind, title, content, synonyms, connectionId: connId, database });
+            imported += 1;
+            if (res.merged) merged += 1;
+          } catch (err: any) {
+            bad.push(tr("行 {0}：{1}", [lineNo, err?.message ?? tr("保存失败")]));
+          }
+        }
+        await reloadMemories();
+        notify('success', tr("已保存"), tr("导入 {0} 条（合并 {1} 条）", [imported, merged]));
+        if (truncated) notify('error', tr("导入被截断"), tr("超出 500 行上限，仅导入前 500 行"));
+        if (bad.length) notify('error', tr("导入完成，{0} 行被跳过", [bad.length]), bad.slice(0, 5).join('；'));
+      } catch (err: any) {
+        notify('error', tr("导入失败"), err?.message);
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
 
   if (!connections.length) return <div className="dash-empty">{tr("请先创建一个数据库连接。")}</div>;
 
@@ -453,25 +540,60 @@ export function AgentContextTool() {
 
       {tab === 'terms' ? (
         <div className="tool-scroll">
+          <div className="tool-row">
+            <span className="muted" style={{ fontSize: 10.5 }}>{tr("术语与示例可导出为 CSV（Excel 直接打开不乱码），也可批量导入。")}</span>
+            <span className="spacer" />
+            <button className="btn small" onClick={exportCsv} disabled={busy || (!terms.length && !examples.length)} data-testid="ctx-export-csv"><Download size={11} /> {tr(" 导出 CSV ")}</button>
+            <button className="btn small" onClick={() => fileRef.current?.click()} disabled={busy} data-testid="ctx-import-csv"><Upload size={11} /> {tr(" 导入 CSV ")}</button>
+            <input ref={fileRef} type="file" accept=".csv,text/csv" style={{ display: 'none' }} data-testid="ctx-import-file" onChange={(e) => { const f = e.target.files?.[0]; if (f) importCsv(f); e.target.value = ''; }} />
+          </div>
           <div className="ctx-section">
             <div className="ctx-section-head">{tr("术语词典（消除简称 / 黑话歧义）")}</div>
             <div className="tool-row">
               <input className="input" style={{ width: 160 }} placeholder={tr("术语，如 JS")} value={draftTerm.title} onChange={(e) => setDraftTerm({ ...draftTerm, title: e.target.value })} />
               <input className="input grow" placeholder={tr("释义，如 JumpServer 堡垒机")} value={draftTerm.content} onChange={(e) => setDraftTerm({ ...draftTerm, content: e.target.value })} />
-              <button className="btn small primary" onClick={() => addMemory('glossary', draftTerm, () => setDraftTerm({ title: '', content: '' }))} disabled={busy}>
+              <button className="btn small primary" onClick={() => addMemory('glossary', draftTerm, () => setDraftTerm({ title: '', content: '', synonyms: '' }))} disabled={busy}>
                 <Plus size={11} /> {tr(" 添加术语 ")}</button>
+            </div>
+            <div className="tool-row">
+              <input className="input grow" placeholder={tr("同义词（逗号分隔），如：堡垒机, 跳板机")} value={draftTerm.synonyms} onChange={(e) => setDraftTerm({ ...draftTerm, synonyms: e.target.value })} data-testid="ctx-term-synonyms" />
             </div>
             {terms.length ? (
               <table className="ctx-grid">
                 <tbody>
                   {terms.map((m) => (
                     <tr key={m.id}>
-                      <td style={{ width: 160 }}><strong>{m.title}</strong></td>
-                      <td>{m.content}</td>
-                      <td style={{ width: 110 }} className="muted">{tr(MEMORY_KIND_LABELS[m.kind].zh)} · {m.scopeType}</td>
-                      <td style={{ width: 40 }}>
-                        <button className="icon-btn" onClick={() => removeMemory(m.id)} title={tr("删除")}><Trash2 size={11} /></button>
-                      </td>
+                      {editing?.id === m.id ? (
+                        <>
+                          <td><input className="input" value={editing.title} onChange={(e) => setEditing({ ...editing, title: e.target.value })} data-testid="ctx-edit-title" /></td>
+                          <td>
+                            <input className="input" value={editing.content} onChange={(e) => setEditing({ ...editing, content: e.target.value })} data-testid="ctx-edit-content" />
+                            <input className="input" style={{ marginTop: 4 }} placeholder={tr("同义词（逗号分隔）")} value={editing.synonyms} onChange={(e) => setEditing({ ...editing, synonyms: e.target.value })} data-testid="ctx-edit-synonyms" />
+                          </td>
+                          <td className="muted">{tr(MEMORY_KIND_LABELS[m.kind].zh)} · {m.scopeType}</td>
+                          <td style={{ width: 70 }}>
+                            <button className="icon-btn" onClick={() => saveEdit(m)} title={tr("保存")} data-testid="ctx-edit-save"><Check size={11} /></button>
+                            <button className="icon-btn" onClick={() => setEditing(null)} title={tr("取消")} data-testid="ctx-edit-cancel"><X size={11} /></button>
+                          </td>
+                        </>
+                      ) : (
+                        <>
+                          <td style={{ width: 160 }}><strong>{m.title}</strong></td>
+                          <td>
+                            {m.content}
+                            {m.synonyms?.length ? (
+                              <div className="ctx-synonyms" title={tr("同义词")}>
+                                {m.synonyms.map((s) => <span key={s} className="badge">{s}</span>)}
+                              </div>
+                            ) : null}
+                          </td>
+                          <td style={{ width: 110 }} className="muted">{tr(MEMORY_KIND_LABELS[m.kind].zh)} · {m.scopeType}</td>
+                          <td style={{ width: 70 }}>
+                            <button className="icon-btn" onClick={() => startEdit(m)} title={tr("编辑")} data-testid={`ctx-edit-term-${m.id}`}><Pencil size={11} /></button>
+                            <button className="icon-btn" onClick={() => removeMemory(m.id)} title={tr("删除")}><Trash2 size={11} /></button>
+                          </td>
+                        </>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -503,11 +625,25 @@ export function AgentContextTool() {
                 <tbody>
                   {examples.map((m) => (
                     <tr key={m.id}>
-                      <td style={{ width: 220 }}><strong>{m.title}</strong></td>
-                      <td><pre className="ctx-pre">{m.content}</pre></td>
-                      <td style={{ width: 40 }}>
-                        <button className="icon-btn" onClick={() => removeMemory(m.id)} title={tr("删除")}><Trash2 size={11} /></button>
-                      </td>
+                      {editing?.id === m.id ? (
+                        <>
+                          <td><input className="input" value={editing.title} onChange={(e) => setEditing({ ...editing, title: e.target.value })} data-testid="ctx-edit-title" /></td>
+                          <td><textarea className="input ctx-sql" rows={3} value={editing.content} onChange={(e) => setEditing({ ...editing, content: e.target.value })} data-testid="ctx-edit-content" /></td>
+                          <td style={{ width: 70 }}>
+                            <button className="icon-btn" onClick={() => saveEdit(m)} title={tr("保存")} data-testid="ctx-edit-save"><Check size={11} /></button>
+                            <button className="icon-btn" onClick={() => setEditing(null)} title={tr("取消")} data-testid="ctx-edit-cancel"><X size={11} /></button>
+                          </td>
+                        </>
+                      ) : (
+                        <>
+                          <td style={{ width: 220 }}><strong>{m.title}</strong></td>
+                          <td><pre className="ctx-pre">{m.content}</pre></td>
+                          <td style={{ width: 70 }}>
+                            <button className="icon-btn" onClick={() => startEdit(m)} title={tr("编辑")} data-testid={`ctx-edit-example-${m.id}`}><Pencil size={11} /></button>
+                            <button className="icon-btn" onClick={() => removeMemory(m.id)} title={tr("删除")}><Trash2 size={11} /></button>
+                          </td>
+                        </>
+                      )}
                     </tr>
                   ))}
                 </tbody>

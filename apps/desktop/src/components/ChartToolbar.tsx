@@ -1,4 +1,4 @@
-import { BarChart3, Download, Grid3x3, Layers, LineChart, Maximize2, PieChart, Radar, ScatterChart } from 'lucide-react';
+import { BarChart3, Download, Grid3x3, Layers, LineChart, Loader2, Maximize2, PieChart, Radar, ScatterChart, Sparkles, TrendingUp } from 'lucide-react';
 import { CopyButton, Option, Select } from './ui';
 import { getI18nLocale, t as tr } from '../i18n';
 
@@ -35,13 +35,19 @@ export interface ChartToolbarProps {
   exporting?: boolean;
   /** AI 图表的数据适配结果；不适配的类型禁用并在 title 里说明原因 */
   suitability?: Partial<Record<ChartType, { ok: boolean; reason?: string }>>;
+  /** 一键解读/预测：传了才渲染按钮；数据是否可预测由后端判定，前端不做类型预判 */
+  onAnalyze?: () => void;
+  onForecast?: () => void;
+  insightBusy?: 'analyze' | 'forecast' | null;
+  analysisOn?: boolean;
+  forecastOn?: boolean;
 }
 
 /**
  * 图表工具条：QueryView 与 Agent 的图表卡共用同一套入口。
  * 类型 / X / Y 三个下拉原本只存在于 QueryView，这里把它们吸收进来，避免出现两个功能相同的控件。
  */
-export function ChartToolbar({ type, onType, columns, x, y, onX, onY, sql, onExportCsv, onExportPng, onZoom, exporting, suitability }: ChartToolbarProps) {
+export function ChartToolbar({ type, onType, columns, x, y, onX, onY, sql, onExportCsv, onExportPng, onZoom, exporting, suitability, onAnalyze, onForecast, insightBusy, analysisOn, forecastOn }: ChartToolbarProps) {
   const showAxes = Boolean(columns?.length && onX && onY);
   return (
     <div className="chart-toolbar" data-testid="chart-toolbar">
@@ -89,6 +95,32 @@ export function ChartToolbar({ type, onType, columns, x, y, onX, onY, sql, onExp
 
       <div className="spacer" />
 
+      {onAnalyze ? (
+        <button
+          type="button"
+          className={`chart-export chart-insight${analysisOn ? ' active' : ''}`}
+          title={tr("解读")}
+          aria-pressed={analysisOn}
+          data-testid="chart-analyze"
+          disabled={insightBusy != null}
+          onClick={onAnalyze}
+        >
+          {insightBusy === 'analyze' ? <Loader2 size={12} className="spin" /> : <Sparkles size={12} />} {tr("解读")}
+        </button>
+      ) : null}
+      {onForecast ? (
+        <button
+          type="button"
+          className={`chart-export chart-insight${forecastOn ? ' active' : ''}`}
+          title={tr("预测")}
+          aria-pressed={forecastOn}
+          data-testid="chart-forecast"
+          disabled={insightBusy != null}
+          onClick={onForecast}
+        >
+          {insightBusy === 'forecast' ? <Loader2 size={12} className="spin" /> : <TrendingUp size={12} />} {tr("预测")}
+        </button>
+      ) : null}
       {sql ? <CopyButton text={sql} /> : null}
       {onExportCsv && sql ? (
         <button type="button" className="chart-export" title={tr("导出 CSV")} data-testid="chart-export-csv" onClick={onExportCsv}>

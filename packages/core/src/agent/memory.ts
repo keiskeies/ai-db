@@ -58,7 +58,7 @@ export function rankMemories(query: string, memories: Memory[], ctx: RankContext
   if (!qTokens.length) return [];
   const df = new Map<string, number>();
   const docs = memories.map((m) => {
-    const tokens = tokenize(`${m.title} ${m.content} ${(m.tags || []).join(' ')}`);
+    const tokens = tokenize(`${m.title} ${m.content} ${(m.tags || []).join(' ')} ${(m.synonyms || []).join(' ')}`);
     for (const t of new Set(tokens)) df.set(t, (df.get(t) ?? 0) + 1);
     return { m, tokens };
   });

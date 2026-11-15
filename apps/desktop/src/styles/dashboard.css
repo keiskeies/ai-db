@@ -121,6 +121,11 @@
 .dash-card.wide { grid-column: 1 / -1; }
 .dash-card-body { padding: 6px 6px 0; }
 /* ChartView 自带卡片外观，套进仪表板时不要出现两层边框 */
+.dash-card.dragging { opacity: 0.45; }
+.dash-card.drop-target { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.dash-grip { display: inline-flex; align-items: center; padding: 2px; color: var(--text-muted); cursor: grab; border-radius: 4px; }
+.dash-grip:hover { color: var(--text-primary); background: var(--bg-hover); }
+.dash-grip:active { cursor: grabbing; }
 .dash-card .chart-card { border: none; box-shadow: none; background: transparent; padding: 0; }
 .dash-card-empty { display: flex; flex-direction: column; gap: 6px; padding: 14px 12px; font-size: 11.5px; color: var(--text-primary); }
 .dash-card-empty-hint { font-size: 10px; color: var(--text-muted); line-height: 1.5; }

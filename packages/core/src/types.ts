@@ -481,6 +481,8 @@ export interface Memory {
   title: string;
   content: string;
   tags: string[];
+  /** 术语同义词：召回、prompt、离线推理器三条路径都与术语本体同权。 */
+  synonyms?: string[];
   importance: number;
   confidence: number;
   sourceSession?: string;
@@ -498,6 +500,7 @@ export interface MemoryCandidate {
   title: string;
   content: string;
   tags?: string[];
+  synonyms?: string[];
   importance?: number;
   confidence?: number;
   scopeType?: MemoryScopeType;
