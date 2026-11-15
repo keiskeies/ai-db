@@ -182,7 +182,7 @@ The Agent's capability is not a claim of "natural language support." It is defin
 - **Plan**: `update_plan` drives the checklist with live ✓ / ◐ / ○ states; expandable at any time.
 - **Tool trace**: Parameters, results, duration, SQL, and errors for every call; results can open in the editor.
 - **Smart scrolling**: Follows new output only when you are at the bottom; when you scroll up, a "back to latest" button appears instead of yanking you down.
-- **Follow-up suggestions**: After each turn, offers clickable next questions based on the tables involved, generated locally with no extra tokens.
+- **Follow-up suggestions**: After each turn, offers clickable next questions based on the tables involved, generated locally with no extra tokens; empty-chat recommendations support a **shuffle** refresh — already-seen prompts are excluded from the next batch, and the pool wraps around when exhausted.
 - **Model and effort**: Capsules at the bottom of the composer switch model and reasoning effort; effort comes from the current model profile.
 - **Permission capsule**: Read-only / ask / auto / full-auto can be switched at any time; the current mode is always visible.
 - **@ references**: `@table` injects schema into context; multiple tables and databases are supported.
@@ -190,6 +190,7 @@ The Agent's capability is not a claim of "natural language support." It is defin
 - **Sessions**: Isolated by connection + database, auto-resume the latest session for that database, search, rename, delete, archive / restore.
 - **Export**: Answers export to PDF with chart backgrounds preserved in print styles; copying is also supported.
 - **Interrupt**: Stop the current turn; output already produced is kept, and the running tool is marked aborted after it finishes.
+- **Honest stops**: a turn always states why it stopped — user stop, model limit, tool error, or nothing left to do — instead of pretending it is still running; "Continue" survives connection changes.
 
 ### Toolset: 53 executable actions
 
@@ -296,7 +297,7 @@ The first screen is the workbench for the **current connection + current databas
 - **Current database header**: connection name, database name, engine, environment tag, read-only marker, table / view / estimated-row counts; multi-database connections can switch the current database in place.
 - **What is in this database**: tables sorted by row count, with column counts, row counts, and no-primary-key markers; views are labeled separately.
 - **Audit summary**: primary-key coverage / missing keys, empty tables, and row-estimate coverage, directly below the table list.
-- **What you can do next**: clickable AI suggestions generated from the current schema (trends, grouped statistics, Top N, referential integrity, etc.) that open the Agent.
+- **What you can do next**: clickable AI suggestions generated from the current schema (trends, grouped statistics, Top N, referential integrity, etc.) that open the Agent; a **shuffle** button refreshes them with candidates you have not seen yet.
 - **AI shortcuts**: database audit, distill business definitions, new query, open dashboard; an empty database offers "let AI create tables."
 - **Recently run**: recent queries filtered to the current database; click to load one into the SQL editor.
 - **Scope separation**: the home page and the Agent each target their own database; when they differ, the UI says so and offers one-click alignment.
@@ -308,7 +309,7 @@ The main workspace is a high-density, Navicat-style environment:
 - **Ribbon**: connections, new query, tables, views, functions, users, other, query, backup, automation, models, and dashboards — 12 entry points.
 - **Tabbed workspace**: data, query, designer, relationship diagram, and dashboard each get a tab; right-click to close, close others, or close all.
 - **Command palette**: `⌘/Ctrl + K` to search or run commands, open connections, run backups, and switch themes.
-- **Draggable layout**: the sidebar and AI panel can be resized and collapsed; the AI panel expands to 58% width.
+- **Draggable layout**: the sidebar and AI panel can be resized and collapsed; the AI panel can expand to fullscreen and collapse back with the same button or `Esc`.
 - **Status bar**: Bridge status, current connection and database, current tab, current model, and connection count.
 - **Theme and language**: dark / light / follow system, Chinese / English switched instantly.
 - **Auto-refresh**: the Bridge emits `schema_changed`; the object tree, data page, and designer invalidate and refresh after schema changes. When the designer detects a concurrent change, it offers to reload or keep local edits.
@@ -461,6 +462,7 @@ The dashboard is a **frequently asked questions panel for this database**, not a
 - **AI drafts vs pinned cards**: AI-generated cards are drafts (`pinned = 0`) and can be discarded in bulk; user-pinned cards (`pinned = 1`) are never overwritten by AI.
 - **Three sources**: ask AI for a batch, import from favorite queries, or write SQL manually; one sentence can generate a single card and a trial run.
 - **Board controls**: all time / last 7 days / last 30 days / last 90 days / last year; scheduled refresh (5 minutes / 30 minutes / 2 hours / daily); per-card refresh, widen / narrow, pin, and delete.
+- **Drag to reorder**: drag cards by their handle to rearrange; the layout persists, and ±1 buttons stay for keyboard access.
 - **Export for reporting**: turn current card results into a paginated report (PPTX), or use `/report` for a fuller business report.
 - **Read-only guardrails**: dashboard SQL must be read-only, auto-LIMIT applies, disabled tables are blocked at execution, and all card metadata is written only to `~/.aidb`, never to the target database.
 
