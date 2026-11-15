@@ -198,7 +198,7 @@ interface AppStore {
   tabs: Tab[];
   activeTabId: string;
   agentOpen: boolean;
-  agentExpanded: boolean;
+  agentFullscreen: boolean;
   sidebarOpen: boolean;
   sidebarWidth: number;
   agentWidth: number;
@@ -297,7 +297,7 @@ interface AppStore {
   setAgentWidth: (width: number, persist?: boolean) => void;
   openContextMenu: (x: number, y: number, items: ContextMenuItem[]) => void;
   closeContextMenu: () => void;
-  setAgentExpanded: (expanded: boolean) => void;
+  setAgentFullscreen: (fullscreen: boolean) => void;
   setAgentMode: (mode: PermissionMode) => void;
   setAgentDatabase: (database: string) => Promise<void>;
   restoreSessionForScope: () => Promise<void>;
@@ -434,7 +434,7 @@ export const useApp = create<AppStore>((set, get) => ({
   activeTabId: 'welcome',
   printRequested: false,
   agentOpen: true,
-  agentExpanded: false,
+  agentFullscreen: false,
   sidebarOpen: readUiPrefs().sidebarOpen ?? true,
   sidebarWidth: readUiPrefs().sidebarWidth ?? 244,
   groupOrder: readUiPrefs().groupOrder ?? [],
@@ -873,7 +873,7 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 
   setAgentOpen: (open) => set({ agentOpen: open }),
-  setAgentExpanded: (expanded) => set({ agentExpanded: expanded }),
+  setAgentFullscreen: (fullscreen) => set({ agentFullscreen: fullscreen }),
   toggleSidebar: () => {
     const sidebarOpen = !get().sidebarOpen;
     set({ sidebarOpen });

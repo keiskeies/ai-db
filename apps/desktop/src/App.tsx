@@ -193,7 +193,7 @@ export default function App() {
   const sidebarWidth = useApp((s) => s.sidebarWidth);
   const setSidebarWidth = useApp((s) => s.setSidebarWidth);
   const agentWidth = useApp((s) => s.agentWidth);
-  const agentExpanded = useApp((s) => s.agentExpanded);
+  const agentFullscreen = useApp((s) => s.agentFullscreen);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const setSettingsOpen = useApp((s) => s.setSettingsOpen);
   const setPaletteOpen = useApp((s) => s.setPaletteOpen);
@@ -346,15 +346,14 @@ export default function App() {
   const crumbDatabase = (activeTab && 'database' in activeTab && activeTab.database) || agentDatabase || crumbConn?.database || '';
   const dark = settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
 
-  // 三栏宽度只在这里算一次：比例、中间地板、拖拽上限、展开目标都在 lib/layout.ts 里，
+  // 三栏宽度只在这里算一次：比例、中间地板、拖拽上限都在 lib/layout.ts 里（满屏是浮层，不参与三栏），
   // 组件只消费结果，避免 App / Workspace / CSS 各算一套互相打架。
   const layout = computePaneLayout({
     viewport: viewportWidth,
     sidebarOpen,
-    agentOpen,
+    agentOpen: agentOpen && !agentFullscreen,
     sidebarWanted: sidebarWidth,
     agentWanted: agentWidth,
-    agentExpanded,
   });
   const effectiveSidebar = layout.sidebar;
   const effectiveAgent = layout.agent;

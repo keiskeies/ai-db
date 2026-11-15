@@ -2450,6 +2450,21 @@ const statsBox = await page.locator('[data-testid="composer-stats"]').boundingBo
 const noteBox = await page.locator('[data-testid="composer-disclaimer"]').boundingBox();
 check('disclaimer sits on the same row as the stats', Boolean(statsBox && noteBox) && Math.abs((statsBox.y + statsBox.height / 2) - (noteBox.y + noteBox.height / 2)) < 8, { statsH: Math.round(statsBox?.height ?? 0) });
 check('audited-policy line is gone', !/均可审计|fully audited/.test(await page.locator('[data-testid="agent-panel"]').innerText()));
+// 满屏按钮：AI 助手像视频全屏接管整屏；Esc 与再点都能回到三栏
+await page.locator('[data-testid="agent-fullscreen"]').click();
+await page.waitForFunction(() => document.querySelector('[data-testid="agent-panel"]')?.classList.contains('fullscreen'), null, { timeout: 5000 });
+const fsBox = await page.locator('[data-testid="agent-panel"]').boundingBox();
+const fsVp = page.viewportSize();
+check('agent fullscreen covers the whole viewport', Boolean(fsBox) && Math.abs(fsBox.width - fsVp.width) < 2 && Math.abs(fsBox.height - fsVp.height) < 2, JSON.stringify(fsBox));
+await page.keyboard.press('Escape');
+await page.waitForFunction(() => !document.querySelector('[data-testid="agent-panel"]')?.classList.contains('fullscreen'), null, { timeout: 5000 });
+const paneBox = await page.locator('[data-testid="agent-panel"]').boundingBox();
+check('Esc exits fullscreen back to the pane', Boolean(paneBox) && paneBox.width < fsVp.width - 100, JSON.stringify(paneBox));
+await page.locator('[data-testid="agent-fullscreen"]').click();
+await page.waitForFunction(() => document.querySelector('[data-testid="agent-panel"]')?.classList.contains('fullscreen'), null, { timeout: 5000 });
+await page.locator('[data-testid="agent-fullscreen"]').click();
+await page.waitForFunction(() => !document.querySelector('[data-testid="agent-panel"]')?.classList.contains('fullscreen'), null, { timeout: 5000 });
+check('fullscreen button toggles both ways', true);
 await page.locator('[data-testid="agent-mode"]').click();
 await page.waitForSelector('[data-testid="agent-mode-menu"]', { timeout: 5000 });
 check('permission capsule opens a menu with all four modes', (await page.locator('[data-testid="agent-mode-menu"] .pill-menu-item').count()) === 4);

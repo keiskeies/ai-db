@@ -15,11 +15,11 @@ import {
   Copy,
   Database,
   Download,
-  Expand,
   History,
   ImagePlus,
   ListChecks,
   Loader2,
+  Maximize2,
   MessageSquarePlus,
   Minimize2,
   PanelRightClose,
@@ -1251,7 +1251,7 @@ function AssistantShell({ children }: { children: React.ReactNode }) {
 export function AgentPanel() {
   const t = useApp((s) => s.t);
   const agentOpen = useApp((s) => s.agentOpen);
-  const expanded = useApp((s) => s.agentExpanded);
+  const fullscreen = useApp((s) => s.agentFullscreen);
   const messages = useApp((s) => s.agentMessages);
   const followUps = useApp((s) => s.agentFollowUps);
   const live = useApp((s) => s.live);
@@ -1273,7 +1273,7 @@ export function AgentPanel() {
   const prefill = useApp((s) => s.agentPrefill);
 
   const setAgentOpen = useApp((s) => s.setAgentOpen);
-  const setAgentExpanded = useApp((s) => s.setAgentExpanded);
+  const setAgentFullscreen = useApp((s) => s.setAgentFullscreen);
   const setAgentMode = useApp((s) => s.setAgentMode);
   const setAgentDatabase = useApp((s) => s.setAgentDatabase);
   const setSessionsOpen = useApp((s) => s.setSessionsOpen);
@@ -1327,6 +1327,16 @@ export function AgentPanel() {
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [pillMenu]);
+
+  // 满屏像视频全屏：Esc 退出；胶囊/弹层开着时 Esc 先关它们
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && pillMenu === 'none' && popover === 'none') setAgentFullscreen(false);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [fullscreen, pillMenu, popover, setAgentFullscreen]);
 
   const startRename = (id: string, title: string) => {
     setRenamingId(id);
@@ -1681,7 +1691,7 @@ export function AgentPanel() {
   };
 
   return (
-    <aside className={`agent-panel ${expanded ? 'expanded' : ''}`} data-testid="agent-panel">
+    <aside className={`agent-panel ${fullscreen ? 'fullscreen' : ''}`} data-testid="agent-panel">
       <div className="agent-head">
         <div className="agent-title">
           <span className="agent-dot">AI</span>
@@ -1697,8 +1707,8 @@ export function AgentPanel() {
         <button className="icon-btn" title={t('newSession')} onClick={() => void newAgentSession()} data-testid="agent-new-session">
           <MessageSquarePlus size={14} />
         </button>
-        <button className="icon-btn" title={expanded ? 'collapse' : 'expand'} onClick={() => setAgentExpanded(!expanded)}>
-          {expanded ? <Minimize2 size={14} /> : <Expand size={14} />}
+        <button className="icon-btn" title={fullscreen ? tr('退出全屏') : tr('全屏')} aria-pressed={fullscreen} onClick={() => setAgentFullscreen(!fullscreen)} data-testid="agent-fullscreen">
+          {fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
         </button>
         <button className="icon-btn" title={t('close')} onClick={() => setAgentOpen(false)}>
           <PanelRightClose size={14} />

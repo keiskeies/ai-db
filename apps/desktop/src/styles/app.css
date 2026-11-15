@@ -508,6 +508,14 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
   width: var(--agent-w, 384px); flex: 0 0 var(--agent-w, 384px); min-width: 320px; border-left: 1px solid var(--border-panel);
   background: var(--bg-panel); display: flex; flex-direction: column; min-height: 0; position: relative;
 }
+/* 满屏：视频全屏式接管整屏；z-40 盖住三栏与侧栏抽屉，弹层/抽屉（55+）仍在它上面 */
+.agent-panel.fullscreen {
+  position: fixed; inset: 0; z-index: 40; width: 100vw; min-width: 0; flex-basis: auto;
+  border-left: 0; box-shadow: none;
+}
+/* 满屏时对话与输入卡居中限宽，避免一行文字拉满整屏 */
+.agent-panel.fullscreen .agent-transcript-inner,
+.agent-panel.fullscreen .composer-box { width: 100%; max-width: 960px; margin-left: auto; margin-right: auto; }
 .agent-head { height: 44px; flex: 0 0 44px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--border-subtle); }
 .agent-head .agent-title { display: flex; align-items: center; gap: 7px; font-weight: 650; font-size: 12.5px; }
 .agent-dot { width: 16px; height: 16px; border-radius: 5px; background: var(--agent); display: grid; place-items: center; color: var(--on-solid); font-size: 9px; font-weight: 800; }

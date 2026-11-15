@@ -50,14 +50,6 @@ test('AI 助手宽度随窗口智能增长，且封顶在 PANE.agent.max', () =>
   assert.equal(open(3000, { agentWanted: PANE.agent.max }).agent, PANE.agent.max);
 });
 
-test('expand：占到地板为止的剩余空间，不超过自身上限', () => {
-  const base = open(1440);
-  const expanded = open(1440, { agentExpanded: true });
-  assert.ok(expanded.agent > base.agent, '展开应该比默认宽');
-  assert.equal(expanded.agent, 1440 - 10 - floor(1440) - expanded.sidebar);
-  assert.ok(expanded.workspace >= Math.ceil((1440 - 10) * PANE.workspaceShare));
-});
-
 test('窄窗口先收右栏，不压中间', () => {
   const wide = open(1440, { agentWanted: 900 });
   const tight = open(1100, { agentWanted: 900 });
@@ -119,19 +111,6 @@ test('侧栏收起时的拖拽上限也会放宽', () => {
   const l = computePaneLayout({ viewport: 2400, sidebarOpen: false, agentOpen: true, agentWanted: 384 });
   assert.ok(l.agentMax >= 1000);
   assert.ok(2400 - PANE.splitter - l.agentMax >= Math.ceil((2400 - 5) * PANE.workspaceShare));
-});
-
-test('侧栏收起 + 展开：直接吃到自身上限或中间地板', () => {
-  const l = computePaneLayout({ viewport: 2400, sidebarOpen: false, agentOpen: true, agentWanted: 384, agentExpanded: true });
-  assert.equal(l.agent, PANE.agent.max);
-  assert.ok(l.workspace >= Math.ceil((2400 - 5) * PANE.workspaceShare));
-});
-
-test('展开不会越过中间地板：窗口刚过浮层阈值时只给到地板为止', () => {
-  const l = open(1020, { agentExpanded: true });
-  assert.ok(l.workspace >= floor(1020));
-  assert.ok(l.agent >= PANE.agent.min);
-  assert.equal(sum(l, 2), 1020);
 });
 
 test('异常输入不会产出 NaN / 负数', () => {

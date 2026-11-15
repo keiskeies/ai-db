@@ -46,8 +46,6 @@ export interface PaneLayoutInput {
   /** 用户拖出来的偏好宽度 */
   sidebarWanted?: number;
   agentWanted?: number;
-  /** expand 按钮：把 AI 面板拉到当前允许的最大宽度 */
-  agentExpanded?: boolean;
 }
 
 export interface PaneLayout {
@@ -98,11 +96,6 @@ export function computePaneLayout(input: PaneLayoutInput): PaneLayout {
   const agentCap = avail - workspaceFloor - (sidebarInFlow ? sidebar : 0);
   let agent = clamp(safe(input.agentWanted, PANE.agent.fallback), PANE.agent.min, PANE.agent.max);
   if (agentInFlow) agent = Math.min(agent, Math.max(PANE.agent.min, Math.min(PANE.agent.max, agentCap)));
-
-  // 展开：占到「到中间地板为止」的剩余空间，同时不超过右栏上限
-  if (agentInFlow && input.agentExpanded) {
-    agent = clamp(agentCap, PANE.agent.min, Math.max(PANE.agent.min, Math.min(PANE.agent.max, agentCap)));
-  }
 
   // 两侧之和仍可能超过「avail - 地板」（比如两侧都拖到上限）：按余量比例回收
   const used = () => (sidebarInFlow ? sidebar : 0) + (agentInFlow ? agent : 0);

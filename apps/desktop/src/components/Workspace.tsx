@@ -53,7 +53,6 @@ export function Workspace({
   const openQuery = useApp((s) => s.openQuery);
   const agentOpen = useApp((s) => s.agentOpen);
   const setAgentWidth = useApp((s) => s.setAgentWidth);
-  const setAgentExpanded = useApp((s) => s.setAgentExpanded);
   const openContextMenu = useApp((s) => s.openContextMenu);
   const t = useApp((s) => s.t);
 
@@ -116,11 +115,7 @@ export function Workspace({
             width={agentWidth}
             min={PANE.agent.min}
             max={agentMax}
-            // 手动拖拽即退出「展开」：否则 agentExpanded 每帧都会把宽度算回上限，拖动看起来没反应
-            onChange={(width) => {
-              setAgentExpanded(false);
-              setAgentWidth(width);
-            }}
+            onChange={(width) => setAgentWidth(width)}
             onCommit={(width) => setAgentWidth(width, true)}
             testId="splitter-agent"
           />
