@@ -507,7 +507,7 @@ pinned → +0.3 且不衰减
 
 **多步**：一句话里的多个问题只按显式承接词（"以及/再/然后…"）切句，每问单独走一遍规划器，所以半句和单独问给出同一条 SQL；计划由规划器直接发 `plan` 事件，几条只读查询一回合全部发出，结果按调用参数核对 SQL 后分配给各步。
 
-**图表**：类型按用户点名的词定（`chartKindOf`），没点名时按时间桶/占比形态兜底。热力图取两根分类轴 + 一个度量（轴可以是时间粒度），堆叠按分类列拆段（`CASE WHEN` 条件聚合，别名即段名），雷达 3–8 根轴；执行端 `chartSuitability` 是唯一适配口径，降级说明会回显在结论里。
+**图表**：类型按用户点名的词定（`chartKindOf`），没点名时按时间桶/占比形态兜底。热力图取两根分类轴 + 一个度量（轴可以是时间粒度），堆叠按分类列拆段（`CASE WHEN` 条件聚合，别名即段名），雷达 3–8 根轴；执行端 `chartSuitability` 是唯一适配口径（pie/radar/stacked/line 误用都确定性降级），降级与截断说明回显在 `chart.note` 与结论里（bar/pie 24 点、line 200、scatter 300，截断不静默）。选型 guidance 在工具描述与系统 prompt 双写：意图→类型 + chart-ready SQL（排序、时间分桶、top-N+other、SQL 内单位换算、人读标题）。
 
 **非 SQL 引擎**：按 `engineMeta().languages` 路由到 `run_mql` / `run_redis` / `run_cypher` / `run_cql` / `run_aql` / `vector_search` / `search_index`，计数、取样、分组翻成该引擎的原生语句；直接贴进来的 Cypher / MQL JSON / Redis 命令 / CQL / AQL 也按语言分派。翻不准的形状直接说清，不硬凑。
 

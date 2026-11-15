@@ -1734,7 +1734,7 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
 
     if (type === 'scatter') {
       // 散点要保留每一行，不能走 toSeries 的 24 点截断；两个轴都必须是数值。
-      const points = objects
+      const allPoints = objects
         .map((row) => {
           const rawX = row[x];
           const rawY = row[y];
@@ -1745,9 +1745,10 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
           const label = labelName ? row[labelName] : undefined;
           return { x: xValue, y: yValue, ...(label === null || label === undefined || label === '' ? {} : { label: String(label) }) };
         })
-        .filter((point): point is { x: number; y: number; label?: string } => point !== null)
-        .slice(0, 300);
-      if (points.length < 2) {
+        .filter((point): point is { x: number; y: number; label?: string } => point !== null);
+      const points = allPoints.slice(0, 300);
+      const scatterNote = allPoints.length > points.length ? `散点共 ${allPoints.length} 个，仅展示前 300 个；如需全量请聚合或加 LIMIT。` : undefined;
+      if (allPoints.length < 2) {
         throw new DbError('散点图至少需要 2 个 x/y 同时为数值的数据点；请显式指定数值列 x、y', { code: 'EMPTY_SERIES' });
       }
       const chart = {
@@ -1758,15 +1759,19 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
         sql,
         series: points.slice(0, 24).map((point) => ({ label: point.label ?? String(point.x), value: point.y })),
         scatter: points,
+        ...(scatterNote ? { note: scatterNote } : {}),
       };
-      return ok(started, `已生成散点图（${points.length} 个点）`, { chart, columns, rows, chartSql: sql });
+      return ok(started, `已生成散点图（${points.length} 个点）${scatterNote ? `；${scatterNote}` : ''}`, { chart, columns, rows, chartSql: sql });
     }
 
-    const usable = objects.filter((row) => {
+    const usableAll = objects.filter((row) => {
       const value = row[y];
       if (value === null || value === undefined || value === '') return false;
       return Number.isFinite(typeof value === 'number' ? value : Number(String(value).trim()));
-    }).slice(0, 24);
+    });
+    // line 要看全趋势，上限放宽；其余类型以一屏可读为准。截断必须显式注记，不能静默丢数据。
+    const cap = type === 'line' ? 200 : 24;
+    const usable = usableAll.slice(0, cap);
     const series = toSeries(usable, x, y).map((point) => ({ label: point.label || '—', value: point.value }));
     if (!series.length) {
       throw new DbError('图表没有有效数据点：检查 x/y 列与 NULL 值', { code: 'EMPTY_SERIES' });
@@ -1788,11 +1793,13 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
     const fit = chartSuitability({ series, extraSeries });
     let selectedType = type;
     let correctionNote: string | undefined;
-    if (!fit[type].ok && (type === 'pie' || type === 'radar' || type === 'stacked')) {
+    if (!fit[type].ok && (type === 'pie' || type === 'radar' || type === 'stacked' || type === 'line')) {
       const recommended = recommendChartType(fit);
       selectedType = recommended && recommended !== 'scatter' && recommended !== 'heatmap' ? recommended : 'bar';
       correctionNote = `${CHART_KIND_LABELS[type]}不适配当前数据：${fit[type].reason ?? '形态不符'}；已改用${CHART_KIND_LABELS[selectedType]}。`;
     }
+    const truncNote = usableAll.length > usable.length ? `数据共 ${usableAll.length} 行，按 SQL 顺序仅展示前 ${usable.length} 行；完整数据请先聚合/分桶或在 SQL 里 LIMIT。` : undefined;
+    const note = [correctionNote, truncNote].filter(Boolean).join(' ') || undefined;
     const keepStacked = (selectedType === 'stacked' || (selectedType === 'bar' && stacked)) && extraSeries.length > 0;
     const chart = {
       type: selectedType,
@@ -1803,10 +1810,10 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
       series,
       ...(extraSeries.length ? { extraSeries } : {}),
       ...(keepStacked ? { stacked: true } : {}),
-      ...(correctionNote ? { note: correctionNote } : {}),
+      ...(note ? { note } : {}),
     };
     const summaryType = selectedType === 'pie' ? '饼' : selectedType === 'stacked' ? '堆叠柱' : CHART_KIND_LABELS[selectedType].replace(/图$/, '');
-    return ok(started, `已生成${summaryType}图（${selectedType === 'radar' ? `${series.length} 个轴` : `${series.length} 个数据点`}）${correctionNote ? `；${correctionNote}` : ''}`, {
+    return ok(started, `已生成${summaryType}图（${selectedType === 'radar' ? `${series.length} 个轴` : `${series.length} 个数据点`}）${note ? `；${note}` : ''}`, {
       chart,
       columns,
       rows,

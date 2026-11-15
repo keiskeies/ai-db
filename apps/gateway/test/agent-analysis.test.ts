@@ -326,3 +326,41 @@ test('render_chart 审计记录同时留下请求类型与实际类型', async (
   assert.equal(entry?.meta?.chartType, 'bar');
 });
 
+
+test('render_chart 无序类别点 line 时确定性降级 bar，并注记原因', async () => {
+  const result = await run('render_chart', { sql: 'SELECT status, COUNT(*) AS cnt FROM orders GROUP BY status', type: 'line' });
+  assert.equal(result.ok, true, result.error?.message);
+  const chart = (result.data as any).chart;
+  assert.equal(chart.type, 'bar', '无序类别不能画折线');
+  assert.match(chart.note ?? '', /折线图不适配.*已改用柱状图/);
+});
+
+test('render_chart 合法时间序列保留 line 且无注记', async () => {
+  const result = await run('render_chart', { sql: "SELECT strftime('%Y-%m', created_at) AS m, COUNT(*) AS cnt FROM orders GROUP BY m ORDER BY m", type: 'line' });
+  assert.equal(result.ok, true, result.error?.message);
+  const chart = (result.data as any).chart;
+  assert.equal(chart.type, 'line');
+  assert.equal(chart.note, undefined);
+});
+
+test('render_chart 截断必须显式注记：line 上限 200、bar 上限 24', async () => {
+  const line = await run('render_chart', { sql: 'SELECT ROW_NUMBER() OVER (ORDER BY id) AS n, total_cents AS v FROM orders', type: 'line', x: 'n', y: 'v' });
+  assert.equal(line.ok, true, line.error?.message);
+  const lineChart = (line.data as any).chart;
+  assert.equal(lineChart.type, 'line', '有序数值轴是合法 line');
+  assert.equal(lineChart.series.length, 200);
+  assert.match(lineChart.note ?? '', /仅展示前 200 行/);
+  const bar = await run('render_chart', { sql: 'SELECT id, total_cents AS v FROM orders LIMIT 30', type: 'bar' });
+  assert.equal(bar.ok, true, bar.error?.message);
+  const barChart = (bar.data as any).chart;
+  assert.equal(barChart.series.length, 24);
+  assert.match(barChart.note ?? '', /仅展示前 24 行/);
+});
+
+test('render_chart 散点超 300 截断注记', async () => {
+  const result = await run('render_chart', { sql: 'SELECT total_cents AS x, id AS y FROM orders', type: 'scatter' });
+  assert.equal(result.ok, true, result.error?.message);
+  const chart = (result.data as any).chart;
+  assert.equal(chart.scatter.length, 300);
+  assert.match(chart.note ?? '', /仅展示前 300 个/);
+});

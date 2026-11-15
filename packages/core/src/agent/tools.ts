@@ -722,15 +722,15 @@ For a script that must run several write/DDL statements in order, pass allowMult
   {
     name: 'render_chart',
     description:
-      `Execute a SELECT and render the result as a chart in the agent transcript. Pick the type from the data shape and the question — never default to bar out of habit:
-- bar: compare magnitudes across a small set of categories (≤12); x is the category, y/ys are numeric measures.
-- stacked: show how parts compose each category total (or a time series); every measure must share one unit and be non-negative; pass ys and set type=stacked.
-- line: change over an ordered axis (time, sequence); x must be ordered, not an unordered category list.
-- pie: parts of one whole; a single measure with 3–8 non-negative slices. Never use pie for time series, comparisons across periods, or more than 8 categories.
-- scatter: relationship/correlation between two numeric columns; x and y are both numeric, ideally ≥10 points; optional label names each point. Not for categories or time buckets.
-- heatmap: one numeric measure across two categorical dimensions (e.g. weekday × hour, region × category); pass the two category columns as x and y and the measure as value. Best for spotting density/hot spots; avoid >20×16 cells.
+      `Execute a SELECT and render the result as a chart in the agent transcript. Pick the type from the user's intent AND the data shape — never default to bar out of habit:
+- bar: compare magnitudes or rank categories. Shape the SQL: ORDER BY the measure DESC for rankings, LIMIT ≤12, fold the tail into one "other" row when the remainder matters.
+- line: change over an ordered axis (time, sequence). Bucket time in SQL to a readable grain (day/week/month, engine dialect) and ORDER BY the bucket; x must be ordered, never an unordered category list.
+- stacked: how parts compose each category total or a time series; 2–4 measures sharing one unit, non-negative; pass ys and set type=stacked. For composition over time prefer stacked over pie.
+- pie: parts of ONE whole; a single measure with 3–8 non-negative slices. Shape the SQL: top-N plus one "other" bucket so slices stay ≤8. Never for time series, comparisons across periods, or rankings.
+- scatter: relationship/correlation between two numeric columns on raw rows (no aggregation); x and y both numeric, ideally ≥10 points; optional label names each point. Not for categories or time buckets.
+- heatmap: one numeric measure across two categorical dimensions (e.g. weekday × hour, region × category); pass the two category columns as x and y and the measure as value. Best for density/hot spots; avoid >20×16 cells.
 - radar: compare 3–8 same-unit measures for one or a few records; x is the record/category axis, y plus ys are the measures. Never mix units (count with amount) or use fewer than 3 axes.
-x/y/ys/value/label are result column names, not SQL expressions.`,
+Chart-ready SQL: aggregate to one row per category/bucket before rendering; convert units in SQL (cents/100 etc.) and name the measure column after the unit; always pass a human-readable title (subject + measure + unit). x/y/ys/value/label are result column names, not SQL expressions. Pair the chart with analyze_chart numbers when the user asks how much / which is biggest.`,
     risk: 'read',
     inputSchema: {
       type: 'object',
