@@ -269,6 +269,7 @@
   "按主键 {0} 删除这一行？": "¿Eliminar esta fila por clave primaria {0}?",
   "按分组统计并画柱状图": "Contar por grupo y dibujar un gráfico de barras",
   "按对象与数据全文查找": "Búsqueda de texto completo por objetos y datos",
+  "换一换": "Cambiar",
   "授权": "Conceder",
   "授权失败": "Autorización fallida",
   "推理档位：": "Engranaje de razonamiento:",

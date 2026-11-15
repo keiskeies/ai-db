@@ -3630,5 +3630,6 @@
   "行 {0}：title/content 不能为空": "Linha {0}: title/content não pode ficar vazio",
   "行 {0}：{1}": "Linha {0}: {1}",
   "同义词（逗号分隔）": "Sinônimos (separados por vírgula)",
-  "拖拽排序": "Arrastar para reordenar"
+  "拖拽排序": "Arrastar para reordenar",
+  "换一换": "Trocar"
 }

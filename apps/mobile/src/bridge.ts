@@ -343,11 +343,12 @@ export class BridgeClient {
     return this.request<{ result: ToolResult }>('/agent/chart-insight', { method: 'POST', body: JSON.stringify(body) });
   }
 
-  suggest(params: { connectionId: string; database?: string; limit?: number; locale?: string; sessionId?: string }) {
+  suggest(params: { connectionId: string; database?: string; limit?: number; locale?: string; sessionId?: string; exclude?: string[] }) {
     const q = new URLSearchParams({ connectionId: params.connectionId });
     if (params.database) q.set('database', params.database);
     if (params.limit) q.set('limit', String(params.limit));
     if (params.sessionId) q.set('sessionId', params.sessionId);
+    for (const p of params.exclude ?? []) q.append('exclude', p);
     q.set('locale', params.locale ?? 'en');
     return this.request<{ suggestions: QuestionSuggestion[] }>(`/agent/suggest?${q.toString()}`);
   }

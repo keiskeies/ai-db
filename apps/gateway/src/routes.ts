@@ -2611,6 +2611,12 @@ export function createApiRouter(deps: ApiDeps): Router {
       const limit = num(req.query.limit, 6, 1, 12);
       const locale = /^zh/i.test(String(req.query.locale ?? '')) ? 'zh' : 'en';
       const sessionId = str(req.query.sessionId);
+      // 换一换：客户端累积传入已展示过的 prompt（可重复参数），上限 60 条防滥用。
+      const excludeRaw = req.query.exclude;
+      const exclude = (Array.isArray(excludeRaw) ? excludeRaw : excludeRaw ? [excludeRaw] : [])
+        .map((v) => String(v).slice(0, 200))
+        .filter(Boolean)
+        .slice(0, 60);
       // 最近会话里真实问过的问题进入推荐问；排除当前会话，避免把刚问完的问题又推回来。
       let recentQuestions: string[] = [];
       try {
@@ -2631,12 +2637,12 @@ export function createApiRouter(deps: ApiDeps): Router {
       try {
         schemas = await manager.schema(connectionId, database);
       } catch {
-        res.json({ suggestions: suggestQuestions([], { limit, recentQuestions, locale }) });
+        res.json({ suggestions: suggestQuestions([], { limit, recentQuestions, locale, exclude }) });
         return;
       }
       const history = store.listHistory({ connectionId, limit: 50 }).flatMap((h) => tablesFromSql(h.sql));
       res.json({
-        suggestions: suggestQuestions(schemas, { limit, history, bundle: store.agentContextBundle(connectionId, database), locale, recentQuestions }),
+        suggestions: suggestQuestions(schemas, { limit, history, bundle: store.agentContextBundle(connectionId, database), locale, recentQuestions, exclude }),
       });
     }),
   );

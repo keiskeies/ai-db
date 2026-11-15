@@ -269,6 +269,7 @@
   "按主键 {0} 删除这一行？": "Delete this row by primary key {0}?",
   "按分组统计并画柱状图": "Count by group and draw a bar chart",
   "按对象与数据全文查找": "Full-text search by objects and data",
+  "换一换": "Shuffle",
   "授权": "Grant",
   "授权失败": "Authorization failed",
   "推理档位：": "Reasoning gear:",

@@ -566,6 +566,11 @@ table.designer-grid { width: 100%; min-width: 700px; border-collapse: separate; 
 .cap-card:hover { border-color: var(--agent); color: var(--text-primary); }
 .cap-card svg { color: var(--agent); flex: 0 0 auto; }
 .suggest-block { margin-bottom: 14px; text-align: left; }
+.suggest-head { width: 100%; }
+.suggest-refresh { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; border: none; background: transparent; color: var(--text-muted); border-radius: 4px; cursor: pointer; }
+.suggest-refresh:hover { color: var(--agent); background: var(--agent-soft); }
+.suggest-refresh:disabled { opacity: 0.5; cursor: default; }
+.suggest-refresh-btn { padding: 4px 6px; }
 .suggest-list { display: flex; flex-direction: column; gap: 5px; }
 .suggest-chip {
   display: flex; align-items: center; gap: 6px; width: 100%;

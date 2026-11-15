@@ -25,6 +25,8 @@ export interface SuggestOptions {
   locale?: 'zh' | 'en';
   /** 用户最近真实问过的问题（新→旧）；进入「猜你想问」并带「问过」来源标识。 */
   recentQuestions?: string[];
+  /** 换一换：本视图已展示过的 prompt（原样传入即可），排除后返回下一批；排光时回绕。 */
+  exclude?: string[];
 }
 
 const TIME_TYPE = /(date|time|timestamp|year)/i;
@@ -40,6 +42,11 @@ const DIMENSION_NAME = /(status|state|type|kind|category|class|level|grade|chann
 const IDENTIFIER_NAME = /(^|_)(id|ids|uuid|guid|key|code|seq|sn|no)$|^id$/i;
 
 const lower = (value: string) => value.trim().toLowerCase();
+
+/** 推荐问去重统一口径：折叠空白 + 小写。客户端排除集与服务端候选必须共用这一份。 */
+export function normalizeSuggestionPrompt(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase();
+}
 
 export function isTimeColumn(column: ColumnInfo): boolean {
   return TIME_TYPE.test(column.type) || TIME_NAME.test(column.name);
@@ -157,12 +164,12 @@ export function suggestQuestions(schemas: DatabaseSchema[] | undefined, opts: Su
 
   // 真实问过的问题比结构推断更贴近意图：基础分 0.95，重复出现每次 +0.05，封顶 1.05。
   // 输入按新→旧，规范化后去重保留首次出现；与结构候选完全相同的 prompt 不再重复推荐。
-  const structuralPrompts = new Set(candidates.map((c) => lower(c.prompt)));
+  const structuralPrompts = new Set(candidates.map((c) => normalizeSuggestionPrompt(c.prompt)));
   const recentSeen = new Map<string, { prompt: string; count: number }>();
   for (const raw of opts.recentQuestions ?? []) {
     const prompt = raw.trim().replace(/\s+/g, ' ');
     if (prompt.length < 6 || prompt.length > 80) continue;
-    const key = lower(prompt);
+    const key = normalizeSuggestionPrompt(prompt);
     if (structuralPrompts.has(key)) continue;
     const found = recentSeen.get(key);
     if (found) found.count += 1;
@@ -170,7 +177,7 @@ export function suggestQuestions(schemas: DatabaseSchema[] | undefined, opts: Su
   }
   for (const { prompt, count } of recentSeen.values()) {
     candidates.push({
-      id: `recent::${lower(prompt)}`,
+      id: `recent::${normalizeSuggestionPrompt(prompt)}`,
       kind: 'recent',
       prompt,
       reason: L(`最近问过（${count} 次）`, `Asked recently (${count}×)`),
@@ -179,13 +186,21 @@ export function suggestQuestions(schemas: DatabaseSchema[] | undefined, opts: Su
     });
   }
 
-  if (!candidates.length) return [];
+  // 换一换：排除本视图已展示过的 prompt，让每次刷新都看到新内容；
+  // 候选被排除光时回绕到完整集合——只要还有候选，刷新就不空手。
+  const excluded = new Set((opts.exclude ?? []).map(normalizeSuggestionPrompt).filter(Boolean));
+  let pool = candidates;
+  if (excluded.size) {
+    const remaining = candidates.filter((c) => !excluded.has(normalizeSuggestionPrompt(c.prompt)));
+    if (remaining.length) pool = remaining;
+  }
+  if (!pool.length) return [];
 
   // 先按分数排序，再按种类轮转挑选，避免 6 条全是同一类问题
-  candidates.sort((a, b) => b.score - a.score || a.prompt.localeCompare(b.prompt));
+  pool.sort((a, b) => b.score - a.score || a.prompt.localeCompare(b.prompt));
   const perKind = new Map<SuggestionKind, number>();
   const byKind = new Map<SuggestionKind, Candidate[]>();
-  for (const c of candidates) {
+  for (const c of pool) {
     const used = perKind.get(c.kind) ?? 0;
     if (used >= maxPerKind) continue;
     perKind.set(c.kind, used + 1);

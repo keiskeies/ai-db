@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { bundleAgentContext } from '../src/agent/context';
-import { disabledTableInSql, isDimensionColumn, isMeasureColumn, isTimeColumn, suggestFollowUps, suggestQuestions, suggestionLabel, tablesFromSql, type QuestionSuggestion } from '../src/agent/suggest';
+import { disabledTableInSql, isDimensionColumn, isMeasureColumn, isTimeColumn, normalizeSuggestionPrompt, suggestFollowUps, suggestQuestions, suggestionLabel, tablesFromSql, type QuestionSuggestion } from '../src/agent/suggest';
 import type { AgentContextEntry, ColumnInfo, DatabaseSchema, TableInfo } from '../src/types';
 
 const iso = new Date('2026-10-27T00:00:00.000Z').toISOString();
@@ -224,6 +224,33 @@ test('callers without recentQuestions keep the old behaviour; en locale localise
 });
 
 // ---------- follow-ups ----------
+
+test('normalizeSuggestionPrompt folds whitespace and case for dedupe', () => {
+  assert.equal(normalizeSuggestionPrompt('  按 Status   统计 Orders '), '按 status 统计 orders');
+});
+
+test('exclude hides shown prompts (structural and recent) with normalised matching', () => {
+  const recentQuestions = ['上个月华东区的退款率为什么升高？'];
+  const base = suggestQuestions(schema, { limit: 12, recentQuestions });
+  const structural = base.find((s) => s.kind !== 'recent')!;
+  const recent = base.find((s) => s.kind === 'recent')!;
+  const excluded = suggestQuestions(schema, { limit: 12, recentQuestions, exclude: ['  ' + structural.prompt.toUpperCase() + '  ', recent.prompt] });
+  assert.ok(!excluded.some((s) => s.prompt === structural.prompt), '结构候选被排除');
+  assert.ok(!excluded.some((s) => s.prompt === recent.prompt), '问过候选被排除');
+  assert.ok(excluded.length > 0, '其余候选照常返回');
+});
+
+test('exclude wraps around to the full pool when everything has been shown', () => {
+  const base = suggestQuestions(schema, { limit: 12, maxPerKind: 12 });
+  const wrapped = suggestQuestions(schema, { limit: 12, maxPerKind: 12, exclude: base.map((s) => s.prompt) });
+  assert.deepEqual(wrapped.map((s) => s.prompt), base.map((s) => s.prompt), '排光后回绕，刷新不空手');
+});
+
+test('empty exclude keeps the default behaviour', () => {
+  const base = suggestQuestions(schema, { limit: 6 });
+  assert.deepEqual(suggestQuestions(schema, { limit: 6, exclude: [] }), base);
+  assert.deepEqual(suggestQuestions(schema, { limit: 6, exclude: ['   '] }), base);
+});
 
 test('follow-ups are scoped to the tables this turn actually touched', () => {
   const list = suggestFollowUps({ schemas: schema, tables: ['orders'], usedTools: ['run_sql'], limit: 3 });

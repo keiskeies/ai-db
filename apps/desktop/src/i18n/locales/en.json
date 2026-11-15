@@ -3643,5 +3643,6 @@
   "行 {0}：title/content 不能为空": "Row {0}: title/content must not be empty",
   "行 {0}：{1}": "Row {0}: {1}",
   "同义词（逗号分隔）": "Synonyms (comma-separated)",
-  "拖拽排序": "Drag to reorder"
+  "拖拽排序": "Drag to reorder",
+  "换一换": "Shuffle"
 }

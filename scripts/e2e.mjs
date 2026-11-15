@@ -591,6 +591,17 @@ await page.reload({ waitUntil: 'domcontentloaded' });
 await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
 await page.waitForTimeout(900);
 
+// 换一换（首页）：与助手面板同一套排除协议，刷新后必须看到新的一批
+await page.waitForSelector('.home-suggest-list .home-suggest-prompt', { timeout: 15000 });
+const homeSuggestBefore = await page.$$eval('.home-suggest-list .home-suggest-prompt', (els) => els.map((el) => (el.textContent ?? '').trim().replace(/\s+/g, ' ').toLowerCase()));
+await page.click('[data-testid="welcome-suggest-refresh"]');
+await page.waitForFunction((before) => {
+  const now = [...document.querySelectorAll('.home-suggest-list .home-suggest-prompt')].map((el) => (el.textContent ?? '').trim().replace(/\s+/g, ' ').toLowerCase());
+  return now.length > 0 && now.some((p) => !before.includes(p));
+}, homeSuggestBefore, { timeout: 10000 });
+const homeSuggestAfter = await page.$$eval('.home-suggest-list .home-suggest-prompt', (els) => els.map((el) => (el.textContent ?? '').trim().replace(/\s+/g, ' ').toLowerCase()));
+check('首页换一换排除已展示的问题', homeSuggestAfter.length > 0 && homeSuggestAfter.every((p) => !homeSuggestBefore.includes(p)), `${homeSuggestBefore.length} → ${homeSuggestAfter.length}`);
+
 // ---------------- 布局：折叠 / 拖宽 / 右键接管 ----------------
 const sidebarBox = await page.locator('.sidebar').boundingBox();
 await page.click('[data-testid="toggle-sidebar"]');
@@ -2840,6 +2851,16 @@ check('点击推荐填入输入框且不自动发送', (await page.locator('[dat
 const recentChip = page.locator('[data-testid="suggest-recent"]').first();
 check('历史问题进入猜你想问并带问过徽标', (await recentChip.count()) > 0 && ((await recentChip.textContent()) ?? '').includes('问过'), ((await recentChip.textContent()) ?? '').slice(0, 40));
 await page.fill('[data-testid="agent-input"]', '');
+// 换一换：带上已展示的问题做排除，返回下一批且不空手
+const panelSuggestBefore = await suggestChips.evaluateAll((els) => els.map((el) => (el.querySelector('.truncate')?.textContent ?? '').trim().replace(/\s+/g, ' ').toLowerCase()));
+await page.click('[data-testid="suggest-refresh"]');
+await page.waitForFunction((before) => {
+  const chips = [...document.querySelectorAll('[data-testid="agent-suggestions"] .suggest-chip')];
+  const now = chips.map((el) => (el.querySelector('.truncate')?.textContent ?? '').trim().replace(/\s+/g, ' ').toLowerCase());
+  return now.length > 0 && now.some((p) => !before.includes(p));
+}, panelSuggestBefore, { timeout: 10000 });
+const panelSuggestAfter = await suggestChips.evaluateAll((els) => els.map((el) => (el.querySelector('.truncate')?.textContent ?? '').trim().replace(/\s+/g, ' ').toLowerCase()));
+check('助手换一换排除已展示的问题', panelSuggestAfter.length > 0 && panelSuggestAfter.every((p) => !panelSuggestBefore.includes(p)), `${panelSuggestBefore.length} → ${panelSuggestAfter.length}`);
 
 // ---------------- P5 会话重命名与搜索 ----------------
 await page.click('[data-testid="agent-sessions"]');
@@ -3460,6 +3481,16 @@ const mobileSuggestKinds = await mobile.$$eval('[data-testid^="m-suggest-"]', (e
 check('mobile 猜你想问含历史问过', mobileSuggestKinds.includes('m-suggest-recent'), mobileSuggestKinds.join(','));
 const mobileRecentText = (await mobile.locator('[data-testid=m-suggest-recent]').first().textContent()) ?? '';
 check('mobile 历史问题带问过徽标', mobileRecentText.includes('问过'), mobileRecentText.slice(0, 40));
+// 换一换（移动端）：同一套排除协议，刷新后必须看到新的一批
+const mobileSuggestSel = '[data-testid^="m-suggest-"]:not([data-testid="m-suggest-refresh"])';
+const mobileSuggestBefore = await mobile.$$eval(mobileSuggestSel, (els) => els.map((el) => (el.textContent ?? '').trim().replace(/\s+/g, ' ').toLowerCase()));
+await mobile.getByTestId('m-suggest-refresh').click();
+await mobile.waitForFunction((before) => {
+  const now = [...document.querySelectorAll('[data-testid^="m-suggest-"]:not([data-testid="m-suggest-refresh"])')].map((el) => (el.textContent ?? '').trim().replace(/\s+/g, ' ').toLowerCase());
+  return now.length > 0 && now.some((p) => !before.includes(p));
+}, mobileSuggestBefore, { timeout: 10000 });
+const mobileSuggestAfter = await mobile.$$eval(mobileSuggestSel, (els) => els.map((el) => (el.textContent ?? '').trim().replace(/\s+/g, ' ').toLowerCase()));
+check('mobile 换一换排除已展示的问题', mobileSuggestAfter.length > 0 && mobileSuggestAfter.every((p) => !mobileSuggestBefore.includes(p)), `${mobileSuggestBefore.length} → ${mobileSuggestAfter.length}`);
 await mobile.screenshot({ path: join(shots, 'mobile-chat.png') });
 
 await mobile.getByTestId('m-chat-input').fill('看看有哪些表');

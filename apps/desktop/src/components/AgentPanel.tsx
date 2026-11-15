@@ -26,6 +26,7 @@ import {
   Pencil,
   Plus,
   Plug,
+  RefreshCw,
   Search,
   ShieldAlert,
   Sparkles,
@@ -38,7 +39,7 @@ import {
   Zap,
 } from 'lucide-react';
 import type { AgentMessageBlock, AgentPlanItem, PermissionMode, QuestionSuggestion, Risk, TableInfo, ToolResult } from '@aidb/core';
-import { COMMANDS, engineMeta, suggestionLabel } from '@aidb/core';
+import { COMMANDS, engineMeta, normalizeSuggestionPrompt, suggestionLabel } from '@aidb/core';
 import { getI18nLocale } from '../i18n';
 import { contextWindowOf, getModelProfile, isUnfinishedStop, supportsInput } from '@aidb/core';
 import { api, attachmentObjectUrl, type StoredAttachment } from '../lib/api';
@@ -1298,6 +1299,9 @@ export function AgentPanel() {
   const [slashIndex, setSlashIndex] = useState(0);
   const [mentionQuery, setMentionQuery] = useState('');
   const [suggestions, setSuggestions] = useState<QuestionSuggestion[]>([]);
+  const [suggestBusy, setSuggestBusy] = useState(false);
+  // 换一换的排除集：本视图展示过的 prompt 累积在这里，连接/库/会话变化时清空重来。
+  const shownSuggestRef = useRef<Set<string>>(new Set());
   const [sessionQuery, setSessionQuery] = useState('');
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
@@ -1445,6 +1449,7 @@ export function AgentPanel() {
   // 猜你想问：服务端用本地规则从已加载 schema 推导，不查库、不调模型，离线模式同样可用
   const suggestionsSupported = activeConnection ? engineMeta(activeConnection.engine).languages.includes('sql') : true;
   useEffect(() => {
+    shownSuggestRef.current = new Set();
     if (!activeConnectionId || !suggestionsSupported) {
       setSuggestions([]);
       return;
@@ -1453,7 +1458,10 @@ export function AgentPanel() {
     api
       .suggest({ connectionId: activeConnectionId, database: agentDatabase || activeConnection?.database, limit: 6, locale: getI18nLocale(), sessionId: agentSessionId ?? undefined })
       .then((res) => {
-        if (!cancelled) setSuggestions(res.suggestions);
+        if (!cancelled) {
+          setSuggestions(res.suggestions);
+          for (const s of res.suggestions) shownSuggestRef.current.add(normalizeSuggestionPrompt(s.prompt));
+        }
       })
       .catch(() => {
         if (!cancelled) setSuggestions([]);
@@ -1462,6 +1470,25 @@ export function AgentPanel() {
       cancelled = true;
     };
   }, [activeConnectionId, activeConnection?.database, agentDatabase, tables.length, suggestionsSupported, agentSessionId]);
+
+  // 换一换：带上本视图已展示过的 prompt 去服务端排除；返回的全是看过的说明候选回绕了，排除集清零。
+  const refreshSuggestions = async () => {
+    if (!activeConnectionId || suggestBusy) return;
+    setSuggestBusy(true);
+    try {
+      const res = await api.suggest({ connectionId: activeConnectionId, database: agentDatabase || activeConnection?.database, limit: 6, locale: getI18nLocale(), sessionId: agentSessionId ?? undefined, exclude: [...shownSuggestRef.current] });
+      if (res.suggestions.length) {
+        const keys = res.suggestions.map((s) => normalizeSuggestionPrompt(s.prompt));
+        if (keys.every((k) => shownSuggestRef.current.has(k))) shownSuggestRef.current = new Set();
+        for (const k of keys) shownSuggestRef.current.add(k);
+        setSuggestions(res.suggestions);
+      }
+    } catch {
+      /* 刷新失败保持原有推荐，不打断用户 */
+    } finally {
+      setSuggestBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (prefill) {
@@ -1762,7 +1789,13 @@ export function AgentPanel() {
                 <p>{t('emptyAgentHint')}</p>
                 {suggestions.length ? (
                   <div className="suggest-block" data-testid="agent-suggestions">
-                    <div className="plan-title" style={{ padding: '0 2px' }}>{tr("猜你想问")}</div>
+                    <div className="plan-title suggest-head" style={{ padding: '0 2px' }}>
+                      {tr("猜你想问")}
+                      <div className="spacer" />
+                      <button className="suggest-refresh" onClick={() => void refreshSuggestions()} disabled={suggestBusy} title={tr("换一换")} aria-label={tr("换一换")} data-testid="suggest-refresh">
+                        <RefreshCw size={11} className={suggestBusy ? 'spin' : ''} />
+                      </button>
+                    </div>
                     <div className="suggest-list">
                       {suggestions.map((s) => {
                         const label = suggestionLabel(s.kind, /^zh/i.test(getI18nLocale()) ? 'zh' : 'en');

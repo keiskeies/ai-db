@@ -3630,5 +3630,6 @@
   "行 {0}：title/content 不能为空": "Zeile {0}: title/content darf nicht leer sein",
   "行 {0}：{1}": "Zeile {0}: {1}",
   "同义词（逗号分隔）": "Synonyme (kommagetrennt)",
-  "拖拽排序": "Ziehen zum Sortieren"
+  "拖拽排序": "Ziehen zum Sortieren",
+  "换一换": "Andere Vorschläge"
 }

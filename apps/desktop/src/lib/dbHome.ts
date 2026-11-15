@@ -154,9 +154,9 @@ export interface HomeSuggestion extends QuestionSuggestion {
  * AI 建议走 /agent/suggest：它是真按这个库的表、列名和最近查询算出来的，
  * 比首页原来那 4 条写死的 prompt 强得多。失败就退成空数组，首页不因此报错。
  */
-export async function loadSuggestions(connectionId: string, database: string, limit = 4): Promise<HomeSuggestion[]> {
+export async function loadSuggestions(connectionId: string, database: string, limit = 4, exclude?: string[]): Promise<HomeSuggestion[]> {
   try {
-    const { suggestions } = await api.suggest({ connectionId, database: database || undefined, limit, locale: getI18nLocale() });
+    const { suggestions } = await api.suggest({ connectionId, database: database || undefined, limit, locale: getI18nLocale(), exclude });
     return suggestions.map((item) => ({ ...item, label: suggestionLabel(item.kind, /^zh/i.test(getI18nLocale()) ? 'zh' : 'en') }));
   } catch {
     return [];

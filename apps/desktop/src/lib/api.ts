@@ -859,11 +859,12 @@ export const api = {
   bulkContextTables: (body: { connectionId: string; database?: string; tables: string[]; enabled: boolean }) =>
     request<{ touched: number }>('/agent/context/bulk', { method: 'POST', body: JSON.stringify(body) }),
   deleteContextEntry: (id: string) => request<void>(`/agent/context/entry/${id}`, { method: 'DELETE' }),
-  suggest: (params: { connectionId: string; database?: string; limit?: number; locale?: string; sessionId?: string }) => {
+  suggest: (params: { connectionId: string; database?: string; limit?: number; locale?: string; sessionId?: string; exclude?: string[] }) => {
     const q = new URLSearchParams({ connectionId: params.connectionId });
     if (params.database) q.set('database', params.database);
     if (params.limit) q.set('limit', String(params.limit));
     if (params.sessionId) q.set('sessionId', params.sessionId);
+    for (const p of params.exclude ?? []) q.append('exclude', p);
     q.set('locale', params.locale ?? 'en');
     return request<{ suggestions: QuestionSuggestion[] }>(`/agent/suggest?${q.toString()}`);
   },

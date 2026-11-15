@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowRight,
@@ -15,6 +15,7 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import type { QueryHistoryItem } from '@aidb/core';
+import { normalizeSuggestionPrompt } from '@aidb/core';
 import { api } from '../lib/api';
 import {
   computeFacts,
@@ -92,6 +93,8 @@ export function Welcome() {
 
   const [history, setHistory] = useState<QueryHistoryItem[]>([]);
   const [suggestions, setSuggestions] = useState<HomeSuggestion[]>([]);
+  const [suggestBusy, setSuggestBusy] = useState(false);
+  const shownSuggestRef = useRef<Set<string>>(new Set());
   const [pickingDb, setPickingDb] = useState(false);
 
   // 库名变化就重新拉这个库的历史与建议 —— 首页的一切都跟着它走
@@ -117,16 +120,37 @@ export function Welcome() {
   }, [connection?.id, database]);
 
   useEffect(() => {
+    shownSuggestRef.current = new Set();
     if (!connection) return;
     let cancelled = false;
     setSuggestions([]);
     loadSuggestions(connection.id, database, 4).then((items) => {
-      if (!cancelled) setSuggestions(items);
+      if (!cancelled) {
+        setSuggestions(items);
+        for (const item of items) shownSuggestRef.current.add(normalizeSuggestionPrompt(item.prompt));
+      }
     });
     return () => {
       cancelled = true;
     };
   }, [connection?.id, database, facts.tableCount]);
+
+  // 换一换：与助手面板同一套排除/回绕协议；刷新失败或无候选时保持原有推荐。
+  const refreshSuggestions = async () => {
+    if (!connection || suggestBusy) return;
+    setSuggestBusy(true);
+    try {
+      const items = await loadSuggestions(connection.id, database, 4, [...shownSuggestRef.current]);
+      if (items.length) {
+        const keys = items.map((item) => normalizeSuggestionPrompt(item.prompt));
+        if (keys.every((k) => shownSuggestRef.current.has(k))) shownSuggestRef.current = new Set();
+        for (const k of keys) shownSuggestRef.current.add(k);
+        setSuggestions(items);
+      }
+    } finally {
+      setSuggestBusy(false);
+    }
+  };
 
   // 打开首页时，如果这个库的表还没内省过，补一次（首页数字必须是真的）
   useEffect(() => {
@@ -374,6 +398,9 @@ export function Welcome() {
               <span className="home-col-title">
                 <Sparkles size={12} /> {tr(" 接下来能做什么 ")}</span>
               <div className="spacer" />
+              <button className="btn ghost small suggest-refresh-btn" onClick={() => void refreshSuggestions()} disabled={suggestBusy || !connection} title={tr("换一换")} aria-label={tr("换一换")} data-testid="welcome-suggest-refresh">
+                <RefreshCw size={12} className={suggestBusy ? 'spin' : ''} />
+              </button>
               <button className="btn ghost small" onClick={() => setAgentOpen(true)}>
                 {tr(" 打开助手 ")}</button>
             </div>

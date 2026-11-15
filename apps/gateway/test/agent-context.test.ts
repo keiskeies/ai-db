@@ -285,3 +285,19 @@ test('历史会话的真实问题进入推荐问；sessionId 排除当前会话'
   gateway.store.deleteSession(past.id);
   gateway.store.deleteSession(current.id);
 });
+
+test('换一换：exclude 排除已展示的问题；排光后回绕不空手', async () => {
+  const base = `/agent/suggest?connectionId=${demo.id}&database=${encodeURIComponent(database)}&locale=zh`;
+  const first = await api<{ suggestions: any[] }>(`${base}&limit=6`);
+  assert.equal(first.status, 200);
+  assert.ok(first.body.suggestions.length > 0);
+  const params = first.body.suggestions.map((s) => `exclude=${encodeURIComponent(s.prompt)}`).join('&');
+  const second = await api<{ suggestions: any[] }>(`${base}&limit=6&${params}`);
+  assert.equal(second.status, 200);
+  const shown = new Set(first.body.suggestions.map((s) => s.prompt));
+  assert.ok(second.body.suggestions.length > 0 && second.body.suggestions.every((s) => !shown.has(s.prompt)), '第二批不应重复第一批');
+  const all = await api<{ suggestions: any[] }>(`${base}&limit=12`);
+  const allParams = all.body.suggestions.map((s) => `exclude=${encodeURIComponent(s.prompt)}`).join('&');
+  const wrapped = await api<{ suggestions: any[] }>(`${base}&limit=6&${allParams}`);
+  assert.ok(wrapped.body.suggestions.length > 0, '候选排光后回绕，刷新不空手');
+});

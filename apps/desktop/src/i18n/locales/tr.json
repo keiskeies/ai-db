@@ -3630,5 +3630,6 @@
   "行 {0}：title/content 不能为空": "Satır {0}: title/content boş olamaz",
   "行 {0}：{1}": "Satır {0}: {1}",
   "同义词（逗号分隔）": "Eş anlamlılar (virgülle ayrılmış)",
-  "拖拽排序": "Sıralamak için sürükleyin"
+  "拖拽排序": "Sıralamak için sürükleyin",
+  "换一换": "Başka öneriler"
 }

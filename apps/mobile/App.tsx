@@ -74,7 +74,7 @@ import {
   Wrench,
   X,
 } from 'lucide-react-native';
-import { COMMANDS, chartSuitability, localeInfo, normalizeLocale, parsePairingPayload, pipelineStepKind, suggestionLabel } from '@aidb/core';
+import { COMMANDS, chartSuitability, localeInfo, normalizeLocale, normalizeSuggestionPrompt, parsePairingPayload, pipelineStepKind, suggestionLabel } from '@aidb/core';
 import type {
   AgentEvent,
   AgentSettings,
@@ -2108,7 +2108,11 @@ function ChatScreen({
   // 猜你想问与桌面同源：结构推荐 + 最近真实问过的问题（recent 带「问过」徽标）
   const suggestCtx = React.useContext(ChartInsightContext);
   const [suggestions, setSuggestions] = useState<QuestionSuggestion[]>([]);
+  const [suggestBusy, setSuggestBusy] = useState(false);
+  // 换一换的排除集：本视图展示过的 prompt 累积在这里，连接/库/会话变化时清空重来。
+  const shownSuggestRef = React.useRef<Set<string>>(new Set());
   useEffect(() => {
+    shownSuggestRef.current = new Set();
     const client = suggestCtx?.client;
     const connectionId = suggestCtx?.connectionId;
     if (!client || !connectionId) {
@@ -2119,7 +2123,10 @@ function ChatScreen({
     client
       .suggest({ connectionId, database: suggestCtx?.database, limit: 4, locale: currentLocale(), sessionId: sessionMeta?.id })
       .then((res) => {
-        if (!cancelled) setSuggestions(res.suggestions);
+        if (!cancelled) {
+          setSuggestions(res.suggestions);
+          for (const s of res.suggestions) shownSuggestRef.current.add(normalizeSuggestionPrompt(s.prompt));
+        }
       })
       .catch(() => {
         if (!cancelled) setSuggestions([]);
@@ -2128,6 +2135,27 @@ function ChatScreen({
       cancelled = true;
     };
   }, [suggestCtx?.client, suggestCtx?.connectionId, suggestCtx?.database, sessionMeta?.id, tables.length]);
+
+  // 换一换：与桌面同一套排除/回绕协议；刷新失败或无候选时保持原有推荐。
+  const refreshSuggestions = async () => {
+    const client = suggestCtx?.client;
+    const connectionId = suggestCtx?.connectionId;
+    if (!client || !connectionId || suggestBusy) return;
+    setSuggestBusy(true);
+    try {
+      const res = await client.suggest({ connectionId, database: suggestCtx?.database, limit: 4, locale: currentLocale(), sessionId: sessionMeta?.id, exclude: [...shownSuggestRef.current] });
+      if (res.suggestions.length) {
+        const keys = res.suggestions.map((s) => normalizeSuggestionPrompt(s.prompt));
+        if (keys.every((k) => shownSuggestRef.current.has(k))) shownSuggestRef.current = new Set();
+        for (const k of keys) shownSuggestRef.current.add(k);
+        setSuggestions(res.suggestions);
+      }
+    } catch {
+      /* 刷新失败保持原有推荐，不打断用户 */
+    } finally {
+      setSuggestBusy(false);
+    }
+  };
   const modelOptions = useMemo(() => {
     const configs = agentSettings?.modelConfigs ?? [];
     const base = configs.flatMap((config) =>
@@ -2206,7 +2234,12 @@ function ChatScreen({
             <Text style={styles.emptyHint}>用自然语言查询、建表、排查。工具调用、审批与记忆在桌面与移动端同步。</Text>
             {suggestions.length ? (
               <View style={styles.suggestList}>
-                <Text style={styles.sectionLabel}>猜你想问</Text>
+                <View style={styles.suggestHead}>
+                  <Text style={styles.sectionLabel}>猜你想问</Text>
+                  <Pressable testID="m-suggest-refresh" accessibilityLabel={translate('换一换')} onPress={() => void refreshSuggestions()} disabled={suggestBusy} style={styles.suggestRefresh}>
+                    {suggestBusy ? <Loader2 size={12} color={colors.agent} /> : <RefreshCw size={12} color={colors.secondary} />}
+                  </Pressable>
+                </View>
                 {suggestions.map((s) => {
                   const label = suggestionLabel(s.kind, /^zh/i.test(currentLocale()) ? 'zh' : 'en');
                   return (
@@ -6113,6 +6146,8 @@ const makeStyles = () => StyleSheet.create({
   capItem: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: 11, height: 38 },
   capText: { color: colors.secondary, fontSize: 12 },
   suggestList: { width: '100%', gap: 6, marginTop: 16 },
+  suggestHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  suggestRefresh: { padding: 4, borderRadius: radius.sm },
   suggestBadge: { color: colors.agent, fontSize: 9, fontWeight: '600', borderWidth: 1, borderColor: `${colors.agent}55`, borderRadius: radius.sm, paddingHorizontal: 5, paddingVertical: 2 },
   sectionLabel: { color: colors.muted, fontSize: 9.5, letterSpacing: 0.8, textTransform: 'uppercase', fontWeight: '600' },
   recentRow: { flexDirection: 'row', alignItems: 'center', gap: 7, height: 34, borderBottomWidth: 1, borderBottomColor: colors.border },

@@ -3630,5 +3630,6 @@
   "行 {0}：title/content 不能为空": "Dòng {0}: title/content không được để trống",
   "行 {0}：{1}": "Dòng {0}: {1}",
   "同义词（逗号分隔）": "Từ đồng nghĩa (phân cách bằng dấu phẩy)",
-  "拖拽排序": "Kéo để sắp xếp"
+  "拖拽排序": "Kéo để sắp xếp",
+  "换一换": "Gợi ý khác"
 }

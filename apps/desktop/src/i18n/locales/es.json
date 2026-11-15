@@ -3630,5 +3630,6 @@
   "行 {0}：title/content 不能为空": "Fila {0}: title/content no puede estar vacío",
   "行 {0}：{1}": "Fila {0}: {1}",
   "同义词（逗号分隔）": "Sinónimos (separados por comas)",
-  "拖拽排序": "Arrastrar para reordenar"
+  "拖拽排序": "Arrastrar para reordenar",
+  "换一换": "Cambiar"
 }
