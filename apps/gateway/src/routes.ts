@@ -456,10 +456,15 @@ export function createApiRouter(deps: ApiDeps): Router {
         createdAt: now,
         updatedAt: now,
       };
+      // 编辑已有连接时密钥框留空表示「沿用已存那份」：草稿测试也得回落到库里的 secret，
+      // 否则「编辑 → 不动密码直接测试」会拿空密码去连，报一个表单里根本没体现的错。
+      const savedId = str(body.id);
+      const saved = savedId ? store.getConnectionSecret(savedId) : {};
       const result = await manager.testConfig(conn, {
-        password: str(body.password),
-        sshPassword: str(body.sshPassword) ?? (body.ssh as ConnectionConfig['ssh'])?.password,
-        sshPrivateKey: str(body.sshPrivateKey),
+        password: str(body.password) ?? saved.password,
+        sshPassword: str(body.sshPassword) ?? (body.ssh as ConnectionConfig['ssh'])?.password ?? saved.sshPassword,
+        sshPrivateKey: str(body.sshPrivateKey) ?? saved.sshPrivateKey,
+        sshPassphrase: saved.sshPassphrase,
       });
       res.json({ result });
     }),

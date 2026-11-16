@@ -172,7 +172,9 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
     setTesting(true);
     setTestResult(null);
     try {
-      const { result } = await api.testDraft(buildBody(), ctrl.signal);
+      // 带上 id：编辑时密码框留空，由网关回落已存密钥，与「留空则保持不变」的提示一致
+      const body = editor.connection ? { ...buildBody(), id: editor.connection.id } : buildBody();
+      const { result } = await api.testDraft(body, ctrl.signal);
       if (!ctrl.signal.aborted) setTestResult(result);
     } catch (err: any) {
       // 取消（参数被改/窗口关闭）不是失败：旧结论不该显示成新参数的结果
