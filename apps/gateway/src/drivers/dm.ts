@@ -309,6 +309,9 @@ export class DmDriver implements Driver {
         statement: sql,
       };
     } catch (err: any) {
+      // 超时错误必须原样透出 DM_TIMEOUT code——manager.query() 靠它识别「事务会话已死」
+      // 并从 txSessions 移除；在这里再包一层 DM_ERROR 会把 code 弄丢，导致孤儿残留。
+      if (err instanceof DbError && err.code === 'DM_TIMEOUT') throw err;
       throw new DbError(err?.message ?? '达梦事务执行失败', { code: err?.errCode ? `DM_${err.errCode}` : 'DM_ERROR', hint: dmHint(err) });
     }
   }

@@ -361,6 +361,8 @@ const schemaPending = new Map<string, true>();
 const schemaInFlight = new Set<string>();
 const schemaLastRefresh = new Map<string, number>();
 const schemaThrottle = new Map<string, ReturnType<typeof setTimeout>>();
+// loadSchema 每连接代次序列：连接切换 A→B→A 时，过期的 A 请求回来不能覆盖新状态。
+const schemaReloadSeq = new Map<string, number>();
 const SCHEMA_THROTTLE_MS = 1000;
 // 手动刷新后这个窗口内到达的事件跳过：用户自己刚刷过，事件是回声。
 const SCHEMA_ECHO_WINDOW_MS = 1500;
@@ -528,6 +530,9 @@ export const useApp = create<AppStore>((set, get) => ({
     // 也算"用户刚刷过"，不该再触发一次。
     // 但事件驱动的重拉不能记：那会让重拉给自己开一个丢事件窗口，
     // 期间到达的真变更被当回声丢掉，而且没有后续事件来纠正。
+    // 每连接单调代次：A→B→A 快速切换时，先发的旧 A 请求回来不能覆盖新状态。
+    const seq = (schemaReloadSeq.get(connectionId) ?? 0) + 1;
+    schemaReloadSeq.set(connectionId, seq);
     if (refresh && !schemaReloadByEvent) schemaLastRefresh.set(connectionId, Date.now());
     const conn = get().connections.find((c) => c.id === connectionId);
     if (database) {
@@ -535,6 +540,11 @@ export const useApp = create<AppStore>((set, get) => ({
       set((s) => ({ schemaLoading: { ...s.schemaLoading, [key]: true } }));
       try {
         const { schemas } = await api.getSchema(connectionId, refresh, database);
+        if (schemaReloadSeq.get(connectionId) !== seq) {
+          // 过期的请求：不写结构。最后一个 seq 的请求总会自己清掉 loading，这里不能动，
+          // 否则会把「更新的同 key 请求」的 loading 位误清（A→B→A 快速切换时）。
+          return;
+        }
         set((s) => {
           const entry = schemas.find((item) => item.name === database) ?? { name: database, tables: schemas.flatMap((item) => item.tables) };
           const list = s.schemas[connectionId] ?? [];
@@ -551,6 +561,9 @@ export const useApp = create<AppStore>((set, get) => ({
           };
         });
       } catch (err) {
+        if (schemaReloadSeq.get(connectionId) !== seq) {
+          return;
+        }
         set((s) => ({ schemaLoading: { ...s.schemaLoading, [key]: false } }));
         get().notify('error', get().t('error'), errorText(err));
       }
@@ -569,6 +582,7 @@ export const useApp = create<AppStore>((set, get) => ({
       }
       if (!engineMeta(resolved.engine).fileBased) {
         const { databases } = await api.databases(connectionId);
+        if (schemaReloadSeq.get(connectionId) !== seq) return;
         const previouslyLoaded = (get().loadedDatabases[connectionId] ?? []).filter((name) => databases.includes(name));
         const keep = refresh ? [] : previouslyLoaded;
         const byName = new Map((get().schemas[connectionId] ?? []).map((item) => [item.name, item]));
@@ -592,11 +606,13 @@ export const useApp = create<AppStore>((set, get) => ({
         return;
       }
       const { schemas } = await api.getSchema(connectionId, refresh);
+      if (schemaReloadSeq.get(connectionId) !== seq) return;
       set((s) => ({
         schemas: { ...s.schemas, [connectionId]: schemas },
         loadedDatabases: { ...s.loadedDatabases, [connectionId]: schemas.map((item) => item.name) },
       }));
     } catch (err) {
+      if (schemaReloadSeq.get(connectionId) !== seq) return;
       get().notify('error', get().t('error'), errorText(err));
     }
   },

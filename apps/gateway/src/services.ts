@@ -45,8 +45,14 @@ export function exportNeedsStatement(engine: Engine): never {
   });
 }
 
+/** CSV/公式注入防护：= + - @ 及控制符开头的值在 Excel 里会被当公式执行，前缀 ' 转纯文本。 */
+function neutralizeFormula(value: string): string {
+  return /^[=+\-@\t\r\n]/.test(value) ? `'${value}` : value;
+}
+
 function escapeCsv(value: unknown): string {
-  const text = value === null || value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+  let text = value === null || value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+  text = neutralizeFormula(text);
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 

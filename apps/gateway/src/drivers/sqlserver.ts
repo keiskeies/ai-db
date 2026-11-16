@@ -222,11 +222,17 @@ export class SqlServerDriver implements Driver {
   }
 
   /** 开启跨请求事务：mssql 的 Transaction 会独占池内一条连接直到提交/回滚。 */
+  // 注：mssql 对「begin 失败/未提交事务」的连接释放语义需真实环境验证（rollback 在未成功 begin 时可能抛错）。
   async beginTransaction(sessionId: string, database?: string): Promise<void> {
     if (this.txTransactions.has(sessionId)) throw new DbError('该会话已有进行中的事务', { code: 'TX_ACTIVE' });
     const pool = await this.pool(database);
     const transaction = new mssql.Transaction(pool);
-    await transaction.begin();
+    try {
+      await transaction.begin();
+    } catch (err: any) {
+      await transaction.rollback().catch(() => undefined);
+      throw new DbError(err?.message ?? '开启事务失败', { code: err?.code ?? 'MSSQL_TX_BEGIN' });
+    }
     this.txTransactions.set(sessionId, transaction);
   }
 
@@ -256,12 +262,15 @@ export class SqlServerDriver implements Driver {
   private async finishTransaction(sessionId: string, commit: boolean): Promise<void> {
     const transaction = this.txTransactions.get(sessionId);
     if (!transaction) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
-    this.txTransactions.delete(sessionId);
     try {
       if (commit) await transaction.commit();
       else await transaction.rollback();
     } catch (err: any) {
+      // 提交/回滚失败后事务对象仍持有池连接：撤销而不是放走，避免池被无主事务占死。
+      await transaction.rollback().catch(() => undefined);
       throw new DbError(err?.message ?? `${commit ? '提交' : '回滚'}事务失败`, { code: commit ? 'TX_COMMIT' : 'TX_ROLLBACK' });
+    } finally {
+      this.txTransactions.delete(sessionId);
     }
   }
 

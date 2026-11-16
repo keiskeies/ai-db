@@ -274,6 +274,12 @@ export function visibleAgentTools(settings: Pick<AppSettings, 'features'>, allow
 export class AgentHost {
   private active = new Map<string, AbortController>();
   /**
+   * 回合被 abort() 标记为失效：停止/断开后 runtime 可能仍跑完最后一步并正常返回，
+   * 此时不能让它把「完成」终态写回 store——否则用户已点掉的回合看起来像跑完了，
+   * summary/turns 也被继续累积。标记在回合 finally 里清除。
+   */
+  private turnInvalidated = new Map<string, boolean>();
+  /**
    * 回合被中止的那一下是**谁动的手**：用户点了停止，还是连接没了。
    *
    * 两条路径以前都汇到 abort() 再统一记成「用户中止」，但它们在 SSE 上分得清清楚楚：
@@ -311,6 +317,11 @@ export class AgentHost {
     const controller = this.active.get(sessionId);
     if (!controller) return false;
     if (!this.abortCauses.has(sessionId)) this.abortCauses.set(sessionId, cause);
+    // 只有「用户手动停止」才让回合失效：断线（disconnected）时用户没喊停，
+    // 业务语义是保留续跑检查点，不能一并跳过收尾。失效标记在回合 finally 里清除。
+    if (cause === 'user') {
+      this.turnInvalidated.set(sessionId, true);
+    }
     controller.abort();
     // 立即落状态：provider 卡住时 runtime 可能迟迟不返回，UI 不能一直显示“运行中”
     this.opts.store.updateSession(sessionId, { status: 'aborted' });
@@ -369,6 +380,10 @@ export class AgentHost {
 
   async startTurn(sessionId: string, input: TurnInput, emit: (event: AgentEvent) => void): Promise<void> {
     if (this.active.has(sessionId)) throw new DbError('该会话正在运行，请先中止或等待完成', { code: 'SESSION_BUSY', status: 409 });
+    // abort 之后旧回合的收尾（写 history/finally）可能还没跑完：
+    // 此刻放行新回合会造成两回合并发写 store。旧回合由 runtime 的
+    // signal.aborted 在下一步退出，finally 会清掉这个标记，届时即可再开。
+    if (this.turnInvalidated.has(sessionId)) throw new DbError('该会话正在结束，请稍后再试', { code: 'SESSION_BUSY', status: 409 });
     const rawText = input.text?.trim();
     if (!rawText) throw new DbError('消息不能为空', { code: 'EMPTY_MESSAGE', status: 400 });
     // 斜杠命令是目的信号：裸命令也有默认任务，不让用户补表单参数。
@@ -643,23 +658,27 @@ export class AgentHost {
       });
       status = result.status;
       usage = result.usage;
-      // 有分段思考块就不再拼整回合那一坨（同一段文字存两遍，界面也会重复渲染）；
-      // 没有分段块的模型（不发 step_thinking 的旧路径/本地推理器）保留原兜底。
-      const hasStepThinking = blocks.some((b) => b.type === 'thinking' && b.step !== undefined);
-      const finalBlocks = thinking && !hasStepThinking ? [{ type: 'thinking' as const, text: thinking }, ...blocks] : blocks;
-      store.appendMessage({ sessionId, role: 'assistant', content: result.text, blocks: finalBlocks, tokens: result.usage.tokensOut });
-      // 回合**没跑完就结束**时补一条续跑检查点。五种情况共用这一手：连接停摆、界面那侧
-      // 连接断开、回复被输出上限截断、模型空返回、跑满步数。共同点是「进度还在，但事没做完」，
-      // 没有检查点的话，用户点「继续」时模型只能看到半截正文，等于把已烧掉的时间扔掉重来。
-      // 必须写在半截正文之后：正文是模型说过的话，检查点是「它本来还要做什么」，
-      // 两者顺序颠倒会让下一轮的上下文读起来像倒叙。
-      // 界面那侧的连接断开（关页面 / 客户端判定通道静默后主动断开）在 runtime 眼里与
-      // 用户点停止一模一样——都只是 signal.aborted，所以 abortCause 一律是 'user'。
-      // 区别只存在于传输层，只能由 abort() 记下的那一份来补：没人点过停止的中止，
-      // 就该留检查点，否则用户重开页面点「继续」时模型只看得到半截正文。
-      const disconnected = this.abortCauses.get(sessionId) === 'disconnected';
-      const unfinished: AgentResumeCause | undefined =
-        result.status === 'aborted' && result.abortCause === 'stalled'
+      // 被中止（用户停止或断线触发 abort）的回合不再写「完成」终态：
+      // abort 已经置过 status='aborted' 并清了审批，runtime 的收尾若照常写
+      // assistant 消息/检查点/summary/turns，会把用户已停掉的回合伪装成正常收尾。
+      const invalidated = this.turnInvalidated.get(sessionId) === true;
+      if (!invalidated) {
+        // 有分段思考块就不再拼整回合那一坨（同一段文字存两遍，界面也会重复渲染）；
+        // 没有分段块的模型（不发 step_thinking 的旧路径/本地推理器）保留原兜底。
+        const hasStepThinking = blocks.some((b) => b.type === 'thinking' && b.step !== undefined);
+        const finalBlocks = thinking && !hasStepThinking ? [{ type: 'thinking' as const, text: thinking }, ...blocks] : blocks;
+        store.appendMessage({ sessionId, role: 'assistant', content: result.text, blocks: finalBlocks, tokens: result.usage.tokensOut });
+        // 回合**没跑完就结束**时补一条续跑检查点。五种情况共用这一手：连接停摆、界面那侧
+        // 连接断开、回复被输出上限截断、模型空返回、跑满步数。共同点是「进度还在，但事没做完」。
+        // 没有检查点的话，用户点「继续」时模型只能看到半截正文，等于把已烧掉的时间扔掉重来。
+        // 必须写在半截正文之后：正文是模型说过的话，检查点是「它本来还要做什么」，
+        // 两者顺序颠倒会让下一轮的上下文读起来像倒叙。
+        // 界面那侧的连接断开（关页面 / 客户端判定通道静默后主动断开）在 runtime 眼里与
+        // 用户点停止一模一样——都只是 signal.aborted，所以 abortCause 一律是 'user'。
+        // 区别只存在于传输层，只能由 abort() 记下的那一份来补：没人点过停止的中止，
+        // 就该留检查点，否则用户重开页面点「继续」时模型只看得到半截正文。
+        const disconnected = this.abortCauses.get(sessionId) === 'disconnected';
+        const unfinished: AgentResumeCause | undefined = result.status === 'aborted' && result.abortCause === 'stalled'
           ? 'stalled'
           : result.status === 'aborted' && disconnected
             ? 'disconnected'
@@ -673,54 +692,62 @@ export class AgentHost {
                   result.stop === 'max_steps'
                   ? 'max_steps'
                   : undefined;
-      if (unfinished) {
-        store.appendMessage({
-          sessionId,
-          role: 'assistant',
-          content: buildResumeCheckpoint({
-            plan: result.plan,
-            steps: result.steps,
-            toolCalls: result.toolCalls,
-            elapsedMs: Date.now() - startedAt,
-            toolTrace: blocks.filter((b) => b.type === 'tool_call').map((b) => b.tool).filter(Boolean) as string[],
-            cause: unfinished,
-          }),
+        if (unfinished) {
+          store.appendMessage({
+            sessionId,
+            role: 'assistant',
+            content: buildResumeCheckpoint({
+              plan: result.plan,
+              steps: result.steps,
+              toolCalls: result.toolCalls,
+              elapsedMs: Date.now() - startedAt,
+              toolTrace: blocks.filter((b) => b.type === 'tool_call').map((b) => b.tool).filter(Boolean) as string[],
+              cause: unfinished,
+            }),
+          });
+        }
+        const previous = store.getSession(sessionId);
+        const summaryLine = `Q: ${text.slice(0, 200)}\nA: ${result.text.slice(0, 400)}`;
+        const summary = `${previous?.summary ? `${previous.summary}\n---\n` : ''}${summaryLine}`.slice(-6000);
+        store.updateSession(sessionId, {
+          status: result.status === 'done' ? 'done' : result.status === 'aborted' ? 'aborted' : 'error',
+          summary,
+          tokensIn: (previous?.tokensIn ?? 0) + result.usage.tokensIn,
+          tokensOut: (previous?.tokensOut ?? 0) + result.usage.tokensOut,
+          // 轮次 = 用户发起的对话轮数：中止/出错的回合也是用户真问过一次，同样计入。
+          // 只统计跑完的回合会出现「0 轮却跑了 30 步」这种读不通的状态条。
+          turns: (previous?.turns ?? 0) + 1,
+          steps: (previous?.steps ?? 0) + result.steps,
+          cacheHitTokens: (previous?.cacheHitTokens ?? 0) + (result.usage.cacheHitTokens ?? 0),
+          cacheMissTokens: (previous?.cacheMissTokens ?? 0) + (result.usage.cacheMissTokens ?? 0),
+          // 上下文占用取最近一次调用的输入，重开会话时状态条才有可显示的值
+          contextTokens: result.contextTokens,
+          // 「可以继续」要跨连接活下来：界面上的提示挂在 live 上，而回合一结束 live 就会被
+          // 历史替换掉；关页面走掉的人回来时本地什么都没有。只有落了检查点的回合才写。
+          resume: unfinished ?? null,
+          model: settings.agent.provider === 'local' ? 'local' : settings.agent.model,
         });
+      } else {
+        // 中止的回合只保留 aborted 状态与「不可继续」，不累积任何统计。
+        store.updateSession(sessionId, { status: 'aborted', resume: null });
       }
-      const previous = store.getSession(sessionId);
-      const summaryLine = `Q: ${text.slice(0, 200)}\nA: ${result.text.slice(0, 400)}`;
-      const summary = `${previous?.summary ? `${previous.summary}\n---\n` : ''}${summaryLine}`.slice(-6000);
-      store.updateSession(sessionId, {
-        status: result.status === 'done' ? 'done' : result.status === 'aborted' ? 'aborted' : 'error',
-        summary,
-        tokensIn: (previous?.tokensIn ?? 0) + result.usage.tokensIn,
-        tokensOut: (previous?.tokensOut ?? 0) + result.usage.tokensOut,
-        // 轮次 = 用户发起的对话轮数：中止/出错的回合也是用户真问过一次，同样计入。
-        // 只统计跑完的回合会出现「0 轮却跑了 30 步」这种读不通的状态条。
-        turns: (previous?.turns ?? 0) + 1,
-        steps: (previous?.steps ?? 0) + result.steps,
-        cacheHitTokens: (previous?.cacheHitTokens ?? 0) + (result.usage.cacheHitTokens ?? 0),
-        cacheMissTokens: (previous?.cacheMissTokens ?? 0) + (result.usage.cacheMissTokens ?? 0),
-        // 上下文占用取最近一次调用的输入，重开会话时状态条才有可显示的值
-        contextTokens: result.contextTokens,
-        // 「可以继续」要跨连接活下来：界面上的提示挂在 live 上，而回合一结束 live 就会被
-        // 历史替换掉；关页面走掉的人回来时本地什么都没有。只有落了检查点的回合才写。
-        resume: unfinished ?? null,
-        model: settings.agent.provider === 'local' ? 'local' : settings.agent.model,
-      });
       if (result.status === 'done' && settings.agent.followUpSuggestions) {
         for (const item of this.followUps(blocks, schemas, businessContext)) emit({ type: 'suggestions', items: item });
       }
       if (settings.agent.autoMemory) this.captureMemories(text, result.text, sessionId, conn);
     } catch (err: any) {
       status = 'error';
-      store.updateSession(sessionId, { status: 'error' });
-      emit({ type: 'error', code: err?.code ?? 'AGENT_ERROR', message: err?.message ?? 'Agent 运行失败', retryable: false });
+      // 已停止的回合出错不再把状态改成 error：abort 时说好的 aborted 就是最终状态。
+      if (this.turnInvalidated.get(sessionId) !== true) {
+        store.updateSession(sessionId, { status: 'error' });
+        emit({ type: 'error', code: err?.code ?? 'AGENT_ERROR', message: err?.message ?? 'Agent 运行失败', retryable: false });
+      }
     } finally {
       this.active.delete(sessionId);
       // 中止原因的登记只在写检查点时读一次，回合结束就该清掉：会话 id 会被复用，
       // 留着上一回合的 'disconnected' 会让下一次正常结束的回合也被写成断线。
       this.abortCauses.delete(sessionId);
+      this.turnInvalidated.delete(sessionId);
       for (const [id, pending] of this.approvals) {
         if (pending.sessionId !== sessionId) continue;
         clearTimeout(pending.timer);

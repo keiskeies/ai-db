@@ -176,6 +176,15 @@ export function DataGrid({
             </tr>
           ) : null}
           {visibleStart > 0 ? spacer(visibleStart * safeRowHeight) : null}
+          {/*
+            行号 key 约束（记录型，勿删）：
+            `key={rowIndex}`，`rowIndex = visibleStart + offset` 是按「可视窗口内的行位置」命名的，
+            并非行的稳定主键。它仅在数据更新（增删行/排序/过滤）后调用方重置可见窗口时保持稳定——
+            本组件已内置兜底：`rowCount` 变化时把滚动位重置到 0（见上方 useEffect）；若有调用方
+            **原地增删/重排数据而不改变行数**（如原地 splice 后不换引用、排序/过滤在原数组上做），
+            行号会偏移，导致编辑/选择落到错行，此时调用方必须在数据变更后自行重置窗口
+            （设置可见窗口起点或触发 rows 引用替换），否则会串位。
+          */}
           {renderedRows.map((row, offset) => {
             const rowIndex = visibleStart + offset;
             return (

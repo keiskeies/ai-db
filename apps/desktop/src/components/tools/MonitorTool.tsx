@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, Loader2, RefreshCw, Skull } from 'lucide-react';
 import { applyCapabilityDefaults, CAPABILITIES, getCapability, type Capability } from '@aidb/core';
 import { api } from '../../lib/api';
@@ -28,17 +28,21 @@ export function MonitorTool() {
   const [auto, setAuto] = useState(true);
 
   const connectionId = String(values.connectionId ?? '');
+  // 序列号守卫：切换连接后，在飞旧请求返回时不得覆盖新连接的数据/清除新连接的加载态。
+  const loadSeq = useRef(0);
 
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     if (!connectionId) return;
     setLoading(true);
     try {
       const { monitor: data } = await api.monitor(connectionId);
+      if (seq !== loadSeq.current) return;
       setMonitor(data);
     } catch (err: any) {
-      notify('error', tr("监控失败"), err?.message);
+      if (seq === loadSeq.current) notify('error', tr("监控失败"), err?.message);
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
   }, [connectionId, notify]);
 

@@ -28,7 +28,7 @@ await (async () => {
   } as unknown as Storage;
 })();
 
-const { readWithIdleCeiling, ApiError } = await import('../src/lib/api');
+const { readWithIdleCeiling, streamTurn, EVENT_IDLE_MS, ApiError } = await import('../src/lib/api');
 
 const here = dirname(fileURLToPath(import.meta.url));
 // test/ → desktop/ → apps/ → 仓库根
@@ -61,6 +61,46 @@ function hangingReader(): { reader: ReadableStreamDefaultReader<Uint8Array>; can
 }
 
 const bytes = (s: string) => new TextEncoder().encode(s);
+
+/**
+ * 造一个「服务端 SSE 事件循环」：按计划发射事件帧与心跳帧。
+ *
+ * 每个计划条目 `[delayMs, chunk]`：先等 delayMs，再推 chunk。最后一个条目之前
+ * 的 delay 都远小于 EVENT_IDLE_MS，只有用于触发字节级/事件级上限的条目才等很久。
+ */
+function heartbeatStream(
+  plan: Array<[number, string]>,
+): { reader: ReadableStreamDefaultReader<Uint8Array>; cancelled: () => boolean } {
+  let cancelled = false;
+  let i = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const reader = {
+    read: () =>
+      new Promise<{ done: boolean; value?: Uint8Array }>((resolve) => {
+        const step = plan[i];
+        if (!step) {
+          resolve({ done: true });
+          return;
+        }
+        i += 1;
+        const [delayMs, chunk] = step;
+        timer = setTimeout(() => {
+          if (cancelled) return;
+          resolve({ done: false, value: bytes(chunk) });
+        }, delayMs);
+      }),
+    cancel: async () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    },
+  } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+  return { reader, cancelled: () => cancelled };
+}
+
+// streamTurn 里 fetch 到的 body 流；不做真 fetch，只验证 reader 循环与上限逻辑。
+function fakeFetchBody(reader: ReadableStreamDefaultReader<Uint8Array>): Response {
+  return { ok: true, status: 200, body: { getReader: () => reader } } as unknown as Response;
+}
 
 test('正常字节照原样交出，流结束返回 undefined', async () => {
   const reader = streamOf(bytes(': ping\n\n'), bytes('data: {"type":"text_delta","text":"好"}\n\n'));
@@ -100,6 +140,63 @@ test('用户中止仍然是 AbortError：不能被静默文案盖掉「用户中
     assert.notEqual((err as ApiError).code, 'TURN_CHANNEL_IDLE', '人点的停止就是停止，别报成连接静默');
     return true;
   });
+});
+
+test('事件级静默上限：只有 `: ping` 心跳、无 data 帧的健康回合不被误杀', async () => {
+  // 压缩时间轴：事件上限压到 45ms，心跳每 30ms 一帧、全程无 data 帧。
+  // 若心跳不算活动，第二次读前检查时 lastActivityAt 还停在 0，不到 90ms 就会抛；
+  // 心跳算活动则一直刷新，流结束自然 return，且字节级上限（默认 600s）远未触发。
+  const idle = 45;
+  const { reader, cancelled } = heartbeatStream([
+    [0, ': ping\n\n'],
+    [30, ': ping\n\n'],
+    [60, ': ping\n\n'],
+    [90, ': ping\n\n'],
+  ]);
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async () => fakeFetchBody(reader);
+  try {
+    await streamTurn('s1', { text: '慢' }, () => undefined, undefined, idle);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(cancelled(), false, '健康心跳回合不该被 cancel');
+});
+
+test('字节级兜底：默认上限是长阈值，短窗口内重度延迟不会触发', async () => {
+  // readWithIdleCeiling 默认 idleMs 是线上阈值（600s）：挂起 reader 上等 150ms
+  // 不应当抛 TURN_CHANNEL_IDLE——证明字节级不是 90 秒短阈值重新回来；
+  // 再用手动 cancel 收尾，避免定时器挂到 600s。
+  const { reader } = hangingReader();
+  const controller = new AbortController();
+  const pending = readWithIdleCeiling(reader, controller.signal);
+  let fired = false;
+  pending.then(
+    () => undefined,
+    () => {
+      fired = true;
+    },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(fired, false, '150ms 不该触发 600s 的字节级上限');
+  controller.abort();
+  await assert.rejects(() => pending, (err: unknown) => {
+    assert.equal((err as Error).name, 'AbortError');
+    return true;
+  });
+});
+
+test('来源断言：字节级上限已是 600000ms，且事件级上限小于字节级', () => {
+  const ceiling = /const TURN_IDLE_CEILING_MS = ([\d_]+)/.exec(apiSource);
+  assert.ok(ceiling, '字节级上限找不到');
+  const ceilingMs = Number(ceiling![1].replace(/_/g, ''));
+  assert.equal(ceilingMs, 600_000, '字节级上限应为 10 分钟（与 PROVIDER_STALL_MS 对齐）');
+  assert.ok(
+    typeof EVENT_IDLE_MS === 'number' && EVENT_IDLE_MS === 300_000,
+    `事件级上限应当导出且为 5 分钟，实际 ${EVENT_IDLE_MS}`,
+  );
+  assert.ok(EVENT_IDLE_MS < ceilingMs, '事件级上限应比字节级上限小');
 });
 
 test('上限按服务端心跳定，且心跳与回合进展无关', () => {

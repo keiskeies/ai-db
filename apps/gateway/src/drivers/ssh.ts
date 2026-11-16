@@ -68,6 +68,13 @@ export async function openTunnel(ssh: SshConfig, targetHost: string, targetPort:
       server.listen(0, '127.0.0.1', () => resolve());
     });
   } catch (err: any) {
+    // server 已创建但未进入 listening：必须关闭以释放句柄（Windows 下否则句柄泄漏）。
+    // 未 listening 时 close() 会抛 ERR_SERVER_NOT_RUNNING，用 try 保护。
+    try {
+      server.close(() => undefined);
+    } catch {
+      /* server 未启动或已关闭，忽略 */
+    }
     client.end();
     throw new DbError(`SSH 隧道建立失败：${err.message}`, { code: 'SSH_TUNNEL' });
   }
@@ -81,7 +88,11 @@ export async function openTunnel(ssh: SshConfig, targetHost: string, targetPort:
       closing = true;
       // 先断开转发 socket，否则有连接未释放时 server.close 会一直等下去。
       for (const socket of sockets) socket.destroy();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      // destroy 偶发失败会让 close 回调永不触发导致挂起：加 2s 竞速兜底，无论如何都继续。
+      await Promise.race([
+        new Promise<void>((resolve) => server.close(() => resolve())),
+        new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
+      ]);
       client.end();
     },
   };

@@ -176,16 +176,20 @@ export interface TurnPayload {
  * 正是「莫名其妙停了、也说不出原因」里最没法查的一档。
  *
  * 阈值按服务端的心跳定：routes.ts 每 15 秒写一帧 `: ping`，而且那个定时器与回合
- * 进展无关，所以大查询、等审批、模型慢慢想——都在照常发字节。连续错过 6 次心跳
- * 就不是「慢」而是「通了个鬼」，可以放手了。
+ * 进展无关，所以大查询、等审批、模型慢慢想——都在照常发字节。它只是「半开连接」
+ * 的兜底：agent 回合在 provider 返回前可能真实静默数分钟（长思考/长工具执行，
+ * 与 `PROVIDER_STALL_MS` 的 300s 对齐放宽到 10 分钟），字节暂停不代表通道死了。
  */
-const TURN_IDLE_CEILING_MS = 90_000;
+const TURN_IDLE_CEILING_MS = 600_000;
+
+/** 事件级静默上限：任何帧（含 `: ping` 心跳）都算活动；服务端每 15s 一次心跳，5 分钟含义是「网还通着」。 */
+export const EVENT_IDLE_MS = 300_000;
 
 /** 带静默上限的一次读取；超时抛错，用户中止仍然原样抛 AbortError。导出只为让这条分支可测。 */
 export async function readWithIdleCeiling(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   signal?: AbortSignal,
-  /** 只给测试用：默认值就是线上阈值，没必要让用例等 90 秒。 */
+  /** 只给测试用：默认值就是线上阈值，没必要让用例真等 10 分钟。 */
   idleMs = TURN_IDLE_CEILING_MS,
 ): Promise<Uint8Array | undefined> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -226,7 +230,7 @@ export async function readWithIdleCeiling(
   }
 }
 
-export async function streamTurn(sessionId: string, payload: TurnPayload, onEvent: (event: AgentEvent) => void, signal?: AbortSignal): Promise<void> {
+export async function streamTurn(sessionId: string, payload: TurnPayload, onEvent: (event: AgentEvent) => void, signal?: AbortSignal, /** 只给测试用：默认值就是线上阈值，没必要让用例真等 5 分钟。 */ eventIdleMs = EVENT_IDLE_MS): Promise<void> {
   const res = await fetch(`/api/agent/sessions/${sessionId}/turns`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
@@ -249,11 +253,26 @@ export async function streamTurn(sessionId: string, payload: TurnPayload, onEven
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  // 事件级静默上限：服务端只在有新内容时才发 data: 帧，但心跳定时器是独立于回合
+  // 进展的——所以「5 分钟没有任何一帧到达」只能是通道死了，而不是这步很慢。
+  let lastActivityAt = Date.now();
   while (true) {
+    // 字节级上限只管「半开连接」。真正的长思考/长工具回合可能连续几分钟没有字节，
+    // 这是合法的；这里用事件级上限兜底：连心跳都没有了才是真断了。
+    if (Date.now() - lastActivityAt > eventIdleMs) {
+      void reader.cancel().catch(() => undefined);
+      throw new ApiError(
+        tr("与服务端的连接连续 {0} 秒没有任何响应，本次回复已断开。已完成的部分仍然保留，回复「继续」可接着做。", [Math.round(eventIdleMs / 1000)]),
+        { code: 'TURN_CHANNEL_IDLE' },
+      );
+    }
     // 用带上限的读取而不是裸 reader.read()：半开的连接既不报错也不结束，
     // 裸读会永远等下去，界面上就是「图标转到天荒地老」。
     const chunk = await readWithIdleCeiling(reader, signal);
     if (chunk === undefined) break;
+    // 任何一帧（哪怕是只有 `: ping` 的心跳块）到达都算通道还活着，
+    // 在解码/解析之前就更新活动时间，避免静默回合被误杀。
+    lastActivityAt = Date.now();
     buffer = (buffer + decoder.decode(chunk, { stream: true })).replace(/\r\n/g, '\n');
     let idx = buffer.indexOf('\n\n');
     while (idx !== -1) {

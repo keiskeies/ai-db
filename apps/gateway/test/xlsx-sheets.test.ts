@@ -62,3 +62,16 @@ test('单表导出与多 sheet 共用同一个写入器', () => {
   // 空单元格写空标签，而不是写出 "null" 文本。
   assert.doesNotMatch(book.sheetData[0] ?? '', /null/);
 });
+
+test('导出单元格公式注入被中和：= + @ - 开头转为纯文本', () => {
+  const zip = toXlsx(['值'], [['=SUM(A1:A999)'], ['+1+2'], ['@cmd'], ['-1'], ['正常文本'], [5]]);
+  const sheet = inspect(zip).sheetData[0] ?? '';
+  // 中和后值以 ' 开头，公式不再被执行；正常文本与数值原样保留。
+  assert.match(sheet, /'=SUM\(A1:A999\)/, '= 前缀应被中和');
+  assert.match(sheet, /'\+1\+2/, '+ 前缀应被中和');
+  assert.match(sheet, /'@cmd/, '@ 前缀应被中和');
+  assert.match(sheet, /'-1/, '- 前缀应被中和');
+  assert.match(sheet, /正常文本/);
+  assert.match(sheet, />5</, '数值不应被破坏');
+  assert.doesNotMatch(sheet, /<v>=/, '中和后的值不应再进入公式节点');
+});

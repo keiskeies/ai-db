@@ -92,6 +92,10 @@ export interface QueryOptions {
 
 export class ConnectionManager {
   private clients = new Map<string, CachedDriver>();
+  /** 每个 connectionId 的在途创建 Promise：同一连接首次被并发请求时只建一次池/隧道。 */
+  private inFlight = new Map<string, Promise<CachedDriver>>();
+  /** 已 close/删除的连接 id：创建完成时若已被删除，立即关闭且不进缓存。 */
+  private closedFlags = new Map<string, boolean>();
   /** 跨请求事务会话：会话 id → 连接与开始时间（用于超时回收）。 */
   private txSessions = new Map<
     string,
@@ -114,19 +118,48 @@ export class ConnectionManager {
     this.txTimer.unref?.();
   }
 
-  private async driverFor(connectionId: string): Promise<Driver> {
+  private driverFor(connectionId: string): Promise<Driver> {
     const cached = this.clients.get(connectionId);
     if (cached) {
       this.store.touchConnection(connectionId);
-      return cached.driver;
+      return Promise.resolve(cached.driver);
     }
-    const conn = this.store.getConnection(connectionId);
-    if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
-    const secret = this.store.getConnectionSecret(connectionId);
-    const bundle = await createDriver(conn, secret);
-    this.clients.set(connectionId, bundle);
-    this.store.touchConnection(connectionId);
-    return bundle.driver;
+
+    const pending = this.inFlight.get(connectionId);
+    if (pending) return pending.then((bundle) => {
+      if (this.closedFlags.get(connectionId)) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+      this.store.touchConnection(connectionId);
+      return bundle.driver;
+    });
+
+    const created = this.createDriverCached(connectionId);
+    this.inFlight.set(connectionId, created);
+    return created.then((bundle) => bundle.driver);
+  }
+
+  private async createDriverCached(connectionId: string): Promise<CachedDriver> {
+    // ConnectionManager 没有 createConnection/updateConnection 钩子（id 由 store 生成：
+    // createConnection 一律 randomUUID 全新；updateConnection 复用 id 但经 routes 走
+    // manager.close 后由下一次 driverFor 重建）。这里在真正重建前清除已关闭标记，
+    // 使「更新连接后重新建池」不被 close 留下的标记永久阻塞；删除连接的场景 getConnection
+    // 会先抛 CONNECTION_NOT_FOUND，不受影响。
+    this.closedFlags.delete(connectionId);
+    try {
+      const conn = this.store.getConnection(connectionId);
+      if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+      const secret = this.store.getConnectionSecret(connectionId);
+      const bundle = await createDriver(conn, secret);
+      if (this.closedFlags.get(connectionId)) {
+        // 创建期间连接已被删除：立即关掉，绝不进缓存。
+        await bundle.close().catch(() => undefined);
+        throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
+      }
+      this.clients.set(connectionId, bundle);
+      this.store.touchConnection(connectionId);
+      return bundle;
+    } finally {
+      this.inFlight.delete(connectionId);
+    }
   }
 
   async testSaved(connectionId: string): Promise<{ ok: boolean; version?: string; latencyMs: number; message?: string }> {
@@ -918,6 +951,19 @@ export class ConnectionManager {
     }
   }
 
+  /**
+   * 向量元素清洗：只允许有限数字，拒绝字符串/NaN/Infinity。
+   * pgvector 的 `[...]` 字面量直接拼进 SQL，Weaviate 直接拼进 GraphQL，
+   * 不清洗的元素（如 `"1')--"`）会逃逸出数组字面量。
+   */
+  private sanitizeVector(v: unknown[]): number[] {
+    return v.map((item) => {
+      const n = Number(item);
+      if (!Number.isFinite(n)) throw new DbError('向量元素必须是有限数字', { code: 'VECTOR_ELEMENT' });
+      return n;
+    });
+  }
+
   async vectorSearch(connectionId: string, query: VectorQuery, opts: QueryOptions): Promise<QueryResult> {
     const conn = this.store.getConnection(connectionId);
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
@@ -925,6 +971,7 @@ export class ConnectionManager {
     const topK = Math.max(1, Math.min(1000, Number(query.topK) || 10));
     let vector = query.vector;
     if (!vector?.length && query.text) vector = await embedText(this.settings(), query.text);
+    if (vector?.length) vector = this.sanitizeVector(vector);
     const started = Date.now();
     const driver = await this.driverFor(connectionId);
 
@@ -966,7 +1013,8 @@ export class ConnectionManager {
       }
       const target = quoteQualified([table.schema, table.name], conn.engine);
       const vectorColumn = quoteIdent(column.name, conn.engine);
-      const literal = `[${vector.join(',')}]`;
+      const nums = this.sanitizeVector(vector);
+      const literal = `[${nums.join(',')}]`;
       const sql = `SELECT *, 1 - (${vectorColumn} <=> $1::vector) AS score FROM ${target} ORDER BY ${vectorColumn} <=> $1::vector LIMIT ${topK}`;
       try {
         const result = await driver.runParams(sql, [literal], { database: opts.database, maxRows: topK, timeoutMs: opts.timeoutMs });
@@ -1178,6 +1226,10 @@ export class ConnectionManager {
       }
       return { sets, messages, durationMs: Date.now() - started };
     } catch (err: any) {
+      // DM 事务超时：驱动已关闭被固定的连接并删掉自身事务条目，manager 侧的事务
+      // 会话也已失效，立即移除，避免 15 分钟 idle reaper 前同 sessionId 无法复开事务、
+      // 以及 commit/rollback 报 TX_NOT_FOUND 的连环错误。
+      if (err?.code === 'DM_TIMEOUT' && opts.sessionId) this.txSessions.delete(opts.sessionId);
       this.store.addHistory({
         connectionId,
         database: opts.database ?? conn.database,
@@ -1226,7 +1278,12 @@ export class ConnectionManager {
     }
   }
 
-  async runParams(connectionId: string, sql: string, params: unknown[], opts: { database?: string; timeoutMs?: number; actor: 'user' | 'agent' }): Promise<QueryResult> {
+  async runParams(
+    connectionId: string,
+    sql: string,
+    params: unknown[],
+    opts: { database?: string; timeoutMs?: number; maxRows?: number; actor: 'user' | 'agent' },
+  ): Promise<QueryResult> {
     const conn = this.store.getConnection(connectionId);
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
     if (!engineMeta(conn.engine).languages.includes('sql')) {
@@ -1234,7 +1291,12 @@ export class ConnectionManager {
     }
     if (conn.readonly) throw new DbError('该连接为只读，禁止写入', { code: 'READONLY', status: 403 });
     const driver = await this.driverFor(connectionId);
-    return driver.runParams(sql, params, { database: opts.database, timeoutMs: opts.timeoutMs });
+    // 与 query() 相同的内存上限语义：调用方传 maxRows 时用 applyLimit 追加 LIMIT，
+    // 只改动 SQL 末尾，不破坏 $1 占位符，参数化执行安全。
+    const prepared = opts.maxRows && opts.maxRows > 0 ? applyLimit(sql, opts.maxRows, conn.engine) : sql;
+    const result = await driver.runParams(prepared, params, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs });
+    if (prepared !== sql && opts.maxRows && result.rowCount >= opts.maxRows) result.truncated = true;
+    return result;
   }
 
   /**
@@ -1264,6 +1326,9 @@ export class ConnectionManager {
   }
 
   async close(connectionId: string): Promise<void> {
+    // 先打删除标记：在途的 createDriverCached 完成时会走「已关闭即关」分支，
+    // 不会再把已删除连接的 driver 塞回 clients。
+    this.closedFlags.set(connectionId, true);
     const cached = this.clients.get(connectionId);
     if (cached) {
       await cached.close().catch(() => undefined);
@@ -1281,6 +1346,8 @@ export class ConnectionManager {
   async closeAll(): Promise<void> {
     if (this.txTimer) clearInterval(this.txTimer);
     await Promise.all([...this.clients.entries()].map(async ([id]) => this.close(id)));
+    // 全部关闭后清掉删除标记，避免长期存活实例上的 stale 标记累积。
+    this.closedFlags.clear();
   }
 
   /**

@@ -22,6 +22,13 @@ function escapeXml(value: unknown): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/** CSV 注入(公式注入)防护：细胞值为「公式前缀 + 内容」时变成文本而不是被执行。 */
+function neutralizeFormula(value: string): string {
+  // Excel/WPS 会把 = + - @ 及制表符/回车开头的单元格当公式或特殊值执行，
+  // 导出查询结果时字段内容不可信，统一加 ' 前缀转成纯文本（原值仍完整可见）。
+  return /^[=+\-@\t\r\n]/.test(value) ? `'${value}` : value;
+}
+
 function cellRef(index: number, row: number): string {
   let value = index + 1;
   let letters = '';
@@ -39,7 +46,7 @@ function cellXml(value: unknown, ref: string): string {
   if (typeof value === 'number' && Number.isFinite(value)) return `${open}><v>${value}</v></c>`;
   if (typeof value === 'bigint') return `${open}><v>${value.toString()}</v></c>`;
   if (typeof value === 'boolean') return `${open} t="b"><v>${value ? 1 : 0}</v></c>`;
-  return `${open} t="inlineStr"><is><t xml:space="preserve">${escapeXml(value)}</t></is></c>`;
+  return `${open} t="inlineStr"><is><t xml:space="preserve">${escapeXml(neutralizeFormula(String(value)))}</t></is></c>`;
 }
 
 function zip(files: Record<string, string>): Buffer {

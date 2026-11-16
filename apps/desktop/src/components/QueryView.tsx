@@ -160,6 +160,9 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const viewRef = useRef<EditorView | undefined>();
   const sqlRef = useRef(sql);
   const tabIdRef = useRef(tab.id);
+  const runSeq = useRef(0);
+  // 上次已持久化到 tab 的 SQL（仅在真正写库时更新），用于卸载/切 tab 时去重，避免 updateTab 自我触发放大。
+  const savedSqlRef = useRef(tab.sql);
   const runRef = useRef<() => void>(() => undefined);
   const isDark = settings.theme === 'dark' || (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
 
@@ -223,12 +226,32 @@ export function QueryView({ tab }: { tab: QueryTab }) {
     const view = new EditorView({ state, parent: host });
     viewRef.current = view;
     return () => {
+      // 卸载（切 tab / 切连接 / 组件销毁）前把编辑器里的最新 doc 存回 tab，
+      // 避免扔到 updateList listener 之外的未提交改动。若与上次已持久化的值相同则跳过，
+      // 防止 updateTab → tabs 更新 → 重渲染 → 再次触发卸载的自我循环。
+      const live = view.state.doc.toString();
+      if (savedSqlRef.current !== live) {
+        sqlRef.current = live;
+        savedSqlRef.current = live;
+        updateTab(tab.id, { sql: live });
+      }
       view.destroy();
       viewRef.current = undefined;
     };
   }, [tab.id, conn?.engine, isDark]);
 
-  useEffect(() => () => updateTab(tab.id, { sql: sqlRef.current }), [tab.id, updateTab]);
+  useEffect(() => {
+    return () => {
+      const live = viewRef.current?.state.doc.toString();
+      if (live !== undefined && savedSqlRef.current !== live) {
+        sqlRef.current = live;
+        savedSqlRef.current = live;
+        updateTab(tab.id, { sql: live });
+      }
+    };
+    // 卸载时读取 viewRef 当前引用拿到最新 doc（不依赖可能陈旧的 sqlRef 快照）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab.id, updateTab]);
 
   useEffect(() => {
     let active = true;
@@ -286,6 +309,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
       notify('warning', tr("请输入查询"));
       return;
     }
+    const seq = ++runSeq.current;
     setRunning(true);
     setError(null);
     updateTab(tab.id, { sql: text });
@@ -297,16 +321,18 @@ export function QueryView({ tab }: { tab: QueryTab }) {
         limit: queryLimit,
         sessionId: txSession ?? undefined,
       });
+      if (seq !== runSeq.current) return;
       setBatch(result);
       setActiveSet(0);
       setResultTab('results');
       if (result.sets.length > 1) notify('info', tr("执行成功，返回 {0} 个结果集", [result.sets.length]));
     } catch (err: any) {
+      if (seq !== runSeq.current) return;
       setError(`${err?.message ?? tr('执行失败')}${err?.hint ? `\n${err.hint}` : ''}`);
       setBatch(null);
       setResultTab('messages');
     } finally {
-      setRunning(false);
+      if (seq === runSeq.current) setRunning(false);
     }
   };
   runRef.current = () => {
@@ -322,18 +348,21 @@ export function QueryView({ tab }: { tab: QueryTab }) {
         : conn?.engine === 'mysql'
           ? `EXPLAIN FORMAT=JSON ${text.replace(/;\s*$/, '')}`
           : `EXPLAIN (FORMAT JSON, ANALYZE false) ${text.replace(/;\s*$/, '')}`;
+    const seq = ++runSeq.current;
     setRunning(true);
     setError(null);
     try {
       const { batch: result } = await api.query({ connectionId: tab.connectionId, database: tab.database, sql: explainSql });
+      if (seq !== runSeq.current) return;
       setBatch(result);
       setActiveSet(0);
       setResultTab('results');
     } catch (err: any) {
+      if (seq !== runSeq.current) return;
       setError(err?.message ?? tr("执行计划失败"));
       setResultTab('messages');
     } finally {
-      setRunning(false);
+      if (seq === runSeq.current) setRunning(false);
     }
   };
 

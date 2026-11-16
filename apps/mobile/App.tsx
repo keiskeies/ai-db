@@ -682,7 +682,8 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
   const [sessionMeta, setSessionMeta] = useState<AgentSessionMeta | undefined>();
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [live, setLive] = useState<LiveTurn | undefined>();
-  const [approval, setApproval] = useState<ApprovalState | undefined>();
+  const [approvalQueue, setApprovalQueue] = useState<ApprovalState[]>([]);
+  const approval = approvalQueue[0];
   const [mode, setMode] = useState<PermissionMode>('readonly');
   const [input, setInput] = useState('');
   const [pendingImages, setPendingImages] = useState<Array<{ id: string; mime: string }>>([]);
@@ -904,23 +905,20 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
     }
     if (event.type === 'error') {
       setLive((prev) => (prev ? { ...prev, status: 'error', error: event.message } : prev));
-      setApproval(undefined);
+      setApprovalQueue([]);
       return;
     }
     if (event.type === 'approval_required') {
       setLive((prev) => (prev ? { ...prev, status: 'awaiting' } : prev));
-      setApproval({
-        approvalId: event.approvalId,
-        tool: event.call.tool,
-        args: event.call.args,
-        risk: event.call.risk,
-        summary: event.call.summary,
-        sql: event.call.sql,
-      });
+      setApprovalQueue((q) =>
+        q.some((i) => i.approvalId === event.approvalId)
+          ? q
+          : [...q, { approvalId: event.approvalId, tool: event.call.tool, args: event.call.args, risk: event.call.risk, summary: event.call.summary, sql: event.call.sql }]
+      );
       return;
     }
     if (event.type === 'approval_resolved') {
-      setApproval(undefined);
+      setApprovalQueue((q) => q.filter((i) => i.approvalId !== event.approvalId));
       setLive((prev) => (prev ? { ...prev, status: 'streaming' } : prev));
       return;
     }
@@ -1196,7 +1194,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
       const images = pendingImages.map((item) => item.id);
       setInput('');
       setPendingImages([]);
-      setApproval(undefined);
+      setApprovalQueue([]);
       setLive({
         userText: text,
         text: '',
@@ -1227,12 +1225,14 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
   };
 
   const resolveApproval = async (decision: 'allow' | 'deny', scope: 'once' | 'session' | 'always') => {
-    if (!approval) return;
+    const current = approval;
+    if (!current) return;
     try {
-      await client.approve(approval.approvalId, decision, scope);
-      setApproval(undefined);
+      await client.approve(current.approvalId, decision, scope);
     } catch (err: any) {
       notify('授权失败', err?.message ?? '');
+    } finally {
+      setApprovalQueue((q) => q.filter((i) => i.approvalId !== current.approvalId));
     }
   };
 

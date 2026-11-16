@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
@@ -539,22 +539,85 @@ function globFilePredicate(pattern: string): (relativePath: string, name: string
 
 type GrepOutputMode = 'content' | 'files' | 'count';
 
+/**
+ * 终止子进程及其整个进程树：
+ * - POSIX：先 SIGTERM，500ms 后未退出再 SIGKILL（负 pid 连带杀进程组）。
+ * - Windows：taskkill /pid <pid> /T /F 直接强杀整棵进程树（/T 连带子进程）。
+ * 避免子进程挂死时 execFile 自身 timeout 只杀直接子进程、却遗留孙进程的场景。
+ */
+function killTree(child: ChildProcess): void {
+  const pid = child.pid;
+  if (!pid) return;
+  if (process.platform === 'win32') {
+    try {
+      spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }).on('error', () => undefined);
+    } catch {
+      /* taskkill 不存在时退回默认信号 */
+      try {
+        child.kill();
+      } catch {
+        /* 已退出 */
+      }
+    }
+    return;
+  }
+  try {
+    process.kill(-pid, 'SIGTERM');
+  } catch {
+    /* 进程组不存在，退回直接信号 */
+    try {
+      child.kill('SIGTERM');
+    } catch {
+      /* 已退出 */
+    }
+  }
+  setTimeout(() => {
+    try {
+      process.kill(-pid, 'SIGKILL');
+    } catch {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* 已退出 */
+      }
+    }
+  }, 500);
+}
+
+/**
+ * execFile 包装：用显式 kill 取代已弃用的 `timeout` 选项。
+ * timeoutMs 到期后 killTree 杀掉整个进程树，回调照常以 error 形式触发，
+ * 契约与旧实现一致（code 由 err.code 归一化而来；err 为原始错误，供调用方判型）。
+ */
+function execFileManaged(
+  file: string,
+  args: string[],
+  timeoutMs: number,
+  env: NodeJS.ProcessEnv,
+  maxBuffer: number,
+): Promise<{ code: number; stdout: string; stderr: string; err: Error | null }> {
+  return new Promise((resolvePromise) => {
+    const child = execFile(
+      file,
+      args,
+      { maxBuffer, windowsHide: true, encoding: 'utf8', env },
+      (err, stdout, stderr) => {
+        clearTimeout(timer);
+        const code = err ? (typeof (err as any).code === 'number' ? (err as any).code : -1) : 0;
+        resolvePromise({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? ''), err: err ?? null });
+      },
+    );
+    const timer = setTimeout(() => killTree(child), timeoutMs);
+    if (timer.unref) timer.unref();
+  });
+}
+
 function runCommand(
   file: string,
   args: string[],
   timeoutMs: number,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((resolvePromise) => {
-    execFile(
-      file,
-      args,
-      { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, windowsHide: true, encoding: 'utf8' },
-      (err, stdout, stderr) => {
-        const code = err ? (typeof (err as any).code === 'number' ? (err as any).code : -1) : 0;
-        resolvePromise({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') });
-      },
-    );
-  });
+  return execFileManaged(file, args, timeoutMs, process.env, 8 * 1024 * 1024);
 }
 
 let ripgrepProbe: Promise<boolean> | undefined;
@@ -1046,26 +1109,17 @@ async function runFilesystemTool(
 /* ------------------------------------------------------------------ git */
 
 function runProcess(file: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolvePromise, reject) => {
-    execFile(
-      file,
-      args,
-      {
-        timeout: 15_000,
-        maxBuffer: 4 * 1024 * 1024,
-        windowsHide: true,
-        encoding: 'utf8',
-        env: { ...process.env, GIT_PAGER: 'cat', GIT_TERMINAL_PROMPT: '0' },
-      },
-      (err, stdout, stderr) => {
-        if (err) {
-          reject(Object.assign(err, { stderr: String(stderr ?? '') }));
-          return;
-        }
-        resolvePromise({ stdout: String(stdout ?? ''), stderr: String(stderr ?? '') });
-      },
-    );
-  });
+  return execFileManaged(file, args, 15_000, { ...process.env, GIT_PAGER: 'cat', GIT_TERMINAL_PROMPT: '0' }, 4 * 1024 * 1024).then(
+    (result) => {
+      if (result.err) {
+        // 错误（含非零退出码与 ENOENT 等系统错误）原样抛回，stderr 挂到 err 上，契约与旧实现一致。
+        const err: any = result.err;
+        if (err.stderr === undefined) err.stderr = result.stderr;
+        throw err;
+      }
+      return { stdout: result.stdout, stderr: result.stderr };
+    },
+  );
 }
 
 function gitRepos(serverArgs: string[]): string[] {

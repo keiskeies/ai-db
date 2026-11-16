@@ -182,7 +182,17 @@ export class WeaviateDriver implements VectorQueryDriver, DocumentWriteDriver, O
     if (!klass) throw new DbError(`集合不存在：${query.collection}`, { code: 'WEAVIATE_CLASS' });
     const properties = (klass.properties ?? []).map((property: any) => property.name).filter(Boolean);
     const fields = ['_additional { id distance }', ...properties].join(' ');
-    const graphql = `{ Get { ${query.collection}(nearVector: { vector: [${query.vector.join(',')}] }, limit: ${topK}) { ${fields} } } }`;
+    let vectorLiteral: string;
+    try {
+      vectorLiteral = query.vector.map((item) => {
+        const n = Number(item);
+        if (!Number.isFinite(n)) throw new Error('non-finite');
+        return n;
+      }).join(',');
+    } catch {
+      throw new DbError('向量元素必须是有限数字', { code: 'VECTOR_ELEMENT' });
+    }
+    const graphql = `{ Get { ${query.collection}(nearVector: { vector: [${vectorLiteral}] }, limit: ${topK}) { ${fields} } } }`;
     const response = await this.request<any>(
       '/v1/graphql',
       { method: 'POST', body: JSON.stringify({ query: graphql }) },

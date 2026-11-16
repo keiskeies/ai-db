@@ -212,20 +212,42 @@ export class CassandraDriver implements Driver {
     const text = query.text.trim();
     if (!text) throw new DbError('CQL 不能为空', { code: 'CQL_EMPTY' });
     const started = Date.now();
+    const maxRows = opts.maxRows && opts.maxRows > 0 ? opts.maxRows : undefined;
     try {
       const client = await this.ready(opts.database);
-      const result = await client.execute(text, query.params ?? [], {
-        prepare: Boolean(query.params?.length),
-        fetchSize: opts.maxRows && opts.maxRows > 0 ? opts.maxRows : undefined,
-      });
-      const columns = (result.columns ?? []).map((column) => ({ name: column.name, type: String(column.type?.code ?? '') }));
-      const rows = ((result.rows ?? []) as Array<Record<string, unknown>>).map((row) => columns.map((column) => normalize(row[column.name])));
+      const columns: Array<{ name: string; type: string }> = [];
+      const rows: unknown[][] = [];
+      let truncated = false;
+      let pageState: string | undefined;
+      do {
+        // 逐页拉取并主动翻页：fetchSize 只设初始页大小，驱动默认 autoPage 会继续拉全量，
+        // 不封顶会让大结果集整表进内存。累计达到 maxRows 就停止翻页。
+        const result = await client.execute(text, query.params ?? [], {
+          prepare: Boolean(query.params?.length),
+          fetchSize: maxRows ?? undefined,
+          pageState,
+          autoPage: false,
+        });
+        if (!columns.length) {
+          columns.push(...(result.columns ?? []).map((column) => ({ name: column.name, type: String(column.type?.code ?? '') })));
+        }
+        for (const row of (result.rows ?? []) as Array<Record<string, unknown>>) {
+          rows.push(columns.map((column) => normalize(row[column.name])));
+          if (maxRows !== undefined && rows.length >= maxRows) break;
+        }
+        if (maxRows !== undefined && rows.length >= maxRows) {
+          truncated = true;
+          break;
+        }
+        pageState = result.pageState;
+      } while (pageState);
       return {
         columns,
         rows,
         rowCount: rows.length,
         durationMs: Date.now() - started,
         statement: text,
+        truncated,
       };
     } catch (err: any) {
       throw new DbError(err?.message ?? 'CQL 执行失败', { code: 'CASSANDRA_ERROR' });
