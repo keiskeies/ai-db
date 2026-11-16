@@ -42,7 +42,7 @@
   <img alt="53 个 Agent 工具" src="https://img.shields.io/badge/Agent%20Tools-53-45C8C3?style=flat-square" />
   <img alt="macOS、Windows、Linux" src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-0B0E0D?style=flat-square" />
   <img alt="MIT 许可" src="https://img.shields.io/badge/License-MIT-E0AF63?style=flat-square" />
-  <a href="https://github.com/keiskeies/ai-db/releases/tag/v0.0.6"><img alt="Release v0.0.6" src="https://img.shields.io/badge/Release-v0.0.6-45C8C3?style=flat-square&logo=github" /></a>
+  <a href="https://github.com/keiskeies/ai-db/releases/tag/v0.0.7"><img alt="Release v0.0.7" src="https://img.shields.io/badge/Release-v0.0.7-45C8C3?style=flat-square&logo=github" /></a>
   <a href="https://github.com/keiskeies/ai-db"><img alt="GitHub stars" src="https://img.shields.io/github/stars/keiskeies/ai-db?style=flat-square&logo=github&label=Stars&color=E0AF63" /></a>
 </p>
 
@@ -396,7 +396,7 @@ Agent 的主路径不止自由对话。AiDB 把高频业务动作收敛为命令
 - **复制表**：仅结构或结构 + 数据。
 - **清空 / 截断 / 删除**：危险操作二次确认，生产环境会强制审批。
 - **导入 / 导出向导**：数据页支持导入预览与列映射，导出支持 CSV / JSON / SQL / XML / XLSX。
-- **备份与恢复**：逻辑 SQL dump；设置 → 数据与备份中可恢复备份；破坏性操作前可自动备份（默认开启）。
+- **备份与恢复**：逻辑 SQL dump；设置 → 数据与备份中可恢复备份；破坏性操作前可自动备份（默认开启）。dump 脚本按语句语义切分（识别引号与注释），恢复不怕多行 JSON 与内嵌分号；视图一并导出；Oracle / DM / ClickHouse 的 DROP 语句与安全字面量、无参函数默认值得以保留。
 
 ## 数据网格
 
@@ -408,13 +408,13 @@ Agent 的主路径不止自由对话。AiDB 把高频业务动作收敛为命令
 
 - **浏览**：行号、分页、每页行数、记录区间与页码、双击/表单编辑、文本视图、表单视图（逐行编辑）。
 - **定位**：WHERE 过滤、可视化筛选构建器、多列排序对话框、主键安全定位单行。
-- **编辑**：新增行、删除行、行多选、复制 / 粘贴（TSV）、复制所选行到表尾、批量删除、查找替换（先预览匹配数再执行）。
+- **编辑**：新增行、删除行、行多选、复制 / 粘贴（TSV）、复制所选行到表尾、批量删除、查找替换（先预览匹配数再执行）；批量插入按引擎参数上限自动分批并做单请求限流。
 - **列管理**：隐藏列、恢复全部列、列宽与内容自适应。
 - **非关系型**：MongoDB 文档编辑、Redis 键值面板、向量检索、行协议写入等专用面板。
 - **导入**：CSV / TSV / TXT / JSON / XML / XLSX，支持分隔符、首行表头、预览和列映射；单次最多 5000 行，批量插入。
 - **导出**：CSV / JSON / SQL / XML / XLSX；大表按上限导出。
 - **打印**：生成打印预览，可在浏览器/Electron 中打印或另存为 PDF。
-- **错误处理**：写失败保留原始错误与当前编辑状态，不会静默丢数据。
+- **错误处理**：写失败保留原始错误与当前编辑状态，不会静默丢数据；清空单元格请用删除操作，直接输入空值会被提示而非悄悄丢弃。
 
 ## SQL 工作台
 
@@ -481,7 +481,7 @@ SQL 仍然是数据库工作的硬通货。AiDB 不隐藏 SQL，而是把它变�
 | 查询构建器 | 选表、连接、列、WHERE、排序、行数，生成 SQL 送入编辑器 | 无专用工具（`run_sql` 等价） |
 | 结构对比同步 | 两连接 DDL diff，生成目标方言语，确认后执行同步 | `schema_diff`（仅对比） |
 | 数据对比 | 行数 + 主键指纹差异，按表替换同步 | 无专用工具（`recon_data` 覆盖行级对账） |
-| 数据传输 | 跨连接复制表结构与数据，自动建表，追加 / 清空后写入 | `transfer_data` |
+| 数据传输 | 跨连接复制表结构与数据，自动建表，追加 / 清空后写入；替换模式整体走事务，批大小随目标列数自适应 | `transfer_data` |
 | 数据生成 | 按列语义、类型与外键造 1–5000 行测试数据，预览后插入 | `generate_data` |
 | 数据流处理 | 从接口或 SQL 取数，用 JSONPath / 表达式清洗，在内置 DuckDB 或 JS / Python 脚本里计算，再写回表或推送接口；支持单步试运行与增量断点 | `manage_pipeline` |
 | 服务器监控 | 引擎指标、会话列表，10s 刷新，终止会话 | 无 |

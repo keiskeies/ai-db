@@ -42,7 +42,7 @@
   <img alt="53 agent tools" src="https://img.shields.io/badge/Agent%20Tools-53-45C8C3?style=flat-square" />
   <img alt="macOS, Windows, Linux" src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-0B0E0D?style=flat-square" />
   <img alt="MIT license" src="https://img.shields.io/badge/License-MIT-E0AF63?style=flat-square" />
-  <a href="https://github.com/keiskeies/ai-db/releases/tag/v0.0.6"><img alt="Release v0.0.6" src="https://img.shields.io/badge/Release-v0.0.6-45C8C3?style=flat-square&logo=github" /></a>
+  <a href="https://github.com/keiskeies/ai-db/releases/tag/v0.0.7"><img alt="Release v0.0.7" src="https://img.shields.io/badge/Release-v0.0.7-45C8C3?style=flat-square&logo=github" /></a>
   <a href="https://github.com/keiskeies/ai-db"><img alt="GitHub stars" src="https://img.shields.io/github/stars/keiskeies/ai-db?style=flat-square&logo=github&label=Stars&color=E0AF63" /></a>
 </p>
 
@@ -396,7 +396,7 @@ The tree is organized as **connection → database / schema → table / view**, 
 - **Copy table**: structure only, or structure + data.
 - **Truncate / drop**: dangerous operations require a second confirmation, and production forces approval.
 - **Import / export wizard**: the data page supports import preview and column mapping; export supports CSV / JSON / SQL / XML / XLSX.
-- **Backup and restore**: logical SQL dump; restore from Settings → Data & Backups; destructive operations can back up automatically (on by default).
+- **Backup and restore**: logical SQL dump; restore from Settings → Data & Backups; destructive operations can back up automatically (on by default). The dump script is parsed statement-by-statement (semantics-aware of quotes and comments) so restore survives multi-line JSON and embedded semicolons; views are dumped too; Oracle / DM / ClickHouse drop clauses and safe literals / no-argument functions are preserved as defaults.
 
 ## Data grid
 
@@ -408,13 +408,13 @@ The data page is not a read-only table but a grid for everyday data maintenance:
 
 - **Browsing**: row numbers, pagination, page size, record range and page number, double-click / form editing, text view, and form view (row-by-row editing).
 - **Location**: WHERE filtering, a visual filter builder, a multi-column sort dialog, and safe single-row location by primary key.
-- **Editing**: add row, delete row, multi-row selection, copy / paste (TSV), copy selected rows to the end of the table, batch delete, and find & replace (preview the match count before executing).
+- **Editing**: add row, delete row, multi-row selection, copy / paste (TSV), copy selected rows to the end of the table, batch delete, and find & replace (preview the match count before executing); batch insertion is chunked to stay inside engine parameter limits and capped per request.
 - **Column management**: hide columns, restore all columns, and auto-fit column width and content.
 - **Non-relational**: MongoDB document editing, Redis key-value panels, vector search, and line-protocol writes.
 - **Import**: CSV / TSV / TXT / JSON / XML / XLSX, with delimiter, header row, preview, and column mapping; up to 5,000 rows per batch, inserted in bulk.
 - **Export**: CSV / JSON / SQL / XML / XLSX; large tables export up to a configurable limit.
 - **Print**: print preview, printable from the browser / Electron, or saved as PDF.
-- **Error handling**: a failed write preserves the original error and the current edit state; data is never silently dropped.
+- **Error handling**: a failed write preserves the original error and the current edit state; data is never silently dropped; clearing a cell via the delete operation is the way to write empty, and typing an empty string does not silently drop the value.
 
 ## SQL workbench
 
@@ -481,7 +481,7 @@ This means the Agent does not merely "see that these buttons exist"; it knows wh
 | Query builder | Select tables, joins, columns, WHERE, sort, and row limit; generate SQL into the editor | No dedicated tool (`run_sql` equivalent) |
 | Schema compare & sync | DDL diff between two connections, target-dialect SQL, execute after confirmation | `schema_diff` (comparison only) |
 | Data comparison | Row-count + primary-key fingerprint differences; per-table replace sync | No dedicated tool (`recon_data` covers row-level reconciliation) |
-| Data transfer | Copy table schema and data across connections, auto-create tables, append / clear-then-write | `transfer_data` |
+| Data transfer | Copy table schema and data across connections, auto-create tables, append / clear-then-write; replace mode runs in a transaction and batch sizes adapt to the target columns | `transfer_data` |
 | Data generation | Generate 1–5,000 test rows from column semantics, types, and foreign keys; preview then insert | `generate_data` |
 | Data flow | Pull from an HTTP API or a SQL query, reshape with JSONPath / expressions, compute in embedded DuckDB or a JS / Python script, then write to a table or push to an API; preview a single step, keep an incremental bookmark | `manage_pipeline` |
 | Server monitoring | Engine metrics and session list, refreshed every 10s; kill sessions | No |

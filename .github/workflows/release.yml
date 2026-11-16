@@ -412,41 +412,39 @@ jobs:
           prerelease: false
           generate_release_notes: false
           body: |
-            AiDB Studio **v0.0.6** — the Agent's chart answers explain themselves, the dashboard rearranges by hand, "guess what you want to ask" refreshes without repeating itself, and Windows builds now come in two flavors: the usual installer and a portable zip.
+            AiDB Studio **v0.0.7** — the data path gets hardened end to end: batch inserts and data-transfer writes are chunked to stay inside every engine's parameter limits, replace-mode transfer runs inside a transaction, backup dumps round-trip reliably across dialects, and the grid stops silently dropping values.
 
-            **Agent**
-            - **Chart answers that explain themselves**: hover a chart and click **解读** — the stats in the annotation match the SQL aggregation (sum / average), and **预测** draws a dashed forecast line plus a confidence band with the method and fit (r) stated. Works in both the desktop panel and the mobile app.
-            - **Honest turns**: a turn always states why it stopped — user stop, model limit, tool error, or nothing left to do — instead of pretending it is still running. "Continue" survives connection changes, and turns render thoughts, text, and tool cards interlaced in the order they really happened.
-            - **Window-aware context**: schema focus and context compaction adjust automatically to the model's context window; step limits are unbounded by default and oversized tool results are truncated to fit.
-            - **Turns are no longer killed by the clock**: they end by progress and resource judgment, so long-running work is not cut off mid-flight.
+            **Data integrity on the grid**
+            - **Empty-cell semantics made explicit**: typing an empty string no longer silently nulls the cell — you get a hint, and clearing a cell is done through the delete operation. What you see is what gets written.
+            - **Batch inserts are chunked and capped**: multi-row insert in the data page splits into per-engine-safe batches (SQL Server / Oracle parameter ceilings included) and rejects oversized one-shot requests with a clear error, so a paste never half-writes.
 
-            **Guess what you want to ask**
-            - **Shuffle refresh**: the empty-session recommendations (driven by schema structure plus real recent questions from your history) gain a manual **换一换 / shuffle** button on the home page, the agent panel, and mobile. Already-shown prompts are excluded from the next batch, and the pool wraps around when exhausted — refresh never comes back empty.
-            - **"Asked" badge**: questions you actually asked before show up with an **问过 / Asked** badge and are excluded from the current session so you are not asked to repeat yourself.
+            **Data transfer**
+            - **Replace mode runs in a transaction**: clear-then-write now either fully replaces or fully rolls back — no halfway-truncated table when a batch fails; the failed row range is reported so you know exactly what went wrong.
+            - **Adaptive batch sizing**: transfer batches shrink to fit the target table's column count (SQL Server 2000-parameter and Oracle 60000-parameter budgets enforced), avoiding "too many parameters" failures on wide tables.
 
-            **Workbench**
-            - **Fullscreen AI panel**: the agent panel expands to take over the whole window; click the same button (or press `Esc`) to return to the three-column layout.
-            - **Dashboard drag-reorder**: cards rearrange by their grid handle and the layout persists per database; ±1 buttons remain for keyboard users.
-            - **Example-SQL library operations**: bundled sample SQL can be edited, exported to CSV, and re-imported — a round-trip store for your own start-of-day examples.
+            **Backup and restore**
+            - **Statement-aware splitting**: the restore path parses the dump with quote/comment awareness, so multi-line JSON values and embedded semicolons no longer break restores.
+            - **Broader dialect coverage**: Oracle, DM, and ClickHouse get correct drop statements on restore, views are dumped back out, keyset paging keeps Oracle / DM / DuckDB dumps streaming, and safe defaults — literals and no-argument functions like `now()` — survive the dump instead of being lost.
 
-            **Portable Windows builds**
-            - Unzip, run `AiDB Studio.exe` — nothing is installed and nothing touches the registry. The NSIS installer is what writes the uninstall entry and shortcuts; the portable build skips all of that.
-            - Connections and history still live in `%APPDATA%\AiDB Studio`, so the portable build picks up data from an existing install (and vice versa).
-            - The auto-updater replaces NSIS installs in place; a portable folder updates by unzipping the new zip over the old one.
+            **SQL Server parameter typing**
+            - Large text and binary parameters are now bound as `NVarChar(MAX)` / `VarBinary(MAX)` instead of defaulting to 8 KB, fixing truncation in inserts and transfers.
+
+            **SQLite sequence hygiene**
+            - TRUNCATE-style empty operations reset `sqlite_sequence` through a properly quoted identifier, so reused tables get correct new primary keys.
 
             **Installers**
 
             | Platform | Architecture | Files |
             |---|---|---|
-            | Windows | x64 | `AiDB-Studio-0.0.6-x64-setup.exe` · `AiDB-Studio-0.0.6-x64-portable.zip` |
-            | Windows | arm64 | `AiDB-Studio-0.0.6-arm64-setup.exe` · `AiDB-Studio-0.0.6-arm64-portable.zip` |
-            | macOS | Apple Silicon | `AiDB-Studio-0.0.6-arm64.dmg` |
-            | macOS | Intel | `AiDB-Studio-0.0.6-x64.dmg` |
-            | Linux | x64 | `AiDB-Studio-0.0.6-x86_64.AppImage` · `-amd64.deb` · `-x86_64.rpm` |
-            | Linux | arm64 | `AiDB-Studio-0.0.6-arm64.AppImage` · `-arm64.deb` · `-aarch64.rpm` |
+            | Windows | x64 | `AiDB-Studio-0.0.7-x64-setup.exe` · `AiDB-Studio-0.0.7-x64-portable.zip` |
+            | Windows | arm64 | `AiDB-Studio-0.0.7-arm64-setup.exe` · `AiDB-Studio-0.0.7-arm64-portable.zip` |
+            | macOS | Apple Silicon | `AiDB-Studio-0.0.7-arm64.dmg` |
+            | macOS | Intel | `AiDB-Studio-0.0.7-x64.dmg` |
+            | Linux | x64 | `AiDB-Studio-0.0.7-x86_64.AppImage` · `-amd64.deb` · `-x86_64.rpm` |
+            | Linux | arm64 | `AiDB-Studio-0.0.7-arm64.AppImage` · `-arm64.deb` · `-aarch64.rpm` |
 
             **Updating**
-            - Update channels from 0.0.5 keep working: Windows (NSIS) and Linux (AppImage) download and install the update in place; macOS, deb/rpm installs and dev builds check the version and link to this release. Every installer ships `latest.yml` / `latest-linux.yml` / `latest-arm64.yml` metadata for differential updates.
+            - Update channels from 0.0.6 keep working: Windows (NSIS) and Linux (AppImage) download and install the update in place; macOS, deb/rpm installs and dev builds check the version and link to this release. Every installer ships `latest.yml` / `latest-linux.yml` / `latest-arm64.yml` metadata for differential updates.
 
             **Platform notes**
             - Oracle needs a prebuilt node-oracledb binding, and upstream ships none for macOS Intel or Windows arm64. On those two builds the engine is greyed out in the new-connection dialog with the reason; every other engine behaves the same everywhere. Linux arm64 does ship the binding.
@@ -455,7 +453,7 @@ jobs:
             - Android and iOS are still built through EAS and are not part of this release.
 
             **Verification**
-            - 6 desktop combinations (3 operating systems x 2 architectures), 468 Bridge tests passing (65 skipped), 417 core tests, 80 desktop tests, 392 documentation-contract checks, and 327 end-to-end scenarios.
+            - 6 desktop combinations (3 operating systems x 2 architectures), 479 Bridge tests passing (65 skipped, including engine-contract tests that need live servers), 417 core tests, 83 desktop tests, 392 documentation-contract checks, and 327 end-to-end scenarios.
             - Before publishing, CI asserts that every `latest*.yml` points at an asset that actually exists in the release, and the portable zips are built from the same verified unpacked directories as the installers.
 
             Installers are built by GitHub Actions from this tag.
