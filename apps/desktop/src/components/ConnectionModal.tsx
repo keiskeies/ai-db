@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Cable, Check, Loader2, PlugZap, X } from 'lucide-react';
 import type { ConnectionConfig, Engine, EngineMeta } from '@aidb/core';
 import { ENGINES, engineMeta } from '@aidb/core';
@@ -99,6 +99,7 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; version?: string; latencyMs: number; message?: string } | null>(null);
   const [saving, setSaving] = useState(false);
+  const testCtrl = useRef<AbortController | null>(null);
 
   // 本机缺预编译原生绑定的引擎（当前只有 macOS Intel 的 Oracle）：选项置灰，测试与保存一并禁用。
   const blocked = new Map(unavailableEngines.map((item) => [item.engine, item]));
@@ -116,7 +117,6 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
     setPort(meta.defaultPort ? String(meta.defaultPort) : '');
     setUsername(meta.defaultUsername ?? '');
     if (meta.fileBased || meta.model !== 'relational' || meta.defaultDatabase) setDatabase(meta.defaultDatabase ?? '');
-    setTestResult(null);
   };
 
   const buildBody = (): Record<string, unknown> => {
@@ -167,17 +167,29 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
       setTestResult({ ok: false, latencyMs: 0, message: blockedHint });
       return;
     }
+    const ctrl = new AbortController();
+    testCtrl.current = ctrl;
     setTesting(true);
     setTestResult(null);
     try {
-      const { result } = await api.testDraft(buildBody());
-      setTestResult(result);
+      const { result } = await api.testDraft(buildBody(), ctrl.signal);
+      if (!ctrl.signal.aborted) setTestResult(result);
     } catch (err: any) {
-      setTestResult({ ok: false, latencyMs: 0, message: err?.message });
+      // 取消（参数被改/窗口关闭）不是失败：旧结论不该显示成新参数的结果
+      if (!ctrl.signal.aborted) setTestResult({ ok: false, latencyMs: 0, message: err?.message });
     } finally {
-      setTesting(false);
+      if (testCtrl.current === ctrl) setTesting(false);
     }
   };
+
+  // 测试结果只属于发起那一刻的参数：参数一改，旧结果作废、在途请求取消，
+  // 否则改了 host 后界面仍会把上一个 host 的结论当成新 host 的。
+  const testSpec = JSON.stringify({ engine, host, port, database, username, password, ssl, sslInsecure, authMode, replicaSet, authSource, directConnection, redisMode, sshEnabled, sshHost, sshPort, sshUser, sshAuth, sshPassword, sshKeyPath });
+  useEffect(() => {
+    setTestResult(null);
+    setTesting(false);
+    return () => testCtrl.current?.abort();
+  }, [testSpec]);
 
   const submit = async () => {
     if (!name.trim() || blockedEngine) return;

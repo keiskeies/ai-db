@@ -612,7 +612,7 @@ export const api = {
   updateConnection: (id: string, body: Record<string, unknown>) => request<{ connection: ConnectionConfig }>(`/connections/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteConnection: (id: string) => request<void>(`/connections/${id}`, { method: 'DELETE' }),
   testConnection: (id: string) => request<{ result: { ok: boolean; version?: string; latencyMs: number; message?: string } }>(`/connections/${id}/test`, { method: 'POST' }),
-  testDraft: (body: Record<string, unknown>) => request<{ result: { ok: boolean; version?: string; latencyMs: number; message?: string } }>('/connections/test', { method: 'POST', body: JSON.stringify(body) }),
+  testDraft: (body: Record<string, unknown>, signal?: AbortSignal) => request<{ result: { ok: boolean; version?: string; latencyMs: number; message?: string } }>('/connections/test', { method: 'POST', body: JSON.stringify(body), signal }),
   getSchema: (id: string, refresh = false, database?: string) =>
     request<{ schemas: DatabaseSchema[] }>(`/connections/${id}/schema?refresh=${refresh ? 1 : 0}${database ? `&database=${encodeURIComponent(database)}` : ''}`),
   getTables: (id: string, database?: string) =>
