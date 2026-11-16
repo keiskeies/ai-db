@@ -1282,7 +1282,7 @@ export class ConnectionManager {
     connectionId: string,
     sql: string,
     params: unknown[],
-    opts: { database?: string; timeoutMs?: number; maxRows?: number; actor: 'user' | 'agent' },
+    opts: { database?: string; timeoutMs?: number; maxRows?: number; actor: 'user' | 'agent'; sessionId?: string },
   ): Promise<QueryResult> {
     const conn = this.store.getConnection(connectionId);
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
@@ -1291,10 +1291,17 @@ export class ConnectionManager {
     }
     if (conn.readonly) throw new DbError('该连接为只读，禁止写入', { code: 'READONLY', status: 403 });
     const driver = await this.driverFor(connectionId);
+    // 事务里的参数化语句必须走被固定的那条连接，与 query() 的逻辑一致。
+    const candidate = opts.sessionId ? this.txSessions.get(opts.sessionId) : undefined;
+    const txSession = candidate && candidate.connectionId === connectionId ? candidate : undefined;
+    const txDriver = txSession && supportsTransaction(driver) ? driver : undefined;
+    if (txSession) txSession.lastUsedAt = Date.now();
     // 与 query() 相同的内存上限语义：调用方传 maxRows 时用 applyLimit 追加 LIMIT，
     // 只改动 SQL 末尾，不破坏 $1 占位符，参数化执行安全。
     const prepared = opts.maxRows && opts.maxRows > 0 ? applyLimit(sql, opts.maxRows, conn.engine) : sql;
-    const result = await driver.runParams(prepared, params, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs });
+    const result = txDriver && opts.sessionId
+      ? await txDriver.runInTransaction(opts.sessionId, prepared, params, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs })
+      : await driver.runParams(prepared, params, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs });
     if (prepared !== sql && opts.maxRows && result.rowCount >= opts.maxRows) result.truncated = true;
     return result;
   }

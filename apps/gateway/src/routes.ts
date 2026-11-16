@@ -1953,11 +1953,31 @@ export function createApiRouter(deps: ApiDeps): Router {
       } else if (op === 'insertMany') {
         const records = Array.isArray(body.rows) ? body.rows.filter((row) => row && typeof row === 'object') as Record<string, unknown>[] : [];
         if (!records.length) throw Object.assign(new Error('没有可插入的行'), { code: 'INVALID_INPUT', status: 400 });
+        // 与 importCsv 的 5000 行上限对齐，避免一次拼出巨型 INSERT：内存翻倍 + 驱动参数/报文上限（mssql 2100、oracle 65535、mysql max_allowed_packet）。
+        if (records.length > 5000) {
+          throw Object.assign(new Error('单次插入最多 5000 行，请分页粘贴或分多次复制'), { code: 'TOO_MANY_ROWS', status: 400 });
+        }
         rejectUnknown([...new Set(records.flatMap((row) => Object.keys(row)))]);
         const columns = [...new Set(records.flatMap((row) => Object.keys(row)))].filter((c) => known.has(c));
         if (!columns.length) throw Object.assign(new Error('没有可插入的列'), { code: 'INVALID_INPUT', status: 400 });
-        sql = buildInsert(conn.engine, table.name, columns, records.length, schema);
-        params = records.flatMap((row) => columns.map((c) => coerceValue(row[c], typeOf.get(c) ?? 'text')));
+        // 固定 200 行一批，压力与单行插入路径相当；审计只留摘要，不把整批参数塞进审计表。
+        const startedMany = Date.now();
+        try {
+          let affected = 0;
+          for (let start = 0; start < records.length; start += 200) {
+            const chunk = records.slice(start, start + 200);
+            const batchSql = buildInsert(conn.engine, table.name, columns, chunk.length, schema);
+            const batchParams = chunk.flatMap((row) => columns.map((c) => coerceValue(row[c], typeOf.get(c) ?? 'text')));
+            const result = await manager.runParams(connectionId, batchSql, batchParams, { database, actor: 'user' });
+            affected += result.affected ?? chunk.length;
+          }
+          store.addAudit({ actor: 'user', connectionId, database, tool: `rows.${op}`, sql: `INSERT INTO ${table.name} ×${records.length} 行`, risk: 'write', approval: 'manual', status: 'ok', durationMs: Date.now() - startedMany, meta: { table: table.name, rows: records.length } });
+          res.json({ result: { columns: [], rows: [], rowCount: affected, affected, durationMs: Date.now() - startedMany } });
+          return;
+        } catch (err: any) {
+          store.addAudit({ actor: 'user', connectionId, database, tool: `rows.${op}`, sql: `INSERT INTO ${table.name} ×${records.length} 行`, risk: 'write', approval: 'manual', status: 'error', durationMs: Date.now() - startedMany, meta: { error: err.message, table: table.name, rows: records.length } });
+          throw err;
+        }
       } else if (op === 'update') {
         const values = obj(body.values, 'values');
         const key = obj(body.key, 'key');

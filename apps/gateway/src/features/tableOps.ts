@@ -6,6 +6,7 @@ import {
   buildTruncate,
   engineUsesSchema,
   quoteIdent,
+  quoteLiteral,
   quoteQualified,
   type ColumnDef,
   type QueryBatchResult,
@@ -146,7 +147,7 @@ export async function runTableOp(store: Store, manager: ConnectionManager, input
     if (isView) throw Object.assign(new Error('视图不能清空'), { code: 'UNSUPPORTED', status: 400 });
     statements = [buildTruncate(conn.engine, target, schema)];
     if (conn.engine === 'sqlite' && (table.columns ?? []).some((column) => column.autoIncrement)) {
-      statements.push(`DELETE FROM sqlite_sequence WHERE name = '${target.replace(/'/g, "''")}'`);
+      statements.push(`DELETE FROM sqlite_sequence WHERE name = ${quoteLiteral(target)}`);
     }
     risk = 'destructive';
   } else if (input.op === 'empty') {

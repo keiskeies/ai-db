@@ -191,12 +191,25 @@ export class SqlServerDriver implements Driver {
       const pool = await this.pool(opts.database);
       const request = pool.request();
       if (opts.timeoutMs && opts.timeoutMs > 0) (request as unknown as { requestTimeout: number }).requestTimeout = opts.timeoutMs;
-      params.forEach((value, index) => request.input(`p${index + 1}`, value as any));
+      this.bindParams(request, params);
       const result = await request.query(sql);
       return this.toResult(result, started, sql, opts.maxRows);
     } catch (err: any) {
       throw new DbError(err.message ?? 'SQL Server 执行失败', { code: err.code ?? 'MSSQL_ERROR' });
     }
+  }
+
+  /**
+   * 显式标注类型：node-mssql 对未标类型的长串推断为 NVARCHAR(4000)，超长即报错或截断；
+   * 二进制也需 VarBinary(Max) 防讹传。空串语义由调用方（coerceValue/transfer 列类型归一化）决定。
+   */
+  private bindParams(request: mssql.Request, params: unknown[]): void {
+    params.forEach((value, index) => {
+      const name = `p${index + 1}`;
+      if (typeof value === 'string' && value.length > 4000) request.input(name, mssql.NVarChar(mssql.MAX), value);
+      else if (value instanceof Uint8Array || Buffer.isBuffer(value)) request.input(name, mssql.VarBinary(mssql.MAX), value);
+      else request.input(name, value as any);
+    });
   }
 
   private toResult(result: any, started: number, sql: string, maxRows?: number): QueryResult {
@@ -243,7 +256,7 @@ export class SqlServerDriver implements Driver {
     try {
       const request = new mssql.Request(transaction);
       if (opts.timeoutMs && opts.timeoutMs > 0) (request as unknown as { requestTimeout: number }).requestTimeout = opts.timeoutMs;
-      params.forEach((value, index) => request.input(`p${index + 1}`, value as any));
+      this.bindParams(request, params);
       const result = await request.query(sql);
       return this.toResult(result, started, sql, opts.maxRows);
     } catch (err: any) {

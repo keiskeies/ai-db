@@ -1383,8 +1383,9 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
         });
         const failed = result.results.filter((item) => item.status === 'error');
         const state = failed.length === 0 ? 'ok' : failed.length === result.results.length ? 'failed' : 'partial';
+        const failures = failed.map((item) => `${item.table}:${item.error ?? ''}`).slice(0, 3).join('；');
         const summary = failed.length
-          ? `传输 ${result.results.length} 张表 · ${result.totalRows} 行 · ${failed.length} 张失败`
+          ? `传输 ${result.results.length} 张表 · ${result.totalRows} 行 · ${failed.length} 张失败${failures ? `（${failures}）` : ''}`
           : `传输 ${result.results.length} 张表 · ${result.totalRows} 行`;
         return ok(started, summary, result, {
           state,

@@ -454,13 +454,19 @@ export function DataView({ tab }: { tab: DataTab }) {
     }
     const column = columns[colIndex]?.name;
     if (!column) return;
+    // 空输入框统一视为「不改」：服务端对空串按列类型转换（日期/数字→NULL）会
+    // 静默改写用户数据，抑制掉这张直觉错误。真要清空请用删除/置 NULL 操作。
+    if (value.trim() === '') {
+      notify('info', tr("空值未提交：请用删除操作清空该单元格"));
+      return;
+    }
     try {
       await api.rows({
         connectionId: tab.connectionId,
         database: tab.database,
         table: tab.table,
         op: 'update',
-        values: { [column]: value === '' ? null : value },
+        values: { [column]: value },
         key,
       });
       notify('success', tr("已更新 1 行"), column);
@@ -482,7 +488,8 @@ export function DataView({ tab }: { tab: DataTab }) {
     columns.forEach((column) => {
       if (pkColumns.some((pk) => pk.name === column.name)) return;
       const next = formDraft[column.name] ?? '';
-      if (next !== (original[column.name] ?? '')) changes[column.name] = next === '' ? null : next;
+      // 空输入框按「未编辑」处理：不提交该列，避免日期/数字列被静默写成 NULL。
+      if (next !== (original[column.name] ?? '') && next.trim() !== '') changes[column.name] = next;
     });
     if (!Object.keys(changes).length) {
       notify('info', tr("没有改动"));

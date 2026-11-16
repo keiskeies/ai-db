@@ -498,12 +498,12 @@ export async function importCsv(
 }
 
 /**
- * 备份是完整的 DDL + INSERT 脚本，直接重放会撞上“表已存在”。
+ * 备份是完整的 DDL + INSERT 脚本，直接重放会撞上「表已存在」。
  * 恢复前先按脚本里的对象生成 DROP 语句；不支持的方言保持原行为。
  */
 export function restoreDropStatements(engine: Engine, dump: string): string[] {
   const dialect = dialectOf(engine);
-  if (!['sqlite', 'mysql', 'postgres', 'mssql'].includes(dialect)) return [];
+  if (!['sqlite', 'mysql', 'postgres', 'mssql', 'oracle', 'dm', 'clickhouse'].includes(dialect)) return [];
   const pattern = /CREATE\s+(?:OR\s+REPLACE\s+)?(TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?("(?:[^"]|"")+"|`(?:[^`]|``)+`|\[[^\]]+\]|[A-Za-z_][\w$#]*(?:\.[A-Za-z_][\w$#]*)?)/gi;
   const views = new Set<string>();
   const tables = new Set<string>();
@@ -512,10 +512,13 @@ export function restoreDropStatements(engine: Engine, dump: string): string[] {
     const name = match[2].trim();
     (kind === 'VIEW' ? views : tables).add(name);
   }
-  const cascade = dialect === 'postgres' ? ' CASCADE' : '';
+  // mssql/oracle/dm/clickhouse 弃置方言特性：oracle/dm 无 IF EXISTS，需要时先查存在性（用简单可回退策略）。
+  // 这里统一按「IF EXISTS / 无 IF 回退」生成，避免恢复撞「已存在」。
+  const supportsIfExists = dialect === 'mysql' || dialect === 'postgres' || dialect === 'mssql' || dialect === 'sqlite' || dialect === 'clickhouse';
+  const cascade = dialect === 'postgres' ? ' CASCADE' : dialect === 'oracle' || dialect === 'dm' ? ' CASCADE CONSTRAINTS' : '';
   const drops = [
-    ...[...views].map((name) => `DROP VIEW IF EXISTS ${name}${cascade};`),
-    ...[...tables].map((name) => `DROP TABLE IF EXISTS ${name}${cascade};`),
+    ...[...views].map((name) => `DROP VIEW ${supportsIfExists ? 'IF EXISTS ' : ''}${name}${cascade};`),
+    ...[...tables].map((name) => `DROP TABLE ${supportsIfExists ? 'IF EXISTS ' : ''}${name}${cascade};`),
   ];
   if (!drops.length) return [];
   if (dialect === 'mysql') return ['SET FOREIGN_KEY_CHECKS=0;', ...drops, 'SET FOREIGN_KEY_CHECKS=1;'];
@@ -524,8 +527,9 @@ export function restoreDropStatements(engine: Engine, dump: string): string[] {
 }
 
 const DUMP_CHUNK_ROWS = 2000;
+// 支持 LIMIT/OFFSET 或 FETCH 分页的方言；influxdb 无分页语法，保持整表读。duckdb 复用 sqlite dialect。
 const OFFSET_DIALECTS = new Set<DialectId>(['sqlite', 'mysql', 'postgres', 'mssql', 'clickhouse', 'tdengine']);
-const KEYSET_DIALECTS = new Set<DialectId>(['sqlite', 'mysql', 'postgres', 'mssql', 'clickhouse']);
+const KEYSET_DIALECTS = new Set<DialectId>(['sqlite', 'mysql', 'postgres', 'mssql', 'clickhouse', 'oracle', 'dm']);
 
 type DumpPlan = { mode: 'single' } | { mode: 'offset'; order: string[] } | { mode: 'keyset'; column: string };
 
@@ -553,6 +557,8 @@ export function dumpKeysetSql(engine: Engine, base: string, column: string, limi
   const where = cursor === undefined ? '' : ` WHERE ${quoted} > ${placeholder(engine, 1)}`;
   const orderBy = ` ORDER BY ${quoted}`;
   if (dialectOf(engine) === 'mssql') return `${base}${where}${orderBy} OFFSET 0 ROWS FETCH NEXT ${limit} ROWS ONLY`;
+  // oracle/dm 的 keyset 用 FETCH FIRST：无裸 LIMIT 语法。
+  if (dialectOf(engine) === 'oracle' || dialectOf(engine) === 'dm') return `${base}${where}${orderBy} FETCH FIRST ${limit} ROWS ONLY`;
   return `${base}${where}${orderBy} LIMIT ${limit}`;
 }
 
@@ -601,6 +607,18 @@ async function writeTableRows(
   }
 }
 
+/** 备份落盘的默认值白名单：无参内置函数或数字/字符串字面量，其余（含 :: 强转等）无法证明可安全重放，丢弃。 */
+const SAFE_DEFAULT_FN = new Set(['nextval', 'now', 'current_timestamp', 'current_date', 'current_time', 'current_user', 'getdate', 'getutcdate', 'sysdate', 'uuid', 'uuid_generate_v4', 'gen_random_uuid', 'random', 'strftime']);
+export function safeDefaultToDump(value: string): string | undefined {
+  const s = value.trim();
+  const numeric = /^\d+(\.\d+)?$/.test(s);
+  const quoted = /^'[^']*'$/.test(s);
+  if (numeric || quoted) return s;
+  const m = s.match(/^(\w+)\(\)$/);
+  if (m && SAFE_DEFAULT_FN.has(m[1].toLowerCase())) return s;
+  return undefined;
+}
+
 export async function dumpDatabase(  store: Store,
   manager: ConnectionManager,
   config: GatewayConfig,
@@ -639,7 +657,7 @@ export async function dumpDatabase(  store: Store,
           name: c.name,
           type: c.type,
           nullable: c.nullable,
-          defaultValue: c.defaultValue !== undefined && c.defaultValue !== null && !/[()]|::/.test(String(c.defaultValue)) ? String(c.defaultValue) : undefined,
+          defaultValue: c.defaultValue !== undefined && c.defaultValue !== null ? safeDefaultToDump(String(c.defaultValue)) : undefined,
           primaryKey: c.primaryKey,
           autoIncrement: c.autoIncrement,
         }));
@@ -672,8 +690,46 @@ export async function dumpDatabase(  store: Store,
 const RESTORE_BATCH_BYTES = 4 * 1024 * 1024;
 
 /**
+ * 判断 buffer 内是否已出现「引号外」的语句结束分号。
+ * 逐条读出备份脚本时，INSERT 的值可能包含 JSON/多行文本（字符串内有真实换行和分号），
+ * 只按「行尾分号」切会把一条语句拦腰截断；这里按单双引号/反引号/行注释状态跟踪。
+ */
+function lineEndsStatement(text: string): boolean {
+  let quote: '' | "'" | '"' | '`' = '';
+  let lineComment = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (lineComment) {
+      if (c === '\n') lineComment = false;
+      continue;
+    }
+    if (c === '-' && text[i + 1] === '-') {
+      lineComment = true;
+      i++;
+      continue;
+    }
+    if (quote) {
+      if (c === quote) {
+        if (text[i + 1] === quote) {
+          i++;
+          continue; // '' / "" 转义
+        }
+        quote = '';
+      }
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') {
+      quote = c;
+      continue;
+    }
+    if (c === ';') return true;
+  }
+  return false;
+}
+
+/**
  * 逐条读出备份脚本。AiDB 的 dump 一条语句一行（CREATE TABLE 会跨行），
- * 因此以「行尾分号」作为边界即可，不必把整个文件读进内存再 split。
+ * 以「引号外的分号」作为边界，多行字符串值不会把语句拆坏；无分号 EOF 时整体flush。
  */
 export async function* readSqlStatements(path: string): AsyncGenerator<string> {
   const lines = createInterface({ input: createReadStream(path, { encoding: 'utf8' }), crlfDelay: Infinity });
@@ -682,7 +738,7 @@ export async function* readSqlStatements(path: string): AsyncGenerator<string> {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('--')) continue;
     buffer = buffer ? `${buffer}\n${line}` : line;
-    if (trimmed.endsWith(';')) {
+    if (lineEndsStatement(buffer)) {
       yield buffer.trim();
       buffer = '';
     }
