@@ -1076,6 +1076,7 @@ details[open] > summary::before { transform: rotate(45deg); opacity: .7; }
 .context-item:hover { background: var(--bg-hover); color: var(--text-primary); }
 .context-item.danger { color: var(--danger); }
 .context-item:disabled { opacity: .45; cursor: default; }
+.context-item:disabled:hover { background: transparent; color: var(--text-secondary); }
 .context-item svg { flex: 0 0 12px; }
 .pair-panel { display: flex; gap: 14px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
 .pair-qr { width: 148px; height: 148px; padding: 6px; border-radius: 8px; background: #fff; flex: 0 0 auto; }

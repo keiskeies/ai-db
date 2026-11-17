@@ -248,7 +248,7 @@ export function Sidebar() {
       { label: t('test'), icon: <Radio size={13} />, onClick: () => void testConnection(conn) },
       { label: t('refresh'), icon: <RefreshCw size={13} />, onClick: () => void loadSchema(conn.id, true) },
       ...(dbOps.create
-        ? [{ label: tr("新建数据库…"), icon: <Plus size={13} />, onClick: () => setDbDialog({ kind: 'create', conn, database: '' }) } as ContextMenuItem]
+        ? [{ label: tr("新建数据库…"), icon: <Plus size={13} />, disabled: conn.readonly, onClick: () => setDbDialog({ kind: 'create', conn, database: '' }) } as ContextMenuItem]
         : []),
       { label: '', icon: null, sep: true, onClick: () => undefined },
       { label: t('newQuery'), icon: <TerminalSquare size={13} />, onClick: () => openQuery(conn.id) },
@@ -780,13 +780,13 @@ export function Sidebar() {
                                 const items: ContextMenuItem[] = [
                                   { label: tr("关闭数据库"), icon: <FolderOpen size={13} />, onClick: () => toggleSchema(schemaKey) },
                                   ...(caps.rename
-                                    ? [{ label: tr("编辑数据库…"), icon: <Pencil size={13} />, onClick: () => setDbDialog({ kind: 'rename', conn, database: schema.name }) } as ContextMenuItem]
+                                    ? [{ label: tr("编辑数据库…"), icon: <Pencil size={13} />, disabled: conn.readonly, onClick: () => setDbDialog({ kind: 'rename', conn, database: schema.name }) } as ContextMenuItem]
                                     : []),
                                   ...(caps.create
-                                    ? [{ label: tr("新建数据库…"), icon: <Plus size={13} />, onClick: () => setDbDialog({ kind: 'create', conn, database: '' }) } as ContextMenuItem]
+                                    ? [{ label: tr("新建数据库…"), icon: <Plus size={13} />, disabled: conn.readonly, onClick: () => setDbDialog({ kind: 'create', conn, database: '' }) } as ContextMenuItem]
                                     : []),
                                   ...(caps.drop
-                                    ? [{ label: tr("删除数据库…"), icon: <Trash2 size={13} />, danger: true, onClick: () => setDbDialog({ kind: 'drop', conn, database: schema.name }) } as ContextMenuItem]
+                                    ? [{ label: tr("删除数据库…"), icon: <Trash2 size={13} />, danger: true, disabled: conn.readonly, onClick: () => setDbDialog({ kind: 'drop', conn, database: schema.name }) } as ContextMenuItem]
                                     : []),
                                   { label: '', icon: null, sep: true, onClick: () => undefined },
                                   { label: tr("新建表"), icon: <Table2 size={13} />, onClick: () => openDesign(conn.id, undefined, schema.name) },
@@ -815,6 +815,7 @@ export function Sidebar() {
                             >
                               <ChevronRight size={12} className={`conn-toggle ${schemaOpen ? 'open' : ''}`} />
                               <Database size={13} style={{ color: 'var(--text-muted)' }} />
+                              {conn.readonly ? <span title={t('readonly')} style={{ color: 'var(--warning)' }}>🔒</span> : null}
                               <span className="node-label">{single ? (conn.engine === 'sqlite' ? 'main' : conn.database ?? schema.name) : schema.name}</span>
                               {loading ? (
                                 <span className="spinner" style={{ width: 10, height: 10, margin: 0, borderWidth: 1.5 }} />
