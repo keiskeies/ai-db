@@ -1624,7 +1624,7 @@
   "在": "Giriş",
   "在 @BotFather 创建 Bot 拿 token；chatId 可用 @channelusername 或数字 ID。": "@BotFather'da Bot oluşturun ve token alın; chatId @channelusername veya sayısal ID olabilir.",
   "在 设置 → 模型能力 里勾选「图片」后再试。": "Ayarlar → Model Yetenekleri bölümünde \"Görüntü\"yü kontrol edin ve tekrar deneyin.",
-  "在任意 MCP 客户端（Claude Code / Cursor / Cline / Windsurf / Zed 等）中运行 npx -y @aidb/mcp pair，输入此配对码与 Bridge 地址，60 秒内有效。": "Run npx -y @aidb/mcp pair in any MCP client (Claude Code / Cursor / Cline / Windsurf / Zed, etc.) and enter this code with the Bridge address. Valid for 60 seconds.",
+  "在任意 MCP 客户端（Claude Code / Cursor / Cline / Windsurf / Zed 等）中运行 npx -y @aidb-studio/mcp pair，输入此配对码与 Bridge 地址，60 秒内有效。": "Run npx -y @aidb-studio/mcp pair in any MCP client (Claude Code / Cursor / Cline / Windsurf / Zed, etc.) and enter this code with the Bridge address. Valid for 60 seconds.",
   "在已连接的库上执行 SQL，结果集转成行集": "Bağlı kitaplıkta SQL'yi yürütün; sonuç kümesi bir satır kümesine dönüştürülür",
   "在数据库中查找…": "Veritabanında bul…",
   "在查询窗口编写触发器": "Sorgu penceresinde tetikleyiciler yazılıyor",

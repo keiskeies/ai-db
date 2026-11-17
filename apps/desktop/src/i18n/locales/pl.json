@@ -1624,7 +1624,7 @@
   "在": "W",
   "在 @BotFather 创建 Bot 拿 token；chatId 可用 @channelusername 或数字 ID。": "Utwórz bota w @BotFather i zdobądź token; chatId może być @nazwaKanału lub numeryczne ID.",
   "在 设置 → 模型能力 里勾选「图片」后再试。": "Sprawdź „Obraz” w Ustawienia → Możliwości modelu i spróbuj ponownie.",
-  "在任意 MCP 客户端（Claude Code / Cursor / Cline / Windsurf / Zed 等）中运行 npx -y @aidb/mcp pair，输入此配对码与 Bridge 地址，60 秒内有效。": "Run npx -y @aidb/mcp pair in any MCP client (Claude Code / Cursor / Cline / Windsurf / Zed, etc.) and enter this code with the Bridge address. Valid for 60 seconds.",
+  "在任意 MCP 客户端（Claude Code / Cursor / Cline / Windsurf / Zed 等）中运行 npx -y @aidb-studio/mcp pair，输入此配对码与 Bridge 地址，60 秒内有效。": "Run npx -y @aidb-studio/mcp pair in any MCP client (Claude Code / Cursor / Cline / Windsurf / Zed, etc.) and enter this code with the Bridge address. Valid for 60 seconds.",
   "在已连接的库上执行 SQL，结果集转成行集": "Wykonaj SQL w połączonej bibliotece, a zestaw wyników zostanie przekonwertowany na zestaw wierszy",
   "在数据库中查找…": "Znajdź w bazie danych…",
   "在查询窗口编写触发器": "Pisanie wyzwalaczy w oknie zapytania",

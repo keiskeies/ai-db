@@ -1624,7 +1624,7 @@
   "在": "안에",
   "在 @BotFather 创建 Bot 拿 token；chatId 可用 @channelusername 或数字 ID。": "@BotFather에서 봇을 생성하고 토큰을 받습니다. chatId는 @channelusername 또는 숫자 ID일 수 있습니다.",
   "在 设置 → 模型能力 里勾选「图片」后再试。": "설정 → 모델 기능에서 '이미지'를 확인하고 다시 시도하세요.",
-  "在任意 MCP 客户端（Claude Code / Cursor / Cline / Windsurf / Zed 等）中运行 npx -y @aidb/mcp pair，输入此配对码与 Bridge 地址，60 秒内有效。": "Run npx -y @aidb/mcp pair in any MCP client (Claude Code / Cursor / Cline / Windsurf / Zed, etc.) and enter this code with the Bridge address. Valid for 60 seconds.",
+  "在任意 MCP 客户端（Claude Code / Cursor / Cline / Windsurf / Zed 等）中运行 npx -y @aidb-studio/mcp pair，输入此配对码与 Bridge 地址，60 秒内有效。": "Run npx -y @aidb-studio/mcp pair in any MCP client (Claude Code / Cursor / Cline / Windsurf / Zed, etc.) and enter this code with the Bridge address. Valid for 60 seconds.",
   "在已连接的库上执行 SQL，结果集转成行集": "연결된 라이브러리에서 SQL를 실행하면 결과 집합이 행 집합으로 변환됩니다.",
   "在数据库中查找…": "데이터베이스에서 찾기…",
   "在查询窗口编写触发器": "쿼리 창에 트리거 작성",

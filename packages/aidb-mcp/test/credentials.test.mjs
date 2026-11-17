@@ -53,6 +53,6 @@ test('a failed rename preserves the previous credential', () => {
 
 test('readCredentials throws a clear error when no credential exists', () => {
   process.env.AIDB_MCP_CREDENTIALS = join(home, 'missing.json');
-  assert.throws(() => readCredentials(), /npx -y @aidb\/mcp pair/);
+  assert.throws(() => readCredentials(), /npx -y @aidb-studio\/mcp pair/);
   delete process.env.AIDB_MCP_CREDENTIALS;
 });

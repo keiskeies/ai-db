@@ -16,17 +16,17 @@ export function credentialsPath() {
 export function readCredentials() {
   const file = credentialsPath();
   if (!existsSync(file)) {
-    throw new Error('未找到 MCP 配对凭据，请先运行：npx -y @aidb/mcp pair');
+    throw new Error('未找到 MCP 配对凭据，请先运行：npx -y @aidb-studio/mcp pair');
   }
   let data;
   try {
     data = JSON.parse(readFileSync(file, 'utf8'));
   } catch {
-    throw new Error('MCP 配对凭据已损坏，请重新运行：npx -y @aidb/mcp pair');
+    throw new Error('MCP 配对凭据已损坏，请重新运行：npx -y @aidb-studio/mcp pair');
   }
   for (const key of ['url', 'token', 'deviceId', 'pairedAt']) {
     if (typeof data[key] !== 'string' || !data[key]) {
-      throw new Error('MCP 配对凭据字段不完整，请重新运行：npx -y @aidb/mcp pair');
+      throw new Error('MCP 配对凭据字段不完整，请重新运行：npx -y @aidb-studio/mcp pair');
     }
   }
   return { url: data.url, token: data.token, deviceId: data.deviceId, pairedAt: data.pairedAt };

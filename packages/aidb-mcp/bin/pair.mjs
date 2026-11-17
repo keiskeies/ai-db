@@ -61,7 +61,7 @@ export async function runPair(io = {}) {
   const file = write(credentials);
   log(`配对成功，设备 ${body.device?.name ?? 'MCP Client'}（${body.device?.id ?? ''}）`);
   log(`凭据已写入 ${file}`);
-  log('现在可在任意 MCP 客户端（Claude Code / Cursor / Cline / Windsurf / Zed 等）中使用：npx -y @aidb/mcp');
+  log('现在可在任意 MCP 客户端（Claude Code / Cursor / Cline / Windsurf / Zed 等）中使用：npx -y @aidb-studio/mcp');
   log('如需撤销：AiDB 桌面端 设置 → 设备 → 吊销');
   return { ok: true, file, credentials };
 }

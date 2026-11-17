@@ -4,7 +4,10 @@
  * stdout carries ONLY line-delimited JSON-RPC; all diagnostics go to stderr.
  */
 import { createInterface } from 'node:readline';
+import { readFileSync } from 'node:fs';
 import { readCredentials } from './credentials.mjs';
+
+const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 let base;
 let token;
@@ -17,7 +20,7 @@ try {
   if (process.env.AIDB_TOKEN) {
     base = (process.env.AIDB_URL || 'http://127.0.0.1:8787').replace(/\/+$/, '');
     token = process.env.AIDB_TOKEN;
-    process.stderr.write('[aidb-mcp] 使用 AIDB_TOKEN 环境变量（不推荐，建议运行 npx -y @aidb/mcp pair）\n');
+    process.stderr.write('[aidb-mcp] 使用 AIDB_TOKEN 环境变量（不推荐，建议运行 npx -y @aidb-studio/mcp pair）\n');
   } else {
     process.stderr.write(`[aidb-mcp] ${err.message}\n`);
     process.exit(1);
@@ -81,7 +84,7 @@ input.on('line', (line) => {
         reply(message.id, {
           protocolVersion: '2024-11-05',
           capabilities: { tools: {} },
-          serverInfo: { name: 'aidb-studio', version: '0.0.8' },
+          serverInfo: { name: 'aidb-studio', version: pkg.version },
         });
         return;
       }

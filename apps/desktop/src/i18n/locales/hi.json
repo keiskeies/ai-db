@@ -1624,7 +1624,7 @@
   "在": "में",
   "在 @BotFather 创建 Bot 拿 token；chatId 可用 @channelusername 或数字 ID。": "@BotFather में बोट बनाएं और टोकन प्राप्त करें; चैट आईडी @channelusername या न्यूमेरिक आईडी हो सकती है।",
   "在 设置 → 模型能力 里勾选「图片」后再试。": "सेटिंग्स → मॉडल क्षमताओं में \"इमेज\" जांचें और फिर से प्रयास करें।",
-  "在任意 MCP 客户端（Claude Code / Cursor / Cline / Windsurf / Zed 等）中运行 npx -y @aidb/mcp pair，输入此配对码与 Bridge 地址，60 秒内有效。": "Run npx -y @aidb/mcp pair in any MCP client (Claude Code / Cursor / Cline / Windsurf / Zed, etc.) and enter this code with the Bridge address. Valid for 60 seconds.",
+  "在任意 MCP 客户端（Claude Code / Cursor / Cline / Windsurf / Zed 等）中运行 npx -y @aidb-studio/mcp pair，输入此配对码与 Bridge 地址，60 秒内有效。": "Run npx -y @aidb-studio/mcp pair in any MCP client (Claude Code / Cursor / Cline / Windsurf / Zed, etc.) and enter this code with the Bridge address. Valid for 60 seconds.",
   "在已连接的库上执行 SQL，结果集转成行集": "कनेक्टेड लाइब्रेरी पर SQL निष्पादित करें, और परिणाम सेट एक पंक्ति सेट में परिवर्तित हो जाता है",
   "在数据库中查找…": "डेटाबेस में खोजें…",
   "在查询窗口编写触发器": "क्वेरी विंडो में ट्रिगर्स लिखना",

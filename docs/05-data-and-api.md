@@ -370,7 +370,7 @@ export interface QueryResult {
 `risk='read'` 的 `memory_write` 等写状态工具。配对限流按 TCP 远端地址计数、配对码用 CSPRNG、
 两个 start 端点均需主令牌。WebSocket 通道拒绝该凭据。详见 [12-bots-and-mcp.md](./12-bots-and-mcp.md) §4.5。
 
-**破坏性变更**：旧版 `@aidb/mcp`（未发布）曾向 `/pair/claim` 发送 `scope:'mcp:readonly'`；
+**破坏性变更**：旧版 `@aidb-studio/mcp`（未发布）曾向 `/pair/claim` 发送 `scope:'mcp:readonly'`；
 现在该端点硬编码 `full`，旧包会静默获得 full 凭据，必须升级到走 `/pair/mcp/claim` 的版本。
 
 ### 3.1 认证

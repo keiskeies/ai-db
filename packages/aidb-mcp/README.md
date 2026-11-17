@@ -1,4 +1,4 @@
-# @aidb/mcp
+# @aidb-studio/mcp
 
 AiDB Studio 的只读 MCP Server，供 Claude Code / Claude Desktop / Cursor 使用。
 
@@ -13,7 +13,7 @@ AiDB Studio 的只读 MCP Server，供 Claude Code / Claude Desktop / Cursor 使
 2. 运行：
 
    ```bash
-   npx -y @aidb/mcp pair
+   npx -y @aidb-studio/mcp pair
    ```
 
    按提示输入配对码与 Bridge 地址（默认 `http://127.0.0.1:8787`）。
@@ -28,7 +28,7 @@ AiDB Studio 的只读 MCP Server，供 Claude Code / Claude Desktop / Cursor 使
    ```json
    {
      "mcpServers": {
-       "aidb": { "command": "npx", "args": ["-y", "@aidb/mcp"] }
+       "aidb": { "command": "npx", "args": ["-y", "@aidb-studio/mcp"] }
      }
    }
    ```
@@ -60,17 +60,50 @@ AiDB Studio 的只读 MCP Server，供 Claude Code / Claude Desktop / Cursor 使
 
 ## 发布（维护者）
 
-仓库根 `.npmrc` 指向 npmmirror 镜像，发布必须显式覆盖 registry：
+日常发布由 `.github/workflows/publish-mcp.yml` 通过 npm **可信发布（OIDC）** 完成，
+仓库不存 npm token。只有**首次**需要一次性配置，其中只有第 1 步必须访问 npmjs.com 网站
+（`npm` CLI 没有创建组织的命令），其余都能在任何能连通 `registry.npmjs.org` 的机器上做：
+
+1. 在 npmjs.com 创建 **组织 `aidb-studio`**（scope 必须先存在，否则发布报 `Scope not found`）。
+2. 终端登录。默认 `auth-type=web` 会打开 `auth.npmjs.org`，网络受限时必须走 legacy：
+
+   ```bash
+   npm login --registry=https://registry.npmjs.org --auth-type=legacy   # 需要账号密码 + 2FA 验证码
+   ```
+
+3. 发布**真实版本**（首个版本手动发，之后全走 CI；可信发布方只能建在已存在的包上）：
+
+   ```bash
+   cd packages/aidb-mcp && npm publish --access public --registry=https://registry.npmjs.org
+   ```
+
+4. 建可信发布方。`--file` 只写工作流文件名，且必须允许 `npm publish`：
+
+   ```bash
+   npm trust github @aidb-studio/mcp --file publish-mcp.yml --repo keiskeies/ai-db --allow-publish
+   npm trust list @aidb-studio/mcp      # 核对
+   ```
+
+   **建好后必须在 2 天内跑成第一次 CI 发布**，否则该配置过期，只能删掉重建。
+   所以下一步别拖太久。
+
+5. 验证 CI 链路：升版本、打 tag，确认 registry 上出现 CI 发出版本（其 provenance 应指向本仓库）。
+
+之后每次发布只需改 `packages/aidb-mcp/package.json` 的 `version` 并打 tag：
 
 ```bash
-cd packages/aidb-mcp
-npm pack --dry-run --json       # 确认 tarball 只含 bin/ README.md LICENSE
-npm login --registry=https://registry.npmjs.org
-npm publish --registry=https://registry.npmjs.org --access public
-npm view @aidb/mcp version
+npm --workspace @aidb-studio/mcp run test
+git commit -am "chore(mcp): 版本升 x.y.z" && git tag mcp-vx.y.z && git push --follow-tags
 ```
 
-要求 Node.js ≥ 22.5；本包零运行时依赖。
+CI 会校验 tag 与 `version` 一致、跑测试、核对 tarball 只含 `bin/` `README.md` `LICENSE`，
+再 `npm publish` 并回查 registry。跑通后到 npm 把 token 发布关掉
+（Settings → Publishing access → 要求 2FA 且禁用 token），发布权限就只剩这条流水线。
+
+> npm 公告：绕过 2FA 的 token 正被收紧（2026-08 起影响账号操作，2027-01 起不能直接发包）。
+> 这正是改用 OIDC 的理由——CI 侧不需要任何 token。
+
+要求 Node.js ≥ 22.5；本包零运行时依赖。可信发布额外要求 npm ≥ 11.5.1、Node ≥ 22.14.0。
 
 ## 许可
 

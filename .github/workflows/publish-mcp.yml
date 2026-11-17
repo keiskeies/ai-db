@@ -1,0 +1,119 @@
+name: Publish MCP package
+
+# 只发布 packages/aidb-mcp 到 npm，认证走 OIDC 可信发布，仓库里不存任何 npm token。
+# npm 侧的可信发布方按「工作流文件名」授权，所以本文件不能改名；
+# 若要合并进 release.yml，必须同步改 npmjs.com → 包 → Settings → Trusted publishing。
+on:
+  push:
+    tags:
+      - 'mcp-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC 可信发布 + provenance 签名
+
+jobs:
+  publish:
+    name: Publish @aidb-studio/mcp
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 可信发布要求 npm CLI >= 11.5.1、Node >= 22.14.0，低于这个组合 npm 会静默走
+      # 未认证的 token 路径并回报成 404，所以锁 Node 24 而不是用 runner 默认版本。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Check toolchain
+        run: |
+          set -euo pipefail
+          node -v
+          npm -v
+          npm_ver=$(npm -v)
+          node -e '
+            const [major, minor, patch] = process.argv[1].split(".").map(Number);
+            const ok = major > 11 || (major === 11 && (minor > 5 || (minor === 5 && patch >= 1)));
+            if (!ok) {
+              console.error(`::error::npm ${process.argv[1]} 不支持可信发布，需要 >= 11.5.1`);
+              process.exit(1);
+            }
+          ' "$npm_ver"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # 包名会出现在安装命令、错误提示和配对成功文案里，改名后忘了同步会发出错误的指引。
+      - name: Verify package name
+        shell: bash
+        run: |
+          set -euo pipefail
+          name=$(node -p "require('./packages/aidb-mcp/package.json').name")
+          if [ "$name" != "@aidb-studio/mcp" ]; then
+            echo "::error::packages/aidb-mcp 的 name 是 $name，与可信发布配置和文档里的 @aidb-studio/mcp 不一致"
+            exit 1
+          fi
+
+      # 打 tag 与改版本号是两步，漏一步就会把 0.0.8 发成 mcp-v0.0.9（或反过来），
+      # 而 npm 版本不可覆盖，错了只能 deprecate。
+      - name: Verify tag matches package version
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          expected="mcp-v$(node -p "require('./packages/aidb-mcp/package.json').version")"
+          if [ "$tag" != "$expected" ]; then
+            echo "::error::tag $tag 与 packages/aidb-mcp/package.json 的版本不符，期望 $expected"
+            exit 1
+          fi
+
+      - name: Test MCP package
+        run: npm --workspace @aidb-studio/mcp run test
+
+      # 只允许 bin/ README.md LICENSE package.json 进 tarball，多塞文件视为异常。
+      - name: Verify package contents
+        working-directory: packages/aidb-mcp
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm pack --dry-run --json > /tmp/aidb-pack.json 2>/dev/null
+          node -e '
+            const report = require("/tmp/aidb-pack.json")[0];
+            const allowed = new Set(["bin/aidb-mcp.mjs", "bin/credentials.mjs", "bin/pair.mjs", "bin/server.mjs", "LICENSE", "README.md", "package.json"]);
+            const files = report.files.map((f) => f.path);
+            const unexpected = files.filter((f) => !allowed.has(f));
+            const missing = [...allowed].filter((f) => !files.includes(f));
+            if (unexpected.length || missing.length) {
+              console.error("::error::tarball 内容不符，期望：" + [...allowed].join(" "));
+              if (unexpected.length) console.error("  多出：" + unexpected.join(" "));
+              if (missing.length) console.error("  缺少：" + missing.join(" "));
+              process.exit(1);
+            }
+            console.log(`tarball 校验通过：${files.length} 个文件`);
+          '
+
+      - name: Publish
+        working-directory: packages/aidb-mcp
+        run: npm publish --access public --registry=https://registry.npmjs.org
+
+      # 只有 registry 真的解析到本次版本才算发成功；npm 侧元数据可见性会滞后，重试几次。
+      - name: Verify published version
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver=$(node -p "require('./packages/aidb-mcp/package.json').version")
+          for i in 1 2 3 4 5 6; do
+            if [ "$(npm view @aidb-studio/mcp version --registry=https://registry.npmjs.org 2>/dev/null || true)" = "$ver" ]; then
+              echo "已发布：@aidb-studio/mcp@$ver"
+              exit 0
+            fi
+            echo "等待 registry 可见 @aidb-studio/mcp@$ver（第 $i 次）"
+            sleep 10
+          done
+          echo "::error::发布后 registry 查不到 @aidb-studio/mcp@$ver"
+          exit 1
