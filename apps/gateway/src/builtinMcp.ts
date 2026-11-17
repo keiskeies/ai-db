@@ -1,4 +1,4 @@
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
@@ -12,6 +12,7 @@ import {
   type ToolResult,
 } from '@aidb/core';
 import type { McpTool } from './mcp';
+import { killTree } from './processTree';
 import type { Store } from './store';
 import { runSearch } from './search';
 
@@ -128,8 +129,12 @@ export class BuiltinMcpClient {
     }));
   }
 
-  async call(tool: string, args: Record<string, unknown>): Promise<ToolResult> {
+  async call(tool: string, args: Record<string, unknown>, opts?: { signal?: AbortSignal; timeoutMs?: number }): Promise<ToolResult> {
     const started = Date.now();
+    // 内置工具在进程内执行、无法真正中断；至少在入口尊重已中止的信号（契约 K1 的尽力而为）
+    if (opts?.signal?.aborted) {
+      return { ok: false, summary: 'MCP 调用已中止', error: { code: 'MCP_ABORTED', message: '调用方已中止本次 MCP 调用' }, meta: { durationMs: 0 } };
+    }
     try {
       const result = await runBuiltinMcpTool(this.kind(), this.server.args, tool, args);
       return { ok: true, summary: result.summary, data: result.data, meta: { durationMs: Date.now() - started } };
@@ -538,51 +543,6 @@ function globFilePredicate(pattern: string): (relativePath: string, name: string
 }
 
 type GrepOutputMode = 'content' | 'files' | 'count';
-
-/**
- * 终止子进程及其整个进程树：
- * - POSIX：先 SIGTERM，500ms 后未退出再 SIGKILL（负 pid 连带杀进程组）。
- * - Windows：taskkill /pid <pid> /T /F 直接强杀整棵进程树（/T 连带子进程）。
- * 避免子进程挂死时 execFile 自身 timeout 只杀直接子进程、却遗留孙进程的场景。
- */
-function killTree(child: ChildProcess): void {
-  const pid = child.pid;
-  if (!pid) return;
-  if (process.platform === 'win32') {
-    try {
-      spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }).on('error', () => undefined);
-    } catch {
-      /* taskkill 不存在时退回默认信号 */
-      try {
-        child.kill();
-      } catch {
-        /* 已退出 */
-      }
-    }
-    return;
-  }
-  try {
-    process.kill(-pid, 'SIGTERM');
-  } catch {
-    /* 进程组不存在，退回直接信号 */
-    try {
-      child.kill('SIGTERM');
-    } catch {
-      /* 已退出 */
-    }
-  }
-  setTimeout(() => {
-    try {
-      process.kill(-pid, 'SIGKILL');
-    } catch {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        /* 已退出 */
-      }
-    }
-  }, 500);
-}
 
 /**
  * execFile 包装：用显式 kill 取代已弃用的 `timeout` 选项。

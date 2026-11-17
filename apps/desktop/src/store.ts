@@ -355,6 +355,66 @@ let tabSeq = 1;
 let currentAbort: AbortController | undefined;
 const toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+/**
+ * 流式正文/思考 delta 的节流合并器。
+ *
+ * 模型每个 token 都发一帧 text_delta，若每帧都 set 一次 store，长回答会把整棵
+ * Agent 树（含所有历史消息）每秒重渲染几十次。这里把 delta 攒起来，每 50ms 才
+ * flush 一次到 handleAgentEvent；其它事件（工具/步骤边界/done…）先把攒着的 delta
+ * 落地再立即转发，保证时间线顺序不乱。
+ *
+ * 节流放在 sendAgent 的派发层而不是 handleAgentEvent 内部：handleAgentEvent 保持
+ * 同步语义（现有时间线单测直接调它并立即断言 stream），真实流式才走这条批量通道。
+ */
+const DELTA_FLUSH_MS = 50;
+function createEventBatcher(handle: (event: AgentEvent) => void) {
+  let text = '';
+  let thinking = '';
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const flush = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    if (text) {
+      const chunk = text;
+      text = '';
+      handle({ type: 'text_delta', text: chunk });
+    }
+    if (thinking) {
+      const chunk = thinking;
+      thinking = '';
+      handle({ type: 'thinking_delta', text: chunk });
+    }
+  };
+  const schedule = () => {
+    if (!timer) timer = setTimeout(flush, DELTA_FLUSH_MS);
+  };
+  return {
+    dispatch(event: AgentEvent) {
+      if (event.type === 'text_delta') {
+        text += event.text;
+        schedule();
+        return;
+      }
+      if (event.type === 'thinking_delta') {
+        thinking += event.text;
+        schedule();
+        return;
+      }
+      flush();
+      handle(event);
+    },
+    flush,
+    reset() {
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+      text = '';
+      thinking = '';
+    },
+  };
+}
+
 // 结构变更合并用的模块级状态。放 state 里会让每次事件都触发订阅者重渲染，
 // 而这些值只被下面几个函数读。
 const schemaPending = new Map<string, true>();
@@ -1091,16 +1151,10 @@ export const useApp = create<AppStore>((set, get) => ({
 
   handleAgentEvent: (event) => {
     set((prev) => {
-      const live = prev.live
-        ? {
-            ...prev.live,
-            tools: prev.live.tools.map((t) => ({ ...t })),
-            plan: [...prev.live.plan],
-            memories: [...prev.live.memories],
-            timeline: [...prev.live.timeline],
-          }
-        : undefined;
-      if (!live) return {};
+      if (!prev.live) return {};
+      // 只浅拷 live 本身；tools/plan/timeline/memories 仅在对应事件真正改动时才换新引用，
+      // 没变就沿用旧引用——这样流式期间 memo 化的工具卡/计划卡/历史消息不会被无谓重渲染。
+      const live = { ...prev.live };
       // 每个事件都刷新「最后一次有动静」的时刻：静默多久是界面判断「该说句话了」的唯一依据。
       live.lastEventAt = Date.now();
       /** 已入账的正文，用于把 live.text 保持成「整回合」而不是「当前这一步」。 */
@@ -1125,36 +1179,36 @@ export const useApp = create<AppStore>((set, get) => ({
           break;
         // 步骤边界：这一步的正文/思考说完了，下面接它的工具。顺序即渲染顺序。
         case 'step_text':
-          live.timeline.push({ kind: 'text', text: event.text, step: event.step });
+          live.timeline = [...live.timeline, { kind: 'text', text: event.text, step: event.step }];
           live.stream = '';
           break;
         case 'step_thinking':
-          live.timeline.push({ kind: 'thinking', text: event.text, step: event.step });
+          live.timeline = [...live.timeline, { kind: 'thinking', text: event.text, step: event.step }];
           live.streamThinking = '';
           break;
         case 'tool_call':
-          live.tools.push({
-            callId: event.callId,
-            tool: event.tool,
-            args: event.args,
-            risk: event.risk,
-            status: 'running',
-            summary: event.summary,
-          });
-          live.timeline.push({ kind: 'tool', callId: event.callId });
+          live.tools = [
+            ...live.tools,
+            {
+              callId: event.callId,
+              tool: event.tool,
+              args: event.args,
+              risk: event.risk,
+              status: 'running',
+              summary: event.summary,
+            },
+          ];
+          live.timeline = [...live.timeline, { kind: 'tool', callId: event.callId }];
           break;
         case 'tool_result': {
-          const tool = live.tools.find((t) => t.callId === event.callId);
-          if (tool) {
-            tool.status = event.result.ok ? 'ok' : 'error';
-            tool.result = event.result;
-          }
+          // 只换被回填的那一个工具对象，其余工具引用保持不变。
+          live.tools = live.tools.map((t) => (t.callId === event.callId ? { ...t, status: event.result.ok ? 'ok' : 'error', result: event.result } : t));
           live.status = 'streaming';
           break;
         }
         case 'approval_required':
           live.status = 'awaiting';
-          for (const tool of live.tools) if (tool.tool === event.call.tool && tool.status === 'running') tool.status = 'awaiting';
+          live.tools = live.tools.map((t) => (t.tool === event.call.tool && t.status === 'running' ? { ...t, status: 'awaiting' } : t));
           return {
             live,
             ...enqueueApproval(prev, {
@@ -1237,6 +1291,7 @@ export const useApp = create<AppStore>((set, get) => ({
       return;
     }
     let sessionId = get().agentSessionId;
+    const batcher = createEventBatcher((event) => get().handleAgentEvent(event));
     try {
       if (!sessionId) {
         const { session } = await api.createSession({
@@ -1276,11 +1331,12 @@ export const useApp = create<AppStore>((set, get) => ({
         },
       });
       const attachments = [...new Set([...trimmed.matchAll(/@([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]))];
+      batcher.reset();
       currentAbort = new AbortController();
       await streamTurn(
         sessionId,
         { text: trimmed, mode: permission, attachments, ...(images?.length ? { images } : {}), connectionId: get().activeConnectionId, database: get().agentDatabase || undefined },
-        (event) => get().handleAgentEvent(event),
+        (event) => batcher.dispatch(event),
         currentAbort.signal,
       );
     } catch (err) {
@@ -1296,6 +1352,8 @@ export const useApp = create<AppStore>((set, get) => ({
         );
       }
     } finally {
+      // 把节流窗口里还没落地的最后一段 delta 补进 live，再收尾（拉历史/定稿）。
+      batcher.flush();
       currentAbort = undefined;
       const startedAt = get().live?.startedAt;
       const sid = get().agentSessionId;
@@ -1336,12 +1394,15 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 
   abortAgent: async () => {
+    // 先本地断流：后端失联时 POST /abort 会一直挂住，本地 abort 立即停止读取与渲染，
+    // 用户点「停止」马上生效；POST 只是通知后端收尾，失败也静默（本地已经断了）。
+    currentAbort?.abort();
     const sessionId = get().agentSessionId;
     if (!sessionId) return;
     try {
       await api.abort(sessionId);
-    } catch (err) {
-      get().notify('error', get().t('error'), errorText(err));
+    } catch {
+      /* 本地已断流，POST 失败不再打扰用户 */
     }
   },
 

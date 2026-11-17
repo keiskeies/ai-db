@@ -4,12 +4,15 @@ export class ProviderError extends Error {
   code: string;
   status?: number;
   retryable: boolean;
-  constructor(message: string, opts: { code?: string; status?: number; retryable?: boolean } = {}) {
+  /** 429 时服务商 Retry-After 头换算出的毫秒数；runtime 重试退避据此让路。 */
+  retryAfterMs?: number;
+  constructor(message: string, opts: { code?: string; status?: number; retryable?: boolean; retryAfterMs?: number } = {}) {
     super(message);
     this.name = 'ProviderError';
     this.code = opts.code ?? 'PROVIDER_ERROR';
     this.status = opts.status;
     this.retryable = opts.retryable ?? false;
+    this.retryAfterMs = opts.retryAfterMs;
   }
 }
 
@@ -66,6 +69,52 @@ export class ProviderStallError extends ProviderError {
 }
 
 /**
+ * 绝对截止时间的默认上限。停摆看门狗只看「有没有进展」，对关闭了停摆判定的本地端点
+ * （Ollama stallMs:0）来说，引擎真挂死时一个字节都不来但也永远不报错——必须有一条
+ * 「无论如何最多活这么久」的兜底底线。15 分钟足够覆盖本地长 prefill，又不至于无限挂起。
+ */
+export const PROVIDER_DEADLINE_MS = 15 * 60 * 1000;
+export const PROVIDER_DEADLINE_ENV = 'AIDB_PROVIDER_DEADLINE_MS';
+export const PROVIDER_DEADLINE_CODE = 'PROVIDER_DEADLINE';
+
+/** 连接建立阶段（拿到响应头之前）的兜底超时；本地引擎加载模型再慢，TCP/HTTP 握手也不该这么久。 */
+export const PROVIDER_CONNECT_MS = 30_000;
+export const PROVIDER_CONNECT_CODE = 'PROVIDER_CONNECT_TIMEOUT';
+
+/** 取值顺序与 resolveStallMs 一致：显式传入 > 环境变量 > 默认值；0 表示关闭绝对截止。 */
+export function resolveDeadlineMs(
+  explicit?: number,
+  env: Record<string, string | undefined> = typeof process === 'undefined' ? {} : process.env,
+): number {
+  if (typeof explicit === 'number' && Number.isFinite(explicit)) return Math.max(0, explicit);
+  const raw = env[PROVIDER_DEADLINE_ENV];
+  const parsed = raw === undefined || raw.trim() === '' ? NaN : Number(raw);
+  if (Number.isFinite(parsed)) return Math.max(0, parsed);
+  return PROVIDER_DEADLINE_MS;
+}
+
+/** 与停摆错误刻意分开：停摆是「连接不动了」，截止是「跑得太久」，处置与文案都不同。 */
+export class ProviderDeadlineError extends ProviderError {
+  constructor(deadlineMs: number) {
+    super(`模型调用超过绝对时长上限（${Math.round(deadlineMs / 60000)} 分钟），已终止本次调用；本地引擎可通过环境变量 ${PROVIDER_DEADLINE_ENV} 调大上限`, {
+      code: PROVIDER_DEADLINE_CODE,
+      retryable: true,
+    });
+    this.name = 'ProviderDeadlineError';
+  }
+}
+
+export class ProviderConnectError extends ProviderError {
+  constructor(connectMs: number) {
+    super(`模型接口 ${Math.round(connectMs / 1000)} 秒内未建立连接（连接阶段超时），已断开本次调用`, {
+      code: PROVIDER_CONNECT_CODE,
+      retryable: true,
+    });
+    this.name = 'ProviderConnectError';
+  }
+}
+
+/**
  * 读下一个字节，但连续 stallMs 没有任何字节就抛 PROVIDER_STALLED。
  *
  * 这是对「回合卡死」唯一的正确防御位置——**这一层知道什么叫进展**。回合级计时器不知道：
@@ -110,24 +159,43 @@ async function readChunk(
  * 吃掉、TLS 握手卡住）。原来到点就掐整个回合的定时器顺手覆盖了这里，删掉它之后必须由
  * 这一层自己说清「等多久算死」——注意判定依然是「没有响应」，不是「回合跑太久」。
  *
- * 用法：把返回的 signal 传给 fetch，拿到响应头之后调 clear() 关掉定时器（之后的静默
- * 交给 readSse 逐块判定）。clear() 故意**不**摘外层 abort 监听——fetch 的请求体读取
- * 仍然挂在这个 signal 上，摘掉监听会让「用户点停止」再也传不到连接上。
+ * 用法：把返回的 signal 传给 fetch，拿到响应头之后调 clear() 关掉请求头阶段的定时器
+ * （之后的静默交给 readSse 逐块判定）。clear() 故意**不**摘外层 abort 监听——fetch 的请求体读取
+ * 仍然挂在这个 signal 上，摘掉监听会让「用户点停止」再也传不到连接上。流彻底结束后调
+ * dispose() 收尾（清掉绝对截止定时器与外层监听）。
+ *
+ * opts 面向关闭了停摆判定的本地端点（Ollama stallMs:0）：
+ * - connectMs：连接建立阶段的兜底超时（默认 30s），错误与停摆文案区分开；
+ * - deadlineMs：覆盖「请求 + 整个流式读取」的绝对截止时间，clear() 不会停掉它。
+ * 不传 opts 时行为与旧版完全一致，其他提供商的停摆看门狗不受影响。
  */
 export function watchRequestStall(
   outer: AbortSignal | undefined,
   stallMs: number,
-): { signal: AbortSignal | undefined; clear: () => void } {
-  if (!(stallMs > 0)) return { signal: outer, clear: () => undefined };
+  opts?: { deadlineMs?: number; connectMs?: number },
+): { signal: AbortSignal | undefined; clear: () => void; dispose: () => void } {
+  const deadlineMs = opts?.deadlineMs ?? 0;
+  if (!(stallMs > 0) && opts === undefined) return { signal: outer, clear: () => undefined, dispose: () => undefined };
   const controller = new AbortController();
   const onOuterAbort = () => controller.abort();
   if (outer?.aborted) controller.abort();
   else outer?.addEventListener('abort', onOuterAbort, { once: true });
-  const timer = setTimeout(() => controller.abort(new ProviderStallError(stallMs)), stallMs);
-  timer.unref?.();
+  // 请求头阶段：有停摆阈值沿用停摆判定；没有（本地端点）则用连接阶段兜底超时
+  const headerMs = stallMs > 0 ? stallMs : (opts?.connectMs ?? PROVIDER_CONNECT_MS);
+  const headerError = stallMs > 0 ? new ProviderStallError(stallMs) : new ProviderConnectError(headerMs);
+  const headerTimer = setTimeout(() => controller.abort(headerError), headerMs);
+  headerTimer.unref?.();
+  // 绝对截止独立于请求头阶段：拿到响应头后继续计时，直到整个流读完
+  const deadlineTimer = deadlineMs > 0 ? setTimeout(() => controller.abort(new ProviderDeadlineError(deadlineMs)), deadlineMs) : undefined;
+  deadlineTimer?.unref?.();
   return {
     signal: controller.signal,
-    clear: () => clearTimeout(timer),
+    clear: () => clearTimeout(headerTimer),
+    dispose: () => {
+      clearTimeout(headerTimer);
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      outer?.removeEventListener('abort', onOuterAbort);
+    },
   };
 }
 
@@ -182,7 +250,18 @@ function parseFrame(raw: string): SseFrame | null {
  * 与其让人猜，不如直接说出改哪儿。命中关键词才补，正常报错不掺话。
  */
 const LIMIT_HINT = /max_tokens|maximum tokens|too long|context.length|too many tokens/i;
-export function mapHttpError(status: number, body: string): ProviderError {
+
+/** Retry-After 两种合法形态：秒数或 HTTP 日期；解析失败按没给处理。 */
+export function parseRetryAfterMs(value: string | null | undefined): number | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (/^\d+(\.\d+)?$/.test(trimmed)) return Math.max(0, Math.round(Number(trimmed) * 1000));
+  const date = Date.parse(trimmed);
+  if (Number.isFinite(date)) return Math.max(0, date - Date.now());
+  return undefined;
+}
+
+export function mapHttpError(status: number, body: string, retryAfter?: string | null): ProviderError {
   let detail = body.slice(0, 400);
   try {
     const parsed = JSON.parse(body);
@@ -195,7 +274,12 @@ export function mapHttpError(status: number, body: string): ProviderError {
   }
   const retryable = status === 429 || status >= 500;
   const code = status === 401 || status === 403 ? 'PROVIDER_AUTH' : status === 429 ? 'PROVIDER_RATE_LIMIT' : 'PROVIDER_HTTP';
-  return new ProviderError(`模型接口返回 ${status}：${detail}`, { code, status, retryable });
+  return new ProviderError(`模型接口返回 ${status}：${detail}`, {
+    code,
+    status,
+    retryable,
+    ...(status === 429 ? { retryAfterMs: parseRetryAfterMs(retryAfter) } : {}),
+  });
 }
 
 /**

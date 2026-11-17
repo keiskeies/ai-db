@@ -2,7 +2,8 @@ import { existsSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { classifyStatement, type ColumnInfo, type ForeignKeyInfo, type IndexInfo, type QueryResult, type TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions } from './types';
-import { DbError, toRowArray } from './types';
+import { DbError, estimateValueBytes, MAX_RESULT_BYTES, toRowArray } from './types';
+import { wrapSelectLimit } from './sqlCap';
 
 /**
  * node:sqlite 只接受 null / number / bigint / string / Uint8Array。
@@ -90,10 +91,27 @@ export class SqliteDriver implements Driver {
       }
       let rowEstimate: number | undefined;
       if (obj.type === 'table') {
+        // 不做 COUNT(*) 全表扫描（大表上 describe 会卡死事件循环）。
+        // sqlite_stat1 只在跑过 ANALYZE 后存在，stat 首段是估算行数。
         try {
-          rowEstimate = Number((this.db.prepare(`SELECT COUNT(*) AS c FROM ${quoted}`).get() as { c: number }).c);
+          const stat = this.db.prepare('SELECT stat FROM sqlite_stat1 WHERE tbl = ? LIMIT 1').get(obj.name) as { stat?: string } | undefined;
+          const first = stat?.stat?.split(/\s+/)[0];
+          if (first !== undefined && Number.isFinite(Number(first))) rowEstimate = Number(first);
         } catch {
-          rowEstimate = undefined;
+          /* 未 ANALYZE 时 sqlite_stat1 不存在 */
+        }
+        // stat1 缺失（多数库从未 ANALYZE）时退到 MAX(rowid)：rowid 表上它读 B 树最右
+        // 叶节点，O(log n) 不扫全表。报告/仪表板拿它过滤事实表，全空会让功能静默退化。
+        // WITHOUT ROWID 表没有 rowid 列，报错即跳过。
+        if (rowEstimate === undefined) {
+          try {
+            const quoted = `"${String(obj.name).replaceAll('"', '""')}"`;
+            const max = this.db.prepare(`SELECT MAX(rowid) AS n FROM ${quoted}`).get() as { n?: number | bigint | null };
+            const n = Number(max?.n);
+            if (max?.n !== null && max?.n !== undefined && Number.isFinite(n) && n > 0) rowEstimate = n;
+          } catch {
+            /* WITHOUT ROWID 表或损坏对象 */
+          }
         }
       }
       tables.push({
@@ -135,20 +153,55 @@ export class SqliteDriver implements Driver {
       const kind = classifyStatement(sql).kind;
       const isRead = kind === 'read' || /^\s*PRAGMA\b/i.test(sql);
       if (isRead) {
-        const stmtAny = stmt as unknown as { columns?: () => Array<{ name: string; type?: string }> };
+        const stmtAny = stmt as unknown as {
+          columns?: () => Array<{ name: string; type?: string }>;
+          iterate?: (...args: unknown[]) => IterableIterator<Record<string, unknown>>;
+        };
         let columns = (stmtAny.columns?.() ?? []).map((c) => ({ name: c.name, type: c.type || undefined }));
-        const rawRows = (stmt.all as (...args: unknown[]) => Record<string, unknown>[])(...bound);
-        if (!columns.length && rawRows.length) {
-          columns = Object.keys(rawRows[0]).map((name) => ({ name, type: undefined as string | undefined }));
+        const maxRows = opts.maxRows && opts.maxRows > 0 ? opts.maxRows : Number.POSITIVE_INFINITY;
+        const rows: Record<string, unknown>[] = [];
+        let bytes = 0;
+        let truncated = false;
+        // 行数/字节双上限（对齐 mysql.ts 的 64MB 语义）：首行即使单独超预算也保留，
+        // 否则用户什么都看不到；此后严格执行预算，到达上限立即停止读取。
+        const take = (raw: Record<string, unknown>): boolean => {
+          if (!columns.length) columns = Object.keys(raw).map((name) => ({ name, type: undefined as string | undefined }));
+          let size = 16;
+          for (const key in raw) size += estimateValueBytes(raw[key]) + key.length;
+          if (rows.length >= maxRows || (rows.length > 0 && bytes + size > MAX_RESULT_BYTES)) {
+            truncated = true;
+            return false;
+          }
+          rows.push(raw);
+          bytes += size;
+          if (bytes >= MAX_RESULT_BYTES) {
+            truncated = true;
+            return false;
+          }
+          return true;
+        };
+        // node:sqlite 是同步 API，阻塞事件循环本身无法消除；iterate（Node ≥22.13）逐行读，
+        // 配合双上限保证最坏情况有界，不再 .all() 把整张表一次性吃进堆。
+        if (typeof stmtAny.iterate === 'function') {
+          for (const raw of stmtAny.iterate(...bound)) {
+            if (!take(raw)) break;
+          }
+        } else {
+          // 无 iterate 的旧运行时：单条 SELECT/WITH 下推 LIMIT maxRows+1 缩小全量缓冲，
+          // 读入后再按行数/字节裁剪。多语句/非 SELECT 无法下推，只能靠裁剪兜底。
+          const pushed = Number.isFinite(maxRows) ? wrapSelectLimit(sql, maxRows + 1) : undefined;
+          const target = pushed ? this.db.prepare(pushed) : stmt;
+          const rawRows = (target.all as (...args: unknown[]) => Record<string, unknown>[])(...bound);
+          for (const raw of rawRows) {
+            if (!take(raw)) break;
+          }
         }
-        const limit = opts.maxRows && opts.maxRows > 0 ? opts.maxRows : rawRows.length;
-        const rows = rawRows.slice(0, limit);
         return {
           columns,
           rows: toRowArray(columns, rows),
           rowCount: rows.length,
           durationMs: Date.now() - started,
-          truncated: rawRows.length > rows.length,
+          truncated,
           statement: sql,
         };
       }

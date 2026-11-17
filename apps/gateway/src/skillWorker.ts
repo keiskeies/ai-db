@@ -25,6 +25,16 @@ import type { Store } from './store';
 
 const WORKER_TOOL_NAMES = ['skill_read', 'skill_write', 'skill_run', 'skill_list_files', 'update_plan'];
 
+/** REST 启动的 worker 整体上限，与 skillRunner 单 entrypoint 的 30min 封顶对齐。 */
+const WORKER_TIMEOUT_MS = 30 * 60 * 1000;
+/** skill_ask 等人上限，与审批 5 分钟自动拒一致：没人回答就按拒绝继续/收尾，不能无限等。 */
+const ASK_TIMEOUT_MS = 5 * 60 * 1000;
+/**
+ * 结束后条目在内存里保留的窗口。不能「结束即删」：routes 的 SSE/状态端点靠 get()/events()
+ * 回放终态事件，立刻删会让刚结束的 run 直接 404。窗口过后删除 + 周期清扫兜底。
+ */
+const WORKER_RETENTION_MS = 10 * 60 * 1000;
+
 export const SKILL_ASK_TOOL: ToolDefinition = {
   name: 'skill_ask',
   description: 'Ask the user one blocking clarification question. Use only when the skill workflow cannot proceed without a human decision.',
@@ -72,6 +82,10 @@ interface WorkerState {
   outputs: SkillRunFile[];
   startedAt: string;
   finishedAt?: string;
+  /** 整体超时触发过：终态要报 failed 而不是 canceled，文案也说清是超时。 */
+  timedOut?: boolean;
+  deadlineTimer?: ReturnType<typeof setTimeout>;
+  evictTimer?: ReturnType<typeof setTimeout>;
 }
 
 function workerTools(mcpAllowed: boolean): ProviderTool[] {
@@ -82,6 +96,7 @@ function workerTools(mcpAllowed: boolean): ProviderTool[] {
 export class SkillWorker {
   private workers = new Map<string, WorkerState>();
   private providerFactory: (settings: ReturnType<Store['getSettings']>['agent']) => ReturnType<typeof createProvider>;
+  private sweeper?: ReturnType<typeof setInterval>;
 
   constructor(
     private store: Store,
@@ -91,6 +106,31 @@ export class SkillWorker {
     providerFactory?: (settings: ReturnType<Store['getSettings']>['agent']) => ReturnType<typeof createProvider>,
   ) {
     this.providerFactory = providerFactory ?? ((settings) => createProvider(settings));
+    // 周期清扫兜底：即使某条终态路径漏挂了延迟删除，结束超窗的条目也不会永久滞留
+    this.sweeper = setInterval(() => this.sweep(), 5 * 60 * 1000);
+    this.sweeper.unref?.();
+  }
+
+  private sweep(): void {
+    const now = Date.now();
+    for (const [runId, state] of this.workers) {
+      if (state.status === 'running' || !state.finishedAt) continue;
+      if (now - new Date(state.finishedAt).getTime() > WORKER_RETENTION_MS) {
+        if (state.evictTimer) clearTimeout(state.evictTimer);
+        this.workers.delete(runId);
+      }
+    }
+  }
+
+  /** 终态后延迟回收：保留窗口内 SSE/状态端点仍能回放事件，窗口过后释放内存。 */
+  private scheduleEviction(state: WorkerState): void {
+    if (state.deadlineTimer) clearTimeout(state.deadlineTimer);
+    state.deadlineTimer = undefined;
+    if (state.evictTimer) clearTimeout(state.evictTimer);
+    state.evictTimer = setTimeout(() => {
+      if (state.status !== 'running') this.workers.delete(state.runId);
+    }, WORKER_RETENTION_MS);
+    state.evictTimer.unref?.();
   }
 
   start(skillId: string, prompt?: string): { runId: string; skill: string; status: string } {
@@ -116,6 +156,15 @@ export class SkillWorker {
       startedAt: new Date().toISOString(),
     };
     this.workers.set(run.id, state);
+    // 整体超时：模型/工具各自有界，但组合起来仍可能无限跑（反复 skill_run、等人），必须有总闸
+    state.deadlineTimer = setTimeout(() => {
+      if (state.status !== 'running') return;
+      state.timedOut = true;
+      for (const pending of state.questions.values()) pending.reject(new Error('Skill Worker 整体超时'));
+      state.questions.clear();
+      state.controller.abort();
+    }, WORKER_TIMEOUT_MS);
+    state.deadlineTimer.unref?.();
     queueMicrotask(() => void this.execute(state, skill, manifest, provider, prompt));
     return { runId: run.id, skill: skillId, status: 'running' };
   }
@@ -187,7 +236,22 @@ export class SkillWorker {
     const items = Array.isArray(options) ? options.map(String).filter(Boolean).slice(0, 8) : undefined;
     this.emit(state, { type: 'skill_question', id, question, options: items });
     return new Promise<string>((resolve, reject) => {
-      state.questions.set(id, { resolve, reject });
+      // 没人回答不能无限等：到点按拒绝返回，模型拿到失败结果后自行决定继续或收尾
+      const timer = setTimeout(() => {
+        state.questions.delete(id);
+        reject(new Error(`等待用户回答超时（${Math.round(ASK_TIMEOUT_MS / 60000)} 分钟），按拒绝处理`));
+      }, ASK_TIMEOUT_MS);
+      timer.unref?.();
+      state.questions.set(id, {
+        resolve: (answer) => {
+          clearTimeout(timer);
+          resolve(answer);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
     });
   }
 
@@ -200,6 +264,7 @@ export class SkillWorker {
     this.runner.updateRun(state.runId, { status: 'failed', error: message, finishedAt: state.finishedAt });
     for (const listener of state.listeners) listener({ type: 'done', turnId: state.runId, durationMs: 0 });
     state.listeners.clear();
+    this.scheduleEviction(state);
   }
 
   private async execute(
@@ -414,6 +479,11 @@ ${(skill.body ?? '').slice(0, 20000)}`;
       } as AgentRunInput);
       state.status = result.status === 'done' ? 'succeeded' : result.status === 'aborted' ? 'canceled' : 'failed';
       state.error = result.error?.message;
+      // 整体超时触发的 abort 不是用户取消：如实报 failed，文案说清是超时
+      if (state.timedOut) {
+        state.status = 'failed';
+        state.error = `Skill Worker 超过整体时长上限（${Math.round(WORKER_TIMEOUT_MS / 60000)} 分钟），已终止`;
+      }
       state.finishedAt = new Date().toISOString();
       state.outputs = this.runner.listFiles(state.runId).filter((file) => file.type === 'file');
       this.emit(state, { type: 'skill_artifact', workspace: runDir, files: state.outputs });
@@ -436,6 +506,7 @@ ${(skill.body ?? '').slice(0, 20000)}`;
       state.questions.clear();
       for (const listener of state.listeners) listener({ type: 'done', turnId: state.runId, durationMs: 0, summary: state.text.slice(0, 200) });
       state.listeners.clear();
+      this.scheduleEviction(state);
     }
   }
 }

@@ -28,7 +28,7 @@ import { useApp, type Tab } from '../store';
 import { DataGrid } from './DataGrid';
 import { askConfirm } from './AskDialog';
 import { LineProtocolPanel } from './LineProtocolPanel';
-import { EmptyState, Modal, Option, Select } from './ui';
+import { EmptyState, Modal, Option, Select, Spinner } from './ui';
 import { formatDuration } from '../lib/format';
 import { jsonToCsv, xmlToCsv } from '../lib/importConvert';
 import { xlsxToCsv } from '../lib/xlsx';
@@ -148,8 +148,13 @@ export function DataView({ tab }: { tab: DataTab }) {
     { column: '', op: '=', value: '', connector: 'AND' },
   ]);
   const fileRef = useRef<HTMLInputElement>(null);
+  // 快速切排序/翻页/过滤时旧响应可能后到，seq 守卫保证只有最新一次 load 能写结果。
+  const loadSeq = useRef(0);
+  const [exporting, setExporting] = useState(false);
+  const exportAbortRef = useRef<AbortController | undefined>();
 
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     setLoading(true);
     setError(null);
     try {
@@ -163,12 +168,14 @@ export function DataView({ tab }: { tab: DataTab }) {
         orderDir: sorts.length ? sorts.map((sort) => sort.dir).join(',') : undefined,
         where: where || undefined,
       });
+      if (seq !== loadSeq.current) return;
       setPage(result);
     } catch (err: any) {
+      if (seq !== loadSeq.current) return;
       setError(err?.message ?? tr("加载失败"));
       setPage(null);
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
   }, [tab.connectionId, tab.table, tab.database, limit, offset, sorts, where]);
 
@@ -555,15 +562,27 @@ export function DataView({ tab }: { tab: DataTab }) {
   };
 
   const exportData = async (format: 'csv' | 'json' | 'sql' | 'xml' | 'xlsx') => {
+    const controller = new AbortController();
+    exportAbortRef.current = controller;
+    setExporting(true);
     try {
-      const { file } = await api.exportData({ connectionId: tab.connectionId, database: tab.database, table: tab.table, format, limit: 200000 });
+      const { file } = await api.exportData({ connectionId: tab.connectionId, database: tab.database, table: tab.table, format, limit: 200000 }, controller.signal);
       await deliverExport(file, t('export'));
     } catch (err: any) {
-      notify('error', t('error'), err?.message);
+      if (err?.name === 'AbortError') notify('info', tr("已取消导出"));
+      else notify('error', t('error'), err?.message);
+    } finally {
+      setExporting(false);
+      exportAbortRef.current = undefined;
     }
   };
 
   const openExportMenu = (event: React.MouseEvent<HTMLButtonElement>) => {
+    // 导出进行中：这个按钮变为取消入口，不再弹格式菜单。
+    if (exporting) {
+      exportAbortRef.current?.abort();
+      return;
+    }
     const rect = event.currentTarget.getBoundingClientRect();
     openContextMenu(rect.left, rect.bottom + 4, [
       { label: tr("导出为 CSV"), onClick: () => void exportData('csv') },
@@ -770,8 +789,8 @@ export function DataView({ tab }: { tab: DataTab }) {
             e.target.value = '';
           }}
         />
-        <button className="btn small" title={t('export')} onClick={openExportMenu} data-testid="data-export">
-          <Download size={12} /> <span className="btn-text">{t('export')}</span> <ChevronDown size={10} className="btn-caret" />
+        <button className="btn small" title={exporting ? tr("正在导出，点击取消") : t('export')} onClick={openExportMenu} data-testid="data-export">
+          {exporting ? <Spinner /> : <Download size={12} />} <span className="btn-text">{exporting ? tr("导出中…") : t('export')}</span>{exporting ? null : <ChevronDown size={10} className="btn-caret" />}
         </button>
         <button className="btn small" title={tr("打印")} onClick={() => void openPrint()} disabled={!rows.length || printLoading} data-testid="data-print">
           <Printer size={12} /> <span className="btn-text">{tr("打印")}</span>

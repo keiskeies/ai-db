@@ -25,6 +25,8 @@ test('history keeps newest N non-favorites and never prunes favorites', () => {
     assert.equal(store.setHistoryFavorite(favorite.id, true), true);
     for (let i = 0; i < 15; i += 1) store.addHistory({ sql: `SELECT ${i}`, status: 'ok' });
 
+    // 裁剪有 60s 节流（避免每次插入 O(n)），测试里强制触发一次再断言。
+    store.pruneNow();
     const items = store.listHistory({ limit: 500 });
     assert.equal(items.filter((item) => !item.favorite).length, 10, '只保留最近 10 条普通历史');
     assert.equal(items.filter((item) => item.favorite).length, 1, '收藏不受条数限制');
@@ -43,6 +45,7 @@ test('history drops non-favorites older than the retention window', () => {
     raw.close();
 
     store.addHistory({ sql: 'SELECT fresh', status: 'ok' });
+    store.pruneNow();
     const items = store.listHistory({ limit: 500 });
     assert.equal(items.some((item) => item.sql === 'SELECT stale'), false, '超过 30 天的普通历史被清理');
     assert.equal(items.some((item) => item.sql === 'SELECT fresh'), true);

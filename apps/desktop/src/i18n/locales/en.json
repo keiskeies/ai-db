@@ -3644,5 +3644,17 @@
   "行 {0}：{1}": "Row {0}: {1}",
   "同义词（逗号分隔）": "Synonyms (comma-separated)",
   "拖拽排序": "Drag to reorder",
-  "换一换": "Shuffle"
+  "换一换": "Shuffle",
+  "空值未提交：请用删除操作清空该单元格": "Empty value not submitted: use the delete action to clear this cell",
+  "已取消导出": "Export cancelled",
+  "正在导出，点击取消": "Exporting, click to cancel",
+  "已取消执行": "Execution cancelled",
+  "取消当前执行": "Cancel current execution",
+  "请求超时（超过 {0} 秒无响应），已中止。": "Request timed out (no response for over {0} seconds) and was aborted.",
+  "网络请求失败：{0}": "Network request failed: {0}",
+  "与服务端的连接连续 {0} 秒没有任何响应，已断开。": "The connection to the server received no data for {0} seconds and was closed.",
+  "命令进度连接连续 {0} 秒没有任何响应，已断开。": "The command progress connection received no data for {0} seconds and was closed.",
+  "Skill 进度连接连续 {0} 秒没有任何响应，已断开。": "The Skill progress connection received no data for {0} seconds and was closed.",
+  "下载导出文件失败（{0}）": "Failed to download the exported file ({0})",
+  "导出结果缺少文件路径": "Export result is missing a file path"
 }

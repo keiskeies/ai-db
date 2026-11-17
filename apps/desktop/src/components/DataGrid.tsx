@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Copy, Trash2 } from 'lucide-react';
 import type { ResultField } from '@aidb/core';
-import { formatCell } from '../lib/format';
+import { formatCell, truncate } from '../lib/format';
 import { useApp, type ContextMenuItem } from '../store';
 import { t as tr } from '../i18n';
 
@@ -206,19 +206,18 @@ export function DataGrid({
                 const formatted = formatCell(value);
                 const display = textMode && formatted.kind === 'null' ? '(Null)' : formatted.text;
                 const editing = edit?.row === rowIndex && edit?.col === colIndex;
+                // 完整值（不截断）只在用户主动复制/编辑时才 stringify，避免每帧渲染全量序列化。
+                const rawText = value === null || value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
                 return (
                   <td
                     key={`${col.name}_${colIndex}`}
                     className={`${formatted.kind === 'null' ? 'null' : ''} ${formatted.kind === 'number' ? 'num' : ''} ${editing ? 'editing' : ''}`}
-                    title={display}
+                    title={truncate(display, 1024)}
                     onDoubleClick={() => beginEdit(rowIndex, colIndex)}
                     onContextMenu={(event) => {
                       event.preventDefault();
-                      const cell = formatted.kind === 'null' ? '' : formatted.text;
-                      const line = row.map((value) => {
-                        const item = formatCell(value);
-                        return item.kind === 'null' ? '' : item.text;
-                      }).join('	');
+                      const cell = formatted.kind === 'null' ? '' : rawText;
+                      const line = row.map((item) => (item === null || item === undefined ? '' : typeof item === 'object' ? JSON.stringify(item) : String(item))).join('	');
                       const items: ContextMenuItem[] = [
                         { label: tr("复制「{0}」", [col.name]), icon: <Copy size={12} />, onClick: () => void navigator.clipboard.writeText(cell).catch(() => undefined) },
                         { label: tr("复制整行（制表符分隔）"), onClick: () => void navigator.clipboard.writeText(line).catch(() => undefined) },

@@ -1,4 +1,4 @@
-import { createReadStream, createWriteStream, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import {
@@ -25,7 +25,7 @@ import {
 import type { GatewayConfig } from './config';
 import { DbError, type Driver } from './drivers';
 import { estimateRowBytes, supportsRowStream } from './drivers/types';
-import { toXlsx, toXlsxSheets, type XlsxSheet } from './xlsx';
+import { type XlsxSheet } from './xlsx';
 import type { ConnectionManager } from './manager';
 import type { Store } from './store';
 
@@ -145,53 +145,6 @@ export interface ExportInput {
    * 给了 sheets 就忽略 columns/rows。
    */
   sheets?: XlsxSheet[];
-}
-
-export function writeExportFile(input: ExportInput): { path: string; bytes: number; rows: number } {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const safeBase = (input.baseName || input.tableName || 'query').replace(/[^\w\u4e00-\u9fff-]+/g, '_').slice(0, 40);
-  const path = join(input.dir, `${safeBase}-${stamp}.${input.format}`);
-  let content: string | Buffer;
-  if (input.format === 'csv') content = toCsv(input.columns, input.rows);
-  else if (input.format === 'xml') {
-    const escapeXml = (value: unknown) => {
-      if (value === null || value === undefined) return '';
-      const text = typeof value === 'object' ? JSON.stringify(value) : String(value);
-      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    };
-    const tag = (value: string) => {
-      const cleaned = value.replace(/[^A-Za-z0-9_.-]/g, '_');
-      return /^[A-Za-z_]/.test(cleaned) ? cleaned : `col_${cleaned}`;
-    };
-    const xmlRows = input.rows
-      .map(
-        (row) =>
-          '  <row>' +
-          input.columns.map((column, index) => `<${tag(column)}>${escapeXml(row[index])}</${tag(column)}>`).join('') +
-          '</row>',
-      )
-      .join('\n');
-    content = `<?xml version="1.0" encoding="UTF-8"?>\n<rows>\n${xmlRows}\n</rows>\n`;
-  }
-  else if (input.format === 'xlsx') {
-    content = input.sheets?.length ? toXlsxSheets(input.sheets) : toXlsx(input.columns, input.rows);
-  }
-  else if (input.format === 'json') {
-    content = JSON.stringify(
-      input.rows.map((row) => Object.fromEntries(input.columns.map((c, i) => [c, row[i] === undefined ? null : row[i]]))),
-      null,
-      2,
-    );
-  } else {
-    content =
-      `-- AiDB Studio export (${new Date().toISOString()})\n` +
-      toSqlInserts(input.engine, input.tableName || 'exported_data', input.columns, input.rows) +
-      '\n';
-  }
-  if (typeof content === 'string') writeFileSync(path, content, 'utf8');
-  else writeFileSync(path, content);
-  const rowCount = input.sheets?.length ? input.sheets.reduce((sum, sheet) => sum + sheet.rows.length, 0) : input.rows.length;
-  return { path, bytes: statSync(path).size, rows: rowCount };
 }
 
 export function parseCsv(text: string, delimiter = ','): string[][] {

@@ -1,12 +1,16 @@
 
 import { t as tr, getI18nLocale } from '../i18n';
 
+// 对象单元格可能挂着几十 KB 的 JSON：每次渲染全量 stringify 再整坨塞进 title
+// 会拖垮大结果集滚动。预览只留 2KB，完整值走单元格右键复制/编辑（那里用原始值）。
+const OBJECT_PREVIEW_LIMIT = 2048;
+
 export function formatCell(value: unknown): { text: string; kind: 'null' | 'number' | 'json' | 'bool' | 'text' } {
   if (value === null || value === undefined) return { text: 'NULL', kind: 'null' };
   if (typeof value === 'boolean') return { text: value ? 'true' : 'false', kind: 'bool' };
   if (typeof value === 'number') return { text: Number.isInteger(value) ? String(value) : String(Number(value.toFixed(6))), kind: 'number' };
   if (typeof value === 'bigint') return { text: value.toString(), kind: 'number' };
-  if (typeof value === 'object') return { text: JSON.stringify(value), kind: 'json' };
+  if (typeof value === 'object') return { text: truncate(JSON.stringify(value), OBJECT_PREVIEW_LIMIT), kind: 'json' };
   return { text: String(value), kind: 'text' };
 }
 

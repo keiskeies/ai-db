@@ -83,18 +83,21 @@ export async function httpRequest(input: HttpRequestInput): Promise<HttpResponse
   }
   const url = withQuery(input.url, input.query ?? {});
   const timeoutMs = Math.min(Math.max(input.timeoutMs ?? DEFAULT_TIMEOUT, 1000), 120000);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // 单个信号覆盖「请求 + body 读取」全程：拿到响应头就停表的话，服务端headers 回得快、
+  // body 却一直不吐完的场景会无限挂起（与 search.ts 曾有的 bug 同模式）。
+  const signal = AbortSignal.timeout(timeoutMs);
   const started = Date.now();
+  const networkError = (err: any): PipelineError => {
+    const timedOut = err?.name === 'AbortError' || err?.name === 'TimeoutError';
+    const reason = timedOut ? `超过 ${Math.round(timeoutMs / 1000)} 秒未完成（含响应体读取）` : (err?.cause?.message ?? err?.message ?? '连接失败');
+    return new PipelineError(`接口请求失败：${reason}`, 'PIPELINE_HTTP_NETWORK', `检查 ${new URL(url, 'http://localhost').host} 是否可达`);
+  };
   let response: Response;
   try {
-    response = await fetch(url, { method, headers, body, signal: controller.signal, redirect: 'follow' });
+    response = await fetch(url, { method, headers, body, signal, redirect: 'follow' });
   } catch (err: any) {
-    clearTimeout(timer);
-    const reason = err?.name === 'AbortError' ? `超过 ${Math.round(timeoutMs / 1000)} 秒未响应` : (err?.cause?.message ?? err?.message ?? '连接失败');
-    throw new PipelineError(`接口请求失败：${reason}`, 'PIPELINE_HTTP_NETWORK', `检查 ${new URL(url, 'http://localhost').host} 是否可达`);
+    throw networkError(err);
   }
-  clearTimeout(timer);
 
   const contentType = response.headers.get('content-type') ?? '';
   const maxBytes = input.maxBytes ?? DEFAULT_MAX_BYTES;
@@ -103,17 +106,22 @@ export async function httpRequest(input: HttpRequestInput): Promise<HttpResponse
   let bytes = 0;
   let truncated = false;
   if (reader) {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value) continue;
-      bytes += value.byteLength;
-      if (bytes > maxBytes) {
-        truncated = true;
-        void reader.cancel();
-        break;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        bytes += value.byteLength;
+        if (bytes > maxBytes) {
+          truncated = true;
+          void reader.cancel();
+          break;
+        }
+        chunks.push(value);
       }
-      chunks.push(value);
+    } catch (err: any) {
+      // body 读取期间超时：信号 abort 会让 reader.read()  reject，同样按网络/超时错误报
+      throw networkError(err);
     }
   }
   const textBody = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), bytes).toString('utf8');

@@ -68,6 +68,13 @@ interface StepResult {
 
 const DIFF_STEP = 'schema-diff';
 
+/**
+ * 终态 run 在内存里的保留窗口：结果查询（get/events/SSE 回放）依赖这份内存态，
+ * 不能结束即删；但永不回收会让 events（每条最多 500）随运行次数无限累积。
+ * 持久结果在 store 的 artifact_runs 里，窗口过后删内存态不丢数据。
+ */
+const RUN_RETENTION_MS = 10 * 60 * 1000;
+
 function defaultTitle(command: CommandDefinition, input: CommandRunInput): string {
   // 报告/对比用主题当标题：产物列表里「生成报告 · <连接 id>」对读者毫无意义。
   const subject = command.id === 'report' ? String(input.topic ?? '').trim() : command.id === 'compare' ? String(input.metric ?? '').trim() : '';
@@ -82,6 +89,7 @@ function defaultTitle(command: CommandDefinition, input: CommandRunInput): strin
 
 export class CommandRunner {
   private runs = new Map<string, RunState>();
+  private sweeper?: ReturnType<typeof setInterval>;
 
   constructor(
     private readonly store: Store,
@@ -91,7 +99,27 @@ export class CommandRunner {
     private readonly home?: string,
     /** 导出目录；表单选择 Excel / PPT 时，运行成功后直接把文件落盘。 */
     private readonly exportDir?: string,
-  ) {}
+  ) {
+    // 周期清扫兜底：终态超过保留窗口的条目即使漏挂延迟删除也会被回收
+    this.sweeper = setInterval(() => this.sweepRuns(), 5 * 60 * 1000);
+    this.sweeper.unref?.();
+  }
+
+  private sweepRuns(): void {
+    const now = Date.now();
+    for (const [runId, state] of this.runs) {
+      if (!state.finished || !state.info.finishedAt) continue;
+      if (now - new Date(state.info.finishedAt).getTime() > RUN_RETENTION_MS) this.runs.delete(runId);
+    }
+  }
+
+  private scheduleEviction(state: RunState): void {
+    const timer = setTimeout(() => {
+      // 只删自己这条：同 id 不可能复用，但防御性地确认 map 里仍是同一份状态
+      if (state.finished && this.runs.get(state.info.id) === state) this.runs.delete(state.info.id);
+    }, RUN_RETENTION_MS);
+    timer.unref?.();
+  }
 
   start(commandId: string, input: CommandRunInput, options: StartCommandOptions = {}): CommandRunInfo {
     const command = getCommand(commandId);
@@ -186,12 +214,33 @@ export class CommandRunner {
     return this.runs.get(runId)?.finished ?? true;
   }
 
-  waitForRun(runId: string): Promise<CommandRunInfo | undefined> {
+  /**
+   * 契约 K2：可选超时。超时选择 reject（而非 resolve undefined）：消费方 server.ts 的
+   * artifactRunner 用 catch 把 reject 转成 { ok:false, message }，scheduler 据此记失败并
+   * 释放 running 槽；resolve undefined 只会得到含糊的「未完成」，reject 能带上超时原因。
+   * 不传 timeoutMs 时行为与旧版一致（一直等到终态）。
+   */
+  waitForRun(runId: string, timeoutMs?: number): Promise<CommandRunInfo | undefined> {
     const state = this.runs.get(runId);
     if (!state) return Promise.resolve(undefined);
-    if (state.finished) return Promise.resolve({ ...state.info, steps: state.info.steps.map((step) => ({ ...step })) });
-    return new Promise((resolve) => {
-      state.waiters.push(() => resolve({ ...state.info, steps: state.info.steps.map((step) => ({ ...step })) }));
+    const snapshot = (): CommandRunInfo => ({ ...state.info, steps: state.info.steps.map((step) => ({ ...step })) });
+    if (state.finished) return Promise.resolve(snapshot());
+    return new Promise((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const waiter = (): void => {
+        if (timer) clearTimeout(timer);
+        resolve(snapshot());
+      };
+      if (timeoutMs !== undefined && timeoutMs > 0) {
+        timer = setTimeout(() => {
+          // 摘掉 waiter，避免终态到来时再 resolve 一个已被拒绝的 Promise（也防 waiters 泄漏）
+          const index = state.waiters.indexOf(waiter);
+          if (index >= 0) state.waiters.splice(index, 1);
+          reject(Object.assign(new Error(`等待命令运行结束超时（${Math.round(timeoutMs / 1000)} 秒）：${runId}`), { code: 'COMMAND_WAIT_TIMEOUT' }));
+        }, timeoutMs);
+        timer.unref?.();
+      }
+      state.waiters.push(waiter);
     });
   }
 
@@ -232,6 +281,7 @@ export class CommandRunner {
       durationMs: state.info.durationMs ?? 0,
     });
     for (const resolve of state.waiters.splice(0)) resolve();
+    this.scheduleEviction(state);
     return true;
   }
 
@@ -629,6 +679,7 @@ export class CommandRunner {
     });
     state.listeners.clear();
     for (const resolve of state.waiters.splice(0)) resolve();
+    this.scheduleEviction(state);
   }
 
   private emit(state: RunState, event: CommandRunEventInput): void {

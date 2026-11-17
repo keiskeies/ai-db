@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import type { SkillEntrypoint, SkillManifest, SkillRunFile, SkillRunInfo } from '@aidb/core';
+import { killTree } from './processTree';
 import type { SkillStore } from './skills';
 
 const MAX_OUTPUT = 200_000;
@@ -237,16 +238,18 @@ export class SkillRunner {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
         shell: false,
+        // POSIX 下自成进程组，killTree 的 kill(-pid) 才能连带杀掉脚本再 spawn 的孙进程
+        detached: process.platform !== 'win32',
       });
       const onAbort = () => {
         canceled = true;
-        child.kill('SIGKILL');
+        killTree(child);
       };
       if (signal?.aborted) onAbort();
       else signal?.addEventListener('abort', onAbort, { once: true });
       const timer = setTimeout(() => {
         timedOut = true;
-        child.kill('SIGKILL');
+        killTree(child);
       }, timeoutMs);
       child.stdout.setEncoding('utf8');
       child.stderr.setEncoding('utf8');

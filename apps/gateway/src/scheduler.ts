@@ -1,6 +1,6 @@
 import type { JobInfo } from '@aidb/core';
 import type { GatewayConfig } from './config';
-import type { ConnectionManager } from './manager';
+import { SCHEDULER_TASK_TIMEOUT_MS, type ConnectionManager } from './manager';
 import { notifyArtifact, sendNotification } from './notifications';
 import { dumpDatabase } from './services';
 import type { Store } from './store';
@@ -31,6 +31,32 @@ export class JobScheduler {
   /** 数据流任务把执行交给流水线 runner，与 artifact/dashboard 同一套注入方式。 */
   setPipelineRunner(runner: (pipelineIds: string[], batchAt: string) => Promise<{ ok: number; failed: number; message: string }>): void {
     this.pipelineRunner = runner;
+  }
+
+  /**
+   * 任务级超时（G4）：runner/dump 挂死时运行槽永不释放，同一产物/仪表板/任务
+   * 的后续所有定时运行被永久阻塞。这里与 600s 上限竞态，超时抛错走既有的
+   * catch/finally，保证释放槽位并落失败记录。底层 Promise 可能仍在跑（没有
+   * 可取消句柄），但它不再占用调度槽，也不会把结果写回调度状态。
+   */
+  private withTaskTimeout<T>(work: Promise<T>, label: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`${label}超时（${SCHEDULER_TASK_TIMEOUT_MS}ms），已释放调度槽`)),
+        SCHEDULER_TASK_TIMEOUT_MS,
+      );
+      timer.unref?.();
+      work.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      );
+    });
   }
 
   start(): void {
@@ -64,7 +90,7 @@ export class JobScheduler {
       const last = schedule.lastRunAt ? new Date(schedule.lastRunAt).getTime() : 0;
       if (now - last < Math.max(60, schedule.intervalSeconds) * 1000) continue;
       this.artifactRunning.add(schedule.artifactId);
-      void this.artifactRunner(schedule.artifactId)
+      void this.withTaskTimeout(this.artifactRunner(schedule.artifactId), '产物定时运行')
         .then(async (result) => {
           this.store.markArtifactScheduleRun(schedule.artifactId, result.ok ? 'ok' : 'error', result.ok ? undefined : result.message);
           await notifyArtifact(this.store, schedule.artifactId, result.ok ? 'ok' : 'error').catch(() => undefined);
@@ -87,7 +113,7 @@ export class JobScheduler {
       const last = schedule.lastRunAt ? new Date(schedule.lastRunAt).getTime() : 0;
       if (now - last < Math.max(60, schedule.intervalSeconds) * 1000) continue;
       this.dashboardRunning.add(scope);
-      void this.dashboardRunner(schedule.connectionId, schedule.database)
+      void this.withTaskTimeout(this.dashboardRunner(schedule.connectionId, schedule.database), '仪表板定时刷新')
         .then(async (result) => {
           this.store.markDashboardScheduleRun(schedule.connectionId, schedule.database, result.ok ? 'ok' : 'error', result.ok ? undefined : result.message);
           for (const channelId of schedule.notifyChannels) {
@@ -155,7 +181,10 @@ export class JobScheduler {
           throw new Error(message);
         }
       } else {
-        const backup = await dumpDatabase(this.store, this.manager, this.config, job.connectionId, job.database, `job:${job.name}`);
+        const backup = await this.withTaskTimeout(
+          dumpDatabase(this.store, this.manager, this.config, job.connectionId, job.database, `job:${job.name}`),
+          '备份任务',
+        );
         message = `${backup.tables} 张表 / ${backup.rows} 行 → ${backup.path}`;
         this.store.addAudit({
           actor: 'user',

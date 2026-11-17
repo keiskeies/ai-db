@@ -1,5 +1,6 @@
-import { existsSync } from 'node:fs';
-import { readFileSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import {
   COMMANDS,
@@ -51,8 +52,9 @@ import { unavailableEngines } from './engineAvailability';
 import { validateBuiltinMcpArgs } from './builtinMcp';
 import { readAttachment, saveAttachment } from './attachments';
 import type { GatewayConfig } from './config';
-import type { ConnectionManager } from './manager';
-import { assertExportable, auditCsv, coerceValue, dumpDatabase, exportNeedsStatement, importCsv, importDocuments, writeExportFile } from './services';
+import { EXPORT_QUERY_TIMEOUT_MS, type ConnectionManager } from './manager';
+import { assertExportable, auditCsv, coerceValue, dumpDatabase, exportNeedsStatement, importCsv, importDocuments } from './services';
+import { writeExportFile } from './xlsx';
 import type { Store } from './store';
 import type { AgentHost } from './agentHost';
 import type { ToolExecutor } from './executor';
@@ -141,6 +143,23 @@ const ah =
   (req: Request, res: Response, next: NextFunction): void => {
     fn(req, res, next).catch(next);
   };
+
+/**
+ * SSE 背压护栏（G5）：write() 返回 false 说明缓冲区已满，不读流的慢客户端会让
+ * 事件在网关内存里无限积压，超过 1MB 直接断开，由各处已有的 close 清理接管
+ * （agent 回合中止、事件流退订）。未超阈值时保留连接，等 drain 自然恢复。
+ */
+const SSE_MAX_BUFFERED_BYTES = 1024 * 1024;
+function sseWrite(res: Response, chunk: string): void {
+  if (res.writableEnded || res.destroyed) return;
+  const ok = res.write(chunk);
+  if (!ok && res.writableLength > SSE_MAX_BUFFERED_BYTES) res.destroy();
+}
+
+/** K5：导出下载 URL。path 在 GET /export/file 里必须通过 exportDir 内的 resolve 校验。 */
+function exportDownloadUrl(filePath: string): string {
+  return `/api/export/file?path=${encodeURIComponent(filePath)}`;
+}
 
 function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.length ? value : undefined;
@@ -516,6 +535,18 @@ export function createApiRouter(deps: ApiDeps): Router {
       if (!connectionId || !sql) throw Object.assign(new Error('connectionId 与 sql 必填'), { code: 'INVALID_INPUT', status: 400 });
       const settings = store.getSettings();
       const started = Date.now();
+      // G1：客户端提前断开（关页面/主动取消）时必须终止服务端仍在跑的查询，
+      // 否则慢查询白占连接与 CPU。注意监听的是 res 而不是 req：请求体读完时
+      // req 就会 close（此时响应还没开始写），拿它判「客户端断开」会把正常请求
+      // 误杀成提前离场、响应永远不发。res 的 close 才代表连接真的终止，
+      // 再用 writableFinished 区分「响应已写完的正常收尾」与「中途断开」。
+      const executionId = randomUUID();
+      let clientGone = false;
+      res.once('close', () => {
+        if (res.writableFinished) return;
+        clientGone = true;
+        manager.cancelExecution(executionId);
+      });
       try {
         const batch = await manager.query(connectionId, sql, {
           database: str(body.database),
@@ -525,6 +556,7 @@ export function createApiRouter(deps: ApiDeps): Router {
           autoLimit: settings.autoLimit,
           actor: 'user',
           sessionId: str(body.sessionId),
+          executionId,
         });
         store.addAudit({
           actor: 'user',
@@ -537,7 +569,7 @@ export function createApiRouter(deps: ApiDeps): Router {
           status: 'ok',
           durationMs: Date.now() - started,
         });
-        res.json({ batch });
+        if (!clientGone) res.json({ batch });
       } catch (err: any) {
         store.addAudit({
           actor: 'user',
@@ -549,8 +581,10 @@ export function createApiRouter(deps: ApiDeps): Router {
           approval: 'manual',
           status: 'error',
           durationMs: Date.now() - started,
-          meta: { error: err.message },
+          meta: { error: err.message, ...(clientGone ? { canceled: true } : {}) },
         });
+        // 客户端已断开，错误响应没有接收方，不再走错误中间件写响应。
+        if (clientGone) return;
         throw err;
       }
     }),
@@ -2116,16 +2150,49 @@ export function createApiRouter(deps: ApiDeps): Router {
         sql = buildSelectTable(conn.engine, table.name, { schema: engineUsesSchema(conn.engine) ? table.schema : undefined, limit });
       } else throw Object.assign(new Error('sql 或 table 必填'), { code: 'INVALID_INPUT', status: 400 });
       // 行数上限要下推进 SQL：否则「导出 1 万行」也会先把整表拉回内存再截断。
-      const batch = await manager.query(connectionId, sql, { database, maxRows: limit, allowMulti: false, autoLimit: true, actor: 'user' });
+      // G2：导出此前漏传 timeoutMs，慢导出会永久占住连接；导出用 120s 口径。
+      const batch = await manager.query(connectionId, sql, { database, maxRows: limit, allowMulti: false, autoLimit: true, actor: 'user', timeoutMs: EXPORT_QUERY_TIMEOUT_MS });
       const set = batch.sets[0];
       if (!set) throw Object.assign(new Error('没有可导出的结果'), { code: 'EMPTY_RESULT', status: 400 });
-      const file = writeExportFile({ dir: config.exportDir, format, columns: set.columns.map((c) => c.name), rows: set.rows, tableName, engine: conn.engine });
+      // K4：WP5 将把 writeExportFile 异步化（xlsx 落盘耗时），这里先 await；
+      // 对同步函数 await 同样合法，两侧可独立落地。
+      const file = await writeExportFile({ dir: config.exportDir, format, columns: set.columns.map((c) => c.name), rows: set.rows, tableName, engine: conn.engine });
       store.addAudit({ actor: 'user', connectionId, database, tool: 'export', sql, risk: 'read', approval: 'manual', status: 'ok', meta: { path: file.path, format } });
-      // 移动端没有服务器文件系统路径；inline 时把文件内容一并返回，便于下载/分享。
-      const inline = body.inline === true ? { content: readFileSync(file.path).toString('base64'), encoding: 'base64' as const } : {};
+      // K5：inline 不再把整个文件读进内存转 base64（大导出直接 OOM），改为返回
+      // 下载 URL，客户端经 GET /export/file 流式取文件；file 元数据字段保持兼容。
+      const inline = body.inline === true ? { downloadUrl: exportDownloadUrl(file.path) } : {};
       res.json({ file, format, ...inline });
     }),
   );
+
+  // K5：导出文件下载端点。沿用 router 上的 Bearer 鉴权中间件；path 必须 resolve
+  // 校验落在 exportDir 内部，否则拒绝——下载接口绝不能变成任意文件读取漏洞。
+  router.get('/export/file', (req, res) => {
+    const raw = str(req.query.path);
+    if (!raw) {
+      res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'path 必填' } });
+      return;
+    }
+    const root = resolve(config.exportDir);
+    const target = resolve(raw);
+    const rel = relative(root, target);
+    // rel 以 .. 开头或本身是绝对路径（Windows 跨盘符）都说明跳出了 exportDir。
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
+      res.status(403).json({ error: { code: 'FORBIDDEN_PATH', message: '只能下载导出目录内的文件' } });
+      return;
+    }
+    let isFile = false;
+    try {
+      isFile = statSync(target).isFile();
+    } catch {
+      /* 不存在按 404 处理 */
+    }
+    if (!isFile) {
+      res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '文件不存在' } });
+      return;
+    }
+    res.download(target);
+  });
 
   router.post(
     '/import',
@@ -2500,7 +2567,7 @@ export function createApiRouter(deps: ApiDeps): Router {
       res.flushHeaders?.();
       let finished = false;
       const heartbeat = setInterval(() => {
-        if (!finished) res.write(': ping\n\n');
+        if (!finished) sseWrite(res, ': ping\n\n');
       }, 15000);
       res.on('close', () => {
         if (!res.writableEnded) {
@@ -2524,12 +2591,12 @@ export function createApiRouter(deps: ApiDeps): Router {
             database: str(body.database),
           },
           (event) => {
-            if (!finished && !res.writableEnded) res.write(encodeSse(event));
+            if (!finished && !res.writableEnded) sseWrite(res, encodeSse(event));
           },
         );
       } catch (err: any) {
         if (!res.writableEnded) {
-          res.write(encodeSse({ type: 'error', code: err?.code ?? 'AGENT_ERROR', message: err?.message ?? 'Agent 运行失败' }));
+          sseWrite(res, encodeSse({ type: 'error', code: err?.code ?? 'AGENT_ERROR', message: err?.message ?? 'Agent 运行失败' }));
         }
       } finally {
         finished = true;
@@ -2864,7 +2931,7 @@ export function createApiRouter(deps: ApiDeps): Router {
     let closed = false;
     let unsubscribe: () => void = () => undefined;
     const heartbeat = setInterval(() => {
-      if (!closed && !res.writableEnded) res.write(': ping\n\n');
+      if (!closed && !res.writableEnded) sseWrite(res, ': ping\n\n');
     }, 15000);
     const cleanup = () => {
       if (closed) return;
@@ -2873,7 +2940,7 @@ export function createApiRouter(deps: ApiDeps): Router {
       unsubscribe();
     };
     const send = (event: unknown) => {
-      if (!closed && !res.writableEnded) res.write(encodeSse(event as Parameters<typeof encodeSse>[0]));
+      if (!closed && !res.writableEnded) sseWrite(res, encodeSse(event as Parameters<typeof encodeSse>[0]));
       const type = (event as { type?: string })?.type;
       if (type === 'run_finished') {
         cleanup();
@@ -2928,7 +2995,8 @@ export function createApiRouter(deps: ApiDeps): Router {
     ah(async (req, res) => {
       const format = str(req.query.format) === 'pptx' ? 'pptx' : 'xlsx';
       const result = await exportArtifact(store, config, req.params.id, format);
-      const inline = str(req.query.inline) === '1' ? { content: readFileSync(result.path).toString('base64'), encoding: 'base64' as const } : {};
+      // K5：与 /export 一致，inline 改返回下载 URL（exportArtifact 同样落在 exportDir）。
+      const inline = str(req.query.inline) === '1' ? { downloadUrl: exportDownloadUrl(result.path) } : {};
       res.json({ ...result, ...inline });
     }),
   );
@@ -3108,7 +3176,7 @@ export function createApiRouter(deps: ApiDeps): Router {
     let closed = false;
     let unsubscribe: () => void = () => undefined;
     const heartbeat = setInterval(() => {
-      if (!closed && !res.writableEnded) res.write(': ping\n\n');
+      if (!closed && !res.writableEnded) sseWrite(res, ': ping\n\n');
     }, 15000);
     const cleanup = () => {
       if (closed) return;
@@ -3117,7 +3185,7 @@ export function createApiRouter(deps: ApiDeps): Router {
       unsubscribe();
     };
     const send = (event: unknown) => {
-      if (!closed && !res.writableEnded) res.write(encodeSse(event as Parameters<typeof encodeSse>[0]));
+      if (!closed && !res.writableEnded) sseWrite(res, encodeSse(event as Parameters<typeof encodeSse>[0]));
       if ((event as { type?: string })?.type === 'done') {
         cleanup();
         if (!res.writableEnded) res.end();

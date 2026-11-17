@@ -103,7 +103,7 @@ export class AnthropicProvider implements LlmProvider {
       if (err?.name === 'AbortError') throw err;
       throw new ProviderError(`无法连接模型接口：${err.message}`, { code: 'PROVIDER_NETWORK', retryable: true });
     }).finally(requestWatch.clear);
-    if (!res.ok || !res.body) throw mapHttpError(res.status, await res.text());
+    if (!res.ok || !res.body) throw mapHttpError(res.status, await res.text(), res.headers.get('retry-after'));
 
     let inputTokens = 0;
     let outputTokens = 0;

@@ -3,6 +3,7 @@ import {
   Children,
   isValidElement,
   lazy,
+  memo,
   useCallback,
   useId,
   useLayoutEffect,
@@ -475,7 +476,9 @@ export function CopyButton({ text, small = true }: { text: string; small?: boole
 
 const MarkdownBody = lazy(() => import('./MarkdownBody'));
 
-export function Markdown({ children }: { children: string }) {
+// children 是纯字符串：memo 浅比较即可在文本未变时跳过 react-markdown 重解析。
+// 历史消息因此只在内容真正变化时解析一次；live 消息每次 flush 解析一次。
+export const Markdown = memo(function Markdown({ children }: { children: string }) {
   return (
     <div className="prose">
       <Suspense fallback={<Spinner />}>
@@ -483,7 +486,7 @@ export function Markdown({ children }: { children: string }) {
       </Suspense>
     </div>
   );
-}
+});
 
 export function Toasts() {
   const toasts = useApp((s) => s.toasts);

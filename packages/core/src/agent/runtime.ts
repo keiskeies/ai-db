@@ -54,6 +54,14 @@ const MAX_MODEL_RESULT_CHARS = 16000;
  */
 const MAX_TRUNCATION_RESUMES = 1;
 const MAX_SQL_REPAIRS = 2;
+/**
+ * 瞬态故障（429/5xx/网络抖动）的重试上限与退避。2 次足够跨过绝大多数瞬态窗口；
+ * 再多就是在替服务商反复撞同一堵墙，烧 tokens 也看不出问题在哪。
+ */
+const MAX_LLM_RETRIES = 2;
+const LLM_RETRY_BACKOFF_MS = [1000, 3000];
+/** Retry-After 可能给出小时级数值；尊重它但封顶，不能让一次限流把整个回合挂住。 */
+const MAX_RETRY_AFTER_MS = 30_000;
 /** 裁剪后仍要告诉模型怎么拿剩下的数据，否则它只能反复补问同一件事。 */
 const RESULT_CONTINUATION_HINT =
   '[truncated] 上面的结果被截断了。不要假设剩下的内容：需要更多行就带上明确的 LIMIT/OFFSET 或更窄的 WHERE 重新查一次；'
@@ -301,6 +309,23 @@ function commonPrefix(a: string, b: string): number {
   let i = 0;
   while (i < a.length && i < b.length && a[i] === b[i]) i++;
   return i;
+}
+
+/** 退避等待必须能被用户中止打断：点停止后不该再干等几秒才响应。 */
+function waitWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (ms <= 0 || signal?.aborted) {
+      resolve();
+      return;
+    }
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener('abort', done, { once: true });
+  });
 }
 
 function suggestIdentifiers(
@@ -581,7 +606,6 @@ export class AgentRuntime {
     for (let step = 0; maxSteps === 0 || step < maxSteps; step++) {
       if (input.signal?.aborted) return aborted();
       steps = step + 1;
-      modelCalls++;
 
       // 中途压缩：上下文占用越过窗口预算时，把最早的几段「assistant+工具结果」折叠成一行说明，
       // 而不是让它们把窗口顶穿到最后服务商硬报 context 超限。长回合（尤其无步数上限）真正
@@ -613,53 +637,88 @@ export class AgentRuntime {
       let providerError: { code: string; message: string } | undefined;
       /** 服务商给的结束原因；'length'/'max_tokens' 意味着这一步是被拦腰截断的。 */
       let stepStopReason: string | undefined;
-      const callStarted = now();
 
-      try {
-        for await (const ev of deps.provider.stream(request, input.signal)) {
-          if (input.signal?.aborted) break;
-          if (ev.type === 'done') stepStopReason = ev.stopReason;
-          if (ev.type === 'text') {
-            stepText += ev.text;
-            deps.emit({ type: 'text_delta', text: ev.text });
-          } else if (ev.type === 'thinking') {
-            stepThinking += ev.text;
-            deps.emit({ type: 'thinking_delta', text: ev.text });
-          } else if (ev.type === 'plan') {
-            // 离线推理器没有模型可以调 update_plan，计划由规划器直接给出。
-            plan = ev.items.slice(0, 20);
-            deps.emit({ type: 'plan', items: plan });
-          } else if (ev.type === 'tool_call') {
-            calls.push(ev.call);
-          } else if (ev.type === 'usage') {
-            tokensIn += ev.tokensIn;
-            tokensOut += ev.tokensOut;
-            // 单次调用的输入 tokens 就是这一刻的上下文占用
-            contextTokens = ev.tokensIn;
-            if (ev.cacheHitTokens !== undefined || ev.cacheMissTokens !== undefined) {
-              cacheReported = true;
-              cacheHitTokens += ev.cacheHitTokens ?? 0;
-              cacheMissTokens += ev.cacheMissTokens ?? 0;
+      // 瞬态故障重试：429/5xx/网络抖动最多再试 2 次（退避 1s/3s，429 尊重 Retry-After）。
+      // 已经向用户吐过字节（正文/思考）就绝不重试——重发会让半截回复重复出现。
+      let attempt = 0;
+      for (;;) {
+        modelCalls++;
+        const callStarted = now();
+        let emittedOutput = false;
+        providerError = undefined;
+        stepStopReason = undefined;
+        calls.length = 0;
+        // 失败尝试可能已上报过 usage；重试前快照，重试时回滚，避免把半截用量算两遍
+        const usageBefore: { tokensIn: number; tokensOut: number; cacheHitTokens: number; cacheMissTokens: number; cacheReported: boolean; contextTokens: number } =
+          { tokensIn, tokensOut, cacheHitTokens, cacheMissTokens, cacheReported, contextTokens };
+        try {
+          for await (const ev of deps.provider.stream(request, input.signal)) {
+            if (input.signal?.aborted) break;
+            if (ev.type === 'done') stepStopReason = ev.stopReason;
+            if (ev.type === 'text') {
+              emittedOutput = true;
+              stepText += ev.text;
+              deps.emit({ type: 'text_delta', text: ev.text });
+            } else if (ev.type === 'thinking') {
+              emittedOutput = true;
+              stepThinking += ev.text;
+              deps.emit({ type: 'thinking_delta', text: ev.text });
+            } else if (ev.type === 'plan') {
+              // 离线推理器没有模型可以调 update_plan，计划由规划器直接给出。
+              emittedOutput = true;
+              plan = ev.items.slice(0, 20);
+              deps.emit({ type: 'plan', items: plan });
+            } else if (ev.type === 'tool_call') {
+              calls.push(ev.call);
+            } else if (ev.type === 'usage') {
+              tokensIn += ev.tokensIn;
+              tokensOut += ev.tokensOut;
+              // 单次调用的输入 tokens 就是这一刻的上下文占用
+              contextTokens = ev.tokensIn;
+              if (ev.cacheHitTokens !== undefined || ev.cacheMissTokens !== undefined) {
+                cacheReported = true;
+                cacheHitTokens += ev.cacheHitTokens ?? 0;
+                cacheMissTokens += ev.cacheMissTokens ?? 0;
+              }
+              deps.emit({
+                type: 'usage',
+                tokensIn: ev.tokensIn,
+                tokensOut: ev.tokensOut,
+                durationMs: now() - callStarted,
+                ...(ev.cacheHitTokens !== undefined ? { cacheHitTokens: ev.cacheHitTokens } : {}),
+                ...(ev.cacheMissTokens !== undefined ? { cacheMissTokens: ev.cacheMissTokens } : {}),
+              });
             }
-            deps.emit({
-              type: 'usage',
-              tokensIn: ev.tokensIn,
-              tokensOut: ev.tokensOut,
-              durationMs: now() - callStarted,
-              ...(ev.cacheHitTokens !== undefined ? { cacheHitTokens: ev.cacheHitTokens } : {}),
-              ...(ev.cacheMissTokens !== undefined ? { cacheMissTokens: ev.cacheMissTokens } : {}),
-            });
+          }
+        } catch (err: any) {
+          if (input.signal?.aborted || err?.name === 'AbortError') return aborted();
+          // 字节流停摆：连接彻底不动了，多等一秒也不会变。它不是「调用失败」——
+          // 报 error 会让界面显示红色失败并丢掉续跑检查点，而进度其实还在。
+          if (err?.code === PROVIDER_STALL_CODE) return aborted('stalled');
+          providerError = { code: err?.code ?? 'PROVIDER_ERROR', message: err?.message ?? '模型调用失败' };
+          if (err?.retryable === true && !emittedOutput && attempt < MAX_LLM_RETRIES && !input.signal?.aborted) {
+            const backoff = LLM_RETRY_BACKOFF_MS[attempt] ?? 3000;
+            const delay = err?.status === 429 && typeof err?.retryAfterMs === 'number'
+              ? Math.min(Math.max(err.retryAfterMs, backoff), MAX_RETRY_AFTER_MS)
+              : backoff;
+            attempt += 1;
+            modelDurationMs += now() - callStarted;
+            tokensIn = usageBefore.tokensIn;
+            tokensOut = usageBefore.tokensOut;
+            cacheHitTokens = usageBefore.cacheHitTokens;
+            cacheMissTokens = usageBefore.cacheMissTokens;
+            cacheReported = usageBefore.cacheReported;
+            contextTokens = usageBefore.contextTokens;
+            deps.emit({ type: 'text_delta', text: `\n[模型接口瞬态故障（${providerError.code}），${Math.round(delay / 1000)} 秒后自动重试（${attempt}/${MAX_LLM_RETRIES}）]\n` });
+            await waitWithAbort(delay, input.signal);
+            if (input.signal?.aborted) return aborted();
+            continue;
           }
         }
-      } catch (err: any) {
-        if (input.signal?.aborted || err?.name === 'AbortError') return aborted();
-        // 字节流停摆：连接彻底不动了，多等一秒也不会变。它不是「调用失败」——
-        // 报 error 会让界面显示红色失败并丢掉续跑检查点，而进度其实还在。
-        if (err?.code === PROVIDER_STALL_CODE) return aborted('stalled');
-        providerError = { code: err?.code ?? 'PROVIDER_ERROR', message: err?.message ?? '模型调用失败' };
+        // 模型调用的耗时单独累计：tok/s 只该反映生成速度，不该被工具执行时间稀释
+        modelDurationMs += now() - callStarted;
+        break;
       }
-      // 模型调用的耗时单独累计：tok/s 只该反映生成速度，不该被工具执行时间稀释
-      modelDurationMs += now() - callStarted;
       if (input.signal?.aborted) return aborted();
       if (providerError) {
         // 半截正文与思考也要交边界：调用方按 step_text/step_thinking 分段渲染，漏发会让

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
   DEFAULT_SETTINGS,
@@ -438,6 +439,13 @@ export interface ConnectionInput {
 
 const iso = () => new Date().toISOString();
 
+/** 审计 / 工具运行 / 产物运行只写不删会无限膨胀，按条数保留最近记录。 */
+const AUDIT_LOG_LIMIT = 5000;
+const TOOL_RUNS_LIMIT = 1000;
+const ARTIFACT_RUNS_LIMIT = 500;
+/** 裁剪节流：距上次裁剪不足 60s 直接跳过，避免每次插入都触发 O(n) 扫描。 */
+const PRUNE_THROTTLE_MS = 60_000;
+
 /** 快照只为「打开即见图」服务，行数必须封顶，否则 App 存储会被大结果集撑爆。 */
 function trimDashboardResult(result: { columns: Array<{ name: string }>; rows: unknown[][] } | undefined) {
   if (!result) return { columns: [], rows: [] };
@@ -588,6 +596,7 @@ export class Store {
   readonly db: DatabaseSync;
   private box: SecretBox;
   private contextCache = new Map<string, { at: number; bundle: AgentContextBundle }>();
+  private lastPruneAt = 0;
 
   constructor(dbPath: string, secret: string) {
     this.db = new DatabaseSync(dbPath);
@@ -596,6 +605,22 @@ export class Store {
     this.db.exec('PRAGMA foreign_keys = ON');
     this.db.exec('PRAGMA busy_timeout = 5000');
     this.migrate();
+    // 旧版本没有保留期，审计/运行表可能已严重超限：启动时强制裁剪一次。
+    this.pruneRetention(true);
+    this.sweepDataDirs(dbPath);
+  }
+
+  /**
+   * 启动清扫附件/导出/skill 产物目录（7 天 + 500MB 上限）。dbPath 默认是 <home>/aidb.db，
+   * 以其所在目录推导数据根；AIDB_DB 指向别处时跟随该目录，目录不存在则静默跳过。
+   * 动态引入 attachments：避免 store 静态依赖它而把整条驱动链拉进存储层；清扫失败绝不阻塞启动。
+   */
+  private sweepDataDirs(dbPath: string): void {
+    if (!dbPath || dbPath === ':memory:') return;
+    const home = dirname(dbPath);
+    void import('./attachments')
+      .then((m) => m.sweepDataDirs([join(home, 'attachments'), join(home, 'exports'), join(home, 'skill-runs')]))
+      .catch(() => undefined);
   }
 
   private migrate(): void {
@@ -1138,8 +1163,38 @@ export class Store {
       'INSERT INTO query_history (id,connection_id,database_name,sql,status,duration_ms,row_count,error,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
       [entry.id, entry.connectionId ?? null, entry.database ?? null, entry.sql, entry.status, entry.durationMs ?? null, entry.rowCount ?? null, entry.error ?? null, entry.createdAt],
     );
-    this.pruneHistory();
+    this.pruneRetention();
     return entry;
+  }
+
+  /**
+   * 保留期裁剪统一入口：历史 / 审计 / 工具运行 / 产物运行共用一个节流窗口，
+   * 高频写入时最多每 60s 扫一次，而不是每次插入都 O(n)。
+   */
+  private pruneRetention(force = false): void {
+    const now = Date.now();
+    if (!force && now - this.lastPruneAt < PRUNE_THROTTLE_MS) return;
+    this.lastPruneAt = now;
+    this.pruneHistory();
+    this.pruneTable('audit_log', AUDIT_LOG_LIMIT);
+    this.pruneTable('tool_runs', TOOL_RUNS_LIMIT);
+    this.pruneTable('artifact_runs', ARTIFACT_RUNS_LIMIT);
+  }
+
+  /** 立即裁剪一次（不受节流限制），供启动与测试 / 手动维护使用。 */
+  pruneNow(): void {
+    this.pruneRetention(true);
+  }
+
+  /**
+   * 按 rowid 边界删最旧：LIMIT n 反向取保留集的最小 rowid，再做范围删除。
+   * 相比大 NOT IN 列表，不需要把上万个 id 物化后逐行探测；rowid 随插入递增，边界即保留线。
+   */
+  private pruneTable(table: 'audit_log' | 'tool_runs' | 'artifact_runs', keep: number): void {
+    this.exec(
+      `DELETE FROM ${table} WHERE rowid < COALESCE((SELECT MIN(rowid) FROM (SELECT rowid FROM ${table} ORDER BY rowid DESC LIMIT ?)), 0)`,
+      [keep],
+    );
   }
 
   /** 收藏永久保留；其余按条数与天数双阈值裁剪，避免历史表无限增长。 */
@@ -1150,10 +1205,11 @@ export class Store {
       const cutoff = new Date(Date.now() - historyRetentionDays * 86_400_000).toISOString();
       this.exec('DELETE FROM query_history WHERE COALESCE(favorite, 0) = 0 AND created_at < ?', [cutoff]);
     }
+    // 取最近 keep 条非收藏的 rowid 边界后范围删除，语义等价旧 NOT IN，但避免大列表全表探测。
     this.exec(
-      `DELETE FROM query_history WHERE COALESCE(favorite, 0) = 0 AND id NOT IN (
-         SELECT id FROM query_history WHERE COALESCE(favorite, 0) = 0 ORDER BY created_at DESC LIMIT ?
-       )`,
+      `DELETE FROM query_history WHERE COALESCE(favorite, 0) = 0 AND rowid < COALESCE((
+         SELECT MIN(rowid) FROM (SELECT rowid FROM query_history WHERE COALESCE(favorite, 0) = 0 ORDER BY created_at DESC, rowid DESC LIMIT ?)
+       ), 0)`,
       [keep],
     );
   }
@@ -1333,8 +1389,21 @@ export class Store {
     return message;
   }
 
-  listMessages(sessionId: string): AgentMessage[] {
-    return this.all<MessageRow>('SELECT * FROM messages WHERE session_id = ? ORDER BY seq ASC', [sessionId]).map((r) => ({
+  listMessages(sessionId: string, opts: { limit?: number; beforeSeq?: number } = {}): AgentMessage[] {
+    const params: unknown[] = [sessionId];
+    let where = 'session_id = ?';
+    if (opts.beforeSeq !== undefined) {
+      where += ' AND seq < ?';
+      params.push(opts.beforeSeq);
+    }
+    // 带上限时取「最近一页」（seq 倒序 + LIMIT）再翻回升序；不传 limit 保持旧的全量升序行为。
+    const limit = opts.limit === undefined ? undefined : Math.max(1, Math.min(1000, Math.floor(opts.limit)));
+    const rows =
+      limit === undefined
+        ? this.all<MessageRow>(`SELECT * FROM messages WHERE ${where} ORDER BY seq ASC`, params)
+        : this.all<MessageRow>(`SELECT * FROM messages WHERE ${where} ORDER BY seq DESC LIMIT ${limit}`, params);
+    if (limit !== undefined) rows.reverse();
+    return rows.map((r) => ({
       id: r.id,
       sessionId: r.session_id,
       seq: r.seq,
@@ -1377,6 +1446,7 @@ export class Store {
       // 后缀用随机串而不是时间戳：同一毫秒内也可能再次冲突。
       write(`${input.id}#${randomUUID().slice(0, 8)}`);
     }
+    this.pruneRetention();
   }
 
   listToolRuns(sessionId: string): Array<Record<string, unknown>> {
@@ -2176,6 +2246,7 @@ export class Store {
         iso(),
       ],
     );
+    this.pruneRetention();
     return this.getArtifactRun(id)!;
   }
 
@@ -2513,6 +2584,7 @@ export class Store {
         full.createdAt,
       ],
     );
+    this.pruneRetention();
     return full;
   }
 

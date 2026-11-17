@@ -91,17 +91,69 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    ...init,
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${TOKEN}`,
-      ...(init.headers ?? {}),
-    },
-  });
-  if (res.status === 204) return undefined as T;
-  const text = await res.text();
+/** 普通请求的兜底超时：后端挂起/半开连接时不能让用户对着转圈等到天荒地老。 */
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+/** schema 内省可能逐库 describe，放宽到 60s。 */
+const SCHEMA_REQUEST_TIMEOUT_MS = 60_000;
+/** 导出/导入要落盘大文件，放宽到 300s。 */
+const TRANSFER_REQUEST_TIMEOUT_MS = 300_000;
+/** 备份/恢复整库可能很久，放宽到 600s。 */
+const BACKUP_REQUEST_TIMEOUT_MS = 600_000;
+/**
+ * 慢查询合法地可能远超 30s（服务端 queryTimeoutMs 默认 30s 但可调高），
+ * 这里给一个宽松上限只兜「半开连接」，真正的中止交给运行按钮的取消（F2）。
+ */
+const QUERY_REQUEST_TIMEOUT_MS = 120_000;
+
+/** 组合多个 signal：任一 abort 即中止。AbortSignal.any 不可用时退回手动监听（兼容旧内核）。 */
+function combineSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
+  const present = signals.filter((s): s is AbortSignal => Boolean(s));
+  if (present.length === 0) return new AbortController().signal;
+  if (present.length === 1) return present[0];
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any(present);
+  const controller = new AbortController();
+  for (const signal of present) {
+    if (signal.aborted) {
+      controller.abort(signal.reason);
+      break;
+    }
+    signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
+  }
+  return controller.signal;
+}
+
+/** 把 fetch/读 body 阶段的异常归一成 ApiError；用户主动取消仍原样抛 AbortError 供调用方静默复位。 */
+function asRequestError(err: unknown, callerSignal: AbortSignal | undefined, timeoutSignal: AbortSignal | undefined, timeoutMs: number): unknown {
+  if (callerSignal?.aborted) return err;
+  if (timeoutSignal?.aborted) {
+    return new ApiError(tr("请求超时（超过 {0} 秒无响应），已中止。", [Math.round(timeoutMs / 1000)]), { code: 'REQUEST_TIMEOUT' });
+  }
+  if (err instanceof ApiError) return err;
+  if ((err as Error)?.name === 'AbortError') return err;
+  return new ApiError(tr("网络请求失败：{0}", [(err as Error)?.message ?? String(err)]), { code: 'NETWORK_ERROR' });
+}
+
+async function request<T>(path: string, init: RequestInit = {}, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS): Promise<T> {
+  const { signal: callerSignal, ...rest } = init;
+  const timeoutSignal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
+  const signal = combineSignals(callerSignal ?? undefined, timeoutSignal);
+  let res: Response;
+  let text: string;
+  try {
+    res = await fetch(`/api${path}`, {
+      ...rest,
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${TOKEN}`,
+        ...(init.headers ?? {}),
+      },
+      signal,
+    });
+    if (res.status === 204) return undefined as T;
+    text = await res.text();
+  } catch (err) {
+    throw asRequestError(err, callerSignal ?? undefined, timeoutSignal, timeoutMs);
+  }
   let payload: any = null;
   try {
     payload = text ? JSON.parse(text) : null;
@@ -191,6 +243,8 @@ export async function readWithIdleCeiling(
   signal?: AbortSignal,
   /** 只给测试用：默认值就是线上阈值，没必要让用例真等 10 分钟。 */
   idleMs = TURN_IDLE_CEILING_MS,
+  /** 非回合流（command/skill/transfer）复用这套看门狗时，换一句贴合场景的文案与错误码。 */
+  idle?: { code?: string; message?: string },
 ): Promise<Uint8Array | undefined> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -200,8 +254,8 @@ export async function readWithIdleCeiling(
         // 于是它那边的回合还在跑（网关靠 close 才 abort）。
         void reader.cancel().catch(() => undefined);
         reject(
-          new ApiError(tr("与服务端的连接连续 {0} 秒没有任何响应，本次回复已断开。已完成的部分仍然保留，回复「继续」可接着做。", [Math.round(idleMs / 1000)]), {
-            code: 'TURN_CHANNEL_IDLE',
+          new ApiError(idle?.message ?? tr("与服务端的连接连续 {0} 秒没有任何响应，本次回复已断开。已完成的部分仍然保留，回复「继续」可接着做。", [Math.round(idleMs / 1000)]), {
+            code: idle?.code ?? 'TURN_CHANNEL_IDLE',
           }),
         );
       }, idleMs);
@@ -339,15 +393,50 @@ export type TransferEvent =
   | { type: 'error'; code: string; message: string }
   | { type: 'done'; result: { results: TransferTableResult[]; totalRows: number; createdTables: number }; durationMs: number };
 
-async function readSse(res: Response, onEvent: (event: unknown) => void): Promise<void> {
+/**
+ * command/skill 执行期可能长时间没有任何事件（跑一个大脚本/等外部进程），
+ * 所以只用**字节层**静默上限判半开连接，阈值放宽到 120s；不做事件层判定，
+ * 免得把「这一步真的很慢」误杀成「通道死了」。
+ */
+const WORKER_IDLE_CEILING_MS = 120_000;
+
+interface SseIdleOptions {
+  signal?: AbortSignal;
+  /** 字节层静默上限：连续这么久没有任何字节就判通道死。默认沿用回合的 10 分钟。 */
+  byteIdleMs?: number;
+  /** 事件层静默上限（含心跳帧）；不传则不做事件层判定。 */
+  eventIdleMs?: number;
+  /** 静默超时的错误码与文案，按流类型贴合场景。 */
+  idleCode?: string;
+  idleMessage?: string;
+}
+
+/**
+ * 共享的 SSE 读取循环：复用 streamTurn 的字节/事件双层 idle 看门狗。
+ * 半开的 TCP 既不报错也不结束，裸 reader.read() 会永远等下去——这里用
+ * readWithIdleCeiling 兜底，超时 cancel 掉 reader 让网关收到 close。
+ */
+async function readSseStream(res: Response, onEvent: (event: unknown) => void, opts: SseIdleOptions = {}): Promise<void> {
   if (!res.body) throw new ApiError(tr("响应不支持流式读取"), { code: 'SSE_BODY', status: res.status });
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
+  const byteIdleMs = opts.byteIdleMs ?? TURN_IDLE_CEILING_MS;
+  const idle = { code: opts.idleCode, message: opts.idleMessage };
   let buffer = '';
+  let lastActivityAt = Date.now();
   while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
+    if (opts.eventIdleMs && Date.now() - lastActivityAt > opts.eventIdleMs) {
+      void reader.cancel().catch(() => undefined);
+      throw new ApiError(
+        opts.idleMessage ?? tr("与服务端的连接连续 {0} 秒没有任何响应，已断开。", [Math.round(opts.eventIdleMs / 1000)]),
+        { code: opts.idleCode ?? 'SSE_CHANNEL_IDLE' },
+      );
+    }
+    const chunk = await readWithIdleCeiling(reader, opts.signal, byteIdleMs, idle);
+    if (chunk === undefined) break;
+    // 任何一帧（哪怕只有心跳）到达都算通道还活着，在解码/解析之前就更新活动时间。
+    lastActivityAt = Date.now();
+    buffer = (buffer + decoder.decode(chunk, { stream: true })).replace(/\r\n/g, '\n');
     let idx = buffer.indexOf('\n\n');
     while (idx !== -1) {
       const frame = buffer.slice(0, idx).trim();
@@ -369,6 +458,11 @@ async function readSse(res: Response, onEvent: (event: unknown) => void): Promis
       idx = buffer.indexOf('\n\n');
     }
   }
+}
+
+async function readSse(res: Response, onEvent: (event: unknown) => void, signal?: AbortSignal): Promise<void> {
+  // transfer/pipeline 可能长时间静默地搬数据，字节层沿用回合的宽松上限兜半开连接。
+  await readSseStream(res, onEvent, { signal, idleCode: 'SSE_CHANNEL_IDLE', idleMessage: tr("与服务端的连接连续 {0} 秒没有任何响应，已断开。", [Math.round(TURN_IDLE_CEILING_MS / 1000)]) });
 }
 
 export async function streamTransfer(
@@ -395,7 +489,7 @@ export async function streamTransfer(
     }
     throw new ApiError(message, { code, status: res.status });
   }
-  await readSse(res, (event) => onEvent(event as TransferEvent));
+  await readSse(res, (event) => onEvent(event as TransferEvent), signal);
 }
 
 /** 数据流按步骤推进，事件里带每步行数与样本，界面据此画进度条。 */
@@ -424,7 +518,7 @@ export async function streamPipelineRun(
     }
     throw new ApiError(message, { code, status: res.status });
   }
-  await readSse(res, (event) => onEvent(event as PipelineEvent));
+  await readSse(res, (event) => onEvent(event as PipelineEvent), signal);
 }
 
 export interface StoredAttachment {
@@ -444,34 +538,12 @@ export async function streamCommandRun(
     signal,
   });
   if (!res.ok || !res.body) throw new ApiError(tr("命令进度读取失败（{0}）", [res.status]), { code: 'COMMAND_STREAM', status: res.status });
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
-    let idx = buffer.indexOf('\n\n');
-    while (idx !== -1) {
-      const frame = buffer.slice(0, idx).trim();
-      buffer = buffer.slice(idx + 2);
-      if (frame && !frame.startsWith(':')) {
-        const data = frame
-          .split('\n')
-          .filter((line) => line.startsWith('data:'))
-          .map((line) => line.slice(5).trim())
-          .join('\n');
-        if (data) {
-          try {
-            onEvent(JSON.parse(data) as CommandRunEvent);
-          } catch {
-            /* ignore malformed frame */
-          }
-        }
-      }
-      idx = buffer.indexOf('\n\n');
-    }
-  }
+  await readSseStream(res, (event) => onEvent(event as CommandRunEvent), {
+    signal,
+    byteIdleMs: WORKER_IDLE_CEILING_MS,
+    idleCode: 'COMMAND_CHANNEL_IDLE',
+    idleMessage: tr("命令进度连接连续 {0} 秒没有任何响应，已断开。", [Math.round(WORKER_IDLE_CEILING_MS / 1000)]),
+  });
 }
 
 export async function streamSkillRun(
@@ -485,46 +557,39 @@ export async function streamSkillRun(
     signal,
   });
   if (!res.ok || !res.body) throw new ApiError(tr("Skill 进度读取失败（{0}）", [res.status]), { code: 'SKILL_STREAM', status: res.status });
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
-    let idx = buffer.indexOf('\n\n');
-    while (idx !== -1) {
-      const frame = buffer.slice(0, idx).trim();
-      buffer = buffer.slice(idx + 2);
-      if (frame && !frame.startsWith(':')) {
-        const data = frame
-          .split('\n')
-          .filter((line) => line.startsWith('data:'))
-          .map((line) => line.slice(5).trim())
-          .join('\n');
-        if (data) {
-          try {
-            onEvent(JSON.parse(data) as SkillWorkerEvent);
-          } catch {
-            /* ignore malformed frame */
-          }
-        }
-      }
-      idx = buffer.indexOf('\n\n');
-    }
-  }
+  await readSseStream(res, (event) => onEvent(event as SkillWorkerEvent), {
+    signal,
+    byteIdleMs: WORKER_IDLE_CEILING_MS,
+    idleCode: 'SKILL_CHANNEL_IDLE',
+    idleMessage: tr("Skill 进度连接连续 {0} 秒没有任何响应，已断开。", [Math.round(WORKER_IDLE_CEILING_MS / 1000)]),
+  });
 }
 
+// objectURL 永不 revoke 会一直占着 blob 内存；长会话里图片越积越多。
+// 用 LRU（Map 的插入序即访问序）限到 100 条，淘汰最久未用的那条并 revoke。
+const ATTACHMENT_URL_LIMIT = 100;
 const attachmentUrls = new Map<string, string>();
 
 /** 图片走带令牌的 fetch 再转 object URL，避免把令牌暴露在 <img src> 里。 */
 export async function attachmentObjectUrl(id: string): Promise<string> {
   const cached = attachmentUrls.get(id);
-  if (cached) return cached;
+  if (cached) {
+    // 命中即刷新到队尾，成为最近使用项。
+    attachmentUrls.delete(id);
+    attachmentUrls.set(id, cached);
+    return cached;
+  }
   const res = await fetch(`/api/agent/attachments/${encodeURIComponent(id)}`, { headers: { authorization: `Bearer ${TOKEN}` } });
   if (!res.ok) throw new ApiError(tr("图片读取失败（{0}）", [res.status]), { code: 'ATTACHMENT_ERROR', status: res.status });
   const url = URL.createObjectURL(await res.blob());
   attachmentUrls.set(id, url);
+  while (attachmentUrls.size > ATTACHMENT_URL_LIMIT) {
+    const oldest = attachmentUrls.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    const evicted = attachmentUrls.get(oldest);
+    attachmentUrls.delete(oldest);
+    if (evicted) URL.revokeObjectURL(evicted);
+  }
   return url;
 }
 
@@ -576,7 +641,7 @@ export const api = {
   rerunArtifact: (id: string) =>
     request<{ run: CommandRunInfo }>(`/artifacts/${encodeURIComponent(id)}/runs`, { method: 'POST', body: JSON.stringify({}) }),
   exportArtifact: (id: string, format: 'xlsx' | 'pptx') =>
-    request<{ path: string; rows: number; bytes: number; format: string }>(`/artifacts/${encodeURIComponent(id)}/export?format=${format}`),
+    request<{ path: string; rows: number; bytes: number; format: string; downloadUrl?: string; content?: string; encoding?: string }>(`/artifacts/${encodeURIComponent(id)}/export?format=${format}`, {}, TRANSFER_REQUEST_TIMEOUT_MS),
   artifactDeck: (id: string, body: { skill?: string; template?: string; mode?: 'deterministic' | 'agent' }) =>
     request<{ run: { runId: string; skill: string; status: string } }>(`/artifacts/${encodeURIComponent(id)}/deck`, { method: 'POST', body: JSON.stringify(body) }),
   artifactSchedule: (id: string) => request<{ schedule: ArtifactScheduleInfo | null }>(`/artifacts/${encodeURIComponent(id)}/schedule`),
@@ -633,14 +698,14 @@ export const api = {
   testConnection: (id: string) => request<{ result: { ok: boolean; version?: string; latencyMs: number; message?: string } }>(`/connections/${id}/test`, { method: 'POST' }),
   testDraft: (body: Record<string, unknown>, signal?: AbortSignal) => request<{ result: { ok: boolean; version?: string; latencyMs: number; message?: string } }>('/connections/test', { method: 'POST', body: JSON.stringify(body), signal }),
   getSchema: (id: string, refresh = false, database?: string) =>
-    request<{ schemas: DatabaseSchema[] }>(`/connections/${id}/schema?refresh=${refresh ? 1 : 0}${database ? `&database=${encodeURIComponent(database)}` : ''}`),
+    request<{ schemas: DatabaseSchema[] }>(`/connections/${id}/schema?refresh=${refresh ? 1 : 0}${database ? `&database=${encodeURIComponent(database)}` : ''}`, {}, SCHEMA_REQUEST_TIMEOUT_MS),
   getTables: (id: string, database?: string) =>
-    request<{ database?: string; tables: TableInfo[] }>(`/connections/${id}/tables${database ? `?database=${encodeURIComponent(database)}` : ''}`),
-  refreshSchema: (id: string, database?: string) => request<{ schemas: DatabaseSchema[] }>(`/connections/${id}/refresh`, { method: 'POST', body: JSON.stringify({ database }) }),
+    request<{ database?: string; tables: TableInfo[] }>(`/connections/${id}/tables${database ? `?database=${encodeURIComponent(database)}` : ''}`, {}, SCHEMA_REQUEST_TIMEOUT_MS),
+  refreshSchema: (id: string, database?: string) => request<{ schemas: DatabaseSchema[] }>(`/connections/${id}/refresh`, { method: 'POST', body: JSON.stringify({ database }) }, SCHEMA_REQUEST_TIMEOUT_MS),
   databases: (id: string) => request<{ databases: string[] }>(`/connections/${id}/databases`),
 
-  query: (body: { connectionId: string; sql: string; database?: string; limit?: number; allowMulti?: boolean; sessionId?: string }) =>
-    request<{ batch: QueryBatchResult }>('/query', { method: 'POST', body: JSON.stringify(body) }),
+  query: (body: { connectionId: string; sql: string; database?: string; limit?: number; allowMulti?: boolean; sessionId?: string }, signal?: AbortSignal) =>
+    request<{ batch: QueryBatchResult }>('/query', { method: 'POST', body: JSON.stringify(body), signal }, QUERY_REQUEST_TIMEOUT_MS),
   beginTransaction: (body: { connectionId: string; sessionId: string; database?: string }) =>
     request<{ result: { sessionId: string; database?: string } }>('/tx/begin', { method: 'POST', body: JSON.stringify(body) }),
   commitTransaction: (body: { sessionId: string }) =>
@@ -734,7 +799,7 @@ export const api = {
     request<{ result: { imported: number; skipped: number; errors: string[]; collection: string } }>('/documents/import', {
       method: 'POST',
       body: JSON.stringify(body),
-    }),
+    }, TRANSFER_REQUEST_TIMEOUT_MS),
   dashboardCards: (params: { connectionId: string; database?: string }) => {
     const q = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) if (value) q.set(key, String(value));
@@ -785,24 +850,27 @@ export const api = {
     for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== null && value !== '') q.set(key, String(value));
     return request<DataPage>(`/data?${q.toString()}`);
   },
-  rows: (body: Record<string, unknown>) => request<{ result: QueryResult }>('/rows', { method: 'POST', body: JSON.stringify(body) }),
+  rows: (body: Record<string, unknown>) => request<{ result: QueryResult }>('/rows', { method: 'POST', body: JSON.stringify(body) }, QUERY_REQUEST_TIMEOUT_MS),
   tableOps: (body: Record<string, unknown>) =>
     request<{ statements: string[]; ddl?: string; batch?: QueryBatchResult; supported?: boolean; message?: string }>('/tables/ops', {
       method: 'POST',
       body: JSON.stringify(body),
-    }),
+    }, QUERY_REQUEST_TIMEOUT_MS),
   databaseOps: (body: Record<string, unknown>) =>
     request<{ supported: boolean; statements: string[]; message?: string }>('/databases/ops', {
       method: 'POST',
       body: JSON.stringify(body),
-    }),
+    }, QUERY_REQUEST_TIMEOUT_MS),
   replaceData: (body: Record<string, unknown>) =>
-    request<{ affected: number; sql: string; preview: boolean }>('/data/replace', { method: 'POST', body: JSON.stringify(body) }),
+    request<{ affected: number; sql: string; preview: boolean }>('/data/replace', { method: 'POST', body: JSON.stringify(body) }, QUERY_REQUEST_TIMEOUT_MS),
   ddlPreview: (body: Record<string, unknown>) => request<{ statements: string[]; ddl?: string }>('/ddl/preview', { method: 'POST', body: JSON.stringify(body) }),
-  ddlExecute: (body: Record<string, unknown>) => request<{ batch: QueryBatchResult }>('/ddl/execute', { method: 'POST', body: JSON.stringify(body) }),
-  exportData: (body: Record<string, unknown>) => request<{ file: { path: string; bytes: number; rows: number }; format: string }>('/export', { method: 'POST', body: JSON.stringify(body) }),
+  ddlExecute: (body: Record<string, unknown>) => request<{ batch: QueryBatchResult }>('/ddl/execute', { method: 'POST', body: JSON.stringify(body) }, QUERY_REQUEST_TIMEOUT_MS),
+  // K5：服务端 inline 导出新形态返回 downloadUrl（GET /api/export/file?path=…）；
+  // 旧形态仍可能带 base64 content。两种都兼容，调用方优先用 downloadUrl。
+  exportData: (body: Record<string, unknown>, signal?: AbortSignal) =>
+    request<{ file: { path: string; bytes: number; rows: number }; format: string; downloadUrl?: string; content?: string; encoding?: string }>('/export', { method: 'POST', body: JSON.stringify(body), signal }, TRANSFER_REQUEST_TIMEOUT_MS),
   importCsv: (body: Record<string, unknown>) =>
-    request<{ result: { inserted: number; skipped: number; errors: string[]; columns: string[] } }>('/import', { method: 'POST', body: JSON.stringify(body) }),
+    request<{ result: { inserted: number; skipped: number; errors: string[]; columns: string[] } }>('/import', { method: 'POST', body: JSON.stringify(body) }, TRANSFER_REQUEST_TIMEOUT_MS),
   history: (params: { connectionId?: string; search?: string; limit?: number } = {}) => {
     const q = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) if (value) q.set(key, String(value));
@@ -813,7 +881,7 @@ export const api = {
   favoriteHistory: (id: string, favorite: boolean) => request<{ id: string; favorite: boolean }>(`/history/${id}/favorite`, { method: 'POST', body: JSON.stringify({ favorite }) }),
   clearHistory: () => request<void>('/history', { method: 'DELETE' }),
   backups: (connectionId?: string) => request<{ backups: BackupInfo[] }>(`/backups${connectionId ? `?connectionId=${connectionId}` : ''}`),
-  createBackup: (body: { connectionId: string; database?: string; label?: string }) => request<{ backup: BackupInfo }>('/backups', { method: 'POST', body: JSON.stringify(body) }),
+  createBackup: (body: { connectionId: string; database?: string; label?: string }) => request<{ backup: BackupInfo }>('/backups', { method: 'POST', body: JSON.stringify(body) }, BACKUP_REQUEST_TIMEOUT_MS),
   audit: (params: { limit?: number; connectionId?: string; actor?: string } = {}) => {
     const q = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) if (value !== undefined) q.set(key, String(value));
@@ -903,7 +971,7 @@ export const api = {
   compareSchemas: (body: { sourceId: string; sourceDatabase?: string; targetId: string; targetDatabase?: string }) =>
     request<{ diff: any }>('/schema/compare', { method: 'POST', body: JSON.stringify(body) }),
   syncSchema: (body: { connectionId: string; database?: string; statements: string[] }) =>
-    request<{ batch: QueryBatchResult }>('/schema/sync', { method: 'POST', body: JSON.stringify(body) }),
+    request<{ batch: QueryBatchResult }>('/schema/sync', { method: 'POST', body: JSON.stringify(body) }, QUERY_REQUEST_TIMEOUT_MS),
   transfer: (body: Record<string, unknown>) => request<{ result: any }>('/transfer', { method: 'POST', body: JSON.stringify(body) }),
   generateData: (body: Record<string, unknown>) => request<{ result: any }>('/generate', { method: 'POST', body: JSON.stringify(body) }),
   monitor: (connectionId: string) => request<{ monitor: any }>(`/monitor?connectionId=${encodeURIComponent(connectionId)}`),
@@ -947,7 +1015,7 @@ export const api = {
   pipelineCredentials: () => request<{ credentials: PipelineCredentialInfo[] }>('/pipelines/credentials'),
   createPipelineCredential: (body: Record<string, unknown>) => request<{ credential: PipelineCredentialInfo }>('/pipelines/credentials', { method: 'POST', body: JSON.stringify(body) }),
   deletePipelineCredential: (id: string) => request<void>(`/pipelines/credentials/${id}`, { method: 'DELETE' }),
-  restoreBackup: (id: string) => request<{ batch: QueryBatchResult }>(`/backups/${id}/restore`, { method: 'POST' }),
+  restoreBackup: (id: string) => request<{ batch: QueryBatchResult }>(`/backups/${id}/restore`, { method: 'POST' }, BACKUP_REQUEST_TIMEOUT_MS),
 
   pairStart: () => request<{ code: string; expiresIn: number; qrPayload: string; host: string; port: number; url: string }>('/pair/start', { method: 'POST' }),
   pairMcpStart: () => request<{ code: string; expiresIn: number; host: string; port: number; url: string }>('/pair/mcp/start', { method: 'POST' }),

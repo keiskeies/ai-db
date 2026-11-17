@@ -13,6 +13,14 @@ server.on('error', (err: NodeJS.ErrnoException) => {
   process.exit(1);
 });
 
+// G7：显式配置 HTTP 超时，防慢速请求攻击与半开连接无限占用资源。
+// requestTimeout 只覆盖「请求接收」阶段（请求收全即清除计时器），不含响应
+// 输出——已实测验证不误伤 SSE（600ms requestTimeout 下 2.5s SSE 流正常完成）。
+// 三者保持 keepAliveTimeout < headersTimeout < requestTimeout 的合理次序。
+server.requestTimeout = 120_000;
+server.headersTimeout = 60_000;
+server.keepAliveTimeout = 10_000;
+
 server.listen(config.port, config.host, () => {
   console.log(`[gateway] AiDB Bridge v${config.version}`);
   console.log(`[gateway] listening on http://${config.host}:${config.port}`);

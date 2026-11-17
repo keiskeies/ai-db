@@ -4,10 +4,11 @@ const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { test } = require('node:test');
 const { backupBeforeUpgrade, installedVersion, markVersion, versionMarker } = require('./upgrade.cjs');
-function withHome(fn) {
+async function withHome(fn) {
   const home = mkdtempSync(join(tmpdir(), 'aidb-upgrade-'));
   try {
-    fn(home);
+    // backupBeforeUpgrade 已异步化：必须 await 完成后再清理临时目录。
+    await fn(home);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -21,23 +22,23 @@ test('首次安装不备份，写入版本标记', () => {
   });
 });
 
-test('同版本启动不重复备份', () => {
-  withHome((home) => {
+test('同版本启动不重复备份', async () => {
+  await withHome(async (home) => {
     writeFileSync(join(home, 'aidb.db'), 'db');
     markVersion(home, '0.1.0');
-    const result = backupBeforeUpgrade({ home, version: '0.1.0' });
+    const result = await backupBeforeUpgrade({ home, version: '0.1.0' });
     assert.equal(result.backupDir, undefined);
   });
 });
 
-test('覆盖升级先把数据库与 WAL 一起备份', () => {
-  withHome((home) => {
+test('覆盖升级先把数据库与 WAL 一起备份', async () => {
+  await withHome(async (home) => {
     writeFileSync(join(home, 'aidb.db'), 'main');
     writeFileSync(join(home, 'aidb.db-wal'), 'wal');
     writeFileSync(join(home, 'aidb.db-shm'), 'shm');
     markVersion(home, '0.1.0');
 
-    const { backupDir, previous } = backupBeforeUpgrade({ home, version: '0.1.1', now: 1234 });
+    const { backupDir, previous } = await backupBeforeUpgrade({ home, version: '0.1.1', now: 1234 });
     assert.equal(previous, '0.1.0');
     assert.ok(backupDir && existsSync(backupDir));
     assert.equal(readFileSync(join(backupDir, 'aidb.db'), 'utf8'), 'main');
@@ -47,10 +48,21 @@ test('覆盖升级先把数据库与 WAL 一起备份', () => {
   });
 });
 
-test('升级但数据库尚未创建时只更新版本标记', () => {
-  withHome((home) => {
+test('wal/shm 不存在时只备份主库文件', async () => {
+  await withHome(async (home) => {
+    writeFileSync(join(home, 'aidb.db'), 'main');
     markVersion(home, '0.1.0');
-    const result = backupBeforeUpgrade({ home, version: '0.1.1' });
+    const { backupDir } = await backupBeforeUpgrade({ home, version: '0.1.1', now: 5678 });
+    assert.ok(backupDir && existsSync(join(backupDir, 'aidb.db')));
+    assert.equal(existsSync(join(backupDir, 'aidb.db-wal')), false);
+    assert.equal(existsSync(join(backupDir, 'aidb.db-shm')), false);
+  });
+});
+
+test('升级但数据库尚未创建时只更新版本标记', async () => {
+  await withHome(async (home) => {
+    markVersion(home, '0.1.0');
+    const result = await backupBeforeUpgrade({ home, version: '0.1.1' });
     assert.equal(result.backupDir, undefined);
     markVersion(home, '0.1.1');
     assert.equal(installedVersion(home), '0.1.1');

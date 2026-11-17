@@ -32,6 +32,14 @@ export interface MongoOptions {
 
 const SYSTEM_DATABASES = new Set(['admin', 'local', 'config']);
 
+/** 元数据/采样路径的服务端超时。 */
+const METADATA_TIMEOUT_MS = 30000;
+/**
+ * socket 兜底必须不小于最长的 maxTimeMS（质检/导出路径会传 120s），
+ * 否则服务端还在合法执行、客户端先把连接掐了。
+ */
+const SOCKET_TIMEOUT_MS = 150000;
+
 /** 编辑对话框写回的文档带 EJSON 标记，还原成真正的 BSON 类型再存。 */
 function decodeEjson(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(decodeEjson);
@@ -247,6 +255,8 @@ export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver, 
       this.client = new MongoClient(this.uri(), {
         serverSelectionTimeoutMS: 8000,
         connectTimeoutMS: 8000,
+        // 网络黑洞（服务端不回包）时 maxTimeMS 救不了客户端，socket 超时是最后兜底。
+        socketTimeoutMS: SOCKET_TIMEOUT_MS,
         maxPoolSize: 5,
         appName: 'AiDB Studio',
       });
@@ -286,7 +296,7 @@ export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver, 
   async listDatabases(): Promise<string[]> {
     try {
       const client = await this.connect();
-      const result = await client.db('admin').admin().listDatabases();
+      const result = await client.db('admin').admin().listDatabases({ maxTimeMS: METADATA_TIMEOUT_MS });
       return result.databases.map((item) => item.name).sort((a, b) => a.localeCompare(b));
     } catch (err: any) {
       throw new DbError(err?.message ?? 'MongoDB 列出数据库失败', { code: err?.codeName ?? 'MONGO_ERROR' });
@@ -298,7 +308,7 @@ export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver, 
     const client = await this.connect();
     const db = client.db(dbName);
     try {
-      const collections = await db.listCollections({}, { nameOnly: false }).toArray();
+      const collections = await db.listCollections({}, { nameOnly: false, maxTimeMS: METADATA_TIMEOUT_MS }).toArray();
       const tables: TableInfo[] = [];
       const batchSize = 6;
       for (let start = 0; start < collections.length && tables.length < 200; start += batchSize) {
@@ -312,19 +322,19 @@ export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver, 
               kind: 'collection',
             };
             try {
-              table.rowEstimate = await db.collection(coll.name).estimatedDocumentCount();
+              table.rowEstimate = await db.collection(coll.name).estimatedDocumentCount({ maxTimeMS: METADATA_TIMEOUT_MS });
             } catch {
               /* views and restricted collections may not allow counts */
             }
             if (coll.type === 'collection') {
               try {
-                const sample = (await db.collection(coll.name).find({}, { limit: 30 }).toArray()) as Record<string, unknown>[];
+                const sample = (await db.collection(coll.name).find({}, { limit: 30, maxTimeMS: METADATA_TIMEOUT_MS }).toArray()) as Record<string, unknown>[];
                 table.columns = inferColumns(sample);
               } catch {
                 /* sampling is best effort */
               }
               try {
-                table.indexes = normalizeIndexes(await db.collection(coll.name).indexes());
+                table.indexes = normalizeIndexes(await db.collection(coll.name).indexes({ maxTimeMS: METADATA_TIMEOUT_MS }));
               } catch {
                 /* 权限受限的集合可能读不到索引 */
               }
@@ -348,7 +358,7 @@ export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver, 
     try {
       const coll = await this.collection(query.collection, opts.database);
       if (query.op === 'count') {
-        const count = await coll.countDocuments((query.filter ?? {}) as Filter<Document>);
+        const count = await coll.countDocuments((query.filter ?? {}) as Filter<Document>, { maxTimeMS: opts.timeoutMs ?? METADATA_TIMEOUT_MS });
         return {
           columns: [{ name: 'count', type: 'long' }],
           rows: [[count]],
@@ -360,7 +370,7 @@ export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver, 
       }
       if (query.op === 'distinct') {
         if (!query.field) throw new DbError('distinct 缺少字段名', { code: 'MQL_FIELD' });
-        const values = await coll.distinct(query.field, (query.filter ?? {}) as Filter<Document>);
+        const values = await coll.distinct(query.field, (query.filter ?? {}) as Filter<Document>, { maxTimeMS: opts.timeoutMs ?? METADATA_TIMEOUT_MS });
         const rows = values.slice(0, limit).map((value) => [serialize(value)]);
         return {
           columns: [{ name: query.field, type: bsonKind(values[0]) }],
@@ -375,7 +385,7 @@ export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver, 
       if (query.op === 'aggregate') {
         const pipeline = [...(query.pipeline ?? [])] as Document[];
         if (!pipeline.some((stage) => '$limit' in stage || '$count' in stage || '$facet' in stage)) pipeline.push({ $limit: limit });
-        const cursor = coll.aggregate(pipeline, { allowDiskUse: true, maxTimeMS: opts.timeoutMs });
+        const cursor = coll.aggregate(pipeline, { allowDiskUse: true, maxTimeMS: opts.timeoutMs ?? METADATA_TIMEOUT_MS });
         const docs = (await cursor.toArray()) as Record<string, unknown>[];
         return resultFromDocuments(docs.slice(0, limit), started, statement, docs.length >= limit);
       }

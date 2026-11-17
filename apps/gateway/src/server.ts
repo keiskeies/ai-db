@@ -19,13 +19,18 @@ import { SkillRunner } from './skillRunner';
 import { SkillWorker } from './skillWorker';
 import { hashToken, safeEqual } from './crypto';
 import { loadConfig, type GatewayConfig } from './config';
-import { ConnectionManager } from './manager';
+import { ConnectionManager, SCHEDULER_TASK_TIMEOUT_MS } from './manager';
 import { GatewayEvents } from './events';
 import { ToolExecutor } from './executor';
 import { ensureDemoDatabase } from './seed';
 import { createApiRouter } from './routes';
 import { JobScheduler } from './scheduler';
 import { Store } from './store';
+
+/** WS 背压阈值（G5）：客户端不消费时帧积压在发送缓冲，超过 1MB 丢弃该客户端，保护网关内存。 */
+const WS_MAX_BUFFERED_BYTES = 1024 * 1024;
+/** WS 死连接阈值（G5）：ping 周期 30s，连续 3 轮（90s）没有任何入站消息即判半开连接，terminate。 */
+const WS_DEAD_AFTER_MS = 90_000;
 
 export interface GatewayInstance {
   app: express.Express;
@@ -68,7 +73,12 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
   scheduler.setArtifactRunner(async (artifactId) => {
     try {
       const run = commands.startArtifact(artifactId);
-      const finished = await commands.waitForRun(run.id);
+      // 契约 K2：WP3 给 waitForRun 增加可选 timeoutMs（超时 resolve undefined）。
+      // 对方签名落地前直接传第二参会 typecheck 失败，暂用断言放宽；运行时多余
+      // 参数被忽略，集成后移除断言。scheduler 侧另有 withTaskTimeout 兜底，
+      // 即使 waitForRun 永不 resolve 也会释放调度槽。
+      const waitForRun = commands.waitForRun.bind(commands) as (runId: string, timeoutMs?: number) => ReturnType<CommandRunner['waitForRun']>;
+      const finished = await waitForRun(run.id, SCHEDULER_TASK_TIMEOUT_MS);
       return { ok: finished?.status === 'succeeded', message: finished?.error?.message ?? finished?.status ?? '未完成' };
     } catch (err: any) {
       return { ok: false, message: err?.message ?? '定时运行失败' };
@@ -169,14 +179,30 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
       ws.close(4401, 'unauthorized');
       return;
     }
+    // G5：记录最近入站时间（任何消息，含应用层 pong）；心跳发现超阈值无入站即判死。
+    let lastSeen = Date.now();
     const send = (event: unknown) => {
-      if (ws.readyState === 1) ws.send(JSON.stringify(event));
+      if (ws.readyState !== 1) return;
+      // G5：积压超阈值说明该客户端已不消费，直接丢弃，避免内存无限增长。
+      if (ws.bufferedAmount > WS_MAX_BUFFERED_BYTES) {
+        ws.terminate();
+        return;
+      }
+      ws.send(JSON.stringify(event));
     };
     const heartbeat = setInterval(() => {
-      if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' }));
+      if (ws.readyState !== 1) return;
+      // G5：半开连接（断网/休眠）收不到 TCP FIN，只有应用层心跳能发现；
+      // 90s 无 pong/入站消息即 terminate，释放会话与缓冲。
+      if (Date.now() - lastSeen > WS_DEAD_AFTER_MS) {
+        ws.terminate();
+        return;
+      }
+      send({ type: 'ping' });
     }, 30000);
     ws.on('close', () => clearInterval(heartbeat));
     ws.on('message', async (raw) => {
+      lastSeen = Date.now();
       let msg: any;
       try {
         msg = JSON.parse(String(raw));
@@ -229,6 +255,11 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
     const frame = JSON.stringify(event);
     for (const client of wss.clients) {
       if (client.readyState !== 1) continue;
+      // G5：慢客户端积压超阈值直接丢弃，不能让它拖垮整条广播。
+      if (client.bufferedAmount > WS_MAX_BUFFERED_BYTES) {
+        client.terminate();
+        continue;
+      }
       // 逐项保护：一个半死的连接（send 抛错）不能中断后面客户端的投递，
       // 否则它前面的客户端刚收到、后面的一律收不到，症状取决于连接顺序。
       try {

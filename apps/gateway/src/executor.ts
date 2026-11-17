@@ -57,8 +57,9 @@ import {
 } from '@aidb/core';
 import type { GatewayConfig } from './config';
 import { DbError } from './drivers';
-import type { ConnectionManager } from './manager';
-import { assertExportable, dumpDatabase, exportNeedsStatement, importCsv, importDocuments, writeExportFile } from './services';
+import { EXPORT_QUERY_TIMEOUT_MS, QUALITY_CHECK_TIMEOUT_MS, type ConnectionManager } from './manager';
+import { assertExportable, dumpDatabase, exportNeedsStatement, importCsv, importDocuments } from './services';
+import { writeExportFile } from './xlsx';
 import { generateData } from './features/generate';
 import { runPipelineAndRecord } from './features/pipelines';
 import { callMcpTool, listMcpTools } from './mcp';
@@ -71,6 +72,9 @@ import { transferData } from './features/transfer';
 import type { Store } from './store';
 
 type RenderChartType = 'bar' | 'stacked' | 'line' | 'pie' | 'scatter' | 'heatmap' | 'radar';
+
+/** G6：skill_worker_run 轮询总时长上限，与 skillRunner 的 10min 默认超时对齐。 */
+const SKILL_WORKER_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 
 export interface ToolContext {
   sessionId: string;
@@ -832,7 +836,8 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
           throw new DbError(`${engineMeta(conn.engine).label} ${hint}`, { code: 'UNSUPPORTED_ENGINE' });
         }
         const sql = buildSelectTable(conn.engine, table.name, { schema: this.schemaFor(conn, table), limit });
-        const batch = await this.manager.query(conn.id, sql, { database, maxRows: limit, allowMulti: false, autoLimit: false, actor: 'agent' });
+        // G2：样例查询此前漏传 timeoutMs，走驱动默认值不受设置约束；普通查询用现有默认口径。
+        const batch = await this.manager.query(conn.id, sql, { database, maxRows: limit, allowMulti: false, autoLimit: false, actor: 'agent', timeoutMs: this.getSettings().queryTimeoutMs });
         const result = batch.sets[0];
         if (result && a.maskSensitive !== false) {
           const sensitive = result.columns.map((c) => SENSITIVE.test(c.name));
@@ -851,7 +856,8 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
         const ref = this.ref(conn.engine, table);
         const col = quoteIdent(column, conn.engine);
         const run = async (sql: string): Promise<QueryResult> => {
-          const batch = await this.manager.query(conn.id, sql, { database, maxRows: 20, allowMulti: false, autoLimit: false, actor: 'agent' });
+          // G2：画像含 COUNT DISTINCT 全表聚合，此前漏传超时；质检口径 120s。
+          const batch = await this.manager.query(conn.id, sql, { database, maxRows: 20, allowMulti: false, autoLimit: false, actor: 'agent', timeoutMs: QUALITY_CHECK_TIMEOUT_MS });
           return batch.sets[0];
         };
         const overview = await run(`SELECT COUNT(*) AS total, SUM(CASE WHEN ${col} IS NULL THEN 1 ELSE 0 END) AS nulls FROM ${ref}`);
@@ -1043,10 +1049,13 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
           allowMulti: false,
           autoLimit: false,
           actor: 'agent',
+          // G2：导出查询与 /export 路由同口径（120s），此前漏传。
+          timeoutMs: EXPORT_QUERY_TIMEOUT_MS,
         });
         const set = batch.sets[0];
         if (!set) throw new DbError('没有可导出的结果');
-        const file = writeExportFile({
+        // K4：WP5 将把 writeExportFile 异步化，这里先 await（对同步函数 await 亦合法）。
+        const file = await writeExportFile({
           dir: this.config.exportDir,
           format,
           columns: set.columns.map((c) => c.name),
@@ -1263,12 +1272,11 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
         const worker = this.skillWorker;
         const prompt = String(a.prompt ?? '');
         const startedRun = worker.start(String(a.skill ?? ''), prompt);
-        // 没有等待上限（曾有 30~900 秒的 deadline + SKILL_TIMEOUT，已删）。
-        // 一次 PPT 生成就是几十分钟量级的活儿，到点取消等于把干了 14 分钟的成果扔掉，
-        // 和回合计时器是同一个错误（docs/04-ai-agent-design.md「回合没有截止时间」）。
-        // Worker 里面的模型调用有 provider 字节看门狗、起的子进程有 skillRunner 自己的超时，
-        // 卡死在下一层就会被看见；这里只等两种事：Worker 自己到了终态，或者上游中止。
-        // Worker 也可能停在「等用户回答」上——那是在等人，不是在卡死，本来就该一直等。
+        // G6：轮询必须有总时长上限——worker 卡在非终态（子进程僵尸、事件丢失）时
+        // 无限等待会把 Agent 回合永久钉死。与 skillRunner 的 10min 默认超时对齐，
+        // 超时取消并按失败处理。长任务（PPT）的时长问题应在 skillRunner 层解决
+        // （其超时可按 skill 配置），而不是靠这里无限轮询兜底。
+        const pollDeadline = Date.now() + SKILL_WORKER_POLL_TIMEOUT_MS;
         for (;;) {
           if (ctx.signal?.aborted) {
             worker.cancel(startedRun.runId);
@@ -1291,6 +1299,10 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
               ...(succeeded ? {} : { error: { code: 'SKILL_WORKER_FAILED', message: state?.error ?? 'Skill Worker 失败' } }),
               meta: { durationMs: Date.now() - started },
             };
+          }
+          if (Date.now() > pollDeadline) {
+            worker.cancel(startedRun.runId);
+            return { ok: false, summary: 'Skill Worker 超时', error: { code: 'SKILL_TIMEOUT', message: `Skill Worker 超过 ${SKILL_WORKER_POLL_TIMEOUT_MS}ms 未到终态，已取消` }, meta: { durationMs: Date.now() - started } };
           }
           await new Promise((resolve) => setTimeout(resolve, 500));
         }
@@ -1355,7 +1367,17 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
       }
 
       case 'mcp_call': {
-        const { server, result } = await callMcpTool(this.store, String(a.server ?? ''), String(a.tool ?? ''), (a.arguments as Record<string, unknown>) ?? {});
+        // 契约 K1：WP3 给 mcp client.call / callMcpTool 增加可选 { signal } 参数，
+        // 上游中止时 MCP 调用随之取消。对方签名落地前直接传第五参会 typecheck
+        // 失败，暂用断言放宽；运行时多余参数被忽略，集成后移除断言。
+        const callWithSignal = callMcpTool as (
+          store: Store,
+          serverRef: string,
+          tool: string,
+          args?: Record<string, unknown>,
+          opts?: { signal?: AbortSignal; timeoutMs?: number },
+        ) => ReturnType<typeof callMcpTool>;
+        const { server, result } = await callWithSignal(this.store, String(a.server ?? ''), String(a.tool ?? ''), (a.arguments as Record<string, unknown>) ?? {}, { signal: ctx.signal });
         if (!result.ok) return result;
         return ok(started, `${server.name}.${String(a.tool)} · ${result.summary.slice(0, 200)}`, result.data);
       }
@@ -1619,6 +1641,8 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
       allowMulti: false,
       autoLimit: false,
       actor: 'agent',
+      // G2：质检 COUNT DISTINCT 全表聚合此前漏传超时；质检口径 120s。
+      timeoutMs: QUALITY_CHECK_TIMEOUT_MS,
     });
     const set = batch.sets[0];
     if (!set) throw new DbError('质量检查没有返回结果');
@@ -1651,6 +1675,8 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
         // 重复主键组可能有几十万，必须让数据库只回 5 行，而不是全表分组后在内存里截。
         autoLimit: true,
         actor: 'agent',
+        // G2：重复主键检查同样是全表分组，质检口径 120s。
+        timeoutMs: QUALITY_CHECK_TIMEOUT_MS,
       });
       duplicates = dupBatch.sets[0]?.rows ?? [];
     }

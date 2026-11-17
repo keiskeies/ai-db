@@ -1,4 +1,13 @@
-import { deflateRawSync } from 'node:zlib';
+import { promises as fsp } from 'node:fs';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { deflateRaw } from 'node:zlib';
+
+// 等价 zlib.promises.deflateRaw：tsx/esbuild 的 CJS interop 不会把 node:zlib 上惰性的
+// promises getter 拷到默认导入对象上，直接 promisify 回调版，行为一致（都走 libuv 线程池）。
+const deflateRawAsync = promisify(deflateRaw);
+// 仅取类型：运行时不反向依赖 services，避免 xlsx ↔ services 循环引用把整条驱动链拉进轻量导出路径。
+import type { ExportInput } from './services';
 
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
@@ -29,6 +38,13 @@ function neutralizeFormula(value: string): string {
   return /^[=+\-@\t\r\n]/.test(value) ? `'${value}` : value;
 }
 
+// 与 services.toCsv 的转义规则保持一致；本地复制一份是为了让落盘写入器不反向依赖 services（循环引用）。
+function escapeCsv(value: unknown): string {
+  let text = value === null || value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+  text = neutralizeFormula(text);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
 function cellRef(index: number, row: number): string {
   let value = index + 1;
   let letters = '';
@@ -49,13 +65,45 @@ function cellXml(value: unknown, ref: string): string {
   return `${open} t="inlineStr"><is><t xml:space="preserve">${escapeXml(neutralizeFormula(String(value)))}</t></is></c>`;
 }
 
-function zip(files: Record<string, string>): Buffer {
-  const parts: Buffer[] = [];
-  const central: Buffer[] = [];
-  let offset = 0;
-  for (const [name, content] of Object.entries(files)) {
-    const data = Buffer.from(content, 'utf8');
-    const compressed = deflateRawSync(data);
+/** 每攒够一批行就落成 Buffer，避免 20 万行时「逐行字符串数组 + 整体 join + Buffer 拷贝」多份峰值内存。 */
+const SHEET_CHUNK_ROWS = 2000;
+/** 文本格式导出的分批写入行数：批与批之间让出事件循环，导出不再一次性占住主线程。 */
+const EXPORT_BATCH_ROWS = 1000;
+
+async function buildSheetXml(sheet: XlsxSheet): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let pending =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>';
+  pending += `<row r="1">${sheet.columns.map((column, position) => cellXml(column, cellRef(position, 1))).join('')}</row>`;
+  for (let i = 0; i < sheet.rows.length; i += 1) {
+    const row = sheet.rows[i] ?? [];
+    const r = i + 2;
+    pending += `<row r="${r}">${row.map((value, position) => cellXml(value, cellRef(position, r))).join('')}</row>`;
+    if ((i + 1) % SHEET_CHUNK_ROWS === 0) {
+      chunks.push(Buffer.from(pending, 'utf8'));
+      pending = '';
+      // 大表构建是纯 CPU 同步操作，定期让出事件循环，避免长导出饿死其它请求。
+      if ((i + 1) % (SHEET_CHUNK_ROWS * 10) === 0) await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
+  pending += '</sheetData></worksheet>';
+  chunks.push(Buffer.from(pending, 'utf8'));
+  return Buffer.concat(chunks);
+}
+
+/**
+ * 顺序写入 zip 条目：deflate 走 zlib 线程池（异步），且每个条目压缩完即释放原始数据，
+ * 峰值内存 ≈ 已压缩部分 + 单个未压缩条目，而不是整本工作簿的原始 XML。
+ */
+class ZipWriter {
+  private parts: Buffer[] = [];
+  private central: Buffer[] = [];
+  private offset = 0;
+  private count = 0;
+
+  async add(name: string, content: string | Buffer): Promise<void> {
+    const data = typeof content === 'string' ? Buffer.from(content, 'utf8') : content;
+    const compressed = await deflateRawAsync(data);
     const crc = crc32(data);
     const nameBuf = Buffer.from(name, 'utf8');
     const local = Buffer.alloc(30);
@@ -67,7 +115,7 @@ function zip(files: Record<string, string>): Buffer {
     local.writeUInt32LE(compressed.length, 18);
     local.writeUInt32LE(data.length, 22);
     local.writeUInt16LE(nameBuf.length, 26);
-    parts.push(local, nameBuf, compressed);
+    this.parts.push(local, nameBuf, compressed);
     const entry = Buffer.alloc(46);
     entry.writeUInt32LE(0x02014b50, 0);
     entry.writeUInt16LE(20, 4);
@@ -78,21 +126,25 @@ function zip(files: Record<string, string>): Buffer {
     entry.writeUInt32LE(compressed.length, 20);
     entry.writeUInt32LE(data.length, 24);
     entry.writeUInt16LE(nameBuf.length, 28);
-    entry.writeUInt32LE(offset, 42);
-    central.push(entry, nameBuf);
-    offset += local.length + nameBuf.length + compressed.length;
+    entry.writeUInt32LE(this.offset, 42);
+    this.central.push(entry, nameBuf);
+    this.offset += local.length + nameBuf.length + compressed.length;
+    this.count += 1;
   }
-  const centralBuf = Buffer.concat(central);
-  const eocd = Buffer.alloc(22);
-  eocd.writeUInt32LE(0x06054b50, 0);
-  eocd.writeUInt16LE(Object.keys(files).length, 8);
-  eocd.writeUInt16LE(Object.keys(files).length, 10);
-  eocd.writeUInt32LE(centralBuf.length, 12);
-  eocd.writeUInt32LE(offset, 16);
-  return Buffer.concat([...parts, centralBuf, eocd]);
+
+  finish(): Buffer {
+    const centralBuf = Buffer.concat(this.central);
+    const eocd = Buffer.alloc(22);
+    eocd.writeUInt32LE(0x06054b50, 0);
+    eocd.writeUInt16LE(this.count, 8);
+    eocd.writeUInt16LE(this.count, 10);
+    eocd.writeUInt32LE(centralBuf.length, 12);
+    eocd.writeUInt32LE(this.offset, 16);
+    return Buffer.concat([...this.parts, centralBuf, eocd]);
+  }
 }
 
-export function toXlsx(columns: string[], rows: unknown[][]): Buffer {
+export async function toXlsx(columns: string[], rows: unknown[][]): Promise<Buffer> {
   return toXlsxSheets([{ name: 'Sheet1', columns, rows }]);
 }
 
@@ -106,7 +158,7 @@ export interface XlsxSheet {
  * 多 sheet 工作簿。报告的表格块各占一张表：
  * 把表格压成「章节 | 类型 | 内容」三列再拼上 `a | b | c`，业务读者就没法拿去用了。
  */
-export function toXlsxSheets(sheets: XlsxSheet[]): Buffer {
+export async function toXlsxSheets(sheets: XlsxSheet[]): Promise<Buffer> {
   const safe = (name: string, index: number): string => {
     const cleaned = String(name ?? '').replace(/[\\/:*?[\]]/g, ' ').trim().slice(0, 31);
     return cleaned || `Sheet${index + 1}`;
@@ -121,39 +173,109 @@ export function toXlsxSheets(sheets: XlsxSheet[]): Buffer {
     names.push(count ? `${base.slice(0, 27)} (${count + 1})` : base);
   });
 
-  const sheetXml = sheets
-    .map((sheet, index) => {
-      const header = `<row r="1">${sheet.columns.map((column, position) => cellXml(column, cellRef(position, 1))).join('')}</row>`;
-      const body = sheet.rows
-        .map((row, rowIndex) => `<row r="${rowIndex + 2}">${row.map((value, position) => cellXml(value, cellRef(position, rowIndex + 2))).join('')}</row>`)
-        .join('');
-      return { name: names[index] ?? `Sheet${index + 1}`, xml: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${header}${body}</sheetData></worksheet>` };
-    });
-
-  const overrides = sheetXml
+  const overrides = sheets
     .map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`)
     .join('');
-  const sheetEntries = sheetXml
-    .map((sheet, index) => `<sheet name="${escapeXml(sheet.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`)
+  const sheetEntries = names
+    .map((name, index) => `<sheet name="${escapeXml(name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`)
     .join('');
-  const relationships = sheetXml
+  const relationships = sheets
     .map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`)
     .join('');
 
-  const files: Record<string, string> = {
-    '[Content_Types].xml':
-      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+  const writer = new ZipWriter();
+  await writer.add(
+    '[Content_Types].xml',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
       overrides +
       '</Types>',
-    '_rels/.rels':
-      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
-    'xl/workbook.xml':
-      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheetEntries}</sheets></workbook>`,
-    'xl/_rels/workbook.xml.rels':
-      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${relationships}</Relationships>`,
-  };
-  sheetXml.forEach((sheet, index) => {
-    files[`xl/worksheets/sheet${index + 1}.xml`] = sheet.xml;
-  });
-  return zip(files);
+  );
+  await writer.add(
+    '_rels/.rels',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+  );
+  await writer.add(
+    'xl/workbook.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheetEntries}</sheets></workbook>`,
+  );
+  await writer.add(
+    'xl/_rels/workbook.xml.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${relationships}</Relationships>`,
+  );
+  for (let index = 0; index < sheets.length; index += 1) {
+    // 逐 sheet「构建 → 压缩 → 释放」，多 sheet 大表也不会同时驻留所有原始 XML。
+    const xml = await buildSheetXml(sheets[index]!);
+    await writer.add(`xl/worksheets/sheet${index + 1}.xml`, xml);
+  }
+  return writer.finish();
+}
+
+/**
+ * 契约 K4：导出直接落盘，返回元数据（不再把整份文件内容驻留内存 / 返回大 Buffer）。
+ * 文本格式分批写文件；xlsx 由异步压缩生成。调用方（routes/executor/commands）需 await。
+ */
+export async function writeExportFile(input: ExportInput): Promise<{ path: string; bytes: number; rows: number }> {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const safeBase = (input.baseName || input.tableName || 'query').replace(/[^\w\u4e00-\u9fff-]+/g, '_').slice(0, 40);
+  const filePath = join(input.dir, `${safeBase}-${stamp}.${input.format}`);
+  const rowCount = input.sheets?.length ? input.sheets.reduce((sum, sheet) => sum + sheet.rows.length, 0) : input.rows.length;
+
+  if (input.format === 'xlsx') {
+    const buffer = input.sheets?.length ? await toXlsxSheets(input.sheets) : await toXlsx(input.columns, input.rows);
+    await fsp.writeFile(filePath, buffer);
+  } else {
+    const handle = await fsp.open(filePath, 'w');
+    try {
+      if (input.format === 'csv') {
+        await handle.writeFile('\uFEFF' + input.columns.map(escapeCsv).join(',') + '\r\n');
+        for (let i = 0; i < input.rows.length; i += EXPORT_BATCH_ROWS) {
+          const batch = input.rows.slice(i, i + EXPORT_BATCH_ROWS);
+          await handle.writeFile(batch.map((row) => row.map(escapeCsv).join(',')).join('\r\n') + '\r\n');
+        }
+      } else if (input.format === 'xml') {
+        const tag = (value: string) => {
+          const cleaned = value.replace(/[^A-Za-z0-9_.-]/g, '_');
+          return /^[A-Za-z_]/.test(cleaned) ? cleaned : `col_${cleaned}`;
+        };
+        await handle.writeFile('<?xml version="1.0" encoding="UTF-8"?>\n<rows>\n');
+        for (let i = 0; i < input.rows.length; i += EXPORT_BATCH_ROWS) {
+          const batch = input.rows.slice(i, i + EXPORT_BATCH_ROWS);
+          const xmlRows = batch
+            .map((row) => '  <row>' + input.columns.map((column, index) => `<${tag(column)}>${escapeXml(row[index])}</${tag(column)}>`).join('') + '</row>')
+            .join('\n');
+          await handle.writeFile(xmlRows + '\n');
+        }
+        if (!input.rows.length) await handle.writeFile('\n');
+        await handle.writeFile('</rows>\n');
+      } else if (input.format === 'json') {
+        if (!input.rows.length) {
+          await handle.writeFile('[]');
+        } else {
+          await handle.writeFile('[\n');
+          for (let i = 0; i < input.rows.length; i += EXPORT_BATCH_ROWS) {
+            const batch = input.rows.slice(i, i + EXPORT_BATCH_ROWS);
+            const text = batch
+              .map((row) => '  ' + JSON.stringify(Object.fromEntries(input.columns.map((c, index) => [c, row[index] === undefined ? null : row[index]]))))
+              .join(',\n');
+            const hasMore = i + EXPORT_BATCH_ROWS < input.rows.length;
+            await handle.writeFile(text + (hasMore ? ',\n' : '\n'));
+          }
+          await handle.writeFile(']');
+        }
+      } else {
+        // INSERT 脚本依赖 SQL 方言字面量（services.toSqlInserts）；动态引入避免模块顶层循环依赖。
+        const { toSqlInserts } = await import('./services');
+        await handle.writeFile(`-- AiDB Studio export (${new Date().toISOString()})\n`);
+        for (let i = 0; i < input.rows.length; i += EXPORT_BATCH_ROWS) {
+          const batch = input.rows.slice(i, i + EXPORT_BATCH_ROWS);
+          await handle.writeFile(toSqlInserts(input.engine, input.tableName || 'exported_data', input.columns, batch) + '\n');
+        }
+        if (!input.rows.length) await handle.writeFile('\n');
+      }
+    } finally {
+      await handle.close();
+    }
+  }
+  const stat = await fsp.stat(filePath);
+  return { path: filePath, bytes: stat.size, rows: rowCount };
 }

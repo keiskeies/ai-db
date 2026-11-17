@@ -3,9 +3,16 @@ import type { Pool } from 'pg';
 import type { ColumnInfo, Engine, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions } from './types';
 import { DbError, toRowArray } from './types';
+import { wrapSelectLimit } from './sqlCap';
 import { nodeTlsOptions } from './ssl';
 
 const { Pool: PgPool } = pg;
+
+/** 查询默认超时；内省/test 等 pool.query 路径靠池级 statement_timeout 在服务端兜底。 */
+const DEFAULT_QUERY_TIMEOUT_MS = 30000;
+const METADATA_TIMEOUT_MS = 30000;
+/** 备份恢复整段脚本的服务端上限（与网关 execScript 的 600s 约定对齐）。 */
+const SCRIPT_TIMEOUT_MS = 600000;
 
 export interface PgOptions {
   host: string;
@@ -75,6 +82,10 @@ export class PostgresDriver implements Driver {
         ssl: nodeTlsOptions(this.opts),
         max: 3,
         connectionTimeoutMillis: 10000,
+        // 会话级服务端兜底：内省/test 等直接 pool.query 的路径拿不到 client 句柄，
+        // 无法逐句 SET/RESET，靠启动参数让服务端 30s 自动取消（57014）。
+        // 用户查询在 runOnClient 里按 opts 覆盖，结束后 RESET 回落到这个默认值。
+        statement_timeout: METADATA_TIMEOUT_MS,
         application_name: 'AiDB Studio',
       });
       pool.on('error', () => undefined);
@@ -274,6 +285,8 @@ export class PostgresDriver implements Driver {
       }
       return [...tables.values()];
     } catch (err: any) {
+      // 池级 statement_timeout 取消（57014）保留超时语义，其余按内省错误上报。
+      if (err?.code === '57014') throw new DbError(`PostgreSQL 内省超时（${METADATA_TIMEOUT_MS}ms）`, { code: 'PG_TIMEOUT', status: 504 });
       throw new DbError(err.message, { code: 'PG_METADATA_ERROR' });
     }
   }
@@ -284,15 +297,72 @@ export class PostgresDriver implements Driver {
 
   async runParams(sql: string, params: unknown[], opts: RunOptions = {}): Promise<QueryResult> {
     const started = Date.now();
+    // pg-pool 的 connectionTimeoutMillis 已覆盖排队等待；这里签出独占 client 才能 SET/RESET。
+    const client = await this.pool(opts.database).connect();
+    return this.runOnClient(client, sql, params, opts, started, false);
+  }
+
+  /**
+   * 真超时 + 行数下推的统一执行路径。
+   * 服务端：SET statement_timeout 让 PG 自己取消慢查询（57014）；
+   * 客户端看门狗兜底（服务端无响应/网络黑洞时 SET 也救不了），非事务到期销毁 client，
+   * 服务端查询随连接终止。事务内不销毁（会中止事务），且用 SET LOCAL——
+   * 事务结束自动还原，语句被取消导致事务 aborted 时也不会残留会话设置。
+   */
+  private async runOnClient(
+    client: import('pg').PoolClient,
+    sql: string,
+    params: unknown[],
+    opts: RunOptions,
+    started: number,
+    inTx: boolean,
+  ): Promise<QueryResult> {
+    const ms = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : DEFAULT_QUERY_TIMEOUT_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let destroyed = false;
+    const watchdog = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        if (!inTx) {
+          destroyed = true;
+          client.release(true);
+        }
+        reject(new DbError(`PostgreSQL 查询超时（${ms}ms）`, { code: 'PG_TIMEOUT', status: 504 }));
+      }, ms);
+    });
     try {
-      const res = (await this.pool(opts.database).query({
-        text: sql,
-        values: params,
-        query_timeout: opts.timeoutMs,
-      } as any)) as import('pg').QueryResult<Record<string, unknown>>;
+      await Promise.race([client.query(inTx ? `SET LOCAL statement_timeout = ${ms}` : `SET statement_timeout = ${ms}`), watchdog]);
+      const maxRows = opts.maxRows && opts.maxRows > 0 ? opts.maxRows : 0;
+      let pushed = maxRows > 0 ? wrapSelectLimit(sql, maxRows + 1) : undefined;
+      let res: import('pg').QueryResult<Record<string, unknown>>;
+      try {
+        res = (await Promise.race([client.query({ text: pushed ?? sql, values: params }), watchdog])) as import('pg').QueryResult<Record<string, unknown>>;
+      } catch (err: any) {
+        // 重复列名（如 SELECT a.id, b.id）进不了子查询：回落原句，行数上限靠客户端裁剪。
+        if (pushed && err?.code === '42701') {
+          pushed = undefined;
+          res = (await Promise.race([client.query({ text: sql, values: params }), watchdog])) as import('pg').QueryResult<Record<string, unknown>>;
+        } else {
+          throw err;
+        }
+      }
       return this.toResult(res, started, sql, opts.maxRows);
     } catch (err: any) {
-      throw new DbError(err.message ?? 'PostgreSQL 执行失败', { code: err.code ?? 'PG_ERROR' });
+      if (err instanceof DbError) throw err;
+      // 57014 = statement_timeout 服务端取消，沿用超时语义而不是普通执行错误。
+      if (err?.code === '57014') throw new DbError(`PostgreSQL 查询超时（${ms}ms）`, { code: 'PG_TIMEOUT', status: 504 });
+      throw new DbError(err?.message ?? 'PostgreSQL 执行失败', { code: err?.code ?? 'PG_ERROR' });
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (!inTx && !destroyed) {
+        try {
+          await client.query('RESET statement_timeout');
+          client.release();
+        } catch {
+          // RESET 失败说明 client 状态不可信（连接已断/事务异常），销毁不回池，
+          // 避免把改过的 statement_timeout 泄漏给下一个使用者。
+          client.release(true);
+        }
+      }
     }
   }
 
@@ -329,12 +399,7 @@ export class PostgresDriver implements Driver {
     const client = this.txClients.get(sessionId);
     if (!client) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
     const started = Date.now();
-    try {
-      const res = (await client.query({ text: sql, values: params, query_timeout: opts.timeoutMs } as any)) as import('pg').QueryResult<Record<string, unknown>>;
-      return this.toResult(res, started, sql, opts.maxRows);
-    } catch (err: any) {
-      throw new DbError(err.message ?? 'PostgreSQL 事务执行失败', { code: err.code ?? 'PG_ERROR' });
-    }
+    return this.runOnClient(client, sql, params, opts, started, true);
   }
 
   async commitTransaction(sessionId: string): Promise<void> {
@@ -363,12 +428,26 @@ export class PostgresDriver implements Driver {
   /** 备份恢复用：PG 的 simple query 一次往返执行整段脚本，脚本内任一语句失败整段回滚。 */
   async execScript(sql: string, database?: string): Promise<void> {
     const client = await this.pool(database).connect();
+    let ok = false;
     try {
+      // 池默认 statement_timeout 是内省用的 30s，恢复脚本的大语句必须放宽，否则中途被 57014 掐断。
+      await client.query(`SET statement_timeout = ${SCRIPT_TIMEOUT_MS}`);
       await client.query(sql);
+      ok = true;
     } catch (err: any) {
       throw new DbError(err?.message ?? 'PostgreSQL 脚本执行失败', { code: err?.code ?? 'PG_SCRIPT_ERROR' });
     } finally {
-      client.release();
+      if (ok) {
+        try {
+          await client.query('RESET statement_timeout');
+          client.release();
+        } catch {
+          client.release(true);
+        }
+      } else {
+        // 脚本失败后 client 可能停在 aborted 事务/断连状态，RESET 不可靠，直接销毁。
+        client.release(true);
+      }
     }
   }
 

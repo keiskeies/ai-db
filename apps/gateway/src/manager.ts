@@ -45,6 +45,7 @@ import {
 } from '@aidb/core';
 import type { GatewayConfig } from './config';
 import { createDriver, DbError, type Driver } from './drivers';
+import { withQueryTimeout } from './drivers/timeout';
 import { GatewayEvents, type SchemaChangeCause } from './events';
 import { normalizeMql } from './drivers/mongodb';
 import type { CreateRedisKeyInput, RedisKeyDriver } from './drivers/types';
@@ -64,6 +65,19 @@ interface CachedDriver {
  * 上限保护的是「一次误粘贴几百条语句」这类规模事故，不是权限——权限见 resolveRisk。
  */
 export const MAX_SCRIPT_STATEMENTS = 200;
+
+// ── 超时常量集中定义（G2）──────────────────────────────────────────────
+// 各执行路径的超时口径不同，散落在调用点容易漏传（导出/质检曾完全没传）。
+// 统一放这里并注明理由，调用方只引用常量，不再各写各的数字。
+
+/** 导出查询：全表扫描 + 落盘，比交互查询慢，但仍是单条查询，不该像脚本那样长占连接。120s。 */
+export const EXPORT_QUERY_TIMEOUT_MS = 120_000;
+/** 整段脚本（备份恢复）：一个脚本可能含上千条 INSERT，单语句 30s 口径不适用，统一 600s。 */
+export const EXEC_SCRIPT_TIMEOUT_MS = 600_000;
+/** 质检 / 画像：COUNT DISTINCT 等全表聚合在大表上慢，但仍是单条查询。120s。 */
+export const QUALITY_CHECK_TIMEOUT_MS = 120_000;
+/** scheduler 任务级：产物/仪表板/备份任务挂死时必须释放运行槽，否则后续所有定时任务被永久阻塞。600s。 */
+export const SCHEDULER_TASK_TIMEOUT_MS = 600_000;
 
 /**
  * 这些引擎的 DDL 会**隐式提交**当前事务：在 BEGIN 里执行完 ALTER/CREATE，
@@ -88,6 +102,8 @@ export interface QueryOptions {
   actor: 'user' | 'agent';
   /** 跨请求事务会话；存在时语句走被固定的那条连接。 */
   sessionId?: string;
+  /** 执行追踪 id（G1）：路由生成并传入，客户端提前断开时据此取消，见 cancelExecution。 */
+  executionId?: string;
 }
 
 export class ConnectionManager {
@@ -103,6 +119,11 @@ export class ConnectionManager {
   >();
   private readonly txIdleMs: number;
   private txTimer?: NodeJS.Timeout;
+  /**
+   * 活动查询追踪（G1）：executionId → 占用的连接与事务归属。
+   * 客户端提前断开时据此销毁连接，终止服务端仍在跑的查询；查询结束即移除。
+   */
+  private activeExecutions = new Map<string, { connectionId: string; sessionId?: string; inTx: boolean; abandoned?: boolean }>();
 
   constructor(
     private store: Store,
@@ -358,6 +379,8 @@ export class ConnectionManager {
     if (!supportsStructuredQuery(driver)) {
       throw new DbError(`${engineMeta(conn.engine).label} 驱动不支持结构化查询`, { code: 'UNSUPPORTED_ENGINE' });
     }
+    // G1：结构化查询不进事务会话，断开时可直接销毁连接。
+    if (opts.executionId) this.activeExecutions.set(opts.executionId, { connectionId, inTx: false });
     const started = Date.now();
     try {
       let effective = query;
@@ -393,6 +416,8 @@ export class ConnectionManager {
         error: err?.message ?? '执行失败',
       });
       throw err instanceof DbError ? err : new DbError(err?.message ?? '执行失败');
+    } finally {
+      if (opts.executionId) this.activeExecutions.delete(opts.executionId);
     }
   }
 
@@ -1155,6 +1180,59 @@ export class ConnectionManager {
     return session ? { connectionId: session.connectionId, database: session.database } : null;
   }
 
+  /**
+   * 取消一次仍在执行的查询（G1：客户端提前断开）。返回是否命中活动执行。
+   *
+   * 事务内不能销毁连接——那会中止用户整个事务，只标记放弃结果，查询在超时
+   * 看门狗约束下跑完，结果由路由层丢弃。同连接还挂着别的事务会话时同理，
+   * 避免连带回滚别人的事务。其余情况销毁该连接的缓存驱动：MySQL/PG 连接
+   * 断开即终止服务端查询；其他引擎按驱动能力尽力而为。驱动会在下次查询时重建。
+   */
+  cancelExecution(executionId: string): boolean {
+    const active = this.activeExecutions.get(executionId);
+    if (!active) return false;
+    active.abandoned = true;
+    const txOnConnection = [...this.txSessions.values()].some((s) => s.connectionId === active.connectionId);
+    if (active.inTx || txOnConnection) return true;
+    const cached = this.clients.get(active.connectionId);
+    if (cached) this.destroyDriverConnections(cached.driver);
+    // close() 负责摘缓存与清事务会话；单独 pool.end() 是温和关闭（mysql2 会等
+    // 当前命令跑完），杀不掉正在执行的查询，所以先 destroy 再 close。
+    void this.close(active.connectionId).catch(() => undefined);
+    return true;
+  }
+
+  /**
+   * 尽力立即断开驱动占用的底层连接（仅用于取消路径，整池即将被丢弃）。
+   * Driver 契约只有温和的 close()，这里按 mysql2/pg 池的已知结构直接 destroy；
+   * 结构不匹配（驱动重写等）时静默跳过，由 close() + 超时看门狗兜底。
+   */
+  private destroyDriverConnections(driver: Driver): void {
+    try {
+      const pools = (driver as unknown as { pools?: Map<string, unknown> }).pools;
+      if (!pools || typeof pools.values !== 'function') return;
+      for (const pool of pools.values()) {
+        const p = pool as any;
+        // mysql2 promise pool：真实连接挂在 core pool 的 _allConnections 上。
+        const core = p?.pool ?? p;
+        const all = core?._allConnections;
+        if (all && typeof all.forEach === 'function') {
+          all.forEach((conn: any) => {
+            try { conn?.destroy?.(); } catch { /* 单条连接销毁失败不影响其余 */ }
+          });
+          continue;
+        }
+        // pg pool：destroy 客户端底层 socket 即终止服务端查询。
+        const clients = p?._clients;
+        if (Array.isArray(clients)) {
+          for (const client of clients) {
+            try { client?.connection?.stream?.destroy?.(); } catch { /* 同上 */ }
+          }
+        }
+      }
+    } catch { /* 结构探测失败时由 close() 兜底 */ }
+  }
+
   async query(connectionId: string, sql: string, opts: QueryOptions): Promise<QueryBatchResult> {
     const conn = this.store.getConnection(connectionId);
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
@@ -1194,6 +1272,9 @@ export class ConnectionManager {
     const txSession = candidate && candidate.connectionId === connectionId ? candidate : undefined;
     const txDriver = txSession && supportsTransaction(driver) ? driver : undefined;
     if (txSession) txSession.lastUsedAt = Date.now();
+    // G1：登记执行追踪，客户端提前断开时 cancelExecution 据此定位连接与事务归属。
+    const inTx = Boolean(txDriver && opts.sessionId);
+    if (opts.executionId) this.activeExecutions.set(opts.executionId, { connectionId, sessionId: inTx ? opts.sessionId : undefined, inTx });
     const started = Date.now();
     const sets: QueryResult[] = [];
     const messages: string[] = [];
@@ -1240,6 +1321,7 @@ export class ConnectionManager {
       });
       throw err instanceof DbError ? err : new DbError(err?.message ?? '执行失败');
     } finally {
+      if (opts.executionId) this.activeExecutions.delete(opts.executionId);
       if (!failure && sets.length) {
         this.store.addHistory({
           connectionId,
@@ -1316,7 +1398,21 @@ export class ConnectionManager {
     const driver = await this.driverFor(connectionId);
     if (!driver.execScript) return false;
     const started = Date.now();
-    await driver.execScript(sql, opts.database ?? conn.database);
+    // G2：execScript 此前完全没超时——驱动签名不收 timeoutMs，挂死的脚本会永久
+    // 占住连接。这里在 manager 侧套看门狗；整段脚本不是单条查询，调用方传的
+    // queryTimeoutMs 是单语句口径，统一抬到脚本级 600s 下限（允许调用方加长）。
+    const scriptTimeoutMs = Math.max(opts.timeoutMs ?? 0, EXEC_SCRIPT_TIMEOUT_MS);
+    await withQueryTimeout(driver.execScript(sql, opts.database ?? conn.database), scriptTimeoutMs, {
+      code: 'SCRIPT_TIMEOUT',
+      label: '脚本执行',
+      // 超时后断连接才能真正停掉 MySQL/PG 服务端脚本；MySQL 驱动的 execScript
+      // 走独立连接，池销毁够不到它，残留执行由驱动自身超时兜底（WP1）。
+      onTimeout: () => {
+        const cached = this.clients.get(connectionId);
+        if (cached) this.destroyDriverConnections(cached.driver);
+        void this.close(connectionId).catch(() => undefined);
+      },
+    });
     this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,

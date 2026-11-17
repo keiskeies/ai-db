@@ -15,6 +15,10 @@ interface Handlers {
 }
 
 const MAX_BACKOFF_MS = 30000;
+// 契约 K3：每 30s 发一帧应用层 ping，10s 内没有任何入站消息（pong 或其它）就判死连接。
+// 半开的 WS 不会触发 onclose，只有主动探测才能发现；判死后 close 交给 onclose 走指数退避重连。
+const PING_INTERVAL_MS = 30000;
+const PONG_TIMEOUT_MS = 10000;
 
 /**
  * 订阅网关的结构变更广播。
@@ -28,9 +32,18 @@ export function startSchemaEvents({ onChange, onReconnect }: Handlers): () => vo
   let disposed = false;
   let socket: WebSocket | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let pingTimer: ReturnType<typeof setInterval> | undefined;
+  let pongTimer: ReturnType<typeof setTimeout> | undefined;
   let attempt = 0;
   // 首次连上不算"断线重连"：启动时本来就会加载，不必多刷一次。
   let connectedOnce = false;
+
+  const clearHeartbeat = () => {
+    if (pingTimer) clearInterval(pingTimer);
+    if (pongTimer) clearTimeout(pongTimer);
+    pingTimer = undefined;
+    pongTimer = undefined;
+  };
 
   const connect = () => {
     if (disposed) return;
@@ -45,15 +58,39 @@ export function startSchemaEvents({ onChange, onReconnect }: Handlers): () => vo
       attempt = 0;
       if (connectedOnce) onReconnect();
       connectedOnce = true;
+      clearHeartbeat();
+      pingTimer = setInterval(() => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        try {
+          ws.send(JSON.stringify({ type: 'ping' }));
+        } catch {
+          return;
+        }
+        // 服务端尚未实现 pong 时这里会到期并重连——退避已有，不会形成风暴。
+        if (pongTimer) clearTimeout(pongTimer);
+        pongTimer = setTimeout(() => {
+          try {
+            ws.close();
+          } catch {
+            /* ignore */
+          }
+        }, PONG_TIMEOUT_MS);
+      }, PING_INTERVAL_MS);
     };
 
     ws.onmessage = (frame) => {
+      // 任何入站消息（pong 或业务帧）都说明通道还活着，解除死连接判定。
+      if (pongTimer) {
+        clearTimeout(pongTimer);
+        pongTimer = undefined;
+      }
       let parsed: any;
       try {
         parsed = JSON.parse(String(frame.data));
       } catch {
         return;
       }
+      if (parsed?.type === 'pong') return;
       if (parsed?.type !== 'schema_changed' || typeof parsed.connectionId !== 'string') return;
       onChange({
         type: 'schema_changed',
@@ -64,6 +101,7 @@ export function startSchemaEvents({ onChange, onReconnect }: Handlers): () => vo
     };
 
     ws.onclose = (event) => {
+      clearHeartbeat();
       socket = undefined;
       if (disposed) return;
       // 4401 是服务端明确的"你没资格"，重连只会得到同一个答案。
@@ -81,6 +119,7 @@ export function startSchemaEvents({ onChange, onReconnect }: Handlers): () => vo
 
   return () => {
     disposed = true;
+    clearHeartbeat();
     if (retryTimer) clearTimeout(retryTimer);
     const current = socket;
     socket = undefined;

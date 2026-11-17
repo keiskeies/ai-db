@@ -1,7 +1,10 @@
 import { DuckDBInstance, type DuckDBConnection } from '@duckdb/node-api';
 import type { ColumnInfo, Engine, QueryResult, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions } from './types';
-import { DbError } from './types';
+import { DbError, estimateRowBytes, MAX_RESULT_BYTES } from './types';
+
+/** 查询默认超时：到期调 connection.interrupt() 真正终止 DuckDB 内部执行。 */
+const DEFAULT_QUERY_TIMEOUT_MS = 30000;
 
 function normalize(value: unknown): unknown {
   if (value === null || value === undefined) return null;
@@ -102,21 +105,68 @@ export class DuckdbDriver implements Driver {
 
   async runParams(sql: string, params: unknown[], opts: RunOptions = {}): Promise<QueryResult> {
     const started = Date.now();
+    const ms = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : DEFAULT_QUERY_TIMEOUT_MS;
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const connection = await this.connect();
-      const reader = await connection.runAndReadAll(sql, params as any);
-      const columns = reader.columnNames().map((name) => ({ name, type: '' }));
-      const rows = reader.getRows().map((row) => row.map(normalize));
-      return {
-        columns,
-        rows,
-        rowCount: rows.length,
-        durationMs: Date.now() - started,
-        affected: reader.rowsChanged || undefined,
-        statement: sql,
-      };
+      // 看门狗到期 interrupt()：DuckDB 在引擎内部终止查询，fetchChunk 随之报错。
+      timer = setTimeout(() => {
+        timedOut = true;
+        try {
+          connection.interrupt();
+        } catch {
+          /* 连接可能已关闭 */
+        }
+      }, ms);
+      // 流式读取（@duckdb/node-api 2.x 的 stream + fetchChunk）：不再 runAndReadAll 整表进堆。
+      const result = await connection.stream(sql, params as any);
+      try {
+        const columns = result.columnNames().map((name) => ({ name, type: '' }));
+        const maxRows = opts.maxRows && opts.maxRows > 0 ? opts.maxRows : Number.POSITIVE_INFINITY;
+        const rows: unknown[][] = [];
+        let bytes = 0;
+        let truncated = false;
+        for (;;) {
+          const chunk = await result.fetchChunk();
+          // 实测（2.0.0-r.1）：结果耗尽时 fetchChunk 返回空 chunk 而不是 null，
+          // 与库内 fetchAllChunks 的终止条件一致，只判 null 会死循环。
+          if (!chunk || chunk.rowCount === 0 || timedOut) break;
+          for (const raw of chunk.getRows()) {
+            const row = raw.map(normalize);
+            const size = estimateRowBytes(row);
+            // 首行即使单独超预算也保留；此后严格执行行数/字节双上限（对齐 mysql 的 64MB 语义）。
+            if (rows.length >= maxRows || (rows.length > 0 && bytes + size > MAX_RESULT_BYTES)) {
+              truncated = true;
+              break;
+            }
+            rows.push(row);
+            bytes += size;
+            if (bytes >= MAX_RESULT_BYTES) {
+              truncated = true;
+              break;
+            }
+          }
+          if (truncated || timedOut) break;
+        }
+        return {
+          columns,
+          rows,
+          rowCount: rows.length,
+          durationMs: Date.now() - started,
+          truncated: truncated || undefined,
+          affected: result.rowsChanged || undefined,
+          statement: sql,
+        };
+      } finally {
+        // 2.0 语义：未读完的流式结果必须 closeSync，否则连接被阻塞无法执行下一条语句。
+        result.closeSync();
+      }
     } catch (err: any) {
+      if (timedOut) throw new DbError(`DuckDB 查询超时（${ms}ms）`, { code: 'DUCKDB_TIMEOUT', status: 504 });
       throw new DbError(err?.message ?? 'DuckDB 执行失败', { code: 'DUCKDB_ERROR' });
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 

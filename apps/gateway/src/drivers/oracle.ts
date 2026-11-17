@@ -19,6 +19,9 @@ function missingColumn(err: any): boolean {
 
 const thickMode = { attempted: false, ready: false };
 
+/** 内省/连接测试的 callTimeout：catalog 查询也可能被锁/慢 IO 挂住，不能无限等。 */
+const METADATA_TIMEOUT_MS = 30000;
+
 /** thin 模式最低支持 12.1；给了 Instant Client 目录就切到 thick 模式，11g 也能连。 */
 function ensureThickMode(): void {
   if (thickMode.attempted) return;
@@ -95,6 +98,7 @@ export class OracleDriver implements Driver {
     try {
       const pool = await this.pool();
       connection = await pool.getConnection();
+      connection.callTimeout = METADATA_TIMEOUT_MS;
       const result = await connection.execute('SELECT banner FROM v$version WHERE ROWNUM = 1', [], {
         outFormat: oracledb.OUT_FORMAT_OBJECT,
       });
@@ -111,6 +115,7 @@ export class OracleDriver implements Driver {
   async listDatabases(): Promise<string[]> {
     const pool = await this.pool();
     const connection = await pool.getConnection();
+    connection.callTimeout = METADATA_TIMEOUT_MS;
     try {
       let result;
       try {
@@ -135,6 +140,7 @@ export class OracleDriver implements Driver {
   async describe(): Promise<TableInfo[]> {
     const pool = await this.pool();
     const connection = await pool.getConnection();
+    connection.callTimeout = METADATA_TIMEOUT_MS;
     try {
       const tables = await connection.execute(
         `SELECT OWNER, TABLE_NAME, 'TABLE' AS KIND, NUM_ROWS FROM ALL_TABLES WHERE OWNER = :1
@@ -316,13 +322,15 @@ export class OracleDriver implements Driver {
         autoCommit: false,
         maxRows: opts.maxRows && opts.maxRows > 0 ? opts.maxRows + 1 : undefined,
       });
-      connection.callTimeout = 0;
       return this.toResult(result, started, sql, opts.maxRows);
     } catch (err: any) {
       throw new DbError(err.message ?? 'Oracle 事务执行失败', {
         code: err.code ?? 'ORACLE_ERROR',
         hint: oracleBindingHint(err),
       });
+    } finally {
+      // 失败路径也要清零，否则上一条语句的 callTimeout 会残留给事务内后续语句。
+      connection.callTimeout = 0;
     }
   }
 

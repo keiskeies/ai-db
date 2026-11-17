@@ -6,7 +6,7 @@ import { Compartment, EditorState, Prec } from '@codemirror/state';
 import { tags as t } from '@lezer/highlight';
 import { keymap } from '@codemirror/view';
 import { MSSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql as sqlLang, type SQLNamespace } from '@codemirror/lang-sql';
-import { AlignLeft, BarChart3, Bookmark, Check, Database, Download, FileDown, FilePlus, FileUp, Gauge, History, ListChecks, Network, Play, PlayCircle, Plus, Pin, Sparkles, Star, Table2, TerminalSquare, Trash2, Undo2, WandSparkles, Wrench } from 'lucide-react';
+import { AlignLeft, BarChart3, Bookmark, Check, Database, Download, FileDown, FilePlus, FileUp, Gauge, History, ListChecks, Network, Play, PlayCircle, Plus, Pin, Sparkles, Square, Star, Table2, TerminalSquare, Trash2, Undo2, WandSparkles, Wrench } from 'lucide-react';
 import type { ConnectionConfig, DashboardChartType, DatabaseSchema, QueryBatchResult } from '@aidb/core';
 import { engineMeta, editsRecords, supportsTransactions, writesDocuments, writesLineProtocol } from '@aidb/core';
 import { api } from '../lib/api';
@@ -161,6 +161,8 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const sqlRef = useRef(sql);
   const tabIdRef = useRef(tab.id);
   const runSeq = useRef(0);
+  // 运行/脚本执行共用一个中止句柄：取消按钮 abort 它，网关靠连接 close 终止服务端查询（WP2 G1）。
+  const runAbortRef = useRef<AbortController | undefined>();
   // 上次已持久化到 tab 的 SQL（仅在真正写库时更新），用于卸载/切 tab 时去重，避免 updateTab 自我触发放大。
   const savedSqlRef = useRef(tab.sql);
   const runRef = useRef<() => void>(() => undefined);
@@ -310,6 +312,8 @@ export function QueryView({ tab }: { tab: QueryTab }) {
       return;
     }
     const seq = ++runSeq.current;
+    const controller = new AbortController();
+    runAbortRef.current = controller;
     setRunning(true);
     setError(null);
     updateTab(tab.id, { sql: text });
@@ -320,7 +324,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
         sql: text,
         limit: queryLimit,
         sessionId: txSession ?? undefined,
-      });
+      }, controller.signal);
       if (seq !== runSeq.current) return;
       setBatch(result);
       setActiveSet(0);
@@ -328,11 +332,16 @@ export function QueryView({ tab }: { tab: QueryTab }) {
       if (result.sets.length > 1) notify('info', tr("执行成功，返回 {0} 个结果集", [result.sets.length]));
     } catch (err: any) {
       if (seq !== runSeq.current) return;
+      if (err?.name === 'AbortError') {
+        notify('info', tr("已取消执行"));
+        return;
+      }
       setError(`${err?.message ?? tr('执行失败')}${err?.hint ? `\n${err.hint}` : ''}`);
       setBatch(null);
       setResultTab('messages');
     } finally {
       if (seq === runSeq.current) setRunning(false);
+      if (runAbortRef.current === controller) runAbortRef.current = undefined;
     }
   };
   runRef.current = () => {
@@ -349,20 +358,27 @@ export function QueryView({ tab }: { tab: QueryTab }) {
           ? `EXPLAIN FORMAT=JSON ${text.replace(/;\s*$/, '')}`
           : `EXPLAIN (FORMAT JSON, ANALYZE false) ${text.replace(/;\s*$/, '')}`;
     const seq = ++runSeq.current;
+    const controller = new AbortController();
+    runAbortRef.current = controller;
     setRunning(true);
     setError(null);
     try {
-      const { batch: result } = await api.query({ connectionId: tab.connectionId, database: tab.database, sql: explainSql });
+      const { batch: result } = await api.query({ connectionId: tab.connectionId, database: tab.database, sql: explainSql }, controller.signal);
       if (seq !== runSeq.current) return;
       setBatch(result);
       setActiveSet(0);
       setResultTab('results');
     } catch (err: any) {
       if (seq !== runSeq.current) return;
+      if (err?.name === 'AbortError') {
+        notify('info', tr("已取消执行"));
+        return;
+      }
       setError(err?.message ?? tr("执行计划失败"));
       setResultTab('messages');
     } finally {
       if (seq === runSeq.current) setRunning(false);
+      if (runAbortRef.current === controller) runAbortRef.current = undefined;
     }
   };
 
@@ -420,6 +436,9 @@ export function QueryView({ tab }: { tab: QueryTab }) {
       notify('warning', tr("请输入 SQL 脚本"));
       return;
     }
+    const seq = ++runSeq.current;
+    const controller = new AbortController();
+    runAbortRef.current = controller;
     setRunning(true);
     setError(null);
     updateTab(tab.id, { sql: text });
@@ -430,17 +449,24 @@ export function QueryView({ tab }: { tab: QueryTab }) {
         sql: text,
         limit: settings.defaultLimit,
         allowMulti: true,
-      });
+      }, controller.signal);
+      if (seq !== runSeq.current) return;
       setBatch(result);
       setActiveSet(0);
       setResultTab('results');
       notify('info', tr("脚本执行完成"), tr("{0} 个结果集", [result.sets.length]));
     } catch (err: any) {
+      if (seq !== runSeq.current) return;
+      if (err?.name === 'AbortError') {
+        notify('info', tr("已取消执行"));
+        return;
+      }
       setError(`${err?.message ?? tr('执行失败')}${err?.hint ? `\n${err.hint}` : ''}`);
       setBatch(null);
       setResultTab('messages');
     } finally {
-      setRunning(false);
+      if (seq === runSeq.current) setRunning(false);
+      if (runAbortRef.current === controller) runAbortRef.current = undefined;
     }
   };
 
@@ -658,9 +684,15 @@ export function QueryView({ tab }: { tab: QueryTab }) {
         >
           {limitOptions.map((value) => <Option key={value} value={value}>{value}{tr(" 行")}</Option>)}
         </Select>
-        <button className="btn primary small" onClick={() => void run()} disabled={running} title={t('run')} data-testid="query-run">
-          {running ? <Spinner /> : <Play size={12} />} <span className="btn-text">{t('run')}</span>
-        </button>
+        {running ? (
+          <button className="btn small" onClick={() => runAbortRef.current?.abort()} title={tr("取消当前执行")} data-testid="query-cancel">
+            <Square size={12} /> <span className="btn-text">{tr("取消")}</span>
+          </button>
+        ) : (
+          <button className="btn primary small" onClick={() => void run()} title={t('run')} data-testid="query-run">
+            <Play size={12} /> <span className="btn-text">{t('run')}</span>
+          </button>
+        )}
       </div>
 
       <div className="toolbar query-actions">

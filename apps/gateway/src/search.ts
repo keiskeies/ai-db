@@ -120,18 +120,24 @@ function resolveProxy(proxyUrl: string | undefined): void {
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // G3：单个 AbortSignal.timeout 覆盖「请求 + body 读取」全程。旧实现在收到响应头
+  // 时就 clearTimeout，服务端只发头不发 body 时 response.text() 会永久挂起。
+  // 这里把 body 读完才返回（signal 全程计时），调用方拿到的是已缓冲的响应，
+  // 后续 .text() 不再触网；超时错误（含 body 阶段）统一归为 SEARCH_TIMEOUT。
+  const signal = AbortSignal.timeout(timeoutMs);
   const dispatcher = activeProxy?.agent;
   try {
-    return dispatcher
-      ? await undiciFetch(url, { ...init, signal: controller.signal, dispatcher })
-      : await fetch(url, { ...init, signal: controller.signal });
+    const response = dispatcher
+      ? await undiciFetch(url, { ...init, signal, dispatcher })
+      : await fetch(url, { ...init, signal });
+    const body = await response.text();
+    // 204/205/304 不允许携带 body，用 null 重建以保留状态与头语义。
+    const nullBody = response.status === 204 || response.status === 205 || response.status === 304;
+    return new Response(nullBody ? null : body, { status: response.status, statusText: response.statusText, headers: response.headers });
   } catch (err: any) {
-    if (err?.name === 'AbortError') fail(`请求超时（${timeoutMs}ms）：${safeHost(url)}`, 'SEARCH_TIMEOUT');
+    // AbortSignal.timeout 触发的是 TimeoutError；兼容 AbortError 命名。
+    if (err?.name === 'AbortError' || err?.name === 'TimeoutError') fail(`请求超时（${timeoutMs}ms）：${safeHost(url)}`, 'SEARCH_TIMEOUT');
     fail(describeFetchFailure(url, err), 'SEARCH_REQUEST_FAILED');
-  } finally {
-    clearTimeout(timer);
   }
 }
 

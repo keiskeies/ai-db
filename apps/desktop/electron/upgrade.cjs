@@ -18,17 +18,20 @@ function installedVersion(home) {
 /**
  * 升级安装时 gateway 会对 aidb.db 做结构迁移。先按旧版本号整体备份一份，
  * 迁移失败时用户可以从 backups/upgrade-* 直接取回。
+ * 整库 copyFileSync 会阻塞主进程（大库可达数秒），改逐文件异步拷贝；调用方需 await。
  */
-function backupBeforeUpgrade({ home, version, now = Date.now() }) {
+async function backupBeforeUpgrade({ home, version, now = Date.now() }) {
   const previous = installedVersion(home);
   if (!previous || previous === version) return { previous, backupDir: undefined };
   const db = path.join(home, 'aidb.db');
   if (!fs.existsSync(db)) return { previous, backupDir: undefined };
   const backupDir = path.join(home, 'backups', `upgrade-${previous}-to-${version}-${now}`);
-  fs.mkdirSync(backupDir, { recursive: true });
+  await fs.promises.mkdir(backupDir, { recursive: true });
   for (const suffix of ['', '-wal', '-shm']) {
     const source = `${db}${suffix}`;
-    if (fs.existsSync(source)) fs.copyFileSync(source, path.join(backupDir, path.basename(source)));
+    // wal/shm 只在库活跃时存在，不存在就不拷（拷了反而 ENOENT）。
+    if (!fs.existsSync(source)) continue;
+    await fs.promises.copyFile(source, path.join(backupDir, path.basename(source)));
   }
   return { previous, backupDir };
 }

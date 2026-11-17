@@ -1,6 +1,7 @@
 import type { AgentSettings } from '../../types';
 import type { LlmProvider } from '../types';
 import { AnthropicProvider } from './anthropic';
+import { resolveDeadlineMs } from './common';
 import { LocalProvider } from './local';
 import { OpenAIProvider } from './openai';
 import { maxOutputTokensOf } from './profile';
@@ -29,6 +30,9 @@ export function createProvider(settings: AgentSettings): LlmProvider {
       // 本机推理引擎加载模型/长提示词 prefill 期间可以整几分钟不吐字节，
       // 这不是卡死。对这类端点不做停摆判定——误杀比漏杀贵得多。
       stallMs: 0,
+      // 但「不做停摆判定」不等于没有上限：引擎真挂死时必须有绝对截止兜底，
+      // 默认 15 分钟，AIDB_PROVIDER_DEADLINE_MS 可覆盖（0 关闭）。
+      deadlineMs: resolveDeadlineMs(),
     });
   }
   if (settings.provider === 'openai') {

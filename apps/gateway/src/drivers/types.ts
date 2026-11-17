@@ -50,6 +50,12 @@ export function supportsRowStream(driver: Driver): driver is RowStreamDriver {
 }
 
 /**
+ * 保留结果的累计字节上限（各驱动共用）。行数上限挡不住大字段宽表：单行数 MB × 5000 行就是 GB 级，
+ * 全量缓冲时一次 SELECT * 即可打穿默认 ~4GB 堆。超限即停止保留并标记 truncated。
+ */
+export const MAX_RESULT_BYTES = 64 * 1024 * 1024;
+
+/**
  * 单元格占用字节估算（按 JS 堆口径，UTF-16 长度近似）。
  * 用于结果/批次的字节预算：行数上限挡不住单行数 MB 的大字段表。
  */

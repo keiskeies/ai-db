@@ -84,6 +84,46 @@ function pythonCommand(): string {
   return process.env.AIDB_PYTHON || (process.env.OS ? 'python' : 'python3');
 }
 
+/**
+ * 杀整棵进程树而不是只杀直接子进程：用户脚本里再 spawn 的子进程（python multiprocessing、
+ * node child_process 等）否则会在超时/超限后残留。按任务约束自带等价实现，不依赖其他模块；
+ * 与既有行为一致直接用 SIGKILL（脚本步骤没有优雅收尾的契约）。
+ * POSIX 依赖 spawn 时 detached:true 让子进程自成进程组，kill(-pid) 才能命中整组。
+ */
+function killTree(child: ChildProcess): void {
+  const pid = child.pid;
+  if (!pid) return;
+  if (process.platform === 'win32') {
+    try {
+      const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+      killer.on('error', () => {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          /* 已退出 */
+        }
+      });
+    } catch {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* 已退出 */
+      }
+    }
+    return;
+  }
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    /* 进程组不存在（未 detached 或已退出），退回直接信号 */
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      /* 已退出 */
+    }
+  }
+}
+
 /** 只传运行所必需的变量：子进程里不该看到网关 token、数据库口令或搜索密钥。 */
 function childEnv(runtime: ScriptRuntime): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { PATH: process.env.PATH ?? '' };
@@ -112,7 +152,14 @@ export async function runScript(input: ScriptInput): Promise<ScriptOutput> {
   const { stdout, stderr, code, timedOut } = await new Promise<{ stdout: string; stderr: string; code: number; timedOut: boolean }>((resolve, reject) => {
     let child: ChildProcess;
     try {
-      child = spawn(command, args, { cwd: input.dir, env: childEnv(input.runtime), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      child = spawn(command, args, {
+        cwd: input.dir,
+        env: childEnv(input.runtime),
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+        // POSIX 下自成进程组，killTree 的 kill(-pid) 才能连带孙进程；Windows 走 taskkill /T 不需要
+        detached: !isWindows,
+      });
     } catch (err: any) {
       reject(new PipelineError(`无法启动 ${input.runtime}：${err?.message ?? err}`, 'PIPELINE_SCRIPT_SPAWN'));
       return;
@@ -122,7 +169,7 @@ export async function runScript(input: ScriptInput): Promise<ScriptOutput> {
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGKILL');
+      killTree(child);
     }, input.timeoutMs);
     child.stdin?.on('error', () => undefined);
     child.stdin?.end(JSON.stringify(input.payload));
@@ -131,7 +178,7 @@ export async function runScript(input: ScriptInput): Promise<ScriptOutput> {
     child.stdout?.on('data', (chunk: string) => {
       stdout += chunk;
       if (stdout.length > STDOUT_LIMIT) {
-        child.kill('SIGKILL');
+        killTree(child);
         stderr += `\nstdout 超过 ${Math.round(STDOUT_LIMIT / 1024 / 1024)}MB 上限`;
       }
     });

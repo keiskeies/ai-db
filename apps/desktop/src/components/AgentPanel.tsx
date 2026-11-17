@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowDown,
   ArrowLeft,
@@ -38,7 +38,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import type { AgentMessageBlock, AgentPlanItem, PermissionMode, QuestionSuggestion, Risk, TableInfo, ToolResult } from '@aidb/core';
+import type { AgentMessage, AgentMessageBlock, AgentPlanItem, PermissionMode, QuestionSuggestion, Risk, TableInfo, ToolResult } from '@aidb/core';
 import { COMMANDS, engineMeta, normalizeSuggestionPrompt, suggestionLabel } from '@aidb/core';
 import { getI18nLocale } from '../i18n';
 import { contextWindowOf, getModelProfile, isUnfinishedStop, supportsInput } from '@aidb/core';
@@ -1250,6 +1250,36 @@ function AssistantShell({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
+
+/**
+ * 历史消息单独 memo：流式期间 store 每 50ms 因 live delta 更新一次，AgentPanel 跟着重渲染，
+ * 但落库消息的对象引用不变——memo 浅比较 message 即可跳过整条历史消息的重渲染，
+ * 也就不会反复 turnFromBlocks + 重解析 markdown。长对话流式时只有 live 那条在动。
+ */
+const PersistedMessage = memo(function PersistedMessage({ message }: { message: AgentMessage }) {
+  if (message.role === 'user') {
+    const images = message.blocks
+      .map((block) => (block.type === 'image' ? block.attachmentId : undefined))
+      .filter((id): id is string => Boolean(id));
+    return <UserMessage text={message.content} images={images.length ? images : undefined} />;
+  }
+  const view = turnFromBlocks(message.blocks);
+  return (
+    <AssistantShell>
+      {/* 分段消息不再另渲染 message.content：finalText 就是各步正文拼起来的那一份，
+          时间线里已经按顺序说过一遍了，再贴一坨等于同一段话出现两次。
+          旧数据没有分段块，TurnBody 只在那种情况下才用 fallbackText。 */}
+      <TurnBody view={view} fallbackText={message.content} testId="execution-section">
+        {message.content ? <AnswerActions text={message.content} /> : null}
+        {view.toolCount ? (
+          <div className="turn-end">
+            {view.toolCount}{tr(" 次工具调用 ")}{message.tokens ? ` · ↓${message.tokens.toLocaleString()} tokens` : ''}
+          </div>
+        ) : null}
+      </TurnBody>
+    </AssistantShell>
+  );
+});
 
 export function AgentPanel() {
   const t = useApp((s) => s.t);

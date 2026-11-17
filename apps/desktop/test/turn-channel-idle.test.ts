@@ -203,7 +203,8 @@ test('上限按服务端心跳定，且心跳与回合进展无关', () => {
   // 心跳必须是**独立定时器**：写在事件回调里的心跳等于「有进展才发」，
   // 那样长查询就不再发字节，这条上限会把健康长回合一刀切断。
   const heartbeat = routes.slice(routes.indexOf("'/agent/sessions/:id/turns'"), routes.indexOf("'/agent/sessions/:id/turns'") + 2400);
-  assert.match(heartbeat, /setInterval\(\(\) => \{[\s\S]{0,80}res\.write\(': ping\\n\\n'\)/, '心跳得是 setInterval');
+  // G5 后心跳经 sseWrite（带背压护栏）写出，与裸 res.write 语义等价：都必须是 setInterval 独立定时器。
+  assert.match(heartbeat, /setInterval\(\(\) => \{[\s\S]{0,80}(?:res\.write\(|sseWrite\(res, )': ping\\n\\n'\)/, '心跳得是 setInterval');
   const interval = /},\s*(\d+)\);\s*\n\s*res\.on\('close'/.exec(heartbeat);
   assert.ok(interval, '找不到心跳间隔');
   const heartbeatMs = Number(interval![1]);

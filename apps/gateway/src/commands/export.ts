@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import PptxGenJS from 'pptxgenjs';
 import { flattenDeckSlides, planReportDeck, reportSheets } from '@aidb/core';
 import type { ArtifactInfo, ArtifactRunInfo, DeckSlide, ReportSpec } from '@aidb/core';
-import { writeExportFile } from '../services';
+import { writeExportFile } from '../xlsx';
 import type { Store } from '../store';
 
 export type ExportFormat = 'xlsx' | 'pptx';
@@ -269,7 +269,7 @@ export async function exportArtifact(
     ? (run!.result as ReportSpec)
     : undefined;
   const table = reportSpec ? { columns: [] as string[], rows: [] as unknown[][] } : tabular(artifact, run);
-  const file = writeExportFile({
+  const file = await writeExportFile({
     dir: config.exportDir,
     format: 'xlsx',
     columns: table.columns,

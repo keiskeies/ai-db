@@ -4,9 +4,15 @@ let pendingOpen = null;
 const listeners = new Set();
 const menuListeners = new Set();
 const updateListeners = new Set();
+const gatewayListeners = new Set();
 
 ipcRenderer.on('update:event', (_event, payload) => {
   for (const listener of updateListeners) listener(payload);
+});
+
+// 网关崩溃恢复事件：fatal = 自动重启已达上限，recovered = 崩溃后已恢复。
+ipcRenderer.on('gateway:event', (_event, payload) => {
+  for (const listener of gatewayListeners) listener(payload);
 });
 
 ipcRenderer.on('open-table', (_event, payload) => {
@@ -45,5 +51,10 @@ contextBridge.exposeInMainWorld('aidbDesktop', {
     listeners.add(callback);
     if (pendingOpen) callback(pendingOpen);
     return () => listeners.delete(callback);
+  },
+  // 网关生命周期事件（{type:'fatal'|'recovered', message?}），渲染层据此提示崩溃/恢复。
+  onGatewayEvent: (callback) => {
+    gatewayListeners.add(callback);
+    return () => gatewayListeners.delete(callback);
   },
 });
