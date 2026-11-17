@@ -83,9 +83,6 @@ const NON_REPAIRABLE = new Set([
  */
 function serializeForModel(result: ToolResult, extra?: Record<string, unknown>, maxChars = MAX_MODEL_RESULT_CHARS): string {
   const budget = Math.max(0, Math.floor(maxChars));
-  const whole = JSON.stringify({ ...result, ...(extra ?? {}) });
-  if (whole.length <= budget) return whole;
-
   const rows = Array.isArray((result.data as { rows?: unknown[] } | undefined)?.rows)
     ? ((result.data as { rows: unknown[] }).rows as unknown[])
     : undefined;
@@ -100,6 +97,29 @@ function serializeForModel(result: ToolResult, extra?: Record<string, unknown>, 
       ...(extra ?? {}),
       data,
     });
+
+  // 行式结果先逐行探测预算：全部装得下才整体 stringify（此时串本身受预算约束）；
+  // 装不下就直接走逐行装箱，绝不再先把可能 GB 级的完整结果 stringify 一遍再裁——
+  // 那份裁剪前的巨串正是大字段表查询时的 OOM 峰值。
+  if (rows?.length) {
+    let probe = envelope({ rows: [], totalRows: rows.length, rowRange: '1-999' }).length + RESULT_CONTINUATION_HINT.length + 1;
+    let fits = true;
+    for (const row of rows) {
+      probe += JSON.stringify(row).length + 1;
+      if (probe > budget) {
+        fits = false;
+        break;
+      }
+    }
+    if (fits) {
+      const whole = JSON.stringify({ ...result, ...(extra ?? {}) });
+      if (whole.length <= budget) return whole;
+    }
+  } else if (!(typeof result.data === 'string' && result.data.length > budget)) {
+    // 字符串正文本身已超预算时整体必然超预算，跳过这次无谓的全量 stringify。
+    const whole = JSON.stringify({ ...result, ...(extra ?? {}) });
+    if (whole.length <= budget) return whole;
+  }
 
   const omitted = (reason: string) => envelope(`(result omitted: ${reason})${RESULT_CONTINUATION_HINT}`);
 

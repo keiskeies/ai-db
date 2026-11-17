@@ -1,7 +1,7 @@
 import { buildCreateTable, buildInsert, buildSelectTable, buildTruncate, type Engine } from '@aidb/core';
 import type { ConnectionManager } from '../manager';
 import type { Store } from '../store';
-import { supportsTransaction } from '../drivers/types';
+import { supportsRowStream, supportsTransaction, type RowBatch } from '../drivers/types';
 import { connectionSchema, q, tableRef } from './common';
 
 /**
@@ -176,139 +176,203 @@ export async function transferData(
       const sourceSql = buildSelectTable(source.engine, srcTable.name, {
         schema: connectionSchema(source, srcTable),
       });
-      const sourceBatch = await manager.query(opts.sourceId, sourceSql, {
-        database: opts.sourceDatabase,
-        maxRows,
-        allowMulti: false,
-        autoLimit: false,
-        actor: 'user',
-      });
-      const set = sourceBatch.sets[0];
-      if (!set) throw new Error('源表没有返回结果');
-      const limitReached = set.rows.length >= maxRows;
-      await emit({
-        type: 'phase-done',
-        table: srcTable.name,
-        phase,
-        durationMs: Date.now() - readStarted,
-        rows: set.rows.length,
-        columns: set.columns.length,
-        limitReached,
-      });
-      const sourceColumns = set.columns.map((column) => column.name);
-      const targetColumns = new Set((targetTable.columns ?? []).map((column) => column.name.toLowerCase()));
-      const columns = targetColumns.size ? sourceColumns.filter((column) => targetColumns.has(column.toLowerCase())) : sourceColumns;
-      if (!columns.length) throw new Error('源表与目标表没有同名列');
-      const skippedColumns = sourceColumns.length - columns.length;
-      const targetRef = tableRef(target, targetTable);
-
-      // replace 模式且目标连接支持事务时，把 TRUNCATE + INSERT 放同一事务里：
-      // 任一批失败回滚整表，不再留下「清空一半」的目标表。
-      let canTx = false;
+      // 流式驱动逐批读源表：整表 LONGTEXT 不再一次性进堆（maxRows 只是取回后 slice，
+      // 挡不住驱动层全量缓冲）。不支持流式的驱动保持整批读的老路径。
+      const sourceDriver = await manager.rawDriver(opts.sourceId);
+      const streamed = supportsRowStream(sourceDriver);
+      const batches: AsyncGenerator<RowBatch> = streamed
+        ? sourceDriver.iterateRows(sourceSql, [], { database: opts.sourceDatabase, maxRows })
+        : (async function* (): AsyncGenerator<RowBatch> {
+            const sourceBatch = await manager.query(opts.sourceId, sourceSql, {
+              database: opts.sourceDatabase,
+              maxRows,
+              allowMulti: false,
+              autoLimit: false,
+              actor: 'user',
+            });
+            const set = sourceBatch.sets[0];
+            if (!set) throw new Error('源表没有返回结果');
+            yield { columns: set.columns, rows: set.rows };
+          })();
+      let readFailed = false;
       try {
-        canTx = supportsTransaction(await manager.rawDriver(opts.targetId));
-      } catch {
-        // 目标连接不可用会在执行时报错，这里先按不可事务处理。
-      }
-      const useTx = mode === 'replace' && !created && canTx;
-      const txId = `transfer-${Date.now()}-${index}-${srcTable.name}`;
-      const runOpts = (extra: Record<string, unknown> = {}) => ({
-        database: opts.targetDatabase,
-        actor: 'user' as const,
-        ...extra,
-        ...(useTx ? { sessionId: txId } : {}),
-      });
-
-      if (useTx) {
-        await manager.beginTransaction(txId, opts.targetId, runOpts());
-      }
-      try {
-        if (mode === 'replace' && !created) {
-          phase = 'truncate';
-          await emit({ type: 'phase-start', table: srcTable.name, phase });
-          const truncateStarted = Date.now();
-          const truncateSql = buildTruncate(target.engine, targetTable.name, connectionSchema(target, targetTable));
-          await manager.query(opts.targetId, truncateSql, runOpts({ allowMulti: false, autoLimit: false }));
-          truncated = true;
-          await emit({ type: 'phase-done', table: srcTable.name, phase, durationMs: Date.now() - truncateStarted });
-        }
-
-        const identityCol = (targetTable.columns ?? []).find((column) => column.autoIncrement);
-        const identityOn = target.engine === 'sqlserver' && identityCol && columns.some((column) => column.toLowerCase() === identityCol.name.toLowerCase());
-        if (identityOn) {
-          await manager.query(opts.targetId, `SET IDENTITY_INSERT ${targetRef} ON`, runOpts());
-        }
-
-        const indexes = columns.map((column) => sourceColumns.indexOf(column));
-        const typeOf = new Map((targetTable.columns ?? []).map((c) => [c.name, c.type]));
-        phase = 'write';
-        await emit({ type: 'phase-start', table: srcTable.name, phase });
-        const writeStarted = Date.now();
-        let batches = 0;
-        let lastProgressAt = 0;
-        const batchSize = insertBatchSize(target.engine, columns.length);
-        for (let offset = 0; offset < set.rows.length; offset += batchSize) {
-          if (opts.shouldAbort?.()) throw new TransferAbortedError();
-          const chunk = set.rows.slice(offset, offset + batchSize);
-          const params: unknown[] = [];
-          for (const row of chunk) {
-            for (const column of columns) {
-              const value = row[indexes[columns.indexOf(column)]];
-              // 空串按目标列类型归一：字符类保留 ''，日期/数字类按 NULL 传递，
-              // 否则 mssql 会推成 varchar(1) 在日期/数字列上直接报错。
-              if (value === '') params.push(/char|text|json|uuid|blob/.test(String(typeOf.get(column) ?? '').toLowerCase()) ? '' : null);
-              else params.push(value ?? null);
-            }
-          }
-          const insertSql = buildInsert(target.engine, targetTable.name, columns, chunk.length, connectionSchema(target, targetTable));
-          try {
-            await manager.runParams(opts.targetId, insertSql, params, runOpts());
-          } catch (err: any) {
-            // 失败下钻到具体批区间：整表报错时用户不知道坏在哪一行。
-            throw new TransferBatchError(offset + 1, Math.min(offset + chunk.length, set.rows.length), err);
-          }
-          inserted += chunk.length;
-          batches += 1;
-          const now = Date.now();
-          if (inserted >= set.rows.length || now - lastProgressAt >= 80) {
-            lastProgressAt = now;
-            await emit({ type: 'progress', table: srcTable.name, rows: inserted, totalRows: set.rows.length });
-          }
-        }
-
-        if (useTx) {
-          await manager.commitTransaction(txId, 'user');
-        }
+        const first = await batches.next();
+        const firstBatch: RowBatch = first.done ? { columns: [], rows: [] } : first.value;
+        const sourceColumns = firstBatch.columns.map((column) => column.name);
         await emit({
           type: 'phase-done',
           table: srcTable.name,
           phase,
-          durationMs: Date.now() - writeStarted,
-          rows: inserted,
-          batches,
+          durationMs: Date.now() - readStarted,
+          rows: streamed ? undefined : firstBatch.rows.length,
+          columns: sourceColumns.length,
+          // 流式读在首批时还不知道会不会读满上限，limitReached 由 table-done 给出。
+          limitReached: streamed ? undefined : firstBatch.rows.length >= maxRows,
         });
-        const result: TransferTableResult = { table: srcTable.name, status: 'ok', rows: inserted, created, truncated };
-        results.push(result);
-        await emit({
-          type: 'table-done',
-          table: srcTable.name,
-          result,
-          durationMs: Date.now() - tableStarted,
-          columns: columns.length,
-          skippedColumns,
-          batches,
-          limitReached,
+        const targetColumns = new Set((targetTable.columns ?? []).map((column) => column.name.toLowerCase()));
+        const columns = targetColumns.size ? sourceColumns.filter((column) => targetColumns.has(column.toLowerCase())) : sourceColumns;
+        if (!columns.length) throw new Error('源表与目标表没有同名列');
+        const skippedColumns = sourceColumns.length - columns.length;
+        const targetRef = tableRef(target, targetTable);
+
+        // replace 模式且目标连接支持事务时，把 TRUNCATE + INSERT 放同一事务里：
+        // 任一批失败回滚整表，不再留下「清空一半」的目标表。
+        let canTx = false;
+        try {
+          canTx = supportsTransaction(await manager.rawDriver(opts.targetId));
+        } catch {
+          // 目标连接不可用会在执行时报错，这里先按不可事务处理。
+        }
+        const useTx = mode === 'replace' && !created && canTx;
+        const txId = `transfer-${Date.now()}-${index}-${srcTable.name}`;
+        const runOpts = (extra: Record<string, unknown> = {}) => ({
+          database: opts.targetDatabase,
+          actor: 'user' as const,
+          ...extra,
+          ...(useTx ? { sessionId: txId } : {}),
         });
+
+        if (useTx) {
+          await manager.beginTransaction(txId, opts.targetId, runOpts());
+        }
+        try {
+          if (mode === 'replace' && !created) {
+            phase = 'truncate';
+            await emit({ type: 'phase-start', table: srcTable.name, phase });
+            const truncateStarted = Date.now();
+            const truncateSql = buildTruncate(target.engine, targetTable.name, connectionSchema(target, targetTable));
+            await manager.query(opts.targetId, truncateSql, runOpts({ allowMulti: false, autoLimit: false }));
+            truncated = true;
+            await emit({ type: 'phase-done', table: srcTable.name, phase, durationMs: Date.now() - truncateStarted });
+          }
+
+          const identityCol = (targetTable.columns ?? []).find((column) => column.autoIncrement);
+          const identityOn = target.engine === 'sqlserver' && identityCol && columns.some((column) => column.toLowerCase() === identityCol.name.toLowerCase());
+          if (identityOn) {
+            await manager.query(opts.targetId, `SET IDENTITY_INSERT ${targetRef} ON`, runOpts());
+          }
+
+          const indexes = columns.map((column) => sourceColumns.indexOf(column));
+          const typeOf = new Map((targetTable.columns ?? []).map((c) => [c.name, c.type]));
+          phase = 'write';
+          await emit({ type: 'phase-start', table: srcTable.name, phase });
+          const writeStarted = Date.now();
+          let batchCount = 0;
+          let lastProgressAt = 0;
+          const batchSize = insertBatchSize(target.engine, columns.length);
+          let pending = firstBatch.rows;
+          let iteratorDone = first.done;
+          let rowOffset = 0;
+          for (;;) {
+            if (opts.shouldAbort?.()) throw new TransferAbortedError();
+            while (pending.length) {
+              if (opts.shouldAbort?.()) throw new TransferAbortedError();
+              const chunk = pending.slice(0, batchSize);
+              pending = pending.slice(batchSize);
+              const params: unknown[] = [];
+              for (const row of chunk) {
+                for (const column of columns) {
+                  const value = row[indexes[columns.indexOf(column)]];
+                  // 空串按目标列类型归一：字符类保留 ''，日期/数字类按 NULL 传递，
+                  // 否则 mssql 会推成 varchar(1) 在日期/数字列上直接报错。
+                  if (value === '') params.push(/char|text|json|uuid|blob/.test(String(typeOf.get(column) ?? '').toLowerCase()) ? '' : null);
+                  else params.push(value ?? null);
+                }
+              }
+              const insertSql = buildInsert(target.engine, targetTable.name, columns, chunk.length, connectionSchema(target, targetTable));
+              try {
+                await manager.runParams(opts.targetId, insertSql, params, runOpts());
+              } catch (err: any) {
+                // 失败下钻到具体批区间：整表报错时用户不知道坏在哪一行。
+                throw new TransferBatchError(rowOffset + 1, rowOffset + chunk.length, err);
+              }
+              rowOffset += chunk.length;
+              inserted += chunk.length;
+              batchCount += 1;
+              const now = Date.now();
+              if (now - lastProgressAt >= 80) {
+                lastProgressAt = now;
+                // 流式读完整表前总数未知：totalRows 给 0，UI 只显示已写行数。
+                await emit({ type: 'progress', table: srcTable.name, rows: inserted, totalRows: streamed ? 0 : firstBatch.rows.length });
+              }
+            }
+            if (iteratorDone) break;
+            let next: IteratorResult<RowBatch>;
+            try {
+              next = await batches.next();
+            } catch (err) {
+              readFailed = true;
+              throw err;
+            }
+            iteratorDone = Boolean(next.done);
+            pending = next.done ? [] : next.value.rows;
+          }
+          const limitReached = inserted >= maxRows;
+          if (streamed) {
+            // 流式读绕过 manager.query，补记查询历史，审计口径与老路径一致。
+            store.addHistory({
+              connectionId: opts.sourceId,
+              database: opts.sourceDatabase ?? source.database,
+              sql: sourceSql,
+              status: 'ok',
+              durationMs: Date.now() - readStarted,
+              rowCount: inserted,
+            });
+          }
+          await emit({ type: 'progress', table: srcTable.name, rows: inserted, totalRows: inserted });
+
+          if (useTx) {
+            await manager.commitTransaction(txId, 'user');
+          }
+          await emit({
+            type: 'phase-done',
+            table: srcTable.name,
+            phase,
+            durationMs: Date.now() - writeStarted,
+            rows: inserted,
+            batches: batchCount,
+          });
+          const result: TransferTableResult = { table: srcTable.name, status: 'ok', rows: inserted, created, truncated };
+          results.push(result);
+          await emit({
+            type: 'table-done',
+            table: srcTable.name,
+            result,
+            durationMs: Date.now() - tableStarted,
+            columns: columns.length,
+            skippedColumns,
+            batches: batchCount,
+            limitReached,
+          });
+        } catch (err: any) {
+          if (err instanceof TransferAbortedError) throw err;
+          if (useTx) {
+            // 中途失败：回滚保住原表，不留下「清空一半」的目标表。
+            await manager.rollbackTransaction(txId, 'user').catch(() => undefined);
+            truncated = false;
+          }
+          const message = err?.message ?? '传输失败';
+          results.push({ table: srcTable.name, status: 'error', rows: inserted, created, truncated, error: message });
+          await emit({ type: 'table-error', table: srcTable.name, error: message, phase, durationMs: Date.now() - tableStarted, rows: inserted });
+        }
       } catch (err: any) {
         if (err instanceof TransferAbortedError) throw err;
-        if (useTx) {
-          // 中途失败：回滚保住原表，不留下「清空一半」的目标表。
-          await manager.rollbackTransaction(txId, 'user').catch(() => undefined);
-          truncated = false;
+        if (streamed && readFailed) {
+          store.addHistory({
+            connectionId: opts.sourceId,
+            database: opts.sourceDatabase ?? source.database,
+            sql: sourceSql,
+            status: 'error',
+            durationMs: Date.now() - readStarted,
+            error: err?.message ?? '读取失败',
+          });
         }
         const message = err?.message ?? '传输失败';
         results.push({ table: srcTable.name, status: 'error', rows: inserted, created, truncated, error: message });
         await emit({ type: 'table-error', table: srcTable.name, error: message, phase, durationMs: Date.now() - tableStarted, rows: inserted });
+      } finally {
+        // 任何退出路径（成功/失败/中止）都关掉源端迭代器，释放被占用的连接。
+        await batches.return(undefined).catch(() => undefined);
       }
     } catch (err: any) {
       if (err instanceof TransferAbortedError) throw err;

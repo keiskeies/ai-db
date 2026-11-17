@@ -24,6 +24,7 @@ import {
 } from '@aidb/core';
 import type { GatewayConfig } from './config';
 import { DbError, type Driver } from './drivers';
+import { estimateRowBytes, supportsRowStream } from './drivers/types';
 import { toXlsx, toXlsxSheets, type XlsxSheet } from './xlsx';
 import type { ConnectionManager } from './manager';
 import type { Store } from './store';
@@ -527,6 +528,11 @@ export function restoreDropStatements(engine: Engine, dump: string): string[] {
 }
 
 const DUMP_CHUNK_ROWS = 2000;
+/**
+ * 单条 INSERT 批的字节预算。只按行数切批时，单行数 MB 的大字段表一批就能拼出 GB 级巨串
+ * （行数据 + 转义副本 + join 结果同时在堆），备份因此 OOM。行数上限保留为辅助闸。
+ */
+const DUMP_BATCH_BYTES = 4 * 1024 * 1024;
 // 支持 LIMIT/OFFSET 或 FETCH 分页的方言；influxdb 无分页语法，保持整表读。duckdb 复用 sqlite dialect。
 const OFFSET_DIALECTS = new Set<DialectId>(['sqlite', 'mysql', 'postgres', 'mssql', 'clickhouse', 'tdengine']);
 const KEYSET_DIALECTS = new Set<DialectId>(['sqlite', 'mysql', 'postgres', 'mssql', 'clickhouse', 'oracle', 'dm']);
@@ -562,33 +568,53 @@ export function dumpKeysetSql(engine: Engine, base: string, column: string, limi
   return `${base}${where}${orderBy} LIMIT ${limit}`;
 }
 
-async function writeTableRows(
+export async function writeTableRows(
   write: (text: string) => Promise<void>,
   driver: Driver,
   engine: Engine,
   table: TableInfo,
   base: string,
   database: string | undefined,
-): Promise<number> {  const plan = dumpReadPlan(engine, table);
+): Promise<number> {
   const schema = engineUsesSchema(engine) ? table.schema : undefined;
   let names: string[] | undefined;
   let rowCount = 0;
-  const emit = async (result: QueryResult) => {
-    if (!names) names = result.columns.map((column) => column.name);
-    for (let i = 0; i < result.rows.length; i += DUMP_CHUNK_ROWS) {
-      const chunk = result.rows.slice(i, i + DUMP_CHUNK_ROWS);
-      await write(toSqlInserts(engine, table.name, names, chunk, schema));
-      rowCount += chunk.length;
+  const emitRows = async (columns: Array<{ name: string }>, rows: unknown[][]) => {
+    if (!names) names = columns.map((column) => column.name);
+    let start = 0;
+    let bytes = 0;
+    for (let i = 0; i < rows.length; i += 1) {
+      bytes += estimateRowBytes(rows[i]);
+      if (bytes >= DUMP_BATCH_BYTES || i - start + 1 >= DUMP_CHUNK_ROWS) {
+        await write(toSqlInserts(engine, table.name, names, rows.slice(start, i + 1), schema));
+        rowCount += i - start + 1;
+        start = i + 1;
+        bytes = 0;
+      }
+    }
+    if (start < rows.length) {
+      await write(toSqlInserts(engine, table.name, names, rows.slice(start), schema));
+      rowCount += rows.length - start;
     }
   };
+  // 流式驱动一条 SELECT 读完整表：单语句快照天然一致，不会像分页那样漏行/重行，
+  // 无主键表也不再整表缓冲。批由驱动按字节产出，这里再按同一预算切 INSERT。
+  if (supportsRowStream(driver)) {
+    for await (const batch of driver.iterateRows(base, [], { database })) {
+      await emitRows(batch.columns, batch.rows);
+    }
+    return rowCount;
+  }
+  const plan = dumpReadPlan(engine, table);
   if (plan.mode === 'single') {
-    await emit(await driver.run(base, { database }));
+    const result = await driver.run(base, { database });
+    await emitRows(result.columns, result.rows);
     return rowCount;
   }
   if (plan.mode === 'offset') {
     for (let offset = 0; ; offset += DUMP_CHUNK_ROWS) {
       const result = await driver.run(dumpPageSql(engine, base, plan.order, DUMP_CHUNK_ROWS, offset), { database });
-      await emit(result);
+      await emitRows(result.columns, result.rows);
       if (result.rows.length < DUMP_CHUNK_ROWS) return rowCount;
     }
   }
@@ -598,7 +624,7 @@ async function writeTableRows(
     const result = cursor === undefined
       ? await driver.run(sql, { database })
       : await driver.runParams(sql, [cursor], { database });
-    await emit(result);
+    await emitRows(result.columns, result.rows);
     if (result.rows.length < DUMP_CHUNK_ROWS) return rowCount;
     const index = result.columns.findIndex((column) => column.name.toLowerCase() === plan.column.toLowerCase());
     const last = result.rows[result.rows.length - 1];

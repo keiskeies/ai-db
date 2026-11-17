@@ -147,6 +147,12 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
 
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server, path: '/ws' });
+  // ws 会把 http server 的 'error'（如监听时 EADDRINUSE）转发到自身；
+  // 没有接收者就是未处理 error 事件，直接炸进程。退出决策在 index.ts 的 server 错误处理里。
+  wss.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') return;
+    console.error('[gateway] websocket server error:', err);
+  });
 
   const authorized = (token: string): boolean => {
     if (!token) return false;

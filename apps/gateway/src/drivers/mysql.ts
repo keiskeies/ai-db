@@ -1,9 +1,10 @@
 import mysql from 'mysql2/promise';
 import type { Pool, PoolConnection, FieldPacket, ResultSetHeader } from 'mysql2/promise';
+import type { Readable } from 'node:stream';
 import { engineMeta } from '@aidb/core';
 import type { ColumnInfo, Engine, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo } from '@aidb/core';
-import type { Driver, DriverTestResult, RunOptions } from './types';
-import { DbError, toRowArray } from './types';
+import type { DriverTestResult, RowBatch, RowStreamDriver, RunOptions } from './types';
+import { DbError, estimateRowBytes, estimateValueBytes } from './types';
 import { nodeTlsOptions } from './ssl';
 
 export interface MysqlOptions {
@@ -44,7 +45,34 @@ const MYSQL_TYPES: Record<number, string> = {
   254: 'STRING',
 };
 
-export class MysqlDriver implements Driver {
+/**
+ * 保留结果的累计字节上限。行数上限挡不住大字段宽表：单行数 MB × 5000 行就是 GB 级，
+ * mysql2 全量缓冲时一次 SELECT * 即可打穿默认 ~4GB 堆。超限即停止保留并标记 truncated。
+ */
+const MAX_RESULT_BYTES = 64 * 1024 * 1024;
+/** 全保真流式读取（备份/迁移）的批预算：按字节切批，行数只是辅助上限。 */
+const ROW_BATCH_BYTES = 4 * 1024 * 1024;
+const ROW_BATCH_ROWS = 2000;
+
+/** promise 包装的 query() 只返回 Promise（全量缓冲）；流式必须走底层连接的 Query.stream()。 */
+interface RawQuery {
+  stream(options?: { highWaterMark?: number }): Readable;
+  on(event: 'error', listener: (err: Error) => void): RawQuery;
+}
+interface RawConnection {
+  query(options: { sql: string; values?: unknown[]; timeout?: number }): RawQuery;
+  destroy(): void;
+}
+function rawConnection(connection: PoolConnection): RawConnection {
+  return ((connection as unknown as { connection?: RawConnection }).connection ?? connection) as RawConnection;
+}
+
+/** INSERT/UPDATE/DDL 的 OK 包（与数据行区分：列名恰好叫 affectedRows 的极端情况靠双字段判定排除）。 */
+function isResultSetHeader(row: unknown): row is ResultSetHeader {
+  return typeof row === 'object' && row !== null && !Array.isArray(row) && 'affectedRows' in row && 'insertId' in row;
+}
+
+export class MysqlDriver implements RowStreamDriver {
   engine: Engine;
   private pools = new Map<string, Pool>();
   /** 跨请求事务：会话 id → 被固定的连接。 */
@@ -54,32 +82,94 @@ export class MysqlDriver implements Driver {
     this.engine = engine;
   }
 
-  private toResult(rows: any, fields: any, started: number, sql: string, maxRows?: number): QueryResult {
-    if (Array.isArray(rows)) {
-      const fieldList = (Array.isArray(fields) ? fields : []) as FieldPacket[];
-      const columns = fieldList.map((f) => ({ name: f.name, type: MYSQL_TYPES[f.type ?? -1] ?? String(f.type ?? '') }));
-      const all = rows as Array<Record<string, unknown>>;
-      const limit = maxRows && maxRows > 0 ? maxRows : all.length;
-      const sliced = all.slice(0, limit);
-      return {
-        columns,
-        rows: toRowArray(columns, sliced),
-        rowCount: sliced.length,
-        durationMs: Date.now() - started,
-        truncated: all.length > sliced.length,
-        statement: sql,
+  /**
+   * 流式收集查询结果：逐行解析、按行数 + 字节双上限保留，超限立即停止。
+   * 不再用 pool.query() 全量缓冲——那会把整张 LONGTEXT 大表一次性吃进堆。
+   */
+  private streamCollect(
+    connection: PoolConnection,
+    sql: string,
+    params: unknown[],
+    opts: RunOptions,
+    started: number,
+    inTx: boolean,
+  ): Promise<QueryResult> {
+    return new Promise<QueryResult>((resolve, reject) => {
+      const maxRows = opts.maxRows && opts.maxRows > 0 ? opts.maxRows : Number.POSITIVE_INFINITY;
+      const columns: Array<{ name: string; type: string }> = [];
+      const rows: unknown[][] = [];
+      let bytes = 0;
+      let truncated = false;
+      let header: ResultSetHeader | undefined;
+      let settled = false;
+
+      const query = rawConnection(connection).query({ sql, values: params, timeout: opts.timeoutMs });
+      const stream = query.stream({ highWaterMark: 16 });
+
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        if (truncated) {
+          stream.destroy();
+          // 提前中止后查询仍可能报错（超时/断连），没有接收者的 'error' 事件会直接炸进程。
+          query.on('error', () => {});
+          // 事务里不能销毁连接（会中止事务）：剩余报文自然排空，后续语句排队等待。
+          if (!inTx) connection.destroy();
+        }
+        if (header && !columns.length) {
+          resolve({
+            columns: [],
+            rows: [],
+            rowCount: 0,
+            affected: header.affectedRows ?? 0,
+            lastInsertId: header.insertId,
+            durationMs: Date.now() - started,
+            statement: sql,
+          });
+          return;
+        }
+        resolve({
+          columns,
+          rows,
+          rowCount: rows.length,
+          durationMs: Date.now() - started,
+          truncated,
+          statement: sql,
+        });
       };
-    }
-    const header = rows as ResultSetHeader;
-    return {
-      columns: [],
-      rows: [],
-      rowCount: 0,
-      affected: header.affectedRows ?? 0,
-      lastInsertId: header.insertId,
-      durationMs: Date.now() - started,
-      statement: sql,
-    };
+
+      stream.on('fields', (fields: FieldPacket[]) => {
+        for (const f of fields) columns.push({ name: f.name, type: MYSQL_TYPES[f.type ?? -1] ?? String(f.type ?? '') });
+      });
+      stream.on('data', (row: unknown) => {
+        if (settled) return;
+        if (isResultSetHeader(row)) {
+          header = row;
+          return;
+        }
+        const record = row as Record<string, unknown>;
+        let size = 16;
+        for (const key in record) size += estimateValueBytes(record[key]) + key.length;
+        // 首行即使单独超预算也保留，否则用户什么都看不到；此后严格执行字节预算。
+        if (rows.length >= maxRows || (rows.length > 0 && bytes + size > MAX_RESULT_BYTES)) {
+          truncated = true;
+          settle();
+          return;
+        }
+        rows.push(columns.map((c) => record[c.name]));
+        bytes += size;
+        if (rows.length >= maxRows || bytes >= MAX_RESULT_BYTES) {
+          truncated = true;
+          settle();
+        }
+      });
+      stream.on('error', (err: any) => {
+        if (settled) return;
+        settled = true;
+        reject(new DbError(err?.message ?? 'MySQL 执行失败', { code: err?.code ?? 'MYSQL_ERROR' }));
+      });
+      stream.on('end', settle);
+    });
   }
 
   private pool(database?: string): Pool {
@@ -259,11 +349,71 @@ export class MysqlDriver implements Driver {
 
   async runParams(sql: string, params: unknown[], opts: RunOptions = {}): Promise<QueryResult> {
     const started = Date.now();
+    let connection: PoolConnection;
     try {
-      const [rows, fields] = await this.pool(opts.database).query({ sql, values: params, timeout: opts.timeoutMs });
-      return this.toResult(rows, fields, started, sql, opts.maxRows);
+      connection = await this.pool(opts.database).getConnection();
     } catch (err: any) {
-      throw new DbError(err.message ?? 'MySQL 执行失败', { code: err.code ?? 'MYSQL_ERROR', hint: err.sqlMessage ? undefined : undefined });
+      throw new DbError(err?.message ?? 'MySQL 连接失败', { code: err?.code ?? 'MYSQL_ERROR' });
+    }
+    try {
+      return await this.streamCollect(connection, sql, params, opts, started, false);
+    } catch (err: any) {
+      throw err instanceof DbError ? err : new DbError(err?.message ?? 'MySQL 执行失败', { code: err?.code ?? 'MYSQL_ERROR' });
+    } finally {
+      // 被截断销毁的连接 _pool 已置空，release 是空操作；正常连接归还池子。
+      connection.release();
+    }
+  }
+
+  /**
+   * 全保真逐批读取：备份/迁移不能截断数据，也不能整表进堆。
+   * 消费方每拉一批才解析下一批（流背压），提前退出会销毁连接。
+   * 空表也 yield 一个带 columns 的空批，调用方据此拿列信息。
+   */
+  async *iterateRows(sql: string, params: unknown[] = [], opts: RunOptions = {}): AsyncGenerator<RowBatch> {
+    const connection = await this.pool(opts.database).getConnection();
+    const query = rawConnection(connection).query({ sql, values: params, timeout: opts.timeoutMs });
+    const stream = query.stream({ highWaterMark: 8 });
+    let columns: Array<{ name: string; type: string }> = [];
+    stream.on('fields', (fields: FieldPacket[]) => {
+      columns = fields.map((f) => ({ name: f.name, type: MYSQL_TYPES[f.type ?? -1] ?? String(f.type ?? '') }));
+    });
+    const maxRows = opts.maxRows && opts.maxRows > 0 ? opts.maxRows : Number.POSITIVE_INFINITY;
+    let batch: unknown[][] = [];
+    let batchBytes = 0;
+    let rowCount = 0;
+    let yielded = false;
+    let drained = false;
+    stream.on('end', () => {
+      drained = true;
+    });
+    try {
+      for await (const row of stream) {
+        if (isResultSetHeader(row)) continue;
+        if (rowCount >= maxRows) break;
+        const record = row as Record<string, unknown>;
+        const arrayRow = columns.map((c) => record[c.name]);
+        batch.push(arrayRow);
+        batchBytes += estimateRowBytes(arrayRow);
+        rowCount += 1;
+        if (batch.length >= ROW_BATCH_ROWS || batchBytes >= ROW_BATCH_BYTES) {
+          yielded = true;
+          yield { columns, rows: batch };
+          batch = [];
+          batchBytes = 0;
+        }
+      }
+      if (batch.length || !yielded) {
+        yielded = true;
+        yield { columns, rows: batch };
+      }
+    } catch (err: any) {
+      throw err instanceof DbError ? err : new DbError(err?.message ?? 'MySQL 流式读取失败', { code: err?.code ?? 'MYSQL_ERROR' });
+    } finally {
+      stream.destroy();
+      query.on('error', () => {});
+      if (drained) connection.release();
+      else connection.destroy();
     }
   }
 
@@ -286,10 +436,9 @@ export class MysqlDriver implements Driver {
     if (!connection) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
     const started = Date.now();
     try {
-      const [rows, fields] = await connection.query({ sql, values: params, timeout: opts.timeoutMs });
-      return this.toResult(rows, fields, started, sql, opts.maxRows);
+      return await this.streamCollect(connection, sql, params, opts, started, true);
     } catch (err: any) {
-      throw new DbError(err.message ?? 'MySQL 事务执行失败', { code: err.code ?? 'MYSQL_ERROR' });
+      throw err instanceof DbError ? err : new DbError(err?.message ?? 'MySQL 事务执行失败', { code: err?.code ?? 'MYSQL_ERROR' });
     }
   }
 

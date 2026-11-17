@@ -64,6 +64,70 @@ import {
 } from './features/databaseBrief';
 import { parseCommandIntent } from './commandIntents';
 
+/**
+ * 工具结果落库/推送的尺寸上限。驱动层已按字节封顶源头，但完整结果原样写进 SQLite、
+ * 每回合 listMessages 全量读回、每个 WS 客户端再拿一份完整帧，长会话仍会把堆堆高。
+ * UI 预览本来只渲染前几行，模型侧另有更紧的 serializeForModel 预算，这里按展示预算裁剪。
+ */
+const TOOL_RESULT_STORE_CHARS = 256 * 1024;
+
+/** 超长的单元格字符串截到预算内，保留行结构（列数/列序不变）。 */
+function capRowCells(row: unknown, cellBudget: number): unknown {
+  if (!Array.isArray(row)) return row;
+  return row.map((cell) => (typeof cell === 'string' && cell.length > cellBudget ? `${cell.slice(0, cellBudget)}…(truncated)` : cell));
+}
+
+export function capToolResult(result: ToolResult, maxChars = TOOL_RESULT_STORE_CHARS): ToolResult {
+  const data = result.data as Record<string, unknown> | undefined;
+  if (data && Array.isArray(data.rows)) {
+    const rows = data.rows as unknown[];
+    const kept: unknown[] = [];
+    let chars = 64;
+    let modified = false;
+    for (const row of rows) {
+      let candidate = row;
+      let size = JSON.stringify(row)?.length ?? 0;
+      if (size > maxChars) {
+        candidate = capRowCells(row, Math.floor(maxChars / 2));
+        size = JSON.stringify(candidate)?.length ?? 0;
+        modified = true;
+      }
+      if (kept.length > 0 && chars + size > maxChars) break;
+      chars += size + 1;
+      kept.push(candidate);
+    }
+    if (!modified && kept.length >= rows.length) return result;
+    return {
+      ...result,
+      data: { ...data, rows: kept, truncated: true },
+      meta: { ...result.meta, truncated: true },
+    };
+  }
+  if (typeof result.data === 'string') {
+    if (result.data.length <= maxChars) return result;
+    return { ...result, data: `${result.data.slice(0, maxChars)}…(truncated)`, meta: { ...result.meta, truncated: true } };
+  }
+  if (data && typeof data === 'object') {
+    const text = JSON.stringify(data);
+    if (text.length <= maxChars) return result;
+    return { ...result, data: { truncated: true, preview: text.slice(0, maxChars) }, meta: { ...result.meta, truncated: true } };
+  }
+  return result;
+}
+
+/** 工具入参同样可能巨大（write_file 的正文等）：只裁超长的字符串值，保留参数形状。 */
+export function capToolArgs(args: unknown, maxChars = TOOL_RESULT_STORE_CHARS): unknown {
+  if (args === null || args === undefined || typeof args !== 'object' || Array.isArray(args)) return args;
+  const text = JSON.stringify(args);
+  if (text.length <= maxChars) return args;
+  const cellBudget = Math.floor(maxChars / 4);
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args as Record<string, unknown>)) {
+    out[key] = typeof value === 'string' && value.length > cellBudget ? `${value.slice(0, cellBudget)}…(truncated)` : value;
+  }
+  return out;
+}
+
 export interface TurnInput {
   text: string;
   mode?: PermissionMode;
@@ -499,29 +563,36 @@ export class AgentHost {
         case 'step_thinking':
           blocks.push({ type: 'thinking', text: event.text, step: event.step });
           break;
-        case 'tool_call':
+        case 'tool_call': {
+          const args = capToolArgs(event.args);
           callInfo.set(event.callId, { call: { id: event.callId, name: event.tool, args: (event.args ?? {}) as Record<string, unknown> }, risk: event.risk });
-          blocks.push({ type: 'tool_call', callId: event.callId, tool: event.tool, args: event.args, risk: event.risk });
-          break;
-        case 'tool_result':
+          blocks.push({ type: 'tool_call', callId: event.callId, tool: event.tool, args, risk: event.risk });
+          emit({ ...event, args });
+          return;
+        }
+        case 'tool_result': {
+          // 落库/推送用裁剪副本；runtime 自己那份完整结果只用于当步模型序列化，不受影响。
+          const capped = capToolResult(event.result);
           blocks.push({
             type: 'tool_result',
             callId: event.callId,
             tool: event.tool,
-            result: event.result,
-            status: event.result.ok ? 'ok' : 'error',
+            result: capped,
+            status: capped.ok ? 'ok' : 'error',
           });
           store.addToolRun({
             id: event.callId,
             sessionId,
             tool: event.tool,
-            args: callInfo.get(event.callId)?.call.args,
-            result: event.result,
-            status: event.result.ok ? 'ok' : 'error',
+            args: capToolArgs(callInfo.get(event.callId)?.call.args),
+            result: capped,
+            status: capped.ok ? 'ok' : 'error',
             risk: callInfo.get(event.callId)?.risk,
-            durationMs: event.result.meta.durationMs,
+            durationMs: capped.meta.durationMs,
           });
-          break;
+          emit({ ...event, result: capped });
+          return;
+        }
         case 'plan':
           blocks.push({ type: 'plan', items: event.items });
           break;

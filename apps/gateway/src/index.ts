@@ -3,9 +3,14 @@ import { createGateway } from './server';
 const gateway = await createGateway();
 const { config, server } = gateway;
 
-server.on('error', (err) => {
-  console.error('[gateway] server error:', err);
-  process.exitCode = 1;
+server.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`[gateway] 端口 ${config.port} 已被占用，无法启动。请停止占用该端口的进程，或换端口（AIDB_PORT）后重试。`);
+  } else {
+    console.error('[gateway] server error:', err);
+  }
+  // 监听失败后进程没有服务能力，受控退出而不是留着不监听的空壳。
+  process.exit(1);
 });
 
 server.listen(config.port, config.host, () => {

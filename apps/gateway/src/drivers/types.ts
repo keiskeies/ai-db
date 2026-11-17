@@ -30,6 +30,48 @@ export interface StructuredQueryDriver extends Driver {
   executeQuery(query: StructuredQuery, opts?: RunOptions): Promise<QueryResult>;
 }
 
+/** 流式迭代的一批行：columns 每批都带（首批即确定），rows 为按 columns 对齐的数组行。 */
+export interface RowBatch {
+  columns: Array<{ name: string; type?: string }>;
+  rows: unknown[][];
+}
+
+/**
+ * 全保真逐批读取入口（备份/迁移这类不能截断数据的场景）。
+ * 驱动按批 yield，调用方消费完一批才拉下一批，整表不进堆；
+ * 不实现它的驱动继续走 run() 分页/整表读的老路径。
+ */
+export interface RowStreamDriver extends Driver {
+  iterateRows(sql: string, params?: unknown[], opts?: RunOptions): AsyncGenerator<RowBatch>;
+}
+
+export function supportsRowStream(driver: Driver): driver is RowStreamDriver {
+  return typeof (driver as RowStreamDriver).iterateRows === 'function';
+}
+
+/**
+ * 单元格占用字节估算（按 JS 堆口径，UTF-16 长度近似）。
+ * 用于结果/批次的字节预算：行数上限挡不住单行数 MB 的大字段表。
+ */
+export function estimateValueBytes(value: unknown): number {
+  if (value === null || value === undefined) return 4;
+  if (typeof value === 'string') return value.length;
+  if (typeof value === 'number' || typeof value === 'boolean') return 8;
+  if (Buffer.isBuffer(value)) return value.byteLength;
+  if (value instanceof Date) return 8;
+  try {
+    return JSON.stringify(value)?.length ?? 8;
+  } catch {
+    return 8;
+  }
+}
+
+export function estimateRowBytes(row: unknown[]): number {
+  let total = 16;
+  for (const cell of row) total += estimateValueBytes(cell);
+  return total;
+}
+
 export function supportsStructuredQuery(driver: Driver): driver is StructuredQueryDriver {
   return typeof (driver as StructuredQueryDriver).executeQuery === 'function';
 }
