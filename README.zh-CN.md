@@ -42,7 +42,7 @@
   <img alt="53 个 Agent 工具" src="https://img.shields.io/badge/Agent%20Tools-53-45C8C3?style=flat-square" />
   <img alt="macOS、Windows、Linux" src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-0B0E0D?style=flat-square" />
   <img alt="MIT 许可" src="https://img.shields.io/badge/License-MIT-E0AF63?style=flat-square" />
-  <a href="https://github.com/keiskeies/ai-db/releases/tag/v0.0.7"><img alt="Release v0.0.7" src="https://img.shields.io/badge/Release-v0.0.7-45C8C3?style=flat-square&logo=github" /></a>
+  <a href="https://github.com/keiskeies/ai-db/releases/tag/v0.0.8"><img alt="Release v0.0.8" src="https://img.shields.io/badge/Release-v0.0.8-45C8C3?style=flat-square&logo=github" /></a>
   <a href="https://github.com/keiskeies/ai-db"><img alt="GitHub stars" src="https://img.shields.io/github/stars/keiskeies/ai-db?style=flat-square&logo=github&label=Stars&color=E0AF63" /></a>
 </p>
 
@@ -381,12 +381,13 @@ Agent 的主路径不止自由对话。AiDB 把高频业务动作收敛为命令
 
 对象树按 **连接 → 库 / Schema → 表 / 视图** 组织，并固定提供函数 / 存储过程、查询、备份入口。
 
-- **快速定位**：搜索连接或对象，按分组折叠，记住展开状态；表与视图分组展示，行数估算直接显示在树上。
+- **快速定位**：搜索连接或对象，按分组折叠，记住展开状态；表与视图分组展示，行数估算直接显示在树上。「表」「视图」文件夹各有自己的右键菜单（新建表 / 新建查询、刷新），不再落到全局兜底菜单。
 - **数据库右键**：关闭、编辑 / 新建 / 删除数据库、新建表、新建查询、命令列、运行 SQL 文件、转储 SQL、逆向到模型、打开仪表板、在数据库中查找、刷新。
 - **表右键**：打开、新建查询、设计、新建表、重命名、复制（仅结构 / 结构 + 数据）、查看 DDL、创建快捷方式（Windows）、打印表、维护、对象信息、设置权限、导入 / 导出向导、清空、截断、删除、逆向到模型、AI 解释、AI 数据质量。
 - **视图右键**：数据、新建查询、查看 DDL、打印、删除视图、AI 解释此视图。
-- **连接右键**：编辑、测试、刷新、新建查询、新建表、设计、关系图、AI 数据库体检、复制名称、删除。
-- **新建 / 删除数据库**：按引擎能力执行；MySQL / MariaDB 不支持重命名数据库，SQLite / Oracle 不支持新建或删除数据库，界面会说明原因。
+- **连接右键**：编辑、测试、刷新、新建数据库、新建查询、新建表、设计、关系图、AI 数据库体检、复制名称、删除。行右键与行尾「…」按钮打开的是同一份菜单。
+- **新建 / 删除 / 重命名数据库**：只在引擎确有对应语句时才出现。MySQL / MariaDB 没有重命名语句；SQLite、DuckDB 以文件或 ATTACH 管理库，Oracle 的 CREATE DATABASE 是实例级操作，因此都不提供建删；重命名开放给 PG 系（含国产 PG 兼容库）、SQL Server 与 ClickHouse。Bridge 的语句生成读的是同一张能力表，菜单与 SQL 不会对不上。
+- **只读连接**：建 / 删 / 重命名数据库菜单直接置灰并在库节点补锁标识，不再弹一个必然被服务端拒绝的对话框；服务端硬拦截保留，只去掉误导性的可点入口。
 - **对象树之外的入口**：底部提供新建连接、关系图、仪表板和刷新；顶部 Ribbon 的“表 / 视图 / 函数 / 用户 / 其它 / 自动运行”会打开对应工作区。
 
 ### 数据库与表操作

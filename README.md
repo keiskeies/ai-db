@@ -42,7 +42,7 @@
   <img alt="53 agent tools" src="https://img.shields.io/badge/Agent%20Tools-53-45C8C3?style=flat-square" />
   <img alt="macOS, Windows, Linux" src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-0B0E0D?style=flat-square" />
   <img alt="MIT license" src="https://img.shields.io/badge/License-MIT-E0AF63?style=flat-square" />
-  <a href="https://github.com/keiskeies/ai-db/releases/tag/v0.0.7"><img alt="Release v0.0.7" src="https://img.shields.io/badge/Release-v0.0.7-45C8C3?style=flat-square&logo=github" /></a>
+  <a href="https://github.com/keiskeies/ai-db/releases/tag/v0.0.8"><img alt="Release v0.0.8" src="https://img.shields.io/badge/Release-v0.0.8-45C8C3?style=flat-square&logo=github" /></a>
   <a href="https://github.com/keiskeies/ai-db"><img alt="GitHub stars" src="https://img.shields.io/github/stars/keiskeies/ai-db?style=flat-square&logo=github&label=Stars&color=E0AF63" /></a>
 </p>
 
@@ -381,12 +381,13 @@ The object tree is both the user's map and the Agent's directory. It organizes c
 
 The tree is organized as **connection → database / schema → table / view**, with fixed entry points for functions / stored procedures, queries, and backups.
 
-- **Fast location**: search connections or objects, collapse by group, and remember expansion state; tables and views are grouped separately, with estimated row counts shown directly in the tree.
+- **Fast location**: search connections or objects, collapse by group, and remember expansion state; tables and views are grouped separately, with estimated row counts shown directly in the tree. The **Tables** and **Views** folders have their own context menus (new table / new query, refresh) instead of falling back to a generic one.
 - **Database context menu**: close, edit / create / drop database, new table, new query, command column, run SQL file, dump SQL, reverse engineer to model, open dashboard, find in database, refresh.
 - **Table context menu**: open, new query, design, new table, rename, copy (structure only / structure + data), view DDL, create shortcut (Windows), print table, maintain, object information, set privileges, import / export wizard, truncate, drop, reverse engineer to model, AI explain, AI data quality.
 - **View context menu**: data, new query, view DDL, print, drop view, AI explain this view.
-- **Connection context menu**: edit, test, refresh, new query, new table, design, relationship diagram, AI database audit, copy name, delete.
-- **Create / drop database**: executed per engine capability; MySQL / MariaDB do not support renaming databases, SQLite / Oracle do not support creating or dropping databases, and the UI explains why.
+- **Connection context menu**: edit, test, refresh, new database, new query, new table, design, relationship diagram, AI database audit, copy name, delete. Right-clicking the row and pressing its **…** button open the same menu.
+- **Create / drop / rename database**: each entry appears only when the engine has a statement for it. MySQL / MariaDB have no rename; SQLite and DuckDB manage databases as files or `ATTACH`es and Oracle's `CREATE DATABASE` is instance-level, so none of them offer it; rename is available on the PostgreSQL family, SQL Server and ClickHouse. The statement generator in the bridge reads the same capability table, so the menu and the SQL cannot disagree.
+- **Read-only connections**: database create / drop / rename entries are greyed out instead of opening a dialog that the server then rejects, and read-only databases carry a lock marker on their own node. The server-side block stays; only the misleading affordance is removed.
 - **Entry points outside the tree**: new connection, relationship diagram, dashboard, and refresh at the bottom; the Ribbon items "Tables / Views / Functions / Users / Other / Automation" open the corresponding workspaces.
 
 ### Database and table operations

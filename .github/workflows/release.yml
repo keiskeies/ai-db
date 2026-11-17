@@ -412,39 +412,34 @@ jobs:
           prerelease: false
           generate_release_notes: false
           body: |
-            AiDB Studio **v0.0.7** — the data path gets hardened end to end: batch inserts and data-transfer writes are chunked to stay inside every engine's parameter limits, replace-mode transfer runs inside a transaction, backup dumps round-trip reliably across dialects, and the grid stops silently dropping values.
+            AiDB Studio **v0.0.8** — the object tree stops offering what your database cannot do. Every context menu is now driven by the engine's real capabilities and the connection's read-only flag, so there is nothing left to click that only ends in an error dialog.
 
-            **Data integrity on the grid**
-            - **Empty-cell semantics made explicit**: typing an empty string no longer silently nulls the cell — you get a hint, and clearing a cell is done through the delete operation. What you see is what gets written.
-            - **Batch inserts are chunked and capped**: multi-row insert in the data page splits into per-engine-safe batches (SQL Server / Oracle parameter ceilings included) and rejects oversized one-shot requests with a clear error, so a paste never half-writes.
+            **Object-tree context menus**
+            - **One menu per level**: right-clicking a connection row and pressing its trailing **…** button now open the exact same menu, and that menu gains **New Database…** wherever the engine can create one. It used to be two hand-written lists that had quietly drifted apart.
+            - **Capability-driven database operations**: the database node shows **New / Rename / Drop Database** only when the engine actually has a statement for it — no more *Rename* on MySQL (it has none) and no more *New / Drop Database* on SQLite, DuckDB or Oracle, where databases are files, `ATTACH`es or instance-level operations rather than a `CREATE DATABASE`.
+            - **The folder nodes got their own menus**: the **Tables** and **Views** folders respond to a right-click with what belongs there (new table / new query, refresh) instead of falling through to the generic catch-all menu.
 
-            **Data transfer**
-            - **Replace mode runs in a transaction**: clear-then-write now either fully replaces or fully rolls back — no halfway-truncated table when a batch fails; the failed row range is reported so you know exactly what went wrong.
-            - **Adaptive batch sizing**: transfer batches shrink to fit the target table's column count (SQL Server 2000-parameter and Oracle 60000-parameter budgets enforced), avoiding "too many parameters" failures on wide tables.
+            **Read-only connections**
+            - **Greyed out before you click, not after**: create / drop / rename database entries on a read-only connection are disabled and marked, so they no longer open a dialog just to be rejected. The server-side hard block is unchanged — this only removes the misleading affordance.
+            - **Lock badge on the database node**: read-only databases carry the same 🔒 marker as their connection row, so the state is visible at the level you are about to act on.
 
-            **Backup and restore**
-            - **Statement-aware splitting**: the restore path parses the dump with quote/comment awareness, so multi-line JSON values and embedded semicolons no longer break restores.
-            - **Broader dialect coverage**: Oracle, DM, and ClickHouse get correct drop statements on restore, views are dumped back out, keyset paging keeps Oracle / DM / DuckDB dumps streaming, and safe defaults — literals and no-argument functions like `now()` — survive the dump instead of being lost.
-
-            **SQL Server parameter typing**
-            - Large text and binary parameters are now bound as `NVarChar(MAX)` / `VarBinary(MAX)` instead of defaulting to 8 KB, fixing truncation in inserts and transfers.
-
-            **SQLite sequence hygiene**
-            - TRUNCATE-style empty operations reset `sqlite_sequence` through a properly quoted identifier, so reused tables get correct new primary keys.
+            **Engine correctness**
+            - **DuckDB no longer receives `CREATE DATABASE`** — the statement generator in the bridge is now driven by the same capability table as the menus (`managesDatabases`), so the UI and the SQL cannot disagree; previously DuckDB was offered, and asked for, a statement it does not support.
+            - **Rename covers the whole PostgreSQL family**: PG-compatible engines now get `ALTER DATABASE … RENAME TO` instead of the menu disappearing, while SQL Server keeps `MODIFY NAME` and ClickHouse keeps `RENAME DATABASE`.
 
             **Installers**
 
             | Platform | Architecture | Files |
             |---|---|---|
-            | Windows | x64 | `AiDB-Studio-0.0.7-x64-setup.exe` · `AiDB-Studio-0.0.7-x64-portable.zip` |
-            | Windows | arm64 | `AiDB-Studio-0.0.7-arm64-setup.exe` · `AiDB-Studio-0.0.7-arm64-portable.zip` |
-            | macOS | Apple Silicon | `AiDB-Studio-0.0.7-arm64.dmg` |
-            | macOS | Intel | `AiDB-Studio-0.0.7-x64.dmg` |
-            | Linux | x64 | `AiDB-Studio-0.0.7-x86_64.AppImage` · `-amd64.deb` · `-x86_64.rpm` |
-            | Linux | arm64 | `AiDB-Studio-0.0.7-arm64.AppImage` · `-arm64.deb` · `-aarch64.rpm` |
+            | Windows | x64 | `AiDB-Studio-0.0.8-x64-setup.exe` · `AiDB-Studio-0.0.8-x64-portable.zip` |
+            | Windows | arm64 | `AiDB-Studio-0.0.8-arm64-setup.exe` · `AiDB-Studio-0.0.8-arm64-portable.zip` |
+            | macOS | Apple Silicon | `AiDB-Studio-0.0.8-arm64.dmg` |
+            | macOS | Intel | `AiDB-Studio-0.0.8-x64.dmg` |
+            | Linux | x64 | `AiDB-Studio-0.0.8-x86_64.AppImage` · `-amd64.deb` · `-x86_64.rpm` |
+            | Linux | arm64 | `AiDB-Studio-0.0.8-arm64.AppImage` · `-arm64.deb` · `-aarch64.rpm` |
 
             **Updating**
-            - Update channels from 0.0.6 keep working: Windows (NSIS) and Linux (AppImage) download and install the update in place; macOS, deb/rpm installs and dev builds check the version and link to this release. Every installer ships `latest.yml` / `latest-linux.yml` / `latest-arm64.yml` metadata for differential updates.
+            - Update channels from 0.0.7 keep working: Windows (NSIS) and Linux (AppImage) download and install the update in place; macOS, deb/rpm installs and dev builds check the version and link to this release. Every installer ships `latest.yml` / `latest-linux.yml` / `latest-arm64.yml` metadata for differential updates.
 
             **Platform notes**
             - Oracle needs a prebuilt node-oracledb binding, and upstream ships none for macOS Intel or Windows arm64. On those two builds the engine is greyed out in the new-connection dialog with the reason; every other engine behaves the same everywhere. Linux arm64 does ship the binding.
