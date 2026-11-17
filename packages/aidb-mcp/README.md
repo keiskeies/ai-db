@@ -65,10 +65,12 @@ AiDB Studio 的只读 MCP Server，供 Claude Code / Claude Desktop / Cursor 使
 （`npm` CLI 没有创建组织的命令），其余都能在任何能连通 `registry.npmjs.org` 的机器上做：
 
 1. 在 npmjs.com 创建 **组织 `aidb-studio`**（scope 必须先存在，否则发布报 `Scope not found`）。
-2. 终端登录。默认 `auth-type=web` 会打开 `auth.npmjs.org`，网络受限时必须走 legacy：
+2. 终端登录。默认 `auth-type=web` 会打开 `auth.npmjs.org`，网络受限时走 legacy。账号开了 2FA
+   后，legacy 登录会打印一个 `https://www.npmjs.com/login/<uuid>` 链接，在浏览器里用安全密钥
+   确认，再把页面生成的一次性令牌粘回终端：
 
    ```bash
-   npm login --registry=https://registry.npmjs.org --auth-type=legacy   # 需要账号密码 + 2FA 验证码
+   npm login --registry=https://registry.npmjs.org --auth-type=legacy   # 账号密码 + 安全密钥
    ```
 
 3. 发布**真实版本**（首个版本手动发，之后全走 CI；可信发布方只能建在已存在的包上）：
