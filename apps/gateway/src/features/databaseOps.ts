@@ -1,4 +1,4 @@
-import { quoteIdent, type Engine } from '@aidb/core';
+import { quoteIdent, managesDatabases, type Engine } from '@aidb/core';
 import type { ConnectionManager } from '../manager';
 import type { Store } from '../store';
 
@@ -18,23 +18,23 @@ export interface DatabaseOpResult {
 }
 
 function statementsFor(engine: Engine, op: DatabaseOp, database: string, newName?: string): string[] | null {
-  if (engine === 'sqlite' || engine === 'oracle') return null;
+  const caps = managesDatabases(engine);
   const current = quoteIdent(database, engine);
   if (op === 'create') {
+    if (!caps.create) return null;
     if (engine === 'mysql' || engine === 'mariadb') return [`CREATE DATABASE ${current} CHARACTER SET utf8mb4`];
-    if (engine === 'postgresql' || engine === 'cockroachdb') return [`CREATE DATABASE ${current}`];
-    if (engine === 'sqlserver') return [`CREATE DATABASE ${current}`];
     return [`CREATE DATABASE ${current}`];
   }
   if (op === 'drop') {
+    if (!caps.drop) return null;
     return [`DROP DATABASE ${current}`];
   }
-  if (!newName) return null;
+  if (!caps.rename || !newName) return null;
   const next = quoteIdent(newName, engine);
-  if (engine === 'postgresql' || engine === 'cockroachdb') return [`ALTER DATABASE ${current} RENAME TO ${next}`];
   if (engine === 'sqlserver') return [`ALTER DATABASE ${current} MODIFY NAME = ${next}`];
   if (engine === 'clickhouse') return [`RENAME DATABASE ${current} TO ${next}`];
-  return null;
+  // 其余为 PG 系（postgresql/cockroachdb/timescale/国产 PG 兼容库）与更通用的 PG 语法。
+  return [`ALTER DATABASE ${current} RENAME TO ${next}`];
 }
 
 function maintenanceDatabase(engine: Engine, fallback?: string): string | undefined {

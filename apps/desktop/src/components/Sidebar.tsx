@@ -32,7 +32,7 @@ import {
   LayoutDashboard,
 } from 'lucide-react';
 import type { ConnectionConfig, DatabaseSchema, Engine, TableInfo } from '@aidb/core';
-import { addField, engineMeta, managesIndexes, managesObjects } from '@aidb/core';
+import { addField, engineMeta, managesDatabases, managesIndexes, managesObjects } from '@aidb/core';
 import { api } from '../lib/api';
 import { useApp, type ContextMenuItem } from '../store';
 import { desktopBridge, desktopDialogUi } from '../lib/desktop';
@@ -238,6 +238,35 @@ export function Sidebar() {
     } catch (err: any) {
       notify('error', t('connectionTestFailed'), err?.message);
     }
+  };
+
+  /** 连接层级菜单：行右键与行尾「…」按钮共用，保证同一层级菜单一致。 */
+  const connectionMenuItems = (conn: ConnectionConfig): ContextMenuItem[] => {
+    const dbOps = managesDatabases(conn.engine);
+    return [
+      { label: t('editConnection'), icon: <Pencil size={13} />, onClick: () => openConnectionEditor('edit', conn) },
+      { label: t('test'), icon: <Radio size={13} />, onClick: () => void testConnection(conn) },
+      { label: t('refresh'), icon: <RefreshCw size={13} />, onClick: () => void loadSchema(conn.id, true) },
+      ...(dbOps.create
+        ? [{ label: tr("新建数据库…"), icon: <Plus size={13} />, onClick: () => setDbDialog({ kind: 'create', conn, database: '' }) } as ContextMenuItem]
+        : []),
+      { label: '', icon: null, sep: true, onClick: () => undefined },
+      { label: t('newQuery'), icon: <TerminalSquare size={13} />, onClick: () => openQuery(conn.id) },
+      { label: tr("新建表"), icon: <Plus size={13} />, onClick: () => openDesign(conn.id) },
+      { label: t('design'), icon: <Wrench size={13} />, onClick: () => openDesign(conn.id) },
+      { label: tr("关系图"), icon: <Network size={13} />, onClick: () => openRelations(conn.id) },
+      { label: tr("AI 数据库体检"), icon: <Sparkles size={13} />, onClick: () => prefillAgent(tr("对当前数据库做一次体检：缺少主键、外键缺索引、重复索引与空表，并给出修复 SQL。")) },
+      { label: t('copy'), icon: <Copy size={13} />, onClick: () => void navigator.clipboard.writeText(conn.name) },
+      { label: '', icon: null, sep: true, onClick: () => undefined },
+      {
+        label: t('delete'),
+        icon: <Trash2 size={13} />,
+        danger: true,
+        onClick: async () => {
+          if (await askConfirm({ message: tr("删除连接「{0}」？", [conn.name]), detail: tr("仅移除配置，不会删除数据库。"), danger: true, confirmLabel: t('delete') })) void deleteConnection(conn.id);
+        },
+      },
+    ];
   };
 
   const exportTable = async (conn: ConnectionConfig, table: TableInfo, database?: string) => {
@@ -665,29 +694,7 @@ export function Sidebar() {
                       selectConnection(conn.id);
                       toggleConnection(conn.id);
                     }}
-                    onContextMenu={(e) =>
-                      openMenu(e, [
-                        { label: t('editConnection'), icon: <Pencil size={13} />, onClick: () => openConnectionEditor('edit', conn) },
-                        { label: t('test'), icon: <Radio size={13} />, onClick: () => void testConnection(conn) },
-                        { label: t('refresh'), icon: <RefreshCw size={13} />, onClick: () => void loadSchema(conn.id, true) },
-                        { label: '', icon: null, sep: true, onClick: () => undefined },
-                        { label: t('newQuery'), icon: <TerminalSquare size={13} />, onClick: () => openQuery(conn.id) },
-                        { label: tr("新建表"), icon: <Plus size={13} />, onClick: () => openDesign(conn.id) },
-                        { label: t('design'), icon: <Wrench size={13} />, onClick: () => openDesign(conn.id) },
-                        { label: tr("关系图"), icon: <Network size={13} />, onClick: () => openRelations(conn.id) },
-                        { label: tr("AI 数据库体检"), icon: <Sparkles size={13} />, onClick: () => prefillAgent(tr("对当前数据库做一次体检：缺少主键、外键缺索引、重复索引与空表，并给出修复 SQL。")) },
-                        { label: t('copy'), icon: <Copy size={13} />, onClick: () => void navigator.clipboard.writeText(conn.name) },
-                        { label: '', icon: null, sep: true, onClick: () => undefined },
-                        {
-                          label: t('delete'),
-                          icon: <Trash2 size={13} />,
-                          danger: true,
-                          onClick: async () => {
-                            if (await askConfirm({ message: tr("删除连接「{0}」？", [conn.name]), detail: tr("仅移除配置，不会删除数据库。"), danger: true, confirmLabel: t('delete') })) void deleteConnection(conn.id);
-                          },
-                        },
-                      ])
-                    }
+                    onContextMenu={(e) => openMenu(e, connectionMenuItems(conn))}
                     data-testid={`connection-${conn.id}`}
                   >
                     <ChevronRight size={13} className={`conn-toggle ${isOpen ? 'open' : ''}`} onClick={(e) => { e.stopPropagation(); toggleConnection(conn.id); }} />
@@ -701,24 +708,7 @@ export function Sidebar() {
                       style={{ width: 20, height: 20 }}
                       onClick={(e) => {
                         e.stopPropagation();
-                        openMenu(e, [
-                          { label: t('editConnection'), icon: <Pencil size={13} />, onClick: () => openConnectionEditor('edit', conn) },
-                          { label: t('test'), icon: <Radio size={13} />, onClick: () => void testConnection(conn) },
-                          { label: t('refresh'), icon: <RefreshCw size={13} />, onClick: () => void loadSchema(conn.id, true) },
-                          { label: t('newQuery'), icon: <TerminalSquare size={13} />, onClick: () => openQuery(conn.id) },
-                          { label: tr("新建表"), icon: <Plus size={13} />, onClick: () => openDesign(conn.id) },
-                          { label: t('design'), icon: <Wrench size={13} />, onClick: () => openDesign(conn.id) },
-                          { label: tr("关系图"), icon: <Network size={13} />, onClick: () => openRelations(conn.id) },
-                          { label: tr("AI 数据库体检"), icon: <Sparkles size={13} />, onClick: () => prefillAgent(tr("对当前数据库做一次体检：缺少主键、外键缺索引、重复索引与空表，并给出修复 SQL。")) },
-                          {
-                            label: t('delete'),
-                            icon: <Trash2 size={13} />,
-                            danger: true,
-                            onClick: async () => {
-                              if (await askConfirm({ message: tr("删除连接「{0}」？", [conn.name]), detail: tr("仅移除配置，不会删除数据库。"), danger: true, confirmLabel: t('delete') })) void deleteConnection(conn.id);
-                            },
-                          },
-                        ]);
+                        openMenu(e, connectionMenuItems(conn));
                       }}
                     >
                       <MoreHorizontal size={13} />
@@ -750,9 +740,10 @@ export function Sidebar() {
                                 }
                                 toggleSchema(schemaKey);
                               }}
-                              onContextMenu={(e) =>
-                                !engineMeta(conn.engine).languages.includes('sql')
-                                  ? openMenu(e, [
+                              onContextMenu={(e) => {
+                                const caps = managesDatabases(conn.engine);
+                                if (!engineMeta(conn.engine).languages.includes('sql')) {
+                                  openMenu(e, [
                                       { label: tr("关闭数据库"), icon: <FolderOpen size={13} />, onClick: () => toggleSchema(schemaKey) },
                                       {
                                         label: tr("新建查询"),
@@ -783,12 +774,20 @@ export function Sidebar() {
                                         icon: <Copy size={13} />,
                                         onClick: () => void navigator.clipboard.writeText(schema.name).then(() => notify('success', t('copied'))),
                                       },
-                                    ])
-                                  : openMenu(e, [
+                                    ]);
+                                  return;
+                                }
+                                const items: ContextMenuItem[] = [
                                   { label: tr("关闭数据库"), icon: <FolderOpen size={13} />, onClick: () => toggleSchema(schemaKey) },
-                                  { label: tr("编辑数据库…"), icon: <Pencil size={13} />, onClick: () => setDbDialog({ kind: 'rename', conn, database: schema.name }) },
-                                  { label: tr("新建数据库…"), icon: <Plus size={13} />, onClick: () => setDbDialog({ kind: 'create', conn, database: '' }) },
-                                  { label: tr("删除数据库…"), icon: <Trash2 size={13} />, danger: true, onClick: () => setDbDialog({ kind: 'drop', conn, database: schema.name }) },
+                                  ...(caps.rename
+                                    ? [{ label: tr("编辑数据库…"), icon: <Pencil size={13} />, onClick: () => setDbDialog({ kind: 'rename', conn, database: schema.name }) } as ContextMenuItem]
+                                    : []),
+                                  ...(caps.create
+                                    ? [{ label: tr("新建数据库…"), icon: <Plus size={13} />, onClick: () => setDbDialog({ kind: 'create', conn, database: '' }) } as ContextMenuItem]
+                                    : []),
+                                  ...(caps.drop
+                                    ? [{ label: tr("删除数据库…"), icon: <Trash2 size={13} />, danger: true, onClick: () => setDbDialog({ kind: 'drop', conn, database: schema.name }) } as ContextMenuItem]
+                                    : []),
                                   { label: '', icon: null, sep: true, onClick: () => undefined },
                                   { label: tr("新建表"), icon: <Table2 size={13} />, onClick: () => openDesign(conn.id, undefined, schema.name) },
                                   { label: tr("新建查询"), icon: <TerminalSquare size={13} />, onClick: () => openQuery(conn.id, undefined, undefined, schema.name) },
@@ -810,8 +809,9 @@ export function Sidebar() {
                                     icon: <Copy size={13} />,
                                     onClick: () => void navigator.clipboard.writeText(schema.name).then(() => notify('success', t('copied'))),
                                   },
-                                ])
-                              }
+                                ];
+                                openMenu(e, items);
+                              }}
                             >
                               <ChevronRight size={12} className={`conn-toggle ${schemaOpen ? 'open' : ''}`} />
                               <Database size={13} style={{ color: 'var(--text-muted)' }} />
@@ -904,14 +904,30 @@ export function Sidebar() {
                                       }
                                       return (
                                         <>
-                                          <div className="tree-node folder-node" style={{ paddingLeft: INDENT.folder }} onClick={() => setGroupOpen((prev) => ({ ...prev, [tableKey]: !tablesOpen }))}>
+                                          <div className="tree-node folder-node" style={{ paddingLeft: INDENT.folder }} onClick={() => setGroupOpen((prev) => ({ ...prev, [tableKey]: !tablesOpen }))}
+                                            onContextMenu={(event) =>
+                                              openMenu(event, [
+                                                { label: tr("新建表"), icon: <Plus size={13} />, onClick: () => openDesign(conn.id, undefined, schema.name) },
+                                                { label: '', icon: null, sep: true, onClick: () => undefined },
+                                                { label: t('refresh'), icon: <RefreshCw size={13} />, onClick: () => void loadSchema(conn.id, true, schema.name) },
+                                              ])
+                                            }
+                                          >
                                             <ChevronRight size={12} className={`conn-toggle ${tablesOpen ? 'open' : ''}`} />
                                             <Table2 size={13} style={{ color: 'var(--accent)' }} />
                                             <span className="node-label">{tr("表")}</span>
                                             <span className="tree-count">{tableList.length}</span>
                                           </div>
                                           {tablesOpen ? tableList.map((table) => renderTable(conn, schema, table, INDENT.tableLeaf)) : null}
-                                          <div className="tree-node folder-node" style={{ paddingLeft: INDENT.folder }} onClick={() => setGroupOpen((prev) => ({ ...prev, [viewKey]: !viewsOpen }))}>
+                                          <div className="tree-node folder-node" style={{ paddingLeft: INDENT.folder }} onClick={() => setGroupOpen((prev) => ({ ...prev, [viewKey]: !viewsOpen }))}
+                                            onContextMenu={(event) =>
+                                              openMenu(event, [
+                                                { label: tr("新建查询"), icon: <TerminalSquare size={13} />, onClick: () => openQuery(conn.id, undefined, undefined, schema.name) },
+                                                { label: '', icon: null, sep: true, onClick: () => undefined },
+                                                { label: t('refresh'), icon: <RefreshCw size={13} />, onClick: () => void loadSchema(conn.id, true, schema.name) },
+                                              ])
+                                            }
+                                          >
                                             <ChevronRight size={12} className={`conn-toggle ${viewsOpen ? 'open' : ''}`} />
                                             <Eye size={13} style={{ color: 'var(--text-muted)' }} />
                                             <span className="node-label">{tr("视图")}</span>

@@ -983,6 +983,21 @@ export function addField(engine: Engine): boolean {
   return engineMeta(engine).capabilities.fieldAdd === true;
 }
 
+/**
+ * 该引擎能否在对象树中创建/删除/重命名数据库。
+ * 与 gateway 的 databaseOps 保持一致：SQL 引擎且非文件型；Oracle 的 CREATE DATABASE
+ * 是实例级操作、SQLite/DuckDB 用文件/ATTACH 管理库，都不走 CREATE DATABASE 语句。
+ * 重命名只有 PG 系（含国产 PG 兼容库）、SQL Server、ClickHouse 有可用语句。
+ */
+export function managesDatabases(engine: Engine): { create: boolean; drop: boolean; rename: boolean } {
+  const meta = engineMeta(engine);
+  const none = { create: false, drop: false, rename: false };
+  if (!meta.dialect) return none;
+  if (engine === 'sqlite' || engine === 'duckdb' || engine === 'oracle') return none;
+  const rename = meta.family === 'postgres' || engine === 'sqlserver' || engine === 'clickhouse';
+  return { create: true, drop: true, rename };
+}
+
 /** 结果网格能否双击打开整条记录编辑（先读回原文再整体写回）。 */
 export function editsRecords(engine: Engine): boolean {
   return engineMeta(engine).capabilities.recordEdit === true;
