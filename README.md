@@ -426,7 +426,7 @@ The data page is not a read-only table but a grid for everyday data maintenance:
 SQL remains the hard currency of database work. AiDB does not hide SQL; it makes SQL a language the Agent and the user edit and verify together. Statements written by the Agent can return to the editor, and SQL selected by the user can be handed to the Agent for explanation or optimization at any time.
 
 - **Editor**: CodeMirror 6 with dialect highlighting (SQLite / MySQL / PostgreSQL / SQL Server / Oracle / ClickHouse; standard SQL elsewhere) and autocomplete for the current connection's tables and columns.
-- **Execution**: `⌘/Ctrl + Enter` runs the current statement, or only the selection when text is selected; full scripts, multiple result sets, and a messages panel; optional auto-LIMIT and multi-statement switches.
+- **Execution**: `⌘/Ctrl + Enter` runs the current statement, or only the selection when text is selected; full scripts, multiple result sets, and a messages panel; optional auto-LIMIT and multi-statement switches. Execution is cancellable, and closing the tab or switching away cancels the in-flight query on the server instead of leaving it running. Timeouts are enforced where the engine can do it server-side (`MAX_EXECUTION_TIME` on MySQL, `statement_timeout` on PostgreSQL, `maxTimeMS` on MongoDB) with a client-side watchdog as backstop.
 - **Connection and database**: switch both inside the page, with completion based on the current database schema.
 - **Transactions**: engines supporting `BEGIN / COMMIT / ROLLBACK` can start, commit, and roll back inside the page; the transaction stays on one Bridge-side connection.
 - **Results**:

@@ -426,7 +426,7 @@ Agent 的主路径不止自由对话。AiDB 把高频业务动作收敛为命令
 SQL 仍然是数据库工作的硬通货。AiDB 不隐藏 SQL，而是把它变成 Agent 与用户共同编辑、共同验证的语言：Agent 写下的语句可以落回编辑器，用户选中的 SQL 也可以随时交给 Agent 解释或优化。
 
 - **编辑器**：CodeMirror 6，按方言高亮（SQLite / MySQL / PostgreSQL / SQL Server / Oracle / ClickHouse；其余按标准 SQL），自动补全当前连接的表与列。
-- **执行**：`⌘/Ctrl + Enter` 执行当前语句，选中文本时只执行选中部分；可执行整段脚本；多结果集；消息面板；可选自动 LIMIT 与多语句开关。
+- **执行**：`⌘/Ctrl + Enter` 执行当前语句，选中文本时只执行选中部分；可执行整段脚本；多结果集；消息面板；可选自动 LIMIT 与多语句开关。执行可随时取消，关闭页签或切走会同时取消服务端在途查询，而不是留下一个还在跑的查询；能由引擎承担的超时走服务端（MySQL 的 `MAX_EXECUTION_TIME`、PostgreSQL 的 `statement_timeout`、MongoDB 的 `maxTimeMS`），客户端看门狗兜底。
 - **连接与库**：页内直接切换连接和库，使用当前库的表结构做补全。
 - **事务**：支持 `BEGIN / COMMIT / ROLLBACK` 的引擎可在页内开始事务、提交、回滚；事务在 Bridge 端保持同一条连接。
 - **结果**：

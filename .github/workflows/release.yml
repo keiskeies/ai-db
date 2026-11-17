@@ -412,7 +412,19 @@ jobs:
           prerelease: false
           generate_release_notes: false
           body: |
-            AiDB Studio **v0.0.8** — the object tree stops offering what your database cannot do. Every context menu is now driven by the engine's real capabilities and the connection's read-only flag, so there is nothing left to click that only ends in an error dialog.
+            AiDB Studio **v0.0.8** — this release is about not wasting your time: nothing hangs, nothing runs out of memory, and the object tree stops offering what your database cannot do. A sweep across drivers, the bridge, the agent core, the UI and Electron closed 34 hang / timeout / no-response risks; a second pass put hard bounds on result reading so a big table streams instead of exhausting memory. Separately, every context menu is now driven by the engine's real capabilities and the connection's read-only flag.
+
+            **Nothing hangs anymore**
+            - **Timeouts that actually cancel**: MySQL honours `MAX_EXECUTION_TIME` plus a client watchdog (its `timeout` option never worked), PostgreSQL sets `statement_timeout` so the server cancels instead of the client merely giving up, MongoDB gets `maxTimeMS` with a socket fallback, and DuckDB and SQLite gained row/time limits with interrupt support. Introspection queries are no longer exempt.
+            - **Closing a tab cancels the query**: the bridge watches the response socket, so disconnecting cancels the in-flight query instead of leaving it burning a server connection forever. Run and export actions in the UI are cancellable, and stopping the Agent now cuts the local stream even when the server has gone silent.
+            - **The UI stops spinning forever**: every request carries a timeout and an `AbortController`; SSE streams (transfer, pipeline, command, Skill) have an idle watchdog and application-level heartbeats, so a dead connection reports itself instead of pretending to work.
+            - **No unbounded growth**: audit log, tool runs and artifact runs get a retention window; the worker / command-run maps are reclaimed; attachments and export folders are pruned; LLM calls back off and retry on 429/5xx; Skill subprocesses kill their whole process tree on Windows.
+            - **The desktop survives its backend**: a crashed bridge restarts with backoff instead of quitting the app, macOS window re-activation no longer orphans a second gateway process, and blocking sync calls in the main process (whole-database copies, probing `node`, PDF printing) went async.
+
+            **Big result sets stop exhausting memory**
+            - **Streaming with two ceilings**: the MySQL driver reads through `Query.stream()` with both a row count and a 64 MB byte budget and stops when either is hit; exceeding a limit no longer destroys the connection mid-transaction.
+            - **Backups and transfers stream too**: dumps and migrations page through rows in 4 MB / 2,000-row batches and build `INSERT`s against a byte budget, so a table without a primary key is no longer buffered whole; keyset paging keeps the wide-table cases honest.
+            - **Model context stays bounded**: result serialisation probes the per-row budget before packing instead of stringifying everything first, and tool results / arguments are clipped to 256 KB and flagged `truncated` before they are stored or pushed over the socket.
 
             **Object-tree context menus**
             - **One menu per level**: right-clicking a connection row and pressing its trailing **…** button now open the exact same menu, and that menu gains **New Database…** wherever the engine can create one. It used to be two hand-written lists that had quietly drifted apart.
@@ -425,6 +437,7 @@ jobs:
 
             **Engine correctness**
             - **DuckDB no longer receives `CREATE DATABASE`** — the statement generator in the bridge is now driven by the same capability table as the menus (`managesDatabases`), so the UI and the SQL cannot disagree; previously DuckDB was offered, and asked for, a statement it does not support.
+            - **SQLite metadata stopped counting rows**: table descriptions no longer run `COUNT(*)` per table — they read the planner statistics, falling back to `MAX(rowid)` — so opening a schema on a large database is fast, and row counts are labelled as estimates.
             - **Rename covers the whole PostgreSQL family**: PG-compatible engines now get `ALTER DATABASE … RENAME TO` instead of the menu disappearing, while SQL Server keeps `MODIFY NAME` and ClickHouse keeps `RENAME DATABASE`.
 
             **Installers**
@@ -448,7 +461,7 @@ jobs:
             - Android and iOS are still built through EAS and are not part of this release.
 
             **Verification**
-            - 6 desktop combinations (3 operating systems x 2 architectures), 479 Bridge tests passing (65 skipped, including engine-contract tests that need live servers), 417 core tests, 83 desktop tests, 392 documentation-contract checks, and 327 end-to-end scenarios.
+            - 6 desktop combinations (3 operating systems x 2 architectures), 553 Bridge tests passing (65 skipped, including engine-contract tests that need live servers), 435 core tests, 83 desktop tests, 392 documentation-contract checks, and 327 end-to-end scenarios.
             - Before publishing, CI asserts that every `latest*.yml` points at an asset that actually exists in the release, and the portable zips are built from the same verified unpacked directories as the installers.
 
             Installers are built by GitHub Actions from this tag.
