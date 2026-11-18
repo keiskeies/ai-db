@@ -2,7 +2,6 @@
 
 > 状态：**已实现**（2026-11-02）
 > 关联：`docs/05-data-and-api.md`（流式事件）、`docs/02-feature-spec.md`（对象浏览器 / 表设计器）
-> 实施计划：`docs/superpowers/plans/2026-11-02-schema-change-events.md`
 
 ## 1. 要解决的问题
 
