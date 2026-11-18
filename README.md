@@ -574,7 +574,17 @@ The Agent's value extends beyond the database. Notifications, Skills, MCP, and w
   - `builtin-filesystem`: directory allowlist, realpath validation, read/write limits; `grep_files` prefers ripgrep;
   - `builtin-git`: read-only `status / log / diff / show` with a fixed argument allowlist;
   - `builtin-web`: `fetch_url` / `web_search`, blocking loopback, private network, link-local, and cloud metadata addresses.
-- **AiDB as an MCP server (outbound)**: `scripts/aidb-mcp-server.mjs` exposes AiDB's read-only tools to external MCP clients.
+- **AiDB as an MCP server (outbound)**: the npm package `@aidb-studio/aidb-studio` exposes AiDB's read-only tools to any stdio MCP client (Claude Code / Claude Desktop / Cursor / Cline / Zed) in three steps. Open **Settings → Bridge → MCP client pairing** to read a 6-digit code (valid 60 s), pair once per machine, then add the server to the client — no token ever appears in client config:
+
+  ```bash
+  npx -y @aidb-studio/aidb-studio pair
+  ```
+
+  ```json
+  { "mcpServers": { "aidb": { "command": "npx", "args": ["-y", "@aidb-studio/aidb-studio"] } } }
+  ```
+
+  Paired credentials are hard-scoped to a 21-tool read-only allowlist (`run_sql` only passes SELECT) and can be revoked any time under Settings → Devices. Full usage: [`packages/aidb-mcp/README.md`](packages/aidb-mcp/README.md).
 - **Tool catalog**: Settings → MCP and Tools lets you search and browse all 53 Agent tools by group, including their risk constraints.
 
 ### Web search

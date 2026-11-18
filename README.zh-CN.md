@@ -574,7 +574,17 @@ Agent 的价值不止于数据库内部。通知、Skill、MCP 与网络搜索�
   - `builtin-filesystem`：目录白名单、realpath 校验、读写上限；`grep_files` 优先走 ripgrep；
   - `builtin-git`：只读 `status / log / diff / show`，固定参数白名单；
   - `builtin-web`：`fetch_url` / `web_search`，拦截 loopback、内网、链路本地和云元数据地址。
-- **AiDB 作为 MCP Server（出站）**：`scripts/aidb-mcp-server.mjs` 可把 AiDB 的只读工具暴露给外部 MCP 客户端。
+- **AiDB 作为 MCP Server（出站）**：npm 包 `@aidb-studio/aidb-studio` 把 AiDB 的只读工具暴露给任意 stdio MCP 客户端（Claude Code / Claude Desktop / Cursor / Cline / Zed），三步接入：在 **设置 → Bridge → MCP 客户端配对** 读取 6 位配对码（60 秒有效），每台机器配对一次，再在客户端加一条 server——配置里不出现任何令牌：
+
+  ```bash
+  npx -y @aidb-studio/aidb-studio pair
+  ```
+
+  ```json
+  { "mcpServers": { "aidb": { "command": "npx", "args": ["-y", "@aidb-studio/aidb-studio"] } } }
+  ```
+
+  配对凭据被硬性限制在 21 个只读工具白名单内（`run_sql` 仅放行 SELECT），可随时在 设置 → 设备 吊销。完整用法见 [`packages/aidb-mcp/README.md`](packages/aidb-mcp/README.md)。
 - **工具目录**：设置 → MCP 与工具中可搜索、按分组查看全部 53 个 Agent 工具及其风险约束。
 
 ### 网络搜索
