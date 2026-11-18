@@ -20,7 +20,7 @@ try {
   if (process.env.AIDB_TOKEN) {
     base = (process.env.AIDB_URL || 'http://127.0.0.1:8787').replace(/\/+$/, '');
     token = process.env.AIDB_TOKEN;
-    process.stderr.write('[aidb-mcp] 使用 AIDB_TOKEN 环境变量（不推荐，建议运行 npx -y @aidb-studio/mcp pair）\n');
+    process.stderr.write('[aidb-mcp] 使用 AIDB_TOKEN 环境变量（不推荐，建议运行 npx -y @aidb-studio/aidb-studio pair）\n');
   } else {
     process.stderr.write(`[aidb-mcp] ${err.message}\n`);
     process.exit(1);

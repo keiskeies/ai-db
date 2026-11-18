@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   publish:
-    name: Publish @aidb-studio/mcp
+    name: Publish @aidb-studio/aidb-studio
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,8 +52,8 @@ jobs:
         run: |
           set -euo pipefail
           name=$(node -p "require('./packages/aidb-mcp/package.json').name")
-          if [ "$name" != "@aidb-studio/mcp" ]; then
-            echo "::error::packages/aidb-mcp 的 name 是 $name，与可信发布配置和文档里的 @aidb-studio/mcp 不一致"
+          if [ "$name" != "@aidb-studio/aidb-studio" ]; then
+            echo "::error::packages/aidb-mcp 的 name 是 $name，与可信发布配置和文档里的 @aidb-studio/aidb-studio 不一致"
             exit 1
           fi
 
@@ -72,7 +72,7 @@ jobs:
           fi
 
       - name: Test MCP package
-        run: npm --workspace @aidb-studio/mcp run test
+        run: npm --workspace @aidb-studio/aidb-studio run test
 
       # 只允许 bin/ README.md LICENSE package.json 进 tarball，多塞文件视为异常。
       - name: Verify package contents
@@ -108,12 +108,12 @@ jobs:
           set -euo pipefail
           ver=$(node -p "require('./packages/aidb-mcp/package.json').version")
           for i in 1 2 3 4 5 6; do
-            if [ "$(npm view @aidb-studio/mcp version --registry=https://registry.npmjs.org 2>/dev/null || true)" = "$ver" ]; then
-              echo "已发布：@aidb-studio/mcp@$ver"
+            if [ "$(npm view @aidb-studio/aidb-studio version --registry=https://registry.npmjs.org 2>/dev/null || true)" = "$ver" ]; then
+              echo "已发布：@aidb-studio/aidb-studio@$ver"
               exit 0
             fi
-            echo "等待 registry 可见 @aidb-studio/mcp@$ver（第 $i 次）"
+            echo "等待 registry 可见 @aidb-studio/aidb-studio@$ver（第 $i 次）"
             sleep 10
           done
-          echo "::error::发布后 registry 查不到 @aidb-studio/mcp@$ver"
+          echo "::error::发布后 registry 查不到 @aidb-studio/aidb-studio@$ver"
           exit 1

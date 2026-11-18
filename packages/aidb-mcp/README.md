@@ -1,4 +1,4 @@
-# @aidb-studio/mcp
+# @aidb-studio/aidb-studio
 
 AiDB Studio 的只读 MCP Server，供 Claude Code / Claude Desktop / Cursor 使用。
 
@@ -13,7 +13,7 @@ AiDB Studio 的只读 MCP Server，供 Claude Code / Claude Desktop / Cursor 使
 2. 运行：
 
    ```bash
-   npx -y @aidb-studio/mcp pair
+   npx -y @aidb-studio/aidb-studio pair
    ```
 
    按提示输入配对码与 Bridge 地址（默认 `http://127.0.0.1:8787`）。
@@ -28,7 +28,7 @@ AiDB Studio 的只读 MCP Server，供 Claude Code / Claude Desktop / Cursor 使
    ```json
    {
      "mcpServers": {
-       "aidb": { "command": "npx", "args": ["-y", "@aidb-studio/mcp"] }
+       "aidb": { "command": "npx", "args": ["-y", "@aidb-studio/aidb-studio"] }
      }
    }
    ```
@@ -82,8 +82,8 @@ AiDB Studio 的只读 MCP Server，供 Claude Code / Claude Desktop / Cursor 使
 4. 建可信发布方。`--file` 只写工作流文件名，且必须允许 `npm publish`：
 
    ```bash
-   npm trust github @aidb-studio/mcp --file publish-mcp.yml --repo keiskeies/ai-db --allow-publish
-   npm trust list @aidb-studio/mcp      # 核对
+   npm trust github @aidb-studio/aidb-studio --file publish-mcp.yml --repo keiskeies/ai-db --allow-publish
+   npm trust list @aidb-studio/aidb-studio      # 核对
    ```
 
    **建好后必须在 2 天内跑成第一次 CI 发布**，否则该配置过期，只能删掉重建。
@@ -94,7 +94,7 @@ AiDB Studio 的只读 MCP Server，供 Claude Code / Claude Desktop / Cursor 使
 之后每次发布只需改 `packages/aidb-mcp/package.json` 的 `version` 并打 tag：
 
 ```bash
-npm --workspace @aidb-studio/mcp run test
+npm --workspace @aidb-studio/aidb-studio run test
 git commit -am "chore(mcp): 版本升 x.y.z" && git tag mcp-vx.y.z && git push --follow-tags
 ```
 

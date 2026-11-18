@@ -1,11 +1,11 @@
 {
-  "name": "@aidb-studio/mcp",
+  "name": "@aidb-studio/aidb-studio",
   "version": "0.0.8",
   "description": "AiDB Studio read-only MCP server for Claude Code / Claude Desktop, with one-time device pairing",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "aidb-mcp": "./bin/aidb-mcp.mjs"
+    "aidb-mcp": "bin/aidb-mcp.mjs"
   },
   "files": [
     "bin/",
@@ -17,7 +17,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/keiskeies/ai-db"
+    "url": "git+https://github.com/keiskeies/ai-db.git"
   },
   "publishConfig": {
     "access": "public",
