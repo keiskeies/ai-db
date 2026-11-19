@@ -44,7 +44,7 @@ async function runSide(
   let sql = query?.trim();
   let definition = '';
   if (sql) {
-    if (classifySql(sql).risk !== 'read') {
+    if (classifySql(sql, conn.engine).risk !== 'read') {
       throw Object.assign(new Error('对比 SQL 必须是只读查询'), { code: 'INVALID_INPUT', status: 400, field: 'queryA' });
     }
     definition = sql;

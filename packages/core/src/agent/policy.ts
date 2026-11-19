@@ -1,5 +1,6 @@
-import type { Environment, PermissionMode, Risk } from '../types';
-import { classifySql, countStatements, extractTableRef } from '../sql/classify';
+import type { Engine, Environment, PermissionMode, Risk } from '../types';
+import { classifySql, countStatements } from '../sql/classify';
+import { tablesFromSql } from './suggest';
 import { classifyAql, classifyCql, classifyCypher, classifyMql, classifyRedis, aqlQueryFromArgs, cqlQueryFromArgs, cypherQueryFromArgs, formatStructuredQuery, mqlQueryFromArgs, redisQueryFromArgs } from '../query';
 import { builtinMcpToolRisk, builtinMcpToolRiskByName } from './builtinMcp';
 import type { ToolCall, ToolDefinition } from './types';
@@ -15,7 +16,7 @@ export interface PermissionContext {
 }
 
 /** Resolve the effective risk for a call, including dynamic SQL classification. */
-export function resolveRisk(call: ToolCall, tool: ToolDefinition): Risk {
+export function resolveRisk(call: ToolCall, tool: ToolDefinition, engine?: Engine): Risk {
   if (tool.risk === 'dynamic') {
     if (call.name === 'mcp_call') {
       // Only namespaced built-in ids inherit read auto-approval; external servers stay write.
@@ -27,7 +28,7 @@ export function resolveRisk(call: ToolCall, tool: ToolDefinition): Risk {
     }
     if (call.name === 'run_sql') {
       const sql = String(call.args.sql ?? '');
-      return sql.trim() ? classifySql(sql).risk : 'ddl';
+      return sql.trim() ? classifySql(sql, engine).risk : 'ddl';
     }
     if (call.name === 'run_mql') return classifyMql(mqlQueryFromArgs(call.args)).risk;
     if (call.name === 'run_redis') return classifyRedis(redisQueryFromArgs(call.args)).risk;
@@ -48,7 +49,17 @@ export function toolSignature(call: ToolCall): string {
   let target = '';
   const explicit = call.args.table ?? call.args.name;
   if (typeof explicit === 'string') target = explicit;
-  else if (typeof call.args.sql === 'string') target = extractTableRef(String(call.args.sql)) ?? '';
+  else if (typeof call.args.sql === 'string') {
+    // 签名必须覆盖整段脚本：风险级 + 全部引用表 + 动词序列 + 语句数。只取第一个 FROM 表时，
+    // INSERT/UPDATE/DELETE（没有 FROM）会落成 run_sql:conn:*，一次「始终允许」
+    // 就等于该连接上所有非破坏性写的通行证；多语句脚本也能借首表相同的签名混过去。
+    // 动词也要进签名：批准 INSERT orders 不应顺带放行同表的 UPDATE。
+    const sql = String(call.args.sql);
+    const classification = classifySql(sql);
+    const tables = [...new Set(tablesFromSql(sql))].sort().join(',');
+    const verbs = classification.statements.map((s) => s.verb).join(',');
+    target = `${classification.risk}:${tables || '*'}:${verbs}#${classification.statements.length}`;
+  }
   else if (call.name === 'run_mql' && typeof call.args.collection === 'string') target = call.args.collection;
   else if (call.name === 'run_redis' && typeof call.args.command === 'string') target = call.args.command;
   else if (call.name === 'run_cypher' && typeof call.args.query === 'string') target = call.args.query.slice(0, 40);

@@ -332,13 +332,15 @@ export class PostgresDriver implements Driver {
     try {
       await Promise.race([client.query(inTx ? `SET LOCAL statement_timeout = ${ms}` : `SET statement_timeout = ${ms}`), watchdog]);
       const maxRows = opts.maxRows && opts.maxRows > 0 ? opts.maxRows : 0;
-      let pushed = maxRows > 0 ? wrapSelectLimit(sql, maxRows + 1) : undefined;
+      let pushed = maxRows > 0 ? wrapSelectLimit(sql, maxRows + 1, 'postgresql') : undefined;
       let res: import('pg').QueryResult<Record<string, unknown>>;
       try {
         res = (await Promise.race([client.query({ text: pushed ?? sql, values: params }), watchdog])) as import('pg').QueryResult<Record<string, unknown>>;
       } catch (err: any) {
-        // 重复列名（如 SELECT a.id, b.id）进不了子查询：回落原句，行数上限靠客户端裁剪。
-        if (pushed && err?.code === '42701') {
+        // 外包一层子查询并非永远合法：重复列名（42701）、尾注释/特殊语法（42601）、
+        // 列引用进不了子查询（42703）、不支持的特性（0A000）都回落原句，行数上限靠客户端裁剪。
+        // 超时/取消不回落——原句只会跑得更久。
+        if (pushed && ['42601', '42701', '42703', '0A000'].includes(err?.code)) {
           pushed = undefined;
           res = (await Promise.race([client.query({ text: sql, values: params }), watchdog])) as import('pg').QueryResult<Record<string, unknown>>;
         } else {

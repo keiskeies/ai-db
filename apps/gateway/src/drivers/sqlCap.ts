@@ -1,14 +1,14 @@
-import { classifyStatement, maskLiterals, splitStatements } from '@aidb/core';
+import { classifyStatement, maskLiterals, splitStatements, type Engine } from '@aidb/core';
 
 /**
  * 单条只读 SELECT/WITH 判定：LIMIT 外包与 MAX_EXECUTION_TIME 注入都只敢作用于这种形状。
  * classifyStatement 已把 SELECT INTO / FOR UPDATE / WITH 内含写判成 write，
  * SHOW/DESCRIBE/PRAGMA/EXPLAIN 虽是 read 但不能被子查询包裹，这里按 verb 排除。
  */
-export function isSingleSelect(sql: string): boolean {
-  const statements = splitStatements(sql);
+export function isSingleSelect(sql: string, engine?: Engine): boolean {
+  const statements = splitStatements(sql, engine);
   if (statements.length !== 1) return false;
-  const info = classifyStatement(statements[0]);
+  const info = classifyStatement(statements[0], engine);
   return info.kind === 'read' && (info.verb === 'SELECT' || info.verb === 'WITH');
 }
 
@@ -17,10 +17,11 @@ export function isSingleSelect(sql: string): boolean {
  * 多语句/非 SELECT 返回 undefined，调用方回落到客户端裁剪。
  * 残留风险：子查询不允许重复列名（如 SELECT a.id, b.id），PG 侧调用方需捕获 42701 回落原句。
  */
-export function wrapSelectLimit(sql: string, limit: number): string | undefined {
-  if (!Number.isFinite(limit) || limit <= 0 || !isSingleSelect(sql)) return undefined;
+export function wrapSelectLimit(sql: string, limit: number, engine?: Engine): string | undefined {
+  if (!Number.isFinite(limit) || limit <= 0 || !isSingleSelect(sql, engine)) return undefined;
   const clean = sql.replace(/;\s*$/, '');
-  return `SELECT * FROM (${clean}) AS _aidb_limit LIMIT ${Math.floor(limit)}`;
+  // 闭括号前换行：原句尾部的 -- 行注释否则会把 ) AS _aidb_limit 一起注释掉。
+  return `SELECT * FROM (${clean}\n) AS _aidb_limit LIMIT ${Math.floor(limit)}`;
 }
 
 /**
@@ -29,9 +30,9 @@ export function wrapSelectLimit(sql: string, limit: number): string | undefined 
  * 在 maskLiterals 结果上扫描，字符串/注释里的 SELECT 不会误中；不识别提示的
  * MySQL 协议实现（Doris/StarRocks 等）会忽略它，客户端看门狗仍是兜底。
  */
-export function injectMaxExecutionTime(sql: string, ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0 || !isSingleSelect(sql)) return sql;
-  const masked = maskLiterals(sql);
+export function injectMaxExecutionTime(sql: string, ms: number, engine?: Engine): string {
+  if (!Number.isFinite(ms) || ms <= 0 || !isSingleSelect(sql, engine)) return sql;
+  const masked = maskLiterals(sql, engine);
   let depth = 0;
   for (let i = 0; i < masked.length; i += 1) {
     const c = masked[i];

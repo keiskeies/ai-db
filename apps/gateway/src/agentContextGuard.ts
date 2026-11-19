@@ -74,7 +74,12 @@ export function systemCatalogQuery(sql: string): boolean {
   if (!text) return false;
   if (/\b(information_schema|performance_schema)\b/i.test(text)) return true;
   if (/\b(mysql|sys)\s*\./i.test(text)) return true;
-  return /^\s*show\s+(tables|databases)\b/i.test(text);
+  // PG / SQLite / Oracle 的目录同样能枚举出全部表名，不能只挡 MySQL。
+  if (/\bpg_catalog\b/i.test(text)) return true;
+  if (/\b(pg_tables|pg_class|pg_namespace|sqlite_master|sqlite_schema|all_tables|user_tables|dba_tables)\b/i.test(text)) return true;
+  if (/^\s*show\s+(full\s+)?(tables|databases)\b/i.test(text)) return true;
+  if (/^\s*show\s+table\s+status\b/i.test(text)) return true;
+  return false;
 }
 
 export function metadataBlockedError(): ToolResult {

@@ -113,7 +113,7 @@ export class MysqlDriver implements RowStreamDriver {
 
       // 服务端上限：MAX_EXECUTION_TIME 提示让 MySQL 自己掐掉慢 SELECT（含事务内）；
       // 不识别提示的协议实现由下面的客户端看门狗兜底。statement 字段保留用户原句。
-      const execSql = injectMaxExecutionTime(sql, timeoutMs);
+      const execSql = injectMaxExecutionTime(sql, timeoutMs, 'mysql');
       const query = rawConnection(connection).query({ sql: execSql, values: params });
       const stream = query.stream({ highWaterMark: 16 });
 
@@ -271,7 +271,7 @@ export class MysqlDriver implements RowStreamDriver {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
-        connection.query(injectMaxExecutionTime(sql, METADATA_TIMEOUT_MS), params),
+        connection.query(injectMaxExecutionTime(sql, METADATA_TIMEOUT_MS, 'mysql'), params),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
             connection.destroy();

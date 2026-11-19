@@ -2407,7 +2407,9 @@ export function createApiRouter(deps: ApiDeps): Router {
       const body = obj(req.body, 'body');
       const args = body.args && typeof body.args === 'object' && !Array.isArray(body.args) ? (body.args as Record<string, unknown>) : {};
       const call = { id: `http-${Date.now()}`, name, args };
-      const risk = resolveRisk(call, tool);
+      const riskConnId = typeof args.connectionId === 'string' ? args.connectionId
+        : typeof body.connectionId === 'string' && body.connectionId ? body.connectionId : undefined;
+      const risk = resolveRisk(call, tool, riskConnId ? store.getConnection(riskConnId)?.engine : undefined);
       if (risk !== 'read') {
         res.status(403).json({ error: { code: 'TOOL_READ_ONLY', message: `MCP 只读桥不允许执行 ${name}（风险 ${risk}）` } });
         return;

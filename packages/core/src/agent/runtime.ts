@@ -240,7 +240,10 @@ function compactMessages(messages: ProviderMessage[], budget: number): ProviderM
   const cjk = (s: string) => (s.match(/[一-鿿]/g) || []).length;
   const estimate = (m: ProviderMessage): number => {
     const text = 'content' in m ? String(m.content ?? '') : '';
-    return 20 + Math.max(2, Math.ceil(cjk(text) * 1.3 + (text.length - cjk(text)) / 4)) + ('images' in m ? (m.images?.length ?? 0) * 1000 : 0);
+    // assistant 的 toolCalls 参数（整段 SQL 等）不在 content 里，不算就会系统性低估。
+    const calls = 'toolCalls' in m && m.toolCalls?.length ? JSON.stringify(m.toolCalls) : '';
+    const body = text + calls;
+    return 20 + Math.max(2, Math.ceil(cjk(body) * 1.3 + (body.length - cjk(body)) / 4)) + ('images' in m ? (m.images?.length ?? 0) * 1000 : 0);
   };
   const total = (list: ProviderMessage[]) => list.reduce((sum, m) => sum + estimate(m), 0);
   if (total(messages) <= budget) return messages;
@@ -249,7 +252,9 @@ function compactMessages(messages: ProviderMessage[], budget: number): ProviderM
   const out: ProviderMessage[] = [...messages];
   const trimmed: string[] = [];
 
-  // 迭代地从最老开始，删「assistant(工具) + 随后最近的 tool」，直到达标。
+  // 迭代地从最老开始，删「assistant(工具) + 它的全部 tool 结果」，直到达标。
+  // 必须整组删：一步多工具调用时只删到第一条 tool，剩下的 tool 消息失去宿主，
+  // 下一轮请求会被服务商以「tool 消息必须紧跟 tool_calls」直接 400。
   let guard = 0;
   while (total(out) > budget && guard < 200) {
     guard++;
@@ -260,7 +265,9 @@ function compactMessages(messages: ProviderMessage[], budget: number): ProviderM
         let host = -1;
         for (let j = i - 1; j >= 0; j--) if (out[j].role === 'assistant') { host = j; break; }
         const start = host >= 0 ? host : i;
-        out.splice(start, i - start + 1);
+        let end = i;
+        while (end + 1 < out.length && out[end + 1].role === 'tool') end++;
+        out.splice(start, end - start + 1);
         trimmed.push(start === host ? 'assistant+tool' : 'tool');
         found = true;
         break;
@@ -818,7 +825,7 @@ export class AgentRuntime {
           messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: serializeForModel(res, undefined, resultBudget()) });
           continue;
         }
-        const risk = resolveRisk(call, tool);
+        const risk = resolveRisk(call, tool, input.context.connection?.engine);
         const described = describeCall(call);
         const summary = tool.summarize?.(call.args) ?? described.summary;
         deps.emit({ type: 'tool_call', callId: call.id, tool: call.name, args: call.args, risk, summary });

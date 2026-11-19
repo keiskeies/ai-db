@@ -18,23 +18,80 @@ export interface SqlClassification {
 
 const RISK_RANK: Record<Risk, number> = { read: 0, write: 1, ddl: 2, destructive: 3 };
 
-/** Replace quoted literals/identifiers and comments with blanks so keyword checks never fire inside data. */
-export function maskLiterals(sql: string): string {
+/** MySQL 系方言（含 MariaDB/TiDB/Doris 等）：字符串认反斜杠转义，/*! 注释内容会被执行。 */
+function isMysqlDialect(engine?: Engine): boolean {
+  if (!engine) return false;
+  try {
+    return dialectOf(engine) === 'mysql';
+  } catch {
+    return false;
+  }
+}
+
+/** PG 美元引用开标签：$$ 或 $tag$。数据里的普通 $ 不会误中（必须成对出现 $...$）。 */
+function dollarTagAt(sql: string, i: number): string | undefined {
+  if (sql[i] !== '$') return undefined;
+  const m = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(i));
+  return m ? m[0] : undefined;
+}
+
+/** 美元引用只在 PG 系方言成立：MySQL 标识符允许 $，a$b$c 里的 $b$ 会被误认成开标签，
+ * 找不到闭标签就把后续整段（含真实语句）吞进掩码。引擎未知时不认美元引用（宁可误拆）。 */
+function isPgDialect(engine?: Engine): boolean {
+  if (!engine) return false;
+  try {
+    return dialectOf(engine) === 'postgres';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Replace quoted literals/identifiers and comments with blanks so keyword checks never fire inside data.
+ * 掩码必须与原文等长：注释按原长填空格、双写引号/转义按 2 格填。
+ * 调用方（injectMaxExecutionTime）拿掩码下标去切原文，缩长的掩码会把提示插进注释里或插碎 SQL。
+ *
+ * 方言规则（engine 未知时取保守方向）：
+ *  - 反斜杠转义只在 MySQL 系成立；PG/SQLite 等标准 SQL 里 'a\' 就是字符串结束，
+ *    按转义处理会把后面的真实语句吞进掩码，整段被误判成一条 read。
+ *  - MySQL 的 /*! 版本注释（可执行注释）按代码处理，否则 INTO OUTFILE / FOR UPDATE
+ *    这类子句藏在注释里就能骗过只读判定；引擎未知时同样按代码（宁可误拦）。
+ *  - $$...$$ 美元引用按字符串掩掉（仅 PG 系方言），函数体里的关键字不参与判定。
+ */
+export function maskLiterals(sql: string, engine?: Engine): string {
+  const mysql = isMysqlDialect(engine);
+  const pg = isPgDialect(engine);
   let out = '';
   let i = 0;
   const n = sql.length;
   while (i < n) {
     const c = sql[i];
     if (c === '-' && sql[i + 1] === '-') {
+      const start = i;
       while (i < n && sql[i] !== '\n') i++;
-      out += ' ';
+      out += ' '.repeat(i - start);
       continue;
     }
     if (c === '/' && sql[i + 1] === '*') {
+      if (sql[i + 2] === '!' && (mysql || engine === undefined)) {
+        // 可执行注释：只跳过 /*! 标记，内容按正常代码继续扫描。
+        out += '   ';
+        i += 3;
+        continue;
+      }
+      const start = i;
       i += 2;
       while (i < n && !(sql[i] === '*' && sql[i + 1] === '/')) i++;
-      i += 2;
-      out += ' ';
+      i = Math.min(n, i + 2);
+      out += ' '.repeat(i - start);
+      continue;
+    }
+    const tag = pg ? dollarTagAt(sql, i) : undefined;
+    if (tag) {
+      const close = sql.indexOf(tag, i + tag.length);
+      const end = close === -1 ? n : close + tag.length;
+      out += tag + ' '.repeat(Math.max(0, end - i - tag.length * 2)) + (close === -1 ? '' : tag);
+      i = end;
       continue;
     }
     if (c === "'" || c === '"' || c === '`') {
@@ -42,12 +99,15 @@ export function maskLiterals(sql: string): string {
       out += q;
       i++;
       while (i < n) {
-        if (sql[i] === '\\' && q !== "'") {
-          i += 2;
+        if (sql[i] === '\\' && mysql) {
+          const step = Math.min(2, n - i);
+          out += ' '.repeat(step);
+          i += step;
           continue;
         }
         if (sql[i] === q) {
           if (sql[i + 1] === q) {
+            out += '  ';
             i += 2;
             continue;
           }
@@ -67,7 +127,9 @@ export function maskLiterals(sql: string): string {
 }
 
 /** Split a script into statements, respecting strings, quoted identifiers and comments. */
-export function splitStatements(sql: string): string[] {
+export function splitStatements(sql: string, engine?: Engine): string[] {
+  const mysql = isMysqlDialect(engine);
+  const pg = isPgDialect(engine);
   const statements: string[] = [];
   let current = '';
   let i = 0;
@@ -82,8 +144,22 @@ export function splitStatements(sql: string): string[] {
       continue;
     }
     if (c === '/' && sql[i + 1] === '*') {
+      if (sql[i + 2] === '!' && (mysql || engine === undefined)) {
+        // 可执行注释里的 ; 是真实语句边界，必须参与拆分。
+        current += '/*!';
+        i += 3;
+        continue;
+      }
       const end = sql.indexOf('*/', i + 2);
       const stop = end === -1 ? n : end + 2;
+      current += sql.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    const tag = pg ? dollarTagAt(sql, i) : undefined;
+    if (tag) {
+      const close = sql.indexOf(tag, i + tag.length);
+      const stop = close === -1 ? n : close + tag.length;
       current += sql.slice(i, stop);
       i = stop;
       continue;
@@ -94,7 +170,7 @@ export function splitStatements(sql: string): string[] {
       i++;
       while (i < n) {
         current += sql[i];
-        if (sql[i] === '\\' && q !== "'" && i + 1 < n) {
+        if (sql[i] === '\\' && mysql && i + 1 < n) {
           current += sql[i + 1];
           i += 2;
           continue;
@@ -125,8 +201,8 @@ export function splitStatements(sql: string): string[] {
   return statements;
 }
 
-export function classifyStatement(sql: string): StatementInfo {
-  const masked = maskLiterals(sql).replace(/\s+/g, ' ').trim();
+export function classifyStatement(sql: string, engine?: Engine): StatementInfo {
+  const masked = maskLiterals(sql, engine).replace(/\s+/g, ' ').trim();
   const code = masked.toUpperCase();
   const verb = (code.match(/^[A-Z]+/) || [''])[0];
 
@@ -149,7 +225,7 @@ export function classifyStatement(sql: string): StatementInfo {
   if (/^(SHOW|DESCRIBE|DESC)\b/.test(code)) return { sql, kind: 'read', verb };
 
   if (/^PRAGMA\b/.test(code)) {
-    if (/\b(JOURNAL_MODE|WAL_CHECKPOINT|REKEY|KEY|VACUUM|OPTIMIZE)\b/.test(code)) {
+    if (/\b(JOURNAL_MODE|WAL_CHECKPOINT|REKEY|KEY|VACUUM|OPTIMIZE|USER_VERSION|APPLICATION_ID)\b/.test(code)) {
       return { sql, kind: 'write', verb, reason: 'PRAGMA 会产生副作用' };
     }
     return { sql, kind: 'read', verb };
@@ -157,7 +233,7 @@ export function classifyStatement(sql: string): StatementInfo {
 
   if (/^EXPLAIN\b/.test(code)) {
     if (/^EXPLAIN\s+(ANALYZE|ANALYSE)\b/.test(code)) {
-      const inner = classifyStatement(code.replace(/^EXPLAIN\s+(ANALYZE|ANALYSE)\b/, ''));
+      const inner = classifyStatement(code.replace(/^EXPLAIN\s+(ANALYZE|ANALYSE)\b/, ''), engine);
       const kind: SqlKind = inner.kind === 'read' ? 'write' : inner.kind;
       return { sql, kind, verb: 'EXPLAIN', reason: 'EXPLAIN ANALYZE 会实际执行语句' };
     }
@@ -204,6 +280,10 @@ export function classifyStatement(sql: string): StatementInfo {
   // 危险子集单独处理：GLOBAL / PERSIST 改的是服务端配置，PASSWORD 改的是凭证。
   if (/^SET\b/.test(code)) {
     if (/\bPASSWORD\b/.test(code)) return { sql, kind: 'destructive', verb: 'SET', reason: 'SET PASSWORD 会修改凭证' };
+    // 改的是权限上下文而不是会话参数：只读连接上放行等于允许提权后再读。
+    if (/\bROLE\b/.test(code) || /\bSESSION\s+AUTHORIZATION\b/.test(code)) {
+      return { sql, kind: 'write', verb: 'SET', reason: 'SET ROLE / SESSION AUTHORIZATION 会切换权限上下文' };
+    }
     if (/\b(GLOBAL|PERSIST|PERSIST_ONLY)\b/.test(code)) {
       return { sql, kind: 'write', verb: 'SET', reason: '修改服务端全局配置，不是会话级设置' };
     }
@@ -226,8 +306,8 @@ const KNOWN_RISK: Record<SqlKind, Risk> = {
   unknown: 'ddl',
 };
 
-export function classifySql(sql: string): SqlClassification {
-  const statements = splitStatements(sql).map(classifyStatement);
+export function classifySql(sql: string, engine?: Engine): SqlClassification {
+  const statements = splitStatements(sql, engine).map((s) => classifyStatement(s, engine));
   let risk: Risk = 'read';
   for (const s of statements) {
     const r = KNOWN_RISK[s.kind];
@@ -246,17 +326,17 @@ export function classifySql(sql: string): SqlClassification {
   return { risk, kind, statements };
 }
 
-export function isReadOnlyStatement(sql: string): boolean {
-  const kind = classifyStatement(sql).kind;
+export function isReadOnlyStatement(sql: string, engine?: Engine): boolean {
+  const kind = classifyStatement(sql, engine).kind;
   return kind === 'read' || kind === 'session';
 }
 
 /** Returns a human-readable rejection reason for readonly connections, or null when allowed. */
-export function readonlyViolation(sql: string, _engine?: Engine): string | null {
-  const statements = splitStatements(sql);
+export function readonlyViolation(sql: string, engine?: Engine): string | null {
+  const statements = splitStatements(sql, engine);
   if (!statements.length) return '空 SQL';
   for (const s of statements) {
-    const info = classifyStatement(s);
+    const info = classifyStatement(s, engine);
     // 会话级语句（SET SESSION / USE / 事务边界）不写数据，只读连接上没有理由拒绝：
     // 它既不会改库，也不会绕开后面每条语句各自的只读判定。
     if (info.kind !== 'read' && info.kind !== 'session') {
@@ -269,22 +349,24 @@ export function readonlyViolation(sql: string, _engine?: Engine): string | null 
 /** Append a LIMIT to a single plain SELECT when the user did not specify one. */
 export function applyLimit(sql: string, limit: number, engine?: Engine): string {
   if (!limit || limit <= 0) return sql;
-  const statements = splitStatements(sql);
+  const statements = splitStatements(sql, engine);
   if (statements.length !== 1) return sql;
   const s = statements[0];
-  if (classifyStatement(s).kind !== 'read') return sql;
-  const code = maskLiterals(s).replace(/\s+/g, ' ').toUpperCase();
+  if (classifyStatement(s, engine).kind !== 'read') return sql;
+  const code = maskLiterals(s, engine).replace(/\s+/g, ' ').toUpperCase();
   if (/^(SHOW|DESCRIBE|DESC|PRAGMA|EXPLAIN)\b/.test(code)) return sql;
   if (/\bLIMIT\b|\bFETCH\s+(FIRST|NEXT)\b|\bTOP\s+\d+\b|\bOFFSET\b/.test(code)) return sql;
   const clean = s.replace(/;\s*$/, '');
   const n = Math.floor(limit);
   const dialect = engine ? dialectOf(engine) : undefined;
+  // 追加必须另起一行：原句尾部若有 -- 行注释，同行追加的 LIMIT 会被注释掉，
+  // 服务端不再限流；PG 的外包 LIMIT 还会把闭括号一起注释掉造成语法错误。
   if (dialect === 'mssql') {
     const hasOrder = /\bORDER\s+BY\b/.test(code);
-    return `${clean}${hasOrder ? '' : ' ORDER BY (SELECT NULL)'} OFFSET 0 ROWS FETCH NEXT ${n} ROWS ONLY`;
+    return `${clean}\n${hasOrder ? '' : 'ORDER BY (SELECT NULL) '}OFFSET 0 ROWS FETCH NEXT ${n} ROWS ONLY`;
   }
-  if (dialect === 'oracle') return `${clean} FETCH FIRST ${n} ROWS ONLY`;
-  return `${clean} LIMIT ${n}`;
+  if (dialect === 'oracle') return `${clean}\nFETCH FIRST ${n} ROWS ONLY`;
+  return `${clean}\nLIMIT ${n}`;
 }
 
 /** Best-effort primary table reference, used for context hints only. */
@@ -294,6 +376,6 @@ export function extractTableRef(sql: string): string | undefined {
   return m ? m[1].replace(/[`"\[\]]/g, '') : undefined;
 }
 
-export function countStatements(sql: string): number {
-  return splitStatements(sql).length;
+export function countStatements(sql: string, engine?: Engine): number {
+  return splitStatements(sql, engine).length;
 }

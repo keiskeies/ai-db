@@ -196,7 +196,7 @@ test('formatBusinessContext renders terms, join relations and few-shot examples'
     glossary: [mem({ id: 'g1', kind: 'glossary', title: 'JS', content: 'JumpServer 堡垒机' })],
     sqlExamples: [mem({ id: 'e1', kind: 'sql_example', title: '本季度东区赢单总数', content: 'SELECT COUNT(*) FROM deals WHERE region = \'east\';' })],
   });
-  assert.match(out, /## Business context \(authoritative — overrides your own guesses\)/);
+  assert.match(out, /## Business context \(user-configured context is authoritative/);
   assert.match(out, /### Terms\n- JS → JumpServer 堡垒机/);
   assert.match(out, /### Join relations\n- orders\.user_id = users\.id {2}（下单人）/);
   assert.match(out, /Q: 本季度东区赢单总数/);

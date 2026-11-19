@@ -150,7 +150,7 @@ export class SqliteDriver implements Driver {
     const bound = normalizeParams(params);
     try {
       const stmt = this.db.prepare(sql);
-      const kind = classifyStatement(sql).kind;
+      const kind = classifyStatement(sql, 'sqlite').kind;
       const isRead = kind === 'read' || /^\s*PRAGMA\b/i.test(sql);
       if (isRead) {
         const stmtAny = stmt as unknown as {
@@ -189,7 +189,7 @@ export class SqliteDriver implements Driver {
         } else {
           // 无 iterate 的旧运行时：单条 SELECT/WITH 下推 LIMIT maxRows+1 缩小全量缓冲，
           // 读入后再按行数/字节裁剪。多语句/非 SELECT 无法下推，只能靠裁剪兜底。
-          const pushed = Number.isFinite(maxRows) ? wrapSelectLimit(sql, maxRows + 1) : undefined;
+          const pushed = Number.isFinite(maxRows) ? wrapSelectLimit(sql, maxRows + 1, 'sqlite') : undefined;
           const target = pushed ? this.db.prepare(pushed) : stmt;
           const rawRows = (target.all as (...args: unknown[]) => Record<string, unknown>[])(...bound);
           for (const raw of rawRows) {

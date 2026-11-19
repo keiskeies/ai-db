@@ -66,6 +66,13 @@ interface CachedDriver {
  */
 export const MAX_SCRIPT_STATEMENTS = 200;
 
+/**
+ * 无条件硬上限：allowMulti 是模型可以自己声明的参数，不能让它成为规模闸的钥匙。
+ * 超过 200 条需要显式声明，超过 1000 条无论谁都拒绝——每条最多几千行，
+ * 无上限的脚本会把内存和执行时长一起拖垮。
+ */
+export const MAX_SCRIPT_HARD_STATEMENTS = 1000;
+
 // ── 超时常量集中定义（G2）──────────────────────────────────────────────
 // 各执行路径的超时口径不同，散落在调用点容易漏传（导出/质检曾完全没传）。
 // 统一放这里并注明理由，调用方只引用常量，不再各写各的数字。
@@ -1240,8 +1247,14 @@ export class ConnectionManager {
       const query = this.parseStructuredQuery(conn, sql);
       return this.executeStructured(connectionId, conn, query, opts);
     }
-    const statements = splitStatements(sql);
+    const statements = splitStatements(sql, conn.engine);
     if (!statements.length) throw new DbError('SQL 为空', { code: 'EMPTY_SQL' });
+    if (statements.length > MAX_SCRIPT_HARD_STATEMENTS) {
+      throw new DbError(`脚本含 ${statements.length} 条语句，超过硬上限 ${MAX_SCRIPT_HARD_STATEMENTS} 条`, {
+        code: 'SCRIPT_TOO_LARGE',
+        hint: '请分批执行：每批控制在合理条数内，逐次调用并确认上一批结果后再继续。',
+      });
+    }
     // 这道闸拦「规模」，不拦「批量」。
     //
     // 旧实现在「含写/DDL 且有 2 条以上语句」时整段拒绝，本机历史里 22 段多语句脚本
@@ -1345,7 +1358,7 @@ export class ConnectionManager {
       // 已经由调用方显式 invalidate 的路径必须删掉它们自己那处（见计划 Task 3 Step 4），
       // 否则一次操作发两遍事件、客户端刷两遍全库。
       const touchesSchema = applied.some((statement) => {
-        const kind = classifyStatement(statement).kind;
+        const kind = classifyStatement(statement, conn.engine).kind;
         return kind === 'ddl' || kind === 'destructive';
       });
       if (touchesSchema) {

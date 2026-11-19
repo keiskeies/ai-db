@@ -119,11 +119,11 @@ test('isSingleSelect：只认单条只读 SELECT/WITH', () => {
 });
 
 test('wrapSelectLimit：单条 SELECT/WITH 外包 LIMIT，其余不包', () => {
-  assert.equal(wrapSelectLimit('SELECT * FROM t', 3), 'SELECT * FROM (SELECT * FROM t) AS _aidb_limit LIMIT 3');
-  assert.equal(wrapSelectLimit('SELECT * FROM t;', 3), 'SELECT * FROM (SELECT * FROM t) AS _aidb_limit LIMIT 3');
+  assert.equal(wrapSelectLimit('SELECT * FROM t', 3), 'SELECT * FROM (SELECT * FROM t\n) AS _aidb_limit LIMIT 3');
+  assert.equal(wrapSelectLimit('SELECT * FROM t;', 3), 'SELECT * FROM (SELECT * FROM t\n) AS _aidb_limit LIMIT 3');
   assert.equal(
     wrapSelectLimit('WITH c AS (SELECT 1) SELECT * FROM c', 5),
-    'SELECT * FROM (WITH c AS (SELECT 1) SELECT * FROM c) AS _aidb_limit LIMIT 5',
+    'SELECT * FROM (WITH c AS (SELECT 1) SELECT * FROM c\n) AS _aidb_limit LIMIT 5',
   );
   assert.equal(wrapSelectLimit('SELECT 1; SELECT 2', 3), undefined);
   assert.equal(wrapSelectLimit('INSERT INTO t VALUES (1)', 3), undefined);
@@ -221,7 +221,7 @@ test('PG：单条 SELECT 下推 LIMIT maxRows+1，多一行即 truncated', async
   const three = { rows: [{ id: 1 }, { id: 2 }, { id: 3 }], fields: [{ name: 'id', dataTypeID: 23 }], rowCount: 3 };
   const { driver, calls } = fakePg((text) => (text.startsWith('SELECT') ? three : { rows: [] }));
   const result = await driver.runParams('SELECT * FROM t', [], { maxRows: 2, timeoutMs: 1000 });
-  assert.equal(calls[1], 'SELECT * FROM (SELECT * FROM t) AS _aidb_limit LIMIT 3');
+  assert.equal(calls[1], 'SELECT * FROM (SELECT * FROM t\n) AS _aidb_limit LIMIT 3');
   assert.equal(result.rows.length, 2);
   assert.equal(result.truncated, true);
 });

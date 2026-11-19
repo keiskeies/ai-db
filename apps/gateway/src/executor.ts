@@ -215,6 +215,27 @@ export class ToolExecutor {
       return { ok: false, summary: 'MCP 功能已关闭', error: { code: 'FEATURE_DISABLED', message: 'MCP 已在设置中关闭' }, meta: { durationMs: 0 } };
     }
     const tool = getTool(call.name);
+    // 必填参数在入口处校验：残缺 JSON 会被 provider 兜成 {}，空参一路落到各分支
+    // 才报出看不懂的下游错误。connectionId 有会话兜底（requireConnection），不在此列；
+    // confirm 交给破坏性工具自己的 CONFIRM_REQUIRED 流程（缺省/不一致都有专门提示）。
+    if (tool) {
+      const args = (call.args ?? {}) as Record<string, unknown>;
+      const missing = (tool.inputSchema.required ?? []).filter(
+        (key) => key !== 'connectionId' && key !== 'confirm' && (args[key] === undefined || args[key] === null || args[key] === ''),
+      );
+      if (missing.length) {
+        return {
+          ok: false,
+          summary: '工具参数不完整',
+          error: {
+            code: 'INVALID_ARGS',
+            message: `${call.name} 缺少必填参数：${missing.join(', ')}`,
+            hint: '补全参数后重新调用；参数结构见工具定义。',
+          },
+          meta: { durationMs: Date.now() - started },
+        };
+      }
+    }
     let result: ToolResult;
     try {
       result = await this.dispatch(call, ctx, started);
@@ -227,7 +248,10 @@ export class ToolExecutor {
       };
     }
     if (DB_TOOLS.has(call.name)) {
-      const risk = tool ? resolveRisk(call, tool) : undefined;
+      // 审计风险与运行时审批同口径：带上引擎，方言差异（如 /*! 注释）不会两边判得不一样。
+      const riskConnId = this.connectionIdOf(call, ctx);
+      const riskConn = riskConnId ? this.store.getConnection(riskConnId) : undefined;
+      const risk = tool ? resolveRisk(call, tool, riskConn?.engine) : undefined;
       const generated = (result.data as { ddl?: string; statements?: string[] } | undefined)?.ddl
         ?? (result.data as { statements?: string[] } | undefined)?.statements?.join(';\n');
       const sql = typeof call.args.sql === 'string' ? call.args.sql : generated;
@@ -439,7 +463,7 @@ export class ToolExecutor {
         const sql = String(a.sql ?? '').trim();
         if (!sql) throw new DbError('SQL 不能为空', { code: 'EMPTY_SQL' });
         if (a.dryRun === true) {
-          const classification = classifySql(sql);
+          const classification = classifySql(sql, conn.engine);
           return ok(started, '仅编译，未执行', {
             statements: classification.statements.map((s) => s.sql),
             risk: classification.risk,

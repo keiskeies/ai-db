@@ -75,7 +75,7 @@ test('会话级语句里的危险子集仍按写/破坏性处理', () => {
 });
 
 test('applies limits only to unbounded reads', () => {
-  assert.equal(applyLimit('SELECT * FROM t', 50), 'SELECT * FROM t LIMIT 50');
+  assert.equal(applyLimit('SELECT * FROM t', 50), 'SELECT * FROM t\nLIMIT 50');
   assert.equal(applyLimit('SELECT * FROM t LIMIT 5', 50), 'SELECT * FROM t LIMIT 5');
   assert.equal(applyLimit('UPDATE t SET a=1 WHERE id=1', 50), 'UPDATE t SET a=1 WHERE id=1');
   assert.equal(applyLimit('SELECT 1; SELECT 2', 50), 'SELECT 1; SELECT 2');

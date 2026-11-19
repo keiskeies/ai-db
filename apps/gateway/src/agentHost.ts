@@ -675,28 +675,32 @@ export class AgentHost {
         const contextDb = businessContext?.database?.toLowerCase() ?? '';
         const targetDb = String(call.args.database ?? conn?.database ?? '').toLowerCase();
         const scoped = !contextDb || !targetDb || targetDb === contextDb;
-        const disabled = scoped ? businessContext?.disabledTables ?? [] : [];
+        const contextDisabled = businessContext?.disabledTables ?? [];
+        const disabled = scoped ? contextDisabled : [];
+        // SQL 检查不随 args.database 关闭：传一个不同的库名就能把 disabled 置空，
+        // 跨库写法 bizdb.禁用表 也拦不住。名字匹配本来就是「宁可误伤」的硬约束，
+        // 与目标库无关；对象级工具仍按目标库作用域判定。
+        if (contextDisabled.length && typeof call.args.sql === 'string') {
+          const sql = call.args.sql;
+          if (systemCatalogQuery(sql)) return Promise.resolve(metadataBlockedError());
+          const blocked = disabledTableInSql(sql, contextDisabled);
+          if (blocked) {
+            return Promise.resolve({
+              ok: false,
+              summary: '表已被业务上下文禁用',
+              error: {
+                code: 'TABLE_DISABLED',
+                message: `表 ${blocked} 已在业务上下文中禁用，不能执行包含它的 SQL。`,
+                hint: '改用未禁用的表；若确需该表，请让用户在 Agent 上下文里启用它。',
+              },
+              meta: { durationMs: 0 },
+            });
+          }
+        }
         if (disabled.length) {
           if (allTableScanNeedsScope(call, disabled)) return Promise.resolve(scopeRequiredError(call.name));
           const target = disabledTableTarget(call, disabled);
           if (target) return Promise.resolve(disabledToolError(target));
-          if (typeof call.args.sql === 'string') {
-            const sql = call.args.sql;
-            if (systemCatalogQuery(sql)) return Promise.resolve(metadataBlockedError());
-            const blocked = disabledTableInSql(sql, disabled);
-            if (blocked) {
-              return Promise.resolve({
-                ok: false,
-                summary: '表已被业务上下文禁用',
-                error: {
-                  code: 'TABLE_DISABLED',
-                  message: `表 ${blocked} 已在业务上下文中禁用，不能执行包含它的 SQL。`,
-                  hint: '改用未禁用的表；若确需该表，请让用户在 Agent 上下文里启用它。',
-                },
-                meta: { durationMs: 0 },
-              });
-            }
-          }
         }
         return this.opts.executor
           .execute(call, { sessionId, connectionId: conn?.id, database: conn?.database, disabledTables: disabled, signal })

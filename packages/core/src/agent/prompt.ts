@@ -505,7 +505,7 @@ export function formatBusinessContext(opts: { context?: AgentContextBundle; glos
   const examples = formatSqlExamples(opts.sqlExamples);
   if (!terms && !antiPatterns && !relations && !examples) return '';
 
-  const sections: string[] = ['## Business context (authoritative — overrides your own guesses)'];
+  const sections: string[] = ['## Business context (user-configured context is authoritative; memory-recalled entries are strong hints — verify against ## Schema and real data before trusting them)'];
   if (terms) sections.push(`### Terms\n${terms}`);
   if (antiPatterns) sections.push(`### Anti-patterns (hard constraints — do not repeat)\n${antiPatterns}`);
   if (relations) sections.push(`### Join relations\n${relations}`);
@@ -515,7 +515,8 @@ export function formatBusinessContext(opts: { context?: AgentContextBundle; glos
 - Map natural-language wording to columns via the aliases and descriptions in ## Schema; bracketed enum glosses are the only valid value interpretations.
 - Use the join relations exactly as given; never invent join keys.
 - When a question matches an example above, reuse its statistical caliber (filters, grouping, time range).
-- Anti-patterns are hard constraints: do not use the forbidden table/column/interpretation even if it looks plausible.`);
+- Anti-patterns are hard constraints: do not use the forbidden table/column/interpretation even if it looks plausible.
+- Terms and examples recalled from memory were written in earlier sessions (possibly by yourself). They can be stale or wrong: when one conflicts with ## Schema or an observed query result, the schema and the result win.`);
   return sections.join('\n\n');
 }
 
