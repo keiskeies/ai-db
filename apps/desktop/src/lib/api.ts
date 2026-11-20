@@ -48,6 +48,16 @@ import type {
   ToolResult,
 } from '@aidb/core';
 import { t as tr } from '../i18n';
+import {
+  TransportError,
+  request as sharedRequest,
+  readWithIdleCeiling as sharedReadWithIdleCeiling,
+  readSseStream as sharedReadSseStream,
+  streamTurn as sharedStreamTurn,
+  type RequestConfig,
+  type SseIdleOptions,
+  type TurnPayload,
+} from '@aidb/client';
 
 function resolveToken(): string {
   const params = new URLSearchParams(location.hash.replace(/^#/, ''));
@@ -78,16 +88,10 @@ export function authToken(): string {
   return resolveToken();
 }
 
-export class ApiError extends Error {
-  code: string;
-  status: number;
-  hint?: string;
+export class ApiError extends TransportError {
   constructor(message: string, opts: { code?: string; status?: number; hint?: string } = {}) {
-    super(message);
+    super(message, opts);
     this.name = 'ApiError';
-    this.code = opts.code ?? 'API_ERROR';
-    this.status = opts.status ?? 0;
-    this.hint = opts.hint;
   }
 }
 
@@ -105,70 +109,21 @@ const BACKUP_REQUEST_TIMEOUT_MS = 600_000;
  */
 const QUERY_REQUEST_TIMEOUT_MS = 120_000;
 
-/** 组合多个 signal：任一 abort 即中止。AbortSignal.any 不可用时退回手动监听（兼容旧内核）。 */
-function combineSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
-  const present = signals.filter((s): s is AbortSignal => Boolean(s));
-  if (present.length === 0) return new AbortController().signal;
-  if (present.length === 1) return present[0];
-  if (typeof AbortSignal.any === 'function') return AbortSignal.any(present);
-  const controller = new AbortController();
-  for (const signal of present) {
-    if (signal.aborted) {
-      controller.abort(signal.reason);
-      break;
-    }
-    signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
-  }
-  return controller.signal;
-}
+/** desktop 适配层注入：错误类身份、i18n 文案、加载期 token 快照、网络错误归一。 */
+const desktopDeps = {
+  makeError: (message: string, opts?: { code?: string; status?: number; hint?: string }) => new ApiError(message, opts),
+  tr,
+};
 
-/** 把 fetch/读 body 阶段的异常归一成 ApiError；用户主动取消仍原样抛 AbortError 供调用方静默复位。 */
-function asRequestError(err: unknown, callerSignal: AbortSignal | undefined, timeoutSignal: AbortSignal | undefined, timeoutMs: number): unknown {
-  if (callerSignal?.aborted) return err;
-  if (timeoutSignal?.aborted) {
-    return new ApiError(tr("请求超时（超过 {0} 秒无响应），已中止。", [Math.round(timeoutMs / 1000)]), { code: 'REQUEST_TIMEOUT' });
-  }
-  if (err instanceof ApiError) return err;
-  if ((err as Error)?.name === 'AbortError') return err;
-  return new ApiError(tr("网络请求失败：{0}", [(err as Error)?.message ?? String(err)]), { code: 'NETWORK_ERROR' });
-}
+const transportCfg: RequestConfig = {
+  baseUrl: '',
+  getToken: () => TOKEN,
+  normalizeNetworkErrors: true,
+  ...desktopDeps,
+};
 
 async function request<T>(path: string, init: RequestInit = {}, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS): Promise<T> {
-  const { signal: callerSignal, ...rest } = init;
-  const timeoutSignal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
-  const signal = combineSignals(callerSignal ?? undefined, timeoutSignal);
-  let res: Response;
-  let text: string;
-  try {
-    res = await fetch(`/api${path}`, {
-      ...rest,
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${TOKEN}`,
-        ...(init.headers ?? {}),
-      },
-      signal,
-    });
-    if (res.status === 204) return undefined as T;
-    text = await res.text();
-  } catch (err) {
-    throw asRequestError(err, callerSignal ?? undefined, timeoutSignal, timeoutMs);
-  }
-  let payload: any = null;
-  try {
-    payload = text ? JSON.parse(text) : null;
-  } catch {
-    payload = text;
-  }
-  if (!res.ok) {
-    const err = payload?.error;
-    throw new ApiError(typeof err?.message === 'string' ? err.message : tr("请求失败（{0}）", [res.status]), {
-      code: err?.code,
-      status: res.status,
-      hint: err?.hint,
-    });
-  }
-  return payload as T;
+  return sharedRequest<T>(path, init, timeoutMs, transportCfg);
 }
 
 export interface BootstrapData {
@@ -209,15 +164,7 @@ export interface DataPage {
   sql: string;
 }
 
-export interface TurnPayload {
-  text: string;
-  mode?: string;
-  attachments?: string[];
-  /** 已上传的图片附件 id。 */
-  images?: string[];
-  connectionId?: string;
-  database?: string;
-}
+export type { TurnPayload };
 
 /**
  * 一段 SSE 流上「连续多少字节都没来」就算这条通道死了。
@@ -246,109 +193,26 @@ export async function readWithIdleCeiling(
   /** 非回合流（command/skill/transfer）复用这套看门狗时，换一句贴合场景的文案与错误码。 */
   idle?: { code?: string; message?: string },
 ): Promise<Uint8Array | undefined> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await new Promise<Uint8Array | undefined>((resolve, reject) => {
-      timer = setTimeout(() => {
-        // 先取消再抛：不 cancel 的话底层连接会一直挂着，网关那边的 close 也不触发，
-        // 于是它那边的回合还在跑（网关靠 close 才 abort）。
-        void reader.cancel().catch(() => undefined);
-        reject(
-          new ApiError(idle?.message ?? tr("与服务端的连接连续 {0} 秒没有任何响应，本次回复已断开。已完成的部分仍然保留，回复「继续」可接着做。", [Math.round(idleMs / 1000)]), {
-            code: idle?.code ?? 'TURN_CHANNEL_IDLE',
-          }),
-        );
-      }, idleMs);
-      // 用户点停止：把 AbortError 照原样抛出去，别让上面那段超时文案盖掉「用户中止」
-      const onAbort = () => {
-        void reader.cancel().catch(() => undefined);
-        reject(signal?.reason ?? Object.assign(new Error('Aborted'), { name: 'AbortError' }));
-      };
-      if (signal) {
-        if (signal.aborted) onAbort();
-        else signal.addEventListener('abort', onAbort, { once: true });
-      }
-      reader.read().then(
-        ({ done, value }) => {
-          if (signal) signal.removeEventListener('abort', onAbort);
-          resolve(done ? undefined : value);
-        },
-        (err) => {
-          if (signal) signal.removeEventListener('abort', onAbort);
-          reject(err);
-        },
-      );
-    });
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+  return sharedReadWithIdleCeiling(
+    reader,
+    signal,
+    idleMs,
+    {
+      code: idle?.code,
+      message: idle?.message ?? tr("与服务端的连接连续 {0} 秒没有任何响应，本次回复已断开。已完成的部分仍然保留，回复「继续」可接着做。", [Math.round(idleMs / 1000)]),
+    },
+    desktopDeps,
+  );
 }
 
 export async function streamTurn(sessionId: string, payload: TurnPayload, onEvent: (event: AgentEvent) => void, signal?: AbortSignal, /** 只给测试用：默认值就是线上阈值，没必要让用例真等 5 分钟。 */ eventIdleMs = EVENT_IDLE_MS): Promise<void> {
-  const res = await fetch(`/api/agent/sessions/${sessionId}/turns`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
-    body: JSON.stringify(payload),
-    signal,
+  await sharedStreamTurn(sessionId, payload, onEvent, signal, eventIdleMs, {
+    baseUrl: '',
+    getToken: () => TOKEN,
+    byteIdleMs: TURN_IDLE_CEILING_MS,
+    eventIdleMessage: tr("与服务端的连接连续 {0} 秒没有任何响应，本次回复已断开。已完成的部分仍然保留，回复「继续」可接着做。", [Math.round(eventIdleMs / 1000)]),
+    ...desktopDeps,
   });
-  if (!res.ok || !res.body) {
-    const text = await res.text().catch(() => '');
-    let message = tr("Agent 请求失败（{0}）", [res.status]);
-    let code = 'AGENT_REQUEST';
-    try {
-      const parsed = JSON.parse(text);
-      message = parsed?.error?.message ?? message;
-      code = parsed?.error?.code ?? code;
-    } catch {
-      /* keep */
-    }
-    throw new ApiError(message, { code, status: res.status });
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  // 事件级静默上限：服务端只在有新内容时才发 data: 帧，但心跳定时器是独立于回合
-  // 进展的——所以「5 分钟没有任何一帧到达」只能是通道死了，而不是这步很慢。
-  let lastActivityAt = Date.now();
-  while (true) {
-    // 字节级上限只管「半开连接」。真正的长思考/长工具回合可能连续几分钟没有字节，
-    // 这是合法的；这里用事件级上限兜底：连心跳都没有了才是真断了。
-    if (Date.now() - lastActivityAt > eventIdleMs) {
-      void reader.cancel().catch(() => undefined);
-      throw new ApiError(
-        tr("与服务端的连接连续 {0} 秒没有任何响应，本次回复已断开。已完成的部分仍然保留，回复「继续」可接着做。", [Math.round(eventIdleMs / 1000)]),
-        { code: 'TURN_CHANNEL_IDLE' },
-      );
-    }
-    // 用带上限的读取而不是裸 reader.read()：半开的连接既不报错也不结束，
-    // 裸读会永远等下去，界面上就是「图标转到天荒地老」。
-    const chunk = await readWithIdleCeiling(reader, signal);
-    if (chunk === undefined) break;
-    // 任何一帧（哪怕是只有 `: ping` 的心跳块）到达都算通道还活着，
-    // 在解码/解析之前就更新活动时间，避免静默回合被误杀。
-    lastActivityAt = Date.now();
-    buffer = (buffer + decoder.decode(chunk, { stream: true })).replace(/\r\n/g, '\n');
-    let idx = buffer.indexOf('\n\n');
-    while (idx !== -1) {
-      const frame = buffer.slice(0, idx).trim();
-      buffer = buffer.slice(idx + 2);
-      if (frame && !frame.startsWith(':')) {
-        const data = frame
-          .split('\n')
-          .filter((line) => line.startsWith('data:'))
-          .map((line) => line.slice(5).trim())
-          .join('\n');
-        if (data) {
-          try {
-            onEvent(JSON.parse(data) as AgentEvent);
-          } catch {
-            /* ignore malformed frame */
-          }
-        }
-      }
-      idx = buffer.indexOf('\n\n');
-    }
-  }
 }
 
 export type TransferPhase = 'create' | 'read' | 'truncate' | 'write';
@@ -400,64 +264,13 @@ export type TransferEvent =
  */
 const WORKER_IDLE_CEILING_MS = 120_000;
 
-interface SseIdleOptions {
-  signal?: AbortSignal;
-  /** 字节层静默上限：连续这么久没有任何字节就判通道死。默认沿用回合的 10 分钟。 */
-  byteIdleMs?: number;
-  /** 事件层静默上限（含心跳帧）；不传则不做事件层判定。 */
-  eventIdleMs?: number;
-  /** 静默超时的错误码与文案，按流类型贴合场景。 */
-  idleCode?: string;
-  idleMessage?: string;
-}
-
 /**
  * 共享的 SSE 读取循环：复用 streamTurn 的字节/事件双层 idle 看门狗。
  * 半开的 TCP 既不报错也不结束，裸 reader.read() 会永远等下去——这里用
  * readWithIdleCeiling 兜底，超时 cancel 掉 reader 让网关收到 close。
  */
 async function readSseStream(res: Response, onEvent: (event: unknown) => void, opts: SseIdleOptions = {}): Promise<void> {
-  if (!res.body) throw new ApiError(tr("响应不支持流式读取"), { code: 'SSE_BODY', status: res.status });
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  const byteIdleMs = opts.byteIdleMs ?? TURN_IDLE_CEILING_MS;
-  const idle = { code: opts.idleCode, message: opts.idleMessage };
-  let buffer = '';
-  let lastActivityAt = Date.now();
-  while (true) {
-    if (opts.eventIdleMs && Date.now() - lastActivityAt > opts.eventIdleMs) {
-      void reader.cancel().catch(() => undefined);
-      throw new ApiError(
-        opts.idleMessage ?? tr("与服务端的连接连续 {0} 秒没有任何响应，已断开。", [Math.round(opts.eventIdleMs / 1000)]),
-        { code: opts.idleCode ?? 'SSE_CHANNEL_IDLE' },
-      );
-    }
-    const chunk = await readWithIdleCeiling(reader, opts.signal, byteIdleMs, idle);
-    if (chunk === undefined) break;
-    // 任何一帧（哪怕只有心跳）到达都算通道还活着，在解码/解析之前就更新活动时间。
-    lastActivityAt = Date.now();
-    buffer = (buffer + decoder.decode(chunk, { stream: true })).replace(/\r\n/g, '\n');
-    let idx = buffer.indexOf('\n\n');
-    while (idx !== -1) {
-      const frame = buffer.slice(0, idx).trim();
-      buffer = buffer.slice(idx + 2);
-      if (frame && !frame.startsWith(':')) {
-        const data = frame
-          .split('\n')
-          .filter((line) => line.startsWith('data:'))
-          .map((line) => line.slice(5).trim())
-          .join('\n');
-        if (data) {
-          try {
-            onEvent(JSON.parse(data));
-          } catch {
-            /* ignore malformed frame */
-          }
-        }
-      }
-      idx = buffer.indexOf('\n\n');
-    }
-  }
+  await sharedReadSseStream(res, onEvent, opts, desktopDeps, TURN_IDLE_CEILING_MS);
 }
 
 async function readSse(res: Response, onEvent: (event: unknown) => void, signal?: AbortSignal): Promise<void> {

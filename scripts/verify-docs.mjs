@@ -97,13 +97,18 @@ if (existsSync(toolFile)) {
   ok('code tool registry', 'not yet implemented (docs-only phase)');
 }
 
-// 10.1 声明了工具却没实现，运行期只会得到「未实现的工具」——契约脚本必须挡住
-const executorFile = join(root, 'apps/gateway/src/executor.ts');
-if (existsSync(executorFile)) {
-  const src = readFileSync(executorFile, 'utf8');
-  const dispatched = new Set([...src.matchAll(/case '([a-z_]+)':/g)].map((m) => m[1]));
-  for (const t of expectedTools) dispatched.has(t) ? ok(`executor tool ${t}`) : fail(`executor tool ${t}`, 'declared but never dispatched in executor.ts');
-  for (const c of dispatched) if (!expectedTools.includes(c)) fail('executor tool inventory', `unexpected case ${c}`);
+// 10.1 声明了工具却没实现，运行期只会得到「未实现的工具」——契约脚本必须挡住。
+// WP2 后分发是注册式的：扫描 executor/*.ts 里 defineTool 第一参数的字符串字面量。
+const executorDir = join(root, 'apps/gateway/src/executor');
+if (existsSync(executorDir)) {
+  const dispatched = new Set();
+  for (const file of readdirSync(executorDir)) {
+    if (!file.endsWith('.ts')) continue;
+    const src = readFileSync(join(executorDir, file), 'utf8');
+    for (const m of src.matchAll(/defineTool\('([a-z_]+)'/g)) dispatched.add(m[1]);
+  }
+  for (const t of expectedTools) dispatched.has(t) ? ok(`executor tool ${t}`) : fail(`executor tool ${t}`, 'declared but never registered via defineTool in executor/');
+  for (const c of dispatched) if (!expectedTools.includes(c)) fail('executor tool inventory', `unexpected defineTool ${c}`);
 } else {
   ok('executor dispatch', 'not yet implemented (docs-only phase)');
 }

@@ -109,7 +109,7 @@ async function useStubProvider(baseUrl: string): Promise<void> {
 }
 
 /** 回合 SSE 路由那一段源码：路由里的 cause 只能这样钉住。 */
-const turnRouteSource = readFileSync(join(import.meta.dirname, '../src/routes.ts'), 'utf8');
+const turnRouteSource = readFileSync(join(import.meta.dirname, '../src/routes/agent.ts'), 'utf8');
 
 const PLAN = [
   { text: '读取 backend 的 53 张表结构', status: 'done' },

@@ -633,7 +633,9 @@ export const useApp = create<AppStore>((set, get) => ({
       // conn 不在本地列表时不能直接发不带 database 的 /schema：
       // engineMeta 对未知引擎回落到 sqlite，于是这条请求对 MySQL/PG 这类
       // 「合法地没有默认库」的连接只能回 400 NO_DATABASE。先补拉一次连接列表再判引擎。
-      const resolved = conn ?? (await api.connections()).connections.find((c) => c.id === connectionId);
+      // 事件驱动的重拉连本地快照也不能信：连接可能刚被外部（API/其他客户端）删掉，
+      // 本地列表尚未更新，拿旧快照发 /schema 必 404，所以一律补拉列表确认仍在。
+      const resolved = conn && !schemaReloadByEvent ? conn : (await api.connections()).connections.find((c) => c.id === connectionId);
       if (!resolved) {
         // 补拉一次连接列表仍没有它 = 已被删除（调用方拿的是删除前的快照）。
         // 静默返回：deleteConnection 已经把这条连接的 tab/schema 一起清了，

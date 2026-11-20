@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@aidb/client": "*",
     "@aidb/core": "*",
     "@expo/metro-runtime": "~4.0.1",
     "expo": "~52.0.0",

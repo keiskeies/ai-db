@@ -2,12 +2,13 @@ import { promises as fsp } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { deflateRaw } from 'node:zlib';
+import { escapeCsv, neutralizeFormula, toSqlInserts, type ExportInput, type XlsxSheet } from './exportFormat';
+
+export type { XlsxSheet } from './exportFormat';
 
 // 等价 zlib.promises.deflateRaw：tsx/esbuild 的 CJS interop 不会把 node:zlib 上惰性的
 // promises getter 拷到默认导入对象上，直接 promisify 回调版，行为一致（都走 libuv 线程池）。
 const deflateRawAsync = promisify(deflateRaw);
-// 仅取类型：运行时不反向依赖 services，避免 xlsx ↔ services 循环引用把整条驱动链拉进轻量导出路径。
-import type { ExportInput } from './services';
 
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
@@ -29,20 +30,6 @@ function escapeXml(value: unknown): string {
   if (value === null || value === undefined) return '';
   const text = typeof value === 'object' ? JSON.stringify(value) : String(value);
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-/** CSV 注入(公式注入)防护：细胞值为「公式前缀 + 内容」时变成文本而不是被执行。 */
-function neutralizeFormula(value: string): string {
-  // Excel/WPS 会把 = + - @ 及制表符/回车开头的单元格当公式或特殊值执行，
-  // 导出查询结果时字段内容不可信，统一加 ' 前缀转成纯文本（原值仍完整可见）。
-  return /^[=+\-@\t\r\n]/.test(value) ? `'${value}` : value;
-}
-
-// 与 services.toCsv 的转义规则保持一致；本地复制一份是为了让落盘写入器不反向依赖 services（循环引用）。
-function escapeCsv(value: unknown): string {
-  let text = value === null || value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
-  text = neutralizeFormula(text);
-  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
 function cellRef(index: number, row: number): string {
@@ -146,12 +133,6 @@ class ZipWriter {
 
 export async function toXlsx(columns: string[], rows: unknown[][]): Promise<Buffer> {
   return toXlsxSheets([{ name: 'Sheet1', columns, rows }]);
-}
-
-export interface XlsxSheet {
-  name: string;
-  columns: string[];
-  rows: unknown[][];
 }
 
 /**
@@ -263,8 +244,6 @@ export async function writeExportFile(input: ExportInput): Promise<{ path: strin
           await handle.writeFile(']');
         }
       } else {
-        // INSERT 脚本依赖 SQL 方言字面量（services.toSqlInserts）；动态引入避免模块顶层循环依赖。
-        const { toSqlInserts } = await import('./services');
         await handle.writeFile(`-- AiDB Studio export (${new Date().toISOString()})\n`);
         for (let i = 0; i < input.rows.length; i += EXPORT_BATCH_ROWS) {
           const batch = input.rows.slice(i, i + EXPORT_BATCH_ROWS);

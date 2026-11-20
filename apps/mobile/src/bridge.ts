@@ -1,5 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
+import { TransportError, normalizeBaseUrl, request as sharedRequest } from '@aidb/client';
 import type {
   AgentMessage,
   AgentSessionMeta,
@@ -88,19 +89,11 @@ export async function clearBridgeConfig(): Promise<void> {
   }
 }
 
-export function normalizeBaseUrl(input: string): string {
-  const trimmed = input.trim();
-  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
-  return withScheme.replace(/\/+$/, '');
-}
+export { normalizeBaseUrl };
 
-export class BridgeError extends Error {
-  code: string;
-  status: number;
+export class BridgeError extends TransportError {
   constructor(message: string, code = 'BRIDGE_ERROR', status = 0) {
-    super(message);
-    this.code = code;
-    this.status = status;
+    super(message, { code, status });
   }
 }
 
@@ -112,25 +105,14 @@ export class BridgeClient {
   }
 
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const res = await fetch(`${this.config.baseUrl}/api${path}`, {
-      ...init,
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${this.config.token}`,
-        ...(init.headers ?? {}),
-      },
+    // mobile 现状逐项注入：无超时、204 回 null、HTTP 错误兜底 BRIDGE_HTTP、网络异常裸抛、硬编码中文文案。
+    return sharedRequest<T>(path, init, 0, {
+      baseUrl: this.config.baseUrl,
+      getToken: () => this.config.token,
+      noContent: 'null',
+      httpFallbackCode: 'BRIDGE_HTTP',
+      makeError: (message, opts) => new BridgeError(message, opts?.code, opts?.status),
     });
-    const text = await res.text();
-    let payload: any = null;
-    try {
-      payload = text ? JSON.parse(text) : null;
-    } catch {
-      payload = text;
-    }
-    if (!res.ok) {
-      throw new BridgeError(payload?.error?.message ?? `请求失败（${res.status}）`, payload?.error?.code ?? 'BRIDGE_HTTP', res.status);
-    }
-    return payload as T;
   }
 
   health() {
