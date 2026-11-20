@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { TableInfo, ToolResult } from '@aidb/core';
 import { MysqlDriver } from '../src/drivers/mysql';
+import { PostgresDriver } from '../src/drivers/postgres';
 import { DbError } from '../src/drivers/types';
 import { writeTableRows } from '../src/services';
 import { capToolArgs, capToolResult } from '../src/agentHost';
@@ -128,6 +129,104 @@ test('streamCollect：流错误包装成 DbError 抛出', async () => {
   await assert.rejects(collect(new MysqlDriver(driverOpts), fake.conn, {}), (err: unknown) => {
     assert.ok(err instanceof DbError);
     assert.equal((err as DbError & { code?: string }).code, 'ER_BOOM');
+    return true;
+  });
+});
+
+/** PG 侧同款假连接：streamCollect 内部构造真 pg.Query（EventEmitter），假 client 直接 emit 报文事件。 */
+const PG_FIELDS = [
+  { name: 'id', dataTypeID: 23 },
+  { name: 'doc', dataTypeID: 25 },
+];
+function makePgFake(rows: unknown[], opts: { error?: Error; rowCount?: number; fields?: typeof PG_FIELDS } = {}) {
+  const fields = opts.fields ?? PG_FIELDS;
+  const client = {
+    destroyed: 0,
+    released: 0,
+    query(q: { emit: (event: string, ...args: unknown[]) => boolean }) {
+      setImmediate(() => {
+        for (const row of rows) {
+          if (client.destroyed) break;
+          q.emit('row', row, { fields });
+        }
+        if (client.destroyed) return;
+        if (opts.error) q.emit('error', opts.error);
+        else q.emit('end', { fields, rowCount: opts.rowCount ?? rows.length });
+      });
+      return q;
+    },
+    release(destroy?: boolean) {
+      if (destroy) this.destroyed += 1;
+      else this.released += 1;
+    },
+  };
+  return client;
+}
+const collectPg = (driver: PostgresDriver, client: unknown, opts: Record<string, unknown>, inTx = false) =>
+  (driver as unknown as { streamCollect: (...args: unknown[]) => Promise<any> }).streamCollect(
+    client,
+    'SELECT * FROM t',
+    [],
+    opts,
+    Date.now(),
+    inTx,
+    () => {},
+  );
+
+test('pg streamCollect：行数上限截断并销毁连接（事务外）', async () => {
+  const rows = Array.from({ length: 10 }, (_, i) => ({ id: i, doc: 'x' }));
+  const client = makePgFake(rows);
+  const result = await collectPg(new PostgresDriver(driverOpts), client, { maxRows: 3 });
+  assert.equal(result.rows.length, 3);
+  assert.equal(result.truncated, true);
+  assert.equal(client.destroyed, 1);
+  assert.deepEqual(result.columns.map((c: { name: string }) => c.name), ['id', 'doc']);
+  assert.deepEqual(result.rows[0], [0, 'x']);
+});
+
+test('pg streamCollect：字节上限截断，首行即使单独超预算也保留', async () => {
+  const rows = [{ id: 1, doc: 'a'.repeat(65 * 1024 * 1024) }, { id: 2, doc: 'small' }];
+  const client = makePgFake(rows);
+  const result = await collectPg(new PostgresDriver(driverOpts), client, {});
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.truncated, true);
+  assert.equal(client.destroyed, 1);
+});
+
+test('pg streamCollect：事务内截断不销毁连接（剩余行排空，事务继续）', async () => {
+  const rows = Array.from({ length: 5 }, (_, i) => ({ id: i, doc: 'x' }));
+  const client = makePgFake(rows);
+  const result = await collectPg(new PostgresDriver(driverOpts), client, { maxRows: 1 }, true);
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.truncated, true);
+  assert.equal(client.destroyed, 0);
+});
+
+test('pg streamCollect：DML 无行事件，affected 取 CommandComplete 计数', async () => {
+  const client = makePgFake([], { rowCount: 5, fields: [] });
+  const result = await collectPg(new PostgresDriver(driverOpts), client, {});
+  assert.equal(result.affected, 5);
+  assert.equal(result.rows.length, 0);
+  assert.equal(result.truncated, false);
+});
+
+test('pg streamCollect：零行 SELECT 仍给出列信息，正常读完不销毁连接', async () => {
+  const client = makePgFake([]);
+  const result = await collectPg(new PostgresDriver(driverOpts), client, {});
+  assert.equal(result.rows.length, 0);
+  assert.equal(result.truncated, false);
+  assert.equal(client.destroyed, 0);
+  assert.deepEqual(result.columns.map((c: { name: string; type: string }) => [c.name, c.type]), [
+    ['id', 'integer'],
+    ['doc', 'text'],
+  ]);
+});
+
+test('pg streamCollect：查询错误包装成 DbError 抛出（保留 SQLSTATE 供回落判定）', async () => {
+  const client = makePgFake([], { error: Object.assign(new Error('boom'), { code: '42701' }) });
+  await assert.rejects(collectPg(new PostgresDriver(driverOpts), client, {}), (err: unknown) => {
+    assert.ok(err instanceof DbError);
+    assert.equal((err as DbError).code, '42701');
     return true;
   });
 });

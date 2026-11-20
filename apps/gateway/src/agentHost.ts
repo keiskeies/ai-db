@@ -254,11 +254,11 @@ interface AttachedImage extends ProviderImage {
   bytes: number;
 }
 
-function imagesOf(blocks: AgentMessageBlock[], dir: string): AttachedImage[] {
+async function imagesOf(blocks: AgentMessageBlock[], dir: string): Promise<AttachedImage[]> {
   const out: AttachedImage[] = [];
   for (const block of blocks) {
     if (block.type !== 'image' || !block.attachmentId) continue;
-    const file = readAttachment(dir, block.attachmentId);
+    const file = await readAttachment(dir, block.attachmentId);
     if (file) out.push({ id: block.attachmentId, mime: file.mime, base64: file.buffer.toString('base64'), bytes: file.buffer.length });
   }
   return out;
@@ -432,10 +432,10 @@ export class AgentHost {
     });
   }
 
-  private loadImages(ids?: string[]): AttachedImage[] {
+  private async loadImages(ids?: string[]): Promise<AttachedImage[]> {
     const out: AttachedImage[] = [];
     for (const id of (ids ?? []).slice(0, MAX_IMAGES_PER_TURN)) {
-      const file = readAttachment(this.opts.config.attachmentDir, id);
+      const file = await readAttachment(this.opts.config.attachmentDir, id);
       if (!file) throw new DbError(`图片附件不存在，请重新上传：${id}`, { code: 'ATTACHMENT_NOT_FOUND', status: 400 });
       out.push({ id, mime: file.mime, base64: file.buffer.toString('base64'), bytes: file.buffer.length });
     }
@@ -475,7 +475,7 @@ export class AgentHost {
     if (input.images?.length && !supportsInput(profile, 'image')) {
       throw new DbError('当前模型没有开启图片输入，请在 设置 → 模型能力 里勾选「图片」。', { code: 'MODEL_NO_VISION', status: 400 });
     }
-    const images = this.loadImages(input.images);
+    const images = await this.loadImages(input.images);
     const provider = createProvider(settings.agent);
     // 语义命令通常要「看结构 → 多次查数 → 出图」，给足步数；普通提问保持用户设置。
     // 这是回合唯一的量上限：时间不参与判定（见文件头那段说明），0 表示不限步数，
@@ -490,7 +490,7 @@ export class AgentHost {
     const history: ProviderMessage[] = [];
     for (const m of historyMessages) {
       if (m.role === 'user') {
-        const past = imagesOf(m.blocks, this.opts.config.attachmentDir);
+        const past = await imagesOf(m.blocks, this.opts.config.attachmentDir);
         history.push({ role: 'user', content: m.content, ...(past.length ? { images: past } : {}) });
       } else if (m.role === 'assistant' && (m.content || m.blocks.length)) {
         const trace = m.blocks.filter((b) => b.type === 'tool_call').map((b) => b.tool).filter(Boolean);

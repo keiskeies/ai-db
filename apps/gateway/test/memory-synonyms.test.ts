@@ -70,3 +70,32 @@ test('老库没有 synonyms 列也能启动，旧记忆读出空同义词', () =
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('记忆超过 500 条后，作用域内低重要度记忆仍可召回（作用域下推 SQL）', () => {
+  const dir = tempDir();
+  try {
+    const store = new Store(join(dir, 'aidb.db'), 'secret');
+    // 550 条高重要度全局记忆占满旧实现的全局 top-500 名额。
+    store.db.exec('BEGIN');
+    for (let i = 0; i < 550; i += 1) {
+      store.createMemory({ kind: 'fact', title: `全局事实 ${i}`, content: `无关内容 ${i}`, importance: 0.9 });
+    }
+    store.db.exec('COMMIT');
+    const scoped = store.createMemory(
+      { kind: 'glossary', title: '活跃口径', content: '活跃用户 = 近 7 天有登录', importance: 0.1 },
+      { connectionId: 'c1', database: 'db1' },
+    );
+
+    const hit = store.searchMemories('活跃', { connectionId: 'c1', database: 'db1', kinds: ['glossary'] });
+    assert.ok(hit.some((m) => m.id === scoped.id), '本库术语不该被全库前 500 条截掉');
+
+    const otherScope = store.searchMemories('活跃', { connectionId: 'c2', database: 'db2', kinds: ['glossary'] });
+    assert.ok(!otherScope.some((m) => m.id === scoped.id), 'A 库口径不能串到 B 库');
+
+    const globals = store.searchMemories('', { limit: 8 });
+    assert.ok(globals.length > 0 && globals.every((m) => m.scopeType === 'global'), '无连接上下文时只召回全局记忆');
+    store.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

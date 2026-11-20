@@ -2486,21 +2486,24 @@ export function createApiRouter(deps: ApiDeps): Router {
     '/agent/attachments',
     ah(async (req, res) => {
       const body = obj(req.body, 'body');
-      const attachment = saveAttachment(config.attachmentDir, { mime: str(body.mime), base64: str(body.base64) });
+      const attachment = await saveAttachment(config.attachmentDir, { mime: str(body.mime), base64: str(body.base64) });
       res.status(201).json({ attachment });
     }),
   );
 
-  router.get('/agent/attachments/:id', (req, res) => {
-    const file = readAttachment(config.attachmentDir, req.params.id);
-    if (!file) {
-      res.status(404).json({ error: { code: 'ATTACHMENT_NOT_FOUND', message: '图片附件不存在或已被清理' } });
-      return;
-    }
-    res.setHeader('cache-control', 'private, max-age=86400');
-    res.contentType(file.mime);
-    res.send(file.buffer);
-  });
+  router.get(
+    '/agent/attachments/:id',
+    ah(async (req, res) => {
+      const file = await readAttachment(config.attachmentDir, req.params.id);
+      if (!file) {
+        res.status(404).json({ error: { code: 'ATTACHMENT_NOT_FOUND', message: '图片附件不存在或已被清理' } });
+        return;
+      }
+      res.setHeader('cache-control', 'private, max-age=86400');
+      res.contentType(file.mime);
+      res.send(file.buffer);
+    }),
+  );
 
   // 不传参数时与旧行为完全一致（全量），前端按库过滤时带 connectionId / database
   router.get('/agent/sessions', (req, res) =>

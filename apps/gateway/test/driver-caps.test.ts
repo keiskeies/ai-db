@@ -148,15 +148,45 @@ test('injectMaxExecutionTime：提示插在顶层 SELECT 后，WITH 跳过 CTE �
 
 /* ---------------- PG statement_timeout / RESET ---------------- */
 
+interface FakePgQuery {
+  text: string;
+  emit: (event: string, ...args: unknown[]) => boolean;
+}
+/** 流式契约：SELECT 以 Query 实例提交，假 client 逐行 emit('row') 再 emit('end')。 */
+function emitPgResult(query: FakePgQuery, res: { rows?: unknown[]; fields?: unknown[]; rowCount?: number } | undefined) {
+  if (!res) return;
+  for (const row of res.rows ?? []) query.emit('row', row, { fields: res.fields ?? [] });
+  query.emit('end', { fields: res.fields ?? [], rowCount: res.rowCount ?? res.rows?.length ?? 0 });
+}
+
 function fakePg(handler: (text: string) => any) {
   const calls: string[] = [];
   const client = {
     released: 0,
     destroyed: 0,
-    async query(q: unknown) {
-      const text = typeof q === 'string' ? q : (q as { text: string }).text;
-      calls.push(text);
-      return handler(text);
+    query(q: unknown) {
+      if (typeof q === 'string') {
+        calls.push(q);
+        return Promise.resolve(handler(q));
+      }
+      const query = q as FakePgQuery;
+      calls.push(query.text);
+      let out: any;
+      try {
+        out = handler(query.text);
+      } catch (err) {
+        setImmediate(() => query.emit('error', err));
+        return query;
+      }
+      if (out && typeof out.then === 'function') {
+        out.then(
+          (res: any) => emitPgResult(query, res),
+          (err: any) => query.emit('error', err),
+        );
+        return query;
+      }
+      setImmediate(() => emitPgResult(query, out));
+      return query;
     },
     release(err?: unknown) {
       if (err) this.destroyed += 1;
@@ -219,11 +249,13 @@ test('PG：服务端 57014 取消映射为 PG_TIMEOUT，client 正常 RESET 归�
 
 test('PG：单条 SELECT 下推 LIMIT maxRows+1，多一行即 truncated', async () => {
   const three = { rows: [{ id: 1 }, { id: 2 }, { id: 3 }], fields: [{ name: 'id', dataTypeID: 23 }], rowCount: 3 };
-  const { driver, calls } = fakePg((text) => (text.startsWith('SELECT') ? three : { rows: [] }));
+  const { driver, client, calls } = fakePg((text) => (text.startsWith('SELECT') ? three : { rows: [] }));
   const result = await driver.runParams('SELECT * FROM t', [], { maxRows: 2, timeoutMs: 1000 });
   assert.equal(calls[1], 'SELECT * FROM (SELECT * FROM t\n) AS _aidb_limit LIMIT 3');
+  assert.equal(result.statement, 'SELECT * FROM t', 'statement 回用户原句，不漏下推包装句');
   assert.equal(result.rows.length, 2);
   assert.equal(result.truncated, true);
+  assert.equal(client.destroyed, 1, '事务外截断销毁 client，终止服务端剩余输出');
 });
 
 test('PG：多语句/非 SELECT 不下推；重复列名（42701）回落原句', async () => {

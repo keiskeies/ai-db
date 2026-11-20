@@ -2,11 +2,26 @@ import pg from 'pg';
 import type { Pool } from 'pg';
 import type { ColumnInfo, Engine, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions } from './types';
-import { DbError, toRowArray } from './types';
+import { DbError, estimateValueBytes, MAX_RESULT_BYTES } from './types';
 import { wrapSelectLimit } from './sqlCap';
 import { nodeTlsOptions } from './ssl';
 
 const { Pool: PgPool } = pg;
+
+interface PgField {
+  name: string;
+  dataTypeID: number;
+}
+/**
+ * 事件式流式 Query：提交前挂 'row' 监听且不带 callback 时，pg 不再把行累积进 result.rows
+ * （见 pg/lib/query.js handleRowDescription 的 _accumulateRows 判定）。
+ */
+interface PgStreamQuery {
+  on(event: 'row', listener: (row: Record<string, unknown>, result: { fields: PgField[] }) => void): PgStreamQuery;
+  on(event: 'end', listener: (result: { fields: PgField[]; rowCount: number | null }) => void): PgStreamQuery;
+  on(event: 'error', listener: (err: any) => void): PgStreamQuery;
+}
+const PgQuery = (pg as unknown as { Query: new (config: { text: string; values?: unknown[] }) => PgStreamQuery }).Query;
 
 /** 查询默认超时；内省/test 等 pool.query 路径靠池级 statement_timeout 在服务端兜底。 */
 const DEFAULT_QUERY_TIMEOUT_MS = 30000;
@@ -333,25 +348,31 @@ export class PostgresDriver implements Driver {
       await Promise.race([client.query(inTx ? `SET LOCAL statement_timeout = ${ms}` : `SET statement_timeout = ${ms}`), watchdog]);
       const maxRows = opts.maxRows && opts.maxRows > 0 ? opts.maxRows : 0;
       let pushed = maxRows > 0 ? wrapSelectLimit(sql, maxRows + 1, 'postgresql') : undefined;
-      let res: import('pg').QueryResult<Record<string, unknown>>;
+      const markDestroyed = () => {
+        destroyed = true;
+      };
+      let res: QueryResult;
       try {
-        res = (await Promise.race([client.query({ text: pushed ?? sql, values: params }), watchdog])) as import('pg').QueryResult<Record<string, unknown>>;
+        res = await Promise.race([this.streamCollect(client, pushed ?? sql, params, opts, started, inTx, markDestroyed), watchdog]);
       } catch (err: any) {
         // 外包一层子查询并非永远合法：重复列名（42701）、尾注释/特殊语法（42601）、
         // 列引用进不了子查询（42703）、不支持的特性（0A000）都回落原句，行数上限靠客户端裁剪。
         // 超时/取消不回落——原句只会跑得更久。
         if (pushed && ['42601', '42701', '42703', '0A000'].includes(err?.code)) {
           pushed = undefined;
-          res = (await Promise.race([client.query({ text: sql, values: params }), watchdog])) as import('pg').QueryResult<Record<string, unknown>>;
+          res = await Promise.race([this.streamCollect(client, sql, params, opts, started, inTx, markDestroyed), watchdog]);
         } else {
           throw err;
         }
       }
-      return this.toResult(res, started, sql, opts.maxRows);
+      // statement 始终回用户原句：下推包装句只用于执行，不能漏进图表 spec / 历史展示。
+      res.statement = sql;
+      return res;
     } catch (err: any) {
-      if (err instanceof DbError) throw err;
       // 57014 = statement_timeout 服务端取消，沿用超时语义而不是普通执行错误。
+      // 流式路径已把原始错误包成 DbError（保留 SQLSTATE），必须先于 instanceof 判定。
       if (err?.code === '57014') throw new DbError(`PostgreSQL 查询超时（${ms}ms）`, { code: 'PG_TIMEOUT', status: 504 });
+      if (err instanceof DbError) throw err;
       throw new DbError(err?.message ?? 'PostgreSQL 执行失败', { code: err?.code ?? 'PG_ERROR' });
     } finally {
       if (timer) clearTimeout(timer);
@@ -368,20 +389,86 @@ export class PostgresDriver implements Driver {
     }
   }
 
-  private toResult(res: import('pg').QueryResult<Record<string, unknown>>, started: number, sql: string, maxRows?: number): QueryResult {
-    const columns = (res.fields ?? []).map((f) => ({ name: f.name, type: OIDS[f.dataTypeID] ?? String(f.dataTypeID) }));
-    const all = res.rows as Array<Record<string, unknown>>;
-    const limit = maxRows && maxRows > 0 ? maxRows : all.length;
-    const rows = all.slice(0, limit);
-    return {
-      columns,
-      rows: toRowArray(columns, rows),
-      rowCount: rows.length,
-      affected: res.rowCount ?? undefined,
-      durationMs: Date.now() - started,
-      truncated: all.length > rows.length,
-      statement: sql,
-    };
+  /**
+   * 流式收集查询结果：逐行保留、行数 + 字节双上限，超限即停（对齐 mysql.ts streamCollect）。
+   * 非事务超限销毁 client（服务端查询随连接终止）；事务内不能销毁，剩余行只排空不保留。
+   */
+  private streamCollect(
+    client: import('pg').PoolClient,
+    sql: string,
+    params: unknown[],
+    opts: RunOptions,
+    started: number,
+    inTx: boolean,
+    markDestroyed: () => void,
+  ): Promise<QueryResult> {
+    return new Promise<QueryResult>((resolve, reject) => {
+      const maxRows = opts.maxRows && opts.maxRows > 0 ? opts.maxRows : Number.POSITIVE_INFINITY;
+      const columns: Array<{ name: string; type: string }> = [];
+      const rows: unknown[][] = [];
+      let bytes = 0;
+      let truncated = false;
+      let settled = false;
+      let affected: number | undefined;
+
+      const pushFields = (fields: PgField[]) => {
+        for (const f of fields) columns.push({ name: f.name, type: OIDS[f.dataTypeID] ?? String(f.dataTypeID) });
+      };
+      const finish = (result?: { fields: PgField[]; rowCount: number | null }) => {
+        if (settled) return;
+        settled = true;
+        if (!columns.length && result?.fields?.length) pushFields(result.fields);
+        if (result?.rowCount != null) affected = result.rowCount;
+        if (truncated && !inTx) {
+          markDestroyed();
+          client.release(true);
+        }
+        resolve({
+          columns,
+          rows,
+          rowCount: rows.length,
+          affected,
+          durationMs: Date.now() - started,
+          truncated,
+          statement: sql,
+        });
+      };
+      const stop = () => {
+        truncated = true;
+        // 事务里不能销毁 client：保持 'row' 监听排空剩余报文，'end' 时再结算。
+        if (!inTx) finish();
+      };
+
+      const query = new PgQuery({ text: sql, values: params });
+      query.on('row', (row, result) => {
+        if (settled || truncated) return;
+        if (!columns.length && result?.fields?.length) pushFields(result.fields);
+        let size = 16;
+        for (const key in row) size += estimateValueBytes(row[key]) + key.length;
+        // 首行即使单独超预算也保留，否则用户什么都看不到；此后严格执行字节预算。
+        if (rows.length >= maxRows || (rows.length > 0 && bytes + size > MAX_RESULT_BYTES)) {
+          stop();
+          return;
+        }
+        rows.push(columns.map((c) => row[c.name]));
+        bytes += size;
+        if (rows.length >= maxRows || bytes >= MAX_RESULT_BYTES) stop();
+      });
+      query.on('error', (err: any) => {
+        if (settled) return;
+        settled = true;
+        reject(new DbError(err?.message ?? 'PostgreSQL 执行失败', { code: err?.code ?? 'PG_ERROR' }));
+      });
+      query.on('end', (result) => finish(result));
+      try {
+        (client.query as (q: PgStreamQuery) => unknown)(query);
+      } catch (err: any) {
+        if (!settled) {
+          settled = true;
+          reject(new DbError(err?.message ?? 'PostgreSQL 执行失败', { code: err?.code ?? 'PG_ERROR' }));
+        }
+      }
+    });
   }
 
   /** 开启跨请求事务：从连接池签出一条 client 固定住，后续语句都走它。 */

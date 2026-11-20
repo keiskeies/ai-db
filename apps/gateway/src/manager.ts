@@ -224,10 +224,22 @@ export class ConnectionManager {
     const conn = this.store.getConnection(connectionId);
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
     const dbKey = database ?? conn.database ?? (conn.engine === 'sqlite' ? 'main' : conn.engine === 'redis' ? '0' : conn.engine === 'neo4j' ? 'neo4j' : conn.engine === 'memgraph' ? 'memgraph' : conn.engine === 'falkordb' ? (conn.database || 'aidb') : conn.engine === 'influxdb' ? (conn.database || 'aidb') : conn.engine === 'arangodb' ? (conn.database || '_system') : conn.engine === 'elasticsearch' || conn.engine === 'opensearch' ? 'default' : conn.engine === 'cassandra' || conn.engine === 'scylla' ? 'system' : '');
+    const memKey = `${connectionId}\u0000${dbKey}`;
+    // 进程内已解析缓存：SQLite 缓存每命中一次就要整体 JSON.parse 一整库结构，
+    // 表多时这是主线程上的固定开销；解析结果连同表名索引一起留在内存里，TTL 同源。
+    if (!refresh) {
+      const mem = this.parsedSchemas.get(memKey);
+      if (mem && Date.now() - mem.fetchedAt < ttlMs) {
+        mem.usedAt = Date.now();
+        return mem.schemas;
+      }
+    }
     const cached = this.store.getSchemaCache(connectionId, dbKey);
     if (!refresh && cached && Date.now() - new Date(cached.fetchedAt).getTime() < ttlMs) {
       try {
-        return JSON.parse(cached.payload) as DatabaseSchema[];
+        const schemas = JSON.parse(cached.payload) as DatabaseSchema[];
+        this.rememberSchemas(memKey, schemas, new Date(cached.fetchedAt).getTime());
+        return schemas;
       } catch {
         /* fall through */
       }
@@ -248,12 +260,57 @@ export class ConnectionManager {
       schemas = [{ name: dbKey || fallback, tables }];
     }
     this.store.setSchemaCache(connectionId, dbKey, schemas);
+    this.rememberSchemas(memKey, schemas, Date.now());
     return schemas;
+  }
+
+  /** 已解析 schema 的内存缓存上限：连接 × 库数量多时按最久未用淘汰，防止整库结构常驻堆。 */
+  private static readonly PARSED_SCHEMA_CACHE_MAX = 64;
+  private parsedSchemas = new Map<
+    string,
+    { schemas: DatabaseSchema[]; fetchedAt: number; usedAt: number; index: Map<string, { table: TableInfo; schema: DatabaseSchema }> }
+  >();
+
+  private rememberSchemas(key: string, schemas: DatabaseSchema[], fetchedAt: number): void {
+    const index = new Map<string, { table: TableInfo; schema: DatabaseSchema }>();
+    for (const schema of schemas) {
+      for (const table of schema.tables) {
+        const name = table.name.toLowerCase();
+        // 与 findTable 原来的线性扫描一致：同名表取第一个 schema 里的。
+        if (!index.has(name)) index.set(name, { table, schema });
+      }
+    }
+    this.parsedSchemas.set(key, { schemas, fetchedAt, usedAt: Date.now(), index });
+    if (this.parsedSchemas.size > ConnectionManager.PARSED_SCHEMA_CACHE_MAX) {
+      let stalestKey: string | undefined;
+      let stalest = Number.POSITIVE_INFINITY;
+      for (const [k, v] of this.parsedSchemas) {
+        if (v.usedAt < stalest) {
+          stalest = v.usedAt;
+          stalestKey = k;
+        }
+      }
+      if (stalestKey !== undefined) this.parsedSchemas.delete(stalestKey);
+    }
+  }
+
+  private forgetParsedSchemas(connectionId: string): void {
+    const prefix = `${connectionId}\u0000`;
+    for (const key of [...this.parsedSchemas.keys()]) {
+      if (key.startsWith(prefix)) this.parsedSchemas.delete(key);
+    }
   }
 
   async findTable(connectionId: string, database: string | undefined, name: string): Promise<{ table: TableInfo; schema: DatabaseSchema }> {
     const schemas = await this.schema(connectionId, database);
     const target = name.toLowerCase();
+    // schema() 刚填充的内存条目带表名索引；引用相同即命中，O(1) 取代全表线性遍历。
+    for (const entry of this.parsedSchemas.values()) {
+      if (entry.schemas !== schemas) continue;
+      const hit = entry.index.get(target);
+      if (hit) return hit;
+      break;
+    }
     for (const schema of schemas) {
       const table = schema.tables.find((t) => t.name.toLowerCase() === target);
       if (table) return { table, schema };
@@ -1445,6 +1502,7 @@ export class ConnectionManager {
     // 先打删除标记：在途的 createDriverCached 完成时会走「已关闭即关」分支，
     // 不会再把已删除连接的 driver 塞回 clients。
     this.closedFlags.set(connectionId, true);
+    this.forgetParsedSchemas(connectionId);
     const cached = this.clients.get(connectionId);
     if (cached) {
       await cached.close().catch(() => undefined);
@@ -1475,6 +1533,8 @@ export class ConnectionManager {
    *   结构没变，它们要刷的东西不存在。默认广播。
    */
   invalidate(connectionId: string, cause: SchemaChangeCause = 'user', broadcast = true): void {
+    // 内存解析层先清：即使下面落库清理失败，也不会继续供应旧结构。
+    this.forgetParsedSchemas(connectionId);
     // 清缓存失败不能连累已经落库的 DDL：这个方法在 query() 的 finally 里调用，
     // 往上抛会把"表已经建好了"报成失败，调用方据此重试反而制造重复错误。
     // 代价是缓存可能残留旧结构，最多 30s TTL 后自然恢复，比误报失败轻得多。

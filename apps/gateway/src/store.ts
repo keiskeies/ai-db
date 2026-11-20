@@ -455,18 +455,6 @@ function trimDashboardResult(result: { columns: Array<{ name: string }>; rows: u
 /** 业务语义类记忆：召回时走独立配额，不挤占情景记忆的 6 条名额。 */
 const BUSINESS_KINDS: MemoryKind[] = ['glossary', 'sql_example'];
 
-function filterKinds(memories: Memory[], kinds?: MemoryKind[], excludeKinds?: MemoryKind[]): Memory[] {
-  if (kinds?.length) {
-    const allow = new Set(kinds);
-    return memories.filter((m) => allow.has(m.kind));
-  }
-  if (excludeKinds?.length) {
-    const deny = new Set(excludeKinds);
-    return memories.filter((m) => !deny.has(m.kind));
-  }
-  return memories;
-}
-
 const round = (value: unknown, min: number, max: number, fallback: number): number => {
   const n = Number(value);
   return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.floor(n))) : fallback;
@@ -1170,11 +1158,32 @@ export class Store {
   /**
    * 保留期裁剪统一入口：历史 / 审计 / 工具运行 / 产物运行共用一个节流窗口，
    * 高频写入时最多每 60s 扫一次，而不是每次插入都 O(n)。
+   * 非强制裁剪延迟到 setImmediate 执行：node:sqlite 是同步 API，上万行的 DELETE
+   * 不该卡在触发它的那次写请求里；节流窗口在调度时就占住，避免堆积多个裁剪任务。
    */
+  private pruneScheduled = false;
   private pruneRetention(force = false): void {
+    if (force) {
+      this.lastPruneAt = Date.now();
+      this.runPrune();
+      return;
+    }
     const now = Date.now();
-    if (!force && now - this.lastPruneAt < PRUNE_THROTTLE_MS) return;
+    if (now - this.lastPruneAt < PRUNE_THROTTLE_MS || this.pruneScheduled) return;
     this.lastPruneAt = now;
+    this.pruneScheduled = true;
+    setImmediate(() => {
+      this.pruneScheduled = false;
+      try {
+        this.runPrune();
+      } catch (err) {
+        // 裁剪是后台治理：库已关闭等失败不能炸进程，下个节流窗口再试。
+        console.error('[store] 保留期裁剪失败', err);
+      }
+    });
+  }
+
+  private runPrune(): void {
     this.pruneHistory();
     this.pruneTable('audit_log', AUDIT_LOG_LIMIT);
     this.pruneTable('tool_runs', TOOL_RUNS_LIMIT);
@@ -1489,7 +1498,19 @@ export class Store {
     };
   }
 
-  listMemories(opts: { q?: string; kind?: string; scopeType?: string; includeArchived?: boolean; limit?: number } = {}): Memory[] {
+  listMemories(
+    opts: {
+      q?: string;
+      kind?: string;
+      scopeType?: string;
+      includeArchived?: boolean;
+      limit?: number;
+      kinds?: MemoryKind[];
+      excludeKinds?: MemoryKind[];
+      /** 作用域下推到 SQL：先过滤再取 top-N，避免全库前 500 条把本作用域的记忆挤出去。 */
+      scope?: { connectionId?: string; database?: string };
+    } = {},
+  ): Memory[] {
     const clauses: string[] = [];
     const params: unknown[] = [];
     if (!opts.includeArchived) clauses.push('archived = 0');
@@ -1500,6 +1521,28 @@ export class Store {
     if (opts.scopeType) {
       clauses.push('scope_type = ?');
       params.push(opts.scopeType);
+    }
+    if (opts.kinds?.length) {
+      clauses.push(`kind IN (${opts.kinds.map(() => '?').join(',')})`);
+      params.push(...opts.kinds);
+    } else if (opts.excludeKinds?.length) {
+      clauses.push(`kind NOT IN (${opts.excludeKinds.map(() => '?').join(',')})`);
+      params.push(...opts.excludeKinds);
+    }
+    if (opts.scope) {
+      const { connectionId, database } = opts.scope;
+      const ors = ["scope_type = 'global'"];
+      if (connectionId) {
+        ors.push("(scope_type = 'connection' AND scope_key = ?)");
+        params.push(connectionId);
+        ors.push("(scope_type = 'table' AND scope_key LIKE ?)");
+        params.push(`${connectionId}/%`);
+        if (database) {
+          ors.push("(scope_type = 'database' AND scope_key = ?)");
+          params.push(`${connectionId}/${database}`);
+        }
+      }
+      clauses.push(`(${ors.join(' OR ')})`);
     }
     if (opts.q) {
       clauses.push('(title LIKE ? OR content LIKE ? OR tags LIKE ? OR synonyms LIKE ?)');
@@ -1635,9 +1678,15 @@ export class Store {
     query: string,
     ctx: { connectionId?: string; database?: string; limit?: number; kinds?: MemoryKind[]; excludeKinds?: MemoryKind[] } = {},
   ): Memory[] {
-    const all = this.listMemories({ includeArchived: false, limit: 500 });
-    // 作用域先硬过滤再排序：只按分数加权的话，A 库的业务口径会顶着字面相似度串到 B 库
-    const memories = filterKinds(all, ctx.kinds, ctx.excludeKinds).filter((memory) => this.memoryInScope(memory, ctx));
+    // 作用域与类型在 SQL 里先过滤再取 top-500：记忆总量超过 500 后，
+    // 本作用域的记忆不会在排序前就被全库名额截掉。
+    const memories = this.listMemories({
+      includeArchived: false,
+      limit: 500,
+      kinds: ctx.kinds,
+      excludeKinds: ctx.excludeKinds,
+      scope: { connectionId: ctx.connectionId, database: ctx.database },
+    });
     const limit = ctx.limit ?? 8;
     if (!query.trim()) {
       return this.uniqueMemories(
@@ -1650,16 +1699,6 @@ export class Store {
     const unique = this.uniqueMemories(ranked, limit);
     this.markMemoriesUsed(unique.map((m) => m.id));
     return unique;
-  }
-
-  /** 记忆的可见范围：global 处处可见，connection / database / table 只在本作用域内召回。 */
-  private memoryInScope(memory: Memory, ctx: { connectionId?: string; database?: string }): boolean {
-    if (memory.scopeType === 'global') return true;
-    if (!ctx.connectionId) return false;
-    if (memory.scopeType === 'connection') return memory.scopeKey === ctx.connectionId;
-    if (memory.scopeType === 'database') return Boolean(ctx.database) && memory.scopeKey === `${ctx.connectionId}/${ctx.database}`;
-    if (memory.scopeType === 'table') return memory.scopeKey.startsWith(`${ctx.connectionId}/`);
-    return false;
   }
 
   /** 同一问题被反复提问会存成多条同标题的情景记忆；召回按「类型 + 标题」只留排序最前的那条。 */

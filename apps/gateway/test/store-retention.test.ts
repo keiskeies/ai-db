@@ -5,12 +5,12 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { Store } from '../src/store';
 
-function withStore(fn: (store: Store, path: string) => void) {
+async function withStore(fn: (store: Store, path: string) => void | Promise<void>) {
   const dir = mkdtempSync(join(tmpdir(), 'aidb-retention-'));
   const path = join(dir, 'store.sqlite');
   const store = new Store(path, 'test-secret');
   try {
-    fn(store, path);
+    await fn(store, path);
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
@@ -61,8 +61,8 @@ test('audit_log / tool_runs / artifact_runs 超出上限删最旧', () => {
   });
 });
 
-test('裁剪节流：60s 窗口内跳过，窗口过期后随插入触发', () => {
-  withStore((store) => {
+test('裁剪节流：60s 窗口内跳过，窗口过期后随插入触发（延迟到请求路径外执行）', async () => {
+  await withStore(async (store) => {
     const session = store.createSession({});
     batch(store, () => {
       for (let i = 0; i < 1100; i += 1) store.addToolRun({ id: `t_${i}`, sessionId: session.id, tool: 'run_sql', status: 'ok' });
@@ -70,9 +70,12 @@ test('裁剪节流：60s 窗口内跳过，窗口过期后随插入触发', () =
     // 构造时已强制裁剪过一次，后续插入都在节流窗口内 → 不裁剪。
     assert.equal(count(store, 'tool_runs'), 1100);
 
-    // 把上次裁剪时间拨到 61s 前，下一次插入应触发裁剪。
+    // 把上次裁剪时间拨到 61s 前，下一次插入应调度裁剪；
+    // 裁剪走 setImmediate 不阻塞写请求，让出一个宏任务后才落地。
     (store as unknown as { lastPruneAt: number }).lastPruneAt = Date.now() - 61_000;
     store.addToolRun({ id: 't_trigger', sessionId: session.id, tool: 'run_sql', status: 'ok' });
+    assert.equal(count(store, 'tool_runs'), 1101, '触发插入本身不被裁剪阻塞');
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(count(store, 'tool_runs'), 1000);
 
     // 触发后重新进入节流窗口：继续插入不再裁剪。

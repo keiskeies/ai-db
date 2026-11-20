@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, promises as fsp, readFileSync, writeFileSync } from 'node:fs';
+import { promises as fsp } from 'node:fs';
 import { join } from 'node:path';
 // 只取 drivers/types 的 DbError：走 drivers/index 会把整条原生驱动链拉进来，
 // store 启动清扫动态引入本模块时不该为此付出加载代价。
@@ -25,7 +25,7 @@ export interface StoredAttachment {
 }
 
 /** 把 base64 图片落到 Bridge 本地，返回可被会话消息引用的附件 id。 */
-export function saveAttachment(dir: string, input: { mime?: string; base64?: string }): StoredAttachment {
+export async function saveAttachment(dir: string, input: { mime?: string; base64?: string }): Promise<StoredAttachment> {
   const mime = (input.mime ?? '').toLowerCase().trim();
   const ext = EXT_BY_MIME[mime];
   if (!ext) throw new DbError('只支持 JPEG / PNG / GIF / WebP 图片', { code: 'UNSUPPORTED_IMAGE', status: 400 });
@@ -34,16 +34,19 @@ export function saveAttachment(dir: string, input: { mime?: string; base64?: str
   if (!buffer.length) throw new DbError('图片内容为空', { code: 'EMPTY_ATTACHMENT', status: 400 });
   if (buffer.length > MAX_IMAGE_BYTES) throw new DbError(`单张图片不能超过 ${Math.floor(MAX_IMAGE_BYTES / 1024 / 1024)}MB`, { code: 'ATTACHMENT_TOO_LARGE', status: 400 });
   const id = `${randomUUID()}.${ext}`;
-  writeFileSync(join(dir, id), buffer);
+  await fsp.writeFile(join(dir, id), buffer);
   return { id, mime, bytes: buffer.length };
 }
 
 /** id 必须命中白名单格式，避免拼路径读到 attachments 目录之外。 */
-export function readAttachment(dir: string, id: string): { mime: string; buffer: Buffer } | undefined {
+export async function readAttachment(dir: string, id: string): Promise<{ mime: string; buffer: Buffer } | undefined> {
   if (!ID_PATTERN.test(id)) return undefined;
-  const path = join(dir, id);
-  if (!existsSync(path)) return undefined;
-  return { mime: MIME_BY_EXT[id.slice(id.lastIndexOf('.') + 1)], buffer: readFileSync(path) };
+  try {
+    const buffer = await fsp.readFile(join(dir, id));
+    return { mime: MIME_BY_EXT[id.slice(id.lastIndexOf('.') + 1)], buffer };
+  } catch {
+    return undefined;
+  }
 }
 
 /** 附件 / 导出 / skill 产物只写不删会吃满磁盘：7 天前的文件按 mtime 清掉。 */

@@ -210,6 +210,10 @@ export class MysqlDriver implements RowStreamDriver {
         waitForConnections: true,
         // describe 的 4 条附属内省并发各占一条连接，3 条会让内省自己排队触发排队超时。
         connectionLimit: 5,
+        // 内省突发可开到 5 条，但闲时只留 2 条：接入实例 × 库很多时，
+        // 远端 max_connections 不被每个库 5 条常驻 idle 连接吃满（超出 maxIdle 的归还即关）。
+        maxIdle: 2,
+        idleTimeout: 60000,
         connectTimeout: 10000,
         dateStrings: true,
         supportBigNumbers: true,

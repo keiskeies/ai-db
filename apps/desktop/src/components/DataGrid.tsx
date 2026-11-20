@@ -64,6 +64,9 @@ export function DataGrid({
   const [viewHeight, setViewHeight] = useState(600);
   const [rowHeight, setRowHeight] = useState(30);
   const [headerHeight, setHeaderHeight] = useState(32);
+  const [scrollLeft, setScrollLeft] = useState(0);
+  const [viewWidth, setViewWidth] = useState(1200);
+  const [colState, setColState] = useState<{ key: string; widths: number[] }>({ key: '', widths: [] });
   const inputRef = useRef<HTMLInputElement>(null);
   const visibleColumns = columns
     .map((col, index) => ({ col, index }))
@@ -73,18 +76,43 @@ export function DataGrid({
     const wrap = wrapRef.current;
     if (wrap) wrap.scrollTop = 0;
   }, [rowCount]);
+  /**
+   * 列虚拟化（宽表 >40 列）：auto 布局下表格按列下标共享列宽，表体占位格会把表头列撑宽、
+   * 测量随之失真，所以分两阶段——先按自然布局整列渲染一帧测出真实列宽，再切 table-layout: fixed
+   * 把列宽锁在表头显式宽度上；此后表体只渲染横向窗口内的列，窗口外用占位格撑宽。
+   * fixed 布局下列宽只由首行决定，长值靠 CSS ellipsis 截断，DOM 单元格数从 行×全部列 降到 行×可见列。
+   */
+  const colWindowed = visibleColumns.length > 40;
+  /** 列名指纹：列集合变化时旧测量作废，回到 auto 布局重测，避免同列数换列时锁住旧宽。 */
+  const colKey = visibleColumns.map(({ col }) => col.name).join('\n');
+  const colWidths = colState.key === colKey ? colState.widths : [];
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (wrap) wrap.scrollLeft = 0;
+  }, [colKey]);
   useEffect(() => {
     const wrap = wrapRef.current;
     if (!wrap) return;
     const sync = () => {
       setScrollTop(wrap.scrollTop);
       setViewHeight(wrap.clientHeight);
+      setScrollLeft(wrap.scrollLeft);
+      setViewWidth(wrap.clientWidth);
       const first = wrap.querySelector('tbody tr[data-testid^="grid-row-"]') as HTMLElement | null;
       const measuredRow = first?.offsetHeight ?? 0;
       if (measuredRow >= 20) setRowHeight((prev) => (Math.abs(prev - measuredRow) > 0.5 ? measuredRow : prev));
       const head = wrap.querySelector('thead') as HTMLElement | null;
       const measuredHead = head?.offsetHeight ?? 0;
       if (measuredHead > 0) setHeaderHeight((prev) => (Math.abs(prev - measuredHead) > 0.5 ? measuredHead : prev));
+      if (colWindowed) {
+        const heads = wrap.querySelectorAll('th[data-grid-col]');
+        const widths = Array.from(heads, (h) => (h as HTMLElement).offsetWidth);
+        setColState((prev) =>
+          prev.key === colKey && prev.widths.length === widths.length && prev.widths.every((w, i) => Math.abs(w - widths[i]) < 1)
+            ? prev
+            : { key: colKey, widths },
+        );
+      }
     };
     sync();
     wrap.addEventListener('scroll', sync, { passive: true });
@@ -94,7 +122,7 @@ export function DataGrid({
       wrap.removeEventListener('scroll', sync);
       observer.disconnect();
     };
-  }, [rows]);
+  }, [rows, columns, hiddenColumns, colWindowed]);
   const windowed = rows.length > 200;
   const overscan = 8;
   const safeRowHeight = rowHeight >= 20 ? rowHeight : 27;
@@ -102,12 +130,40 @@ export function DataGrid({
   const visibleCount = windowed ? Math.ceil(viewHeight / safeRowHeight) + overscan * 2 : rows.length;
   const visibleEnd = windowed ? Math.min(rows.length, visibleStart + visibleCount) : rows.length;
   const renderedRows = rows.slice(visibleStart, visibleEnd);
+
+  const colMeasured = colWindowed && colWidths.length === visibleColumns.length;
+  let colStart = 0;
+  let colEnd = visibleColumns.length;
+  if (colMeasured) {
+    const colOverscanPx = 240;
+    const from = Math.max(0, scrollLeft - colOverscanPx);
+    const to = scrollLeft + viewWidth + colOverscanPx;
+    let acc = 0;
+    colStart = visibleColumns.length;
+    colEnd = visibleColumns.length;
+    for (let i = 0; i < colWidths.length; i += 1) {
+      const next = acc + colWidths[i];
+      if (colStart === visibleColumns.length && next > from) colStart = i;
+      if (acc >= to) {
+        colEnd = i;
+        break;
+      }
+      acc = next;
+    }
+  }
+  const renderedColumns = visibleColumns.slice(colStart, colEnd);
   const columnSpan = visibleColumns.length + 1 + (onToggleRow ? 1 : 0) + (onRowDelete ? 1 : 0);
+  /** fixed 布局的表格总宽 = 各固定列 CSS 宽 + 实测数据列宽之和（与表头显式宽度一致）。 */
+  const fixedTotal = colMeasured ? 38 + (onToggleRow ? 30 : 0) + colWidths.reduce((a, b) => a + b, 0) + (onRowDelete ? 40 : 0) : 0;
   const spacer = (height: number) => (
     <tr className="grid-spacer">
       <td colSpan={columnSpan} style={{ height, padding: 0, border: 0 }} />
     </tr>
   );
+  /** fixed 布局下单个 td 只占一个列槽，窗口外的列必须用 colSpan 横跨，宽度由表头列宽决定。
+   *  背景/边框交给 CSS：内联 transparent 会盖掉 tr:hover / tr.selected 的整行底色。 */
+  const colSpacer = (span: number, key: string) =>
+    span > 0 ? <td key={key} colSpan={span} style={{ padding: 0 }} /> : null;
 
   const beginEdit = (row: number, col: number) => {
     if (!editable || !onCellEdit) return;
@@ -127,7 +183,11 @@ export function DataGrid({
 
   return (
     <div className={`grid-wrap ${textMode ? 'text-mode' : ''}`} ref={wrapRef}>
-      <table className="data-grid" data-testid={testId}>
+      <table
+        className="data-grid"
+        data-testid={testId}
+        style={colMeasured ? { tableLayout: 'fixed', width: fixedTotal } : undefined}
+      >
         <thead>
           <tr>
             <th className="grid-rowno">#</th>
@@ -136,12 +196,14 @@ export function DataGrid({
                 <input type="checkbox" checked={rows.length > 0 && (selectedRows?.size ?? 0) === rows.length} onChange={() => onToggleAll?.()} />
               </th>
             ) : null}
-            {visibleColumns.map(({ col, index }) => {
+            {visibleColumns.map(({ col, index }, colOffset) => {
               const active = orderBy === col.name;
               return (
                 <th
                   key={`${col.name}_${index}`}
+                  data-grid-col={index}
                   className={onSort ? 'sortable' : ''}
+                  style={colMeasured ? { width: colWidths[colOffset] } : undefined}
                   onClick={() => onSort?.(col.name)}
                   title={col.type ? `${col.name} · ${col.type}` : col.name}
                 >
@@ -159,7 +221,8 @@ export function DataGrid({
             <tr>
               <td className="grid-rowno" />
               {onToggleRow ? <td className="grid-select" /> : null}
-              {visibleColumns.map(({ col, index }) => (
+              {colSpacer(colStart, 'new-left')}
+              {renderedColumns.map(({ col, index }) => (
                 <td key={`new_${col.name}`} className="new-row">
                   <input
                     className="mono"
@@ -172,6 +235,7 @@ export function DataGrid({
                   />
                 </td>
               ))}
+              {colSpacer(visibleColumns.length - colEnd, 'new-right')}
               {onRowDelete ? <td className="row-actions new-row" /> : null}
             </tr>
           ) : null}
@@ -201,7 +265,8 @@ export function DataGrid({
                   <input type="checkbox" checked={selectedRows?.has(rowIndex) ?? false} onChange={() => onToggleRow(rowIndex)} />
                 </td>
               ) : null}
-              {visibleColumns.map(({ col, index: colIndex }) => {
+              {colSpacer(colStart, `left_${rowIndex}`)}
+              {renderedColumns.map(({ col, index: colIndex }) => {
                 const value = row[colIndex];
                 const formatted = formatCell(value);
                 const display = textMode && formatted.kind === 'null' ? '(Null)' : formatted.text;
@@ -246,6 +311,7 @@ export function DataGrid({
                   </td>
                 );
               })}
+              {colSpacer(visibleColumns.length - colEnd, `right_${rowIndex}`)}
               {onRowDelete ? (
                 <td className="row-actions">
                   <button className="icon-btn danger" title="delete row" onClick={() => onRowDelete(rowIndex)}>
