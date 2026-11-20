@@ -34,7 +34,15 @@ export function xmlToCsv(text: string): string {
   }
   if (records.length) {
     const headers = [...new Set(records.flatMap((record) => [...record.children].map((child) => child.tagName)))];
-    const rows = records.map((record) => headers.map((tag) => [...record.children].find((child) => child.tagName === tag)?.textContent ?? ''));
+    const rows = records.map((record) => {
+      // 每行只遍历一次 children；同名标签（如重复 <value>）保留第一个，语义与原先逐格 find 一致。
+      const byTag = new Map<string, string>();
+      for (const child of record.children) {
+        const tag = child.tagName;
+        if (!byTag.has(tag)) byTag.set(tag, child.textContent ?? '');
+      }
+      return headers.map((tag) => byTag.get(tag) ?? '');
+    });
     return rowsToCsv([headers, ...rows]);
   }
   // Excel 2003 XML Spreadsheet：<Worksheet><Table><Row><Cell><Data>

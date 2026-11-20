@@ -51,10 +51,23 @@ export function guessAxes(columns: string[], rows: Array<Record<string, unknown>
   if (!columns.length || !rows.length) return null;
   // 只看首行会踩坑：首行该列可能恰好是 NULL。多扫几行再判定数值列。
   const sample = rows.slice(0, 20);
-  const isNumeric = (column: string) => sample.some((row) => {
-    const value = pick(row, column);
-    return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+  // 引擎返回的列名大小写不一致（Oracle 大写、MySQL 原样），一次采样统一小写缓存，
+  // 避免每个候选列每行都重建一遍小写键表。同名大小写冲突保留第一个匹配，语义与 pick 一致。
+  const sampleByLower: Array<Map<string, unknown>> = sample.map((row) => {
+    const map = new Map<string, unknown>();
+    for (const key of Object.keys(row)) {
+      const lower = key.toLowerCase();
+      if (!map.has(lower)) map.set(lower, row[key]);
+    }
+    return map;
   });
+  const isNumeric = (column: string) => {
+    const lower = column.toLowerCase();
+    return sampleByLower.some((map) => {
+      const value = map.get(lower);
+      return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+    });
+  };
   const numeric = columns.filter(isNumeric);
   const y = numeric.find((c) => !/(^|_)(id|ids|uuid|guid|key|code|seq|sn|no)$/i.test(c)) ?? numeric[0];
   const x = columns.find((c) => c !== y);

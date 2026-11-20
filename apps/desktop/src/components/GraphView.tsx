@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import type { GraphData, GraphNode } from '@aidb/core';
+import type { GraphData, GraphEdge, GraphNode } from '@aidb/core';
 import { t as tr } from '../i18n';
 
 const WIDTH = 900;
@@ -48,31 +48,37 @@ function forceLayout(graph: GraphData): Map<string, Position> {
     positions.set(node.id, { x: WIDTH / 2 + Math.cos(angle) * radius, y: HEIGHT / 2 + Math.sin(angle) * radius });
   });
   const ids = graph.nodes.map((node) => node.id);
+  const disp = new Map<string, Position>();
+  for (const id of ids) disp.set(id, { x: 0, y: 0 });
   const edges = graph.edges.filter((edge) => positions.has(edge.source) && positions.has(edge.target) && edge.source !== edge.target);
   const ideal = Math.sqrt((WIDTH * HEIGHT) / count) * 0.58;
   const iterations = 220;
   for (let step = 0; step < iterations; step += 1) {
     const cooling = 1 - step / iterations;
-    const disp = new Map<string, Position>(ids.map((id) => [id, { x: 0, y: 0 }]));
+    for (const point of disp.values()) { point.x = 0; point.y = 0; }
     for (let i = 0; i < ids.length; i += 1) {
+      const ai = ids[i];
+      const a = positions.get(ai)!;
+      const da = disp.get(ai)!;
       for (let j = i + 1; j < ids.length; j += 1) {
-        const a = positions.get(ids[i])!;
-        const b = positions.get(ids[j])!;
+        const bj = ids[j];
+        const b = positions.get(bj)!;
         let dx = a.x - b.x;
         let dy = a.y - b.y;
         let distance = Math.hypot(dx, dy);
         if (distance < 0.01) {
-          dx = (seedOf(ids[i]) - 0.5) * 0.4;
-          dy = (seedOf(ids[j]) - 0.5) * 0.4;
+          dx = (seedOf(ai) - 0.5) * 0.4;
+          dy = (seedOf(bj) - 0.5) * 0.4;
           distance = Math.hypot(dx, dy) || 0.01;
         }
         const force = (ideal * ideal) / distance;
         const ux = dx / distance;
         const uy = dy / distance;
-        disp.get(ids[i])!.x += ux * force;
-        disp.get(ids[i])!.y += uy * force;
-        disp.get(ids[j])!.x -= ux * force;
-        disp.get(ids[j])!.y -= uy * force;
+        da.x += ux * force;
+        da.y += uy * force;
+        const db = disp.get(bj)!;
+        db.x -= ux * force;
+        db.y -= uy * force;
       }
     }
     for (const edge of edges) {
@@ -159,6 +165,21 @@ export function GraphView({ graph }: { graph: GraphData }) {
     }
     return map;
   }, [graph]);
+
+  /** 同一起止点的边按 edge.id 原文排好序，渲染时按位次决定弯向；0 号取正向、1 号反向。 */
+  const edgePairs = useMemo(() => {
+    const pairs = new Map<string, { edge: GraphEdge; index: number }[]>();
+    graph.edges.forEach((edge) => {
+      // 原地跳边（source === target）不参与多边曲线弯曲
+      if (edge.source === edge.target) return;
+      const pairId = [edge.source, edge.target].sort().join('::');
+      const group = pairs.get(pairId);
+      if (group) group.push({ edge, index: group.length });
+      else pairs.set(pairId, [{ edge, index: 0 }]);
+    });
+    pairs.forEach((group) => group.sort((a, b) => a.edge.id.localeCompare(b.edge.id)));
+    return pairs;
+  }, [graph.edges]);
 
   const legend = useMemo(() => {
     const map = new Map<string, number>();
@@ -319,13 +340,11 @@ export function GraphView({ graph }: { graph: GraphData }) {
                 const source = positions.get(edge.source);
                 const target = positions.get(edge.target);
                 if (!source || !target) return null;
-                const pairId = [edge.source, edge.target].sort().join('::');
-                const samePair = graph.edges.filter((candidate) => [candidate.source, candidate.target].sort().join('::') === pairId);
-                const forward = samePair.length > 1 ? (samePair.findIndex((candidate) => candidate.id === edge.id) % 2 === 0 ? 1 : -1) : 1;
-                const curvature = edge.source === edge.target ? 0 : samePair.length > 1 ? 0.14 * forward : 0;
+                const curved = edge.source === edge.target ? undefined : edgePairs.get([edge.source, edge.target].sort().join('::'));
+                const forward = curved && curved.length > 1 ? (curved.find((item) => item.edge.id === edge.id)?.index ?? 0) % 2 === 0 ? 1 : -1 : 1;
                 const geometry = edge.source === edge.target
                   ? { path: `M ${source.x - 8} ${source.y - 16} C ${source.x - 46} ${source.y - 64}, ${source.x + 46} ${source.y - 64}, ${source.x + 8} ${source.y - 16}`, midX: source.x, midY: source.y - 62 }
-                  : edgeGeometry(source, target, curvature);
+                  : edgeGeometry(source, target, curved && curved.length > 1 ? 0.14 * forward : 0);
                 const active = hoveredEdge === edge.id || selectedId === edge.source || selectedId === edge.target;
                 const showLabel = showAllEdgeLabels || active;
                 return (
