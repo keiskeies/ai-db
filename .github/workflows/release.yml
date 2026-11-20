@@ -412,47 +412,55 @@ jobs:
           prerelease: false
           generate_release_notes: false
           body: |
-            AiDB Studio **v0.0.8** — this release is about not wasting your time: nothing hangs, nothing runs out of memory, and the object tree stops offering what your database cannot do. A sweep across drivers, the bridge, the agent core, the UI and Electron closed 34 hang / timeout / no-response risks; a second pass put hard bounds on result reading so a big table streams instead of exhausting memory. Separately, every context menu is now driven by the engine's real capabilities and the connection's read-only flag.
+            AiDB Studio **v0.0.9** — a maintainability release: the codebase was restructured behind an identical UI and an identical on-the-wire API. None of the work below changes any endpoint, message format or screen you already know — it makes the next feature land faster and the next bug easier to find, while tightening agent safety and the last performance hotspots from 0.0.8.
 
-            **Nothing hangs anymore**
-            - **Timeouts that actually cancel**: MySQL honours `MAX_EXECUTION_TIME` plus a client watchdog (its `timeout` option never worked), PostgreSQL sets `statement_timeout` so the server cancels instead of the client merely giving up, MongoDB gets `maxTimeMS` with a socket fallback, and DuckDB and SQLite gained row/time limits with interrupt support. Introspection queries are no longer exempt.
-            - **Closing a tab cancels the query**: the bridge watches the response socket, so disconnecting cancels the in-flight query instead of leaving it burning a server connection forever. Run and export actions in the UI are cancellable, and stopping the Agent now cuts the local stream even when the server has gone silent.
-            - **The UI stops spinning forever**: every request carries a timeout and an `AbortController`; SSE streams (transfer, pipeline, command, Skill) have an idle watchdog and application-level heartbeats, so a dead connection reports itself instead of pretending to work.
-            - **No unbounded growth**: audit log, tool runs and artifact runs get a retention window; the worker / command-run maps are reclaimed; attachments and export folders are pruned; LLM calls back off and retry on 429/5xx; Skill subprocesses kill their whole process tree on Windows.
-            - **The desktop survives its backend**: a crashed bridge restarts with backoff instead of quitting the app, macOS window re-activation no longer orphans a second gateway process, and blocking sync calls in the main process (whole-database copies, probing `node`, PDF printing) went async.
+            **Architecture: six work packages, zero behavior change**
+            - **Gateway routes → domain routers**: the single 1,600-line `routes.ts` became twelve domain files (`agent`, `query`, `connections`, `commands`, `system`, …) mounted in the same order with the same auth/scope middleware; 151 routes compared one-by-one against the previous implementation.
+            - **Executor → registration-based dispatch**: the agent tool dispatcher is now a `defineTool` registry with a startup self-check that fails the process when a tool is declared but not registered (or registered but not declared), and a duplicate-name guard so a later registration can never silently shadow an earlier one.
+            - **Store → domain repositories**: the gateway's state layer is split into per-domain repositories (connections, agent, dashboards, audit, history, …); all 165 facade methods, transaction boundaries and cache-invalidation points were kept verbatim.
+            - **services ↔ xlsx cycles resolved** with a shared `exportFormat` module.
+            - **Mobile App.tsx 6,335 → 431 lines**: the single-file app shell became 23 screens, 8 overlays and 8 hooks under `src/`, every moved block byte-verified against the original, with the hook order, effect dependencies and state lifting preserved.
+            - **Shared `@aidb/client` package**: the JSON request shell, SSE frame parser and the byte/event idle watchdogs now live in one zero-dependency package consumed by both desktop and mobile; every behavioral difference between the two (timeouts, 204 semantics, error codes, message language) is injected per endpoint, so the desktop's existing test suite passes unmodified.
+            - Regression audit after the refactor (three parallel line-by-line comparisons against the pre-change sources) found no behavioral, flow or UI regressions; see `docs/25-architecture-refactor-2026-11-20.md` (appendices A–F).
 
-            **Big result sets stop exhausting memory**
-            - **Streaming with two ceilings**: the MySQL driver reads through `Query.stream()` with both a row count and a 64 MB byte budget and stops when either is hit; exceeding a limit no longer destroys the connection mid-transaction.
-            - **Backups and transfers stream too**: dumps and migrations page through rows in 4 MB / 2,000-row batches and build `INSERT`s against a byte budget, so a table without a primary key is no longer buffered whole; keyset paging keeps the wide-table cases honest.
-            - **Model context stays bounded**: result serialisation probes the per-row budget before packing instead of stringifying everything first, and tool results / arguments are clipped to 256 KB and flagged `truncated` before they are stored or pushed over the socket.
+            **Agent safety: 12 audit findings closed**
+            - XML-rescued tool calls restore boolean/number/JSON argument types — `dryRun:"true"` can no longer silently become a real execution.
+            - Required tool arguments are validated at the entry point (confirmation kept on its own `CONFIRM_REQUIRED` path).
+            - SQL tokenization is now dialect-aware: MySQL backslash escapes and `/*!` executable comments, PostgreSQL dollar-quoting (PG family only), with the masked length preserved so timeout hints don't get injected into comments.
+            - `SET ROLE` / `SESSION AUTHORIZATION` count as writes; read-only connections no longer allow privilege escalation.
+            - `run_sql` gained a pre-authorized signature covering risk level + all tables + verb sequence + statement count — no more connection-level blanket write pass.
+            - Disabled-table SQL guard can no longer be bypassed via `args.database`; system-catalog detection extended to PG/SQLite/Oracle.
+            - `allowMulti` no longer bypasses the scale gate: 1,000 rows is an unconditional hard ceiling.
+            - Appended `LIMIT` gets a trailing newline so a trailing comment cannot swallow it; PG outer-wrapper fallback extended to 42601/42701/42703/0A000.
+            - Context compaction deletes the whole assistant+tool group, so parallel calls no longer leave orphaned tool messages.
+            - Memory recall is a soft hint again: when it conflicts with the live schema or measured facts, the latter win.
+            - Audit and the MCP read-only bridge now judge risk with the engine in hand, matching the runtime approval decision.
 
-            **Object-tree context menus**
-            - **One menu per level**: right-clicking a connection row and pressing its trailing **…** button now open the exact same menu, and that menu gains **New Database…** wherever the engine can create one. It used to be two hand-written lists that had quietly drifted apart.
-            - **Capability-driven database operations**: the database node shows **New / Rename / Drop Database** only when the engine actually has a statement for it — no more *Rename* on MySQL (it has none) and no more *New / Drop Database* on SQLite, DuckDB or Oracle, where databases are files, `ATTACH`es or instance-level operations rather than a `CREATE DATABASE`.
-            - **The folder nodes got their own menus**: the **Tables** and **Views** folders respond to a right-click with what belongs there (new table / new query, refresh) instead of falling through to the generic catch-all menu.
+            **Performance**
+            - **PostgreSQL drivers stream**: rows are collected through `pg.Query` streaming with both a row count and a 64 MB byte budget; truncation outside a transaction destroys the connection to stop server output, and the statement always remains the user's original text.
+            - **Schema cache gains an in-process parsed layer** (LRU 64) plus a table-name index — hits skip `JSON.parse`, `findTable` is O(1), and invalidation/close clear it synchronously.
+            - **Memory recall pushes filtering into SQL**: `kinds`/`scope` filter first, then take the top 500 — recall scope is no longer silently squeezed out past 500 entries; embeddings are LRU-cached by text with concurrent dedup.
+            - **Wide DataGrid tables virtualize columns**: two-phase measurement with `table-layout: fixed`, off-screen columns collapse to a `colSpan` placeholder, cutting the DOM cell count by an order of magnitude beyond ~40 columns.
+            - **MySQL pool converges idle connections** (`maxIdle: 2`), still bursting to 5 for introspection spikes.
+            - **O(n²) hotspots removed**: relation-graph edge curvature is pre-grouped per frame (O(E²)→O(E)), the force-directed layout reuses its displacement map, XML import row mapping is per-row tag→text (O(M·H²)→O(M·H)), and chart axis guessing builds a lowercase key table once.
+            - Attachments moved to `fs/promises`; retention pruning leaves the write request path (deferred with a 60 s throttle).
 
-            **Read-only connections**
-            - **Greyed out before you click, not after**: create / drop / rename database entries on a read-only connection are disabled and marked, so they no longer open a dialog just to be rejected. The server-side hard block is unchanged — this only removes the misleading affordance.
-            - **Lock badge on the database node**: read-only databases carry the same 🔒 marker as their connection row, so the state is visible at the level you are about to act on.
-
-            **Engine correctness**
-            - **DuckDB no longer receives `CREATE DATABASE`** — the statement generator in the bridge is now driven by the same capability table as the menus (`managesDatabases`), so the UI and the SQL cannot disagree; previously DuckDB was offered, and asked for, a statement it does not support.
-            - **SQLite metadata stopped counting rows**: table descriptions no longer run `COUNT(*)` per table — they read the planner statistics, falling back to `MAX(rowid)` — so opening a schema on a large database is fast, and row counts are labelled as estimates.
-            - **Rename covers the whole PostgreSQL family**: PG-compatible engines now get `ALTER DATABASE … RENAME TO` instead of the menu disappearing, while SQL Server keeps `MODIFY NAME` and ClickHouse keeps `RENAME DATABASE`.
+            **Bug fixes**
+            - Desktop schema panel no longer races an event-driven reload: when the schema refresh request is triggered by an event, the connections list is re-fetched before use, so a connection deleted elsewhere can't produce a spurious 404.
 
             **Installers**
 
             | Platform | Architecture | Files |
             |---|---|---|
-            | Windows | x64 | `AiDB-Studio-0.0.8-x64-setup.exe` · `AiDB-Studio-0.0.8-x64-portable.zip` |
-            | Windows | arm64 | `AiDB-Studio-0.0.8-arm64-setup.exe` · `AiDB-Studio-0.0.8-arm64-portable.zip` |
-            | macOS | Apple Silicon | `AiDB-Studio-0.0.8-arm64.dmg` |
-            | macOS | Intel | `AiDB-Studio-0.0.8-x64.dmg` |
-            | Linux | x64 | `AiDB-Studio-0.0.8-x86_64.AppImage` · `-amd64.deb` · `-x86_64.rpm` |
-            | Linux | arm64 | `AiDB-Studio-0.0.8-arm64.AppImage` · `-arm64.deb` · `-aarch64.rpm` |
+            | Windows | x64 | `AiDB-Studio-0.0.9-x64-setup.exe` · `AiDB-Studio-0.0.9-x64-portable.zip` |
+            | Windows | arm64 | `AiDB-Studio-0.0.9-arm64-setup.exe` · `AiDB-Studio-0.0.9-arm64-portable.zip` |
+            | macOS | Apple Silicon | `AiDB-Studio-0.0.9-arm64.dmg` |
+            | macOS | Intel | `AiDB-Studio-0.0.9-x64.dmg` |
+            | Linux | x64 | `AiDB-Studio-0.0.9-x86_64.AppImage` · `-amd64.deb` · `-x86_64.rpm` |
+            | Linux | arm64 | `AiDB-Studio-0.0.9-arm64.AppImage` · `-arm64.deb` · `-aarch64.rpm` |
 
             **Updating**
-            - Update channels from 0.0.7 keep working: Windows (NSIS) and Linux (AppImage) download and install the update in place; macOS, deb/rpm installs and dev builds check the version and link to this release. Every installer ships `latest.yml` / `latest-linux.yml` / `latest-arm64.yml` metadata for differential updates.
+            - Update channels from 0.0.8 keep working: Windows (NSIS) and Linux (AppImage) download and install the update in place; macOS, deb/rpm installs and dev builds check the version and link to this release. Every installer ships `latest.yml` / `latest-linux.yml` / `latest-arm64.yml` metadata for differential updates.
 
             **Platform notes**
             - Oracle needs a prebuilt node-oracledb binding, and upstream ships none for macOS Intel or Windows arm64. On those two builds the engine is greyed out in the new-connection dialog with the reason; every other engine behaves the same everywhere. Linux arm64 does ship the binding.
@@ -461,7 +469,7 @@ jobs:
             - Android and iOS are still built through EAS and are not part of this release.
 
             **Verification**
-            - 6 desktop combinations (3 operating systems x 2 architectures), 553 Bridge tests passing (65 skipped, including engine-contract tests that need live servers), 435 core tests, 83 desktop tests, 392 documentation-contract checks, and 327 end-to-end scenarios.
+            - 6 desktop combinations (3 operating systems x 2 architectures), 630 Bridge tests passing (65 skipped, including engine-contract tests that need live servers), 448 core tests, 14 shared-client transport tests, 83 desktop tests, 392 documentation-contract checks, and 327 end-to-end scenarios.
             - Before publishing, CI asserts that every `latest*.yml` points at an asset that actually exists in the release, and the portable zips are built from the same verified unpacked directories as the installers.
 
             Installers are built by GitHub Actions from this tag.

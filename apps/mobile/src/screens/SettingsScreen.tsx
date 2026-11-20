@@ -76,7 +76,7 @@ export function SettingsScreen({
               <View style={[styles.statusDot, { backgroundColor: connected ? colors.success : colors.warning }]} />
               <Text style={styles.listMeta}>{connected ? 'WebSocket 已连接' : '正在重连'}</Text>
             </View>
-            <Text style={styles.listMeta}>v{boot?.version ?? '0.0.8'}</Text>
+            <Text style={styles.listMeta}>v{boot?.version ?? '0.0.9'}</Text>
           </View>
         </View>
 
