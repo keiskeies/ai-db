@@ -223,7 +223,7 @@ export function SettingsScreen({
           <Text style={[styles.secondaryButtonText, { color: colors.danger }]}>解除配对</Text>
         </Pressable>
 
-        <Text style={[styles.hint, { textAlign: 'center', marginTop: 6 }]}>AiDB Studio v0.0.4 · Android / iOS / Web</Text>
+        <Text style={[styles.hint, { textAlign: 'center', marginTop: 6 }]}>AiDB Studio v{boot?.version ?? '0.0.9'} · Android / iOS / Web</Text>
       </ScrollView>
     </View>
   );

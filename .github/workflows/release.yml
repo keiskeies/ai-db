@@ -357,9 +357,159 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build release APK
+        working-directory: apps/mobile/android
+        # Expo CLI 默认把 Metro 根设成 monorepo 根，而 RN Gradle 插件传的是相对 apps/mobile 的入口，
+        # 不开这个开关会去仓库根找 index.ts。
+        env:
+          EXPO_NO_METRO_WORKSPACE_ROOT: '1'
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Verify and stage APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./apps/mobile/app.json').expo.version")
+          apk=apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+          if [ ! -f "$apk" ]; then
+            echo "::error::missing $apk"
+            exit 1
+          fi
+          size=$(stat -c%s "$apk")
+          if [ "$size" -lt 20000000 ]; then
+            echo "::error::APK is only ${size} bytes — Metro bundle missing?"
+            exit 1
+          fi
+          aapt2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -n 1)
+          badging=$("$aapt2" dump badging "$apk" | head -n 1)
+          echo "$badging"
+          case "$badging" in
+            *"package: name='com.aidb.studio'"*"versionName='$version'"*) ;;
+            *) echo "::error::APK identity mismatch, expected com.aidb.studio $version"; exit 1 ;;
+          esac
+          unzip -l "$apk" | grep -q 'lib/arm64-v8a/' || { echo "::error::APK lacks arm64-v8a libraries"; exit 1; }
+          mkdir -p dist-mobile
+          cp "$apk" "dist-mobile/AiDB-Studio-$version-android.apk"
+          ls -lh dist-mobile/*.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aidb-android
+          path: dist-mobile/*.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  ios:
+    name: Build iOS (EAS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # iOS 需要 Expo + Apple 两个账号；账号没备齐时只告警跳过，不能拦住桌面发布
+    continue-on-error: true
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verify native version sync
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("fs");
+            const version = require("./apps/mobile/app.json").expo.version;
+            const plist = fs.readFileSync("apps/mobile/ios/AiDBStudio/Info.plist", "utf8");
+            const xcode = fs.readFileSync("apps/mobile/ios/AiDBStudio.xcodeproj/project.pbxproj", "utf8");
+            const marker = "<key>CFBundleShortVersionString</key>";
+            const tail = plist.slice(plist.indexOf(marker) + marker.length);
+            const short = tail.slice(tail.indexOf("<string>") + 8, tail.indexOf("</string>"));
+            const marketing = xcode.split("MARKETING_VERSION = ").slice(1).map((part) => part.slice(0, part.indexOf(";")));
+            const wrong = marketing.filter((v) => v !== version);
+            if (short !== version || marketing.length === 0 || wrong.length > 0) {
+              console.error("::error::iOS version drift: app.json " + version + ", Info.plist " + short + ", wrong MARKETING_VERSION entries " + wrong.length);
+              process.exit(1);
+            }
+            console.log("iOS native version synced: " + version);
+          '
+
+      - name: Check EAS configuration
+        id: guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          project=$(node -p 'require("./apps/mobile/app.json").expo.extra?.eas?.projectId ?? ""')
+          ok=1
+          if [ -z "${EXPO_TOKEN:-}" ]; then
+            echo "::warning::EXPO_TOKEN secret is not set — iOS build skipped. One-time setup is documented under Mobile builds in README."
+            ok=0
+          fi
+          if [ "$project" = "00000000-0000-0000-0000-000000000000" ] || [ -z "$project" ]; then
+            echo "::warning::EAS projectId is still the placeholder — run eas init in apps/mobile, commit the real id, then rerun. iOS build skipped."
+            ok=0
+          fi
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger EAS build
+        if: steps.guard.outputs.ok == '1'
+        working-directory: apps/mobile
+        run: |
+          set -o pipefail
+          npx --yes eas-cli@27.11.0 build --platform ios --profile preview --non-interactive --wait --json > eas-build.json
+          node -e '
+            const [build] = require("./eas-build.json");
+            if (!build?.artifacts?.buildUrl) {
+              console.error("EAS build finished without an artifact URL");
+              process.exit(1);
+            }
+            console.log(build.artifacts.buildUrl);
+          ' > ipa-url.txt
+
+      - name: Download IPA
+        if: steps.guard.outputs.ok == '1'
+        shell: bash
+        working-directory: apps/mobile
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./app.json').expo.version")
+          mkdir -p ../../dist-mobile
+          curl -fsSL "$(cat ipa-url.txt)" -o "../../dist-mobile/AiDB-Studio-$version-ios.ipa"
+          ls -lh "../../dist-mobile/AiDB-Studio-$version-ios.ipa"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.guard.outputs.ok == '1'
+        with:
+          name: aidb-ios
+          path: dist-mobile/*.ipa
+          if-no-files-found: error
+          retention-days: 7
+
   release:
     name: Publish GitHub release
-    needs: desktop
+    needs: [desktop, android, ios]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -466,7 +616,7 @@ jobs:
             - Oracle needs a prebuilt node-oracledb binding, and upstream ships none for macOS Intel or Windows arm64. On those two builds the engine is greyed out in the new-connection dialog with the reason; every other engine behaves the same everywhere. Linux arm64 does ship the binding.
             - Windows on ARM can also run the x64 installer through the system emulator, and that build keeps Oracle.
             - Linux: deb and rpm install through the distribution package manager; the AppImage is portable but needs FUSE 2 (or run it with `--appimage-extract-and-run`). A graphical session is required either way — WSL2 needs WSLg.
-            - Android and iOS are still built through EAS and are not part of this release.
+            - Android ships as a universal APK built in CI with Gradle and signed with the debug key — installable by sideloading, not Play-ready. iOS is built through EAS and attached when `EXPO_TOKEN` is configured; otherwise it is skipped with a warning.
 
             **Verification**
             - 6 desktop combinations (3 operating systems x 2 architectures), 630 Bridge tests passing (65 skipped, including engine-contract tests that need live servers), 448 core tests, 14 shared-client transport tests, 83 desktop tests, 392 documentation-contract checks, and 327 end-to-end scenarios.
@@ -480,6 +630,8 @@ jobs:
             dist-release/*.AppImage
             dist-release/*.deb
             dist-release/*.rpm
+            dist-release/*.apk
+            dist-release/*.ipa
             # 自动更新的元数据（latest.yml / latest-linux.yml）：客户端靠它判断版本与差分下载。
             # 只取 latest 前缀，避免把 electron-builder 的 builder-debug.yml 也发上线。
             dist-release/latest*.yml

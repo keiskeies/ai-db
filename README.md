@@ -612,7 +612,13 @@ Releases are published per operating system and architecture — six desktop com
 - Windows on ARM can also run the x64 installer through the system emulator, and that build keeps the Oracle driver.
 - Linux filenames follow distribution conventions (x64 shows up as `amd64` or `x86_64`, arm64 as `aarch64`). deb and rpm install through the package manager; the AppImage is portable but needs FUSE 2 — otherwise run it with `--appimage-extract-and-run`. A graphical session is required either way; WSL2 needs WSLg.
 - Each installer carries only its own architecture's native bindings (DuckDB, node-oracledb), asserted per build in CI; the two exceptions are described in the engine section above.
-- Android and iOS are built through EAS and are not part of the release page.
+- Android ships as a universal `AiDB-Studio-<version>-android.apk`, built in CI with Gradle from `apps/mobile/android` and signed with the committed debug key — sideload-ready, not Play-ready. iOS is built through EAS and attached to the release only when the repository has an `EXPO_TOKEN` secret; without it the job skips with a warning.
+
+### Mobile builds
+
+- **Android** is built by CI (`./gradlew assembleRelease`) from the committed native project — no Expo account needed. The APK covers all four ABIs and is signed with the debug keystore in `apps/mobile/android/app`, so upgrades keep the same signature; swap in a release keystore before shipping through Google Play. Versions come from `apps/mobile/app.json`: `versionName` is its `version`, and `versionCode` is major×10000 + minor×100 + patch. To build one locally, run `cd apps/mobile/android && EXPO_NO_METRO_WORKSPACE_ROOT=1 ./gradlew assembleRelease` — the env keeps Metro's root aligned with the native project in this monorepo.
+- **iOS** goes through EAS and needs one-time setup: `npm i -g eas-cli`, `cd apps/mobile`, `eas login`, `eas init` (replaces the placeholder `projectId` in `app.json` — commit it), `eas device:create` for internal installs, then run `eas build -p ios --profile preview` once interactively so EAS stores the Apple certificate and provisioning profile. Create an access token at expo.dev/settings/access-tokens and add it as the `EXPO_TOKEN` repository secret; CI then triggers the same profile on every tag and attaches the IPA.
+- Local runs: `npm --workspace apps/mobile run android` (and `run ios`, which needs macOS + Xcode).
 
 ### Checking for updates
 
@@ -708,7 +714,7 @@ When starting the Bridge, set `AIDB_PUBLIC_URL=https://db.example.com` so pairin
 - Mobile is a pocket workspace: connection credentials are never distributed, and complex layout editing and some administration capabilities remain on desktop.
 - Graph, vector, search, time-series, and wide-column engines work in their own query languages rather than forcing SQL semantics; unsupported DDL, backup, and user management are disabled.
 - Data edits currently commit immediately; cross-request transactions use `BEGIN / COMMIT / ROLLBACK` on engines that support them.
-- Desktop installers are produced per system and architecture (Windows / macOS / Linux × x64 / arm64); the macOS Intel and Windows arm64 builds ship without the Oracle driver, see the engine section above. Mobile IPA / APK builds need EAS and stay outside the release pipeline.
+- Desktop installers are produced per system and architecture (Windows / macOS / Linux × x64 / arm64); the macOS Intel and Windows arm64 builds ship without the Oracle driver, see the engine section above. The Android APK is built by CI and attached to every release; the iOS IPA goes through EAS and is attached when `EXPO_TOKEN` is configured.
 
 ## Design documents
 

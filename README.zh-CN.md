@@ -612,7 +612,13 @@ release 页按「系统 + 架构」出包，六个桌面组合：
 - Windows on ARM 也能直接跑 x64 安装包（系统模拟），而那份保留 Oracle 驱动。
 - Linux 的文件名按发行版惯例带架构后缀（x64 是 `amd64` / `x86_64`，arm64 是 `aarch64`）。deb / rpm 走发行版包管理器；AppImage 免安装但需要 FUSE 2，没有就 `--appimage-extract-and-run`。两者都需要图形会话，WSL2 需要 WSLg。
 - 每个安装包只带自身架构的原生绑定（DuckDB、node-oracledb），CI 在发布前逐个断言；两个例外见上文引擎说明。
-- Android / iOS 走 EAS 构建，不在 release 里。
+- Android 以通用 `AiDB-Studio-<版本>-android.apk` 随 release 发布：CI 用 `apps/mobile/android` 里的原生工程跑 Gradle 构建，用仓库内的 debug keystore 签名——可直接侧载安装，但不适合上架 Google Play。iOS 走 EAS 构建，仓库配置了 `EXPO_TOKEN` secret 时才产出并附上 IPA；没配就告警跳过。
+
+### 移动端构建
+
+- **Android**：CI 用已入库的原生工程执行 `./gradlew assembleRelease`，不需要 Expo 账号。APK 是通用包（四个 ABI），用 `apps/mobile/android/app` 里的 debug keystore 签名，升级时签名一致；正式上架 Google Play 前要换成 release keystore。版本号取自 `apps/mobile/app.json`：`versionName` 就是它的 `version`，`versionCode` 按 major×10000 + minor×100 + patch 计算。本地出包：`cd apps/mobile/android && EXPO_NO_METRO_WORKSPACE_ROOT=1 ./gradlew assembleRelease`——这个环境变量让 Metro 的根与原生工程对齐，否则它会去 monorepo 根找 `index.ts`。
+- **iOS**：走 EAS，需一次性配置：`npm i -g eas-cli`、`cd apps/mobile`、`eas login`、`eas init`（把 `app.json` 里的占位 `projectId` 换成真实 id 并提交）、内测安装需 `eas device:create`；再交互式跑一次 `eas build -p ios --profile preview`，让 EAS 保存 Apple 证书与描述文件。到 expo.dev/settings/access-tokens 建 token，配成仓库 secret `EXPO_TOKEN`，之后每次打 tag CI 会触发同一 profile 并附上 IPA。
+- 本地运行：`npm --workspace apps/mobile run android`（`run ios` 需要 macOS + Xcode）。
 
 ### 检查更新
 
@@ -708,7 +714,7 @@ location / {
 - 移动端是随身工作区：连接凭据不下发、复杂布局编辑和部分管理能力仍在桌面端。
 - 图数据库、向量库、搜索、时序、宽列等引擎按各自查询语言工作，不强行套用 SQL 语义；不支持的 DDL、备份、用户管理等能力会禁用。
 - 数据编辑当前即时提交；跨请求事务在支持的 SQL 引擎上通过 `BEGIN / COMMIT / ROLLBACK` 完成。
-- 桌面端按「系统 + 架构」产出六个安装包（Windows / macOS / Linux × x64 / arm64）；macOS Intel 与 Windows arm64 不含 Oracle 驱动，原因见上文引擎说明。移动端 IPA / APK 需要 EAS 构建，不在 release 流水线内。
+- 桌面端按「系统 + 架构」产出六个安装包（Windows / macOS / Linux × x64 / arm64）；macOS Intel 与 Windows arm64 不含 Oracle 驱动，原因见上文引擎说明。Android APK 由 CI 构建并随每次 release 发布；iOS IPA 走 EAS，配置了 `EXPO_TOKEN` 才附上。
 
 ## 设计文档
 

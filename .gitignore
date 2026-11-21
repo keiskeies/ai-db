@@ -38,6 +38,8 @@ imports/
 *.p12
 *.pfx
 *.keystore
+# CI 打内测 APK 要稳定的签名（标准 debug 密钥，非机密）；正式分发再换 release keystore
+!apps/mobile/android/app/debug.keystore
 secrets/
 
 # ── Expo / React Native ───────────────────────────────

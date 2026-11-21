@@ -156,7 +156,7 @@ sequenceDiagram
 | 桌面打包 | `npm run build:desktop` | Windows NSIS / macOS dmg / Linux AppImage |
 | Bridge 独立部署 | `npm run build:gateway && node apps/gateway/dist/index.js` | Linux 可运行服务 + Dockerfile |
 | 移动开发 | `npm --workspace apps/mobile run start` | Expo Go / 模拟器 |
-| 移动构建 | `eas build -p android|ios` | AAB / IPA |
+| 移动构建 | Android: `./gradlew assembleRelease`（CI）；iOS: `eas build -p ios` | APK / IPA |
 | 全量校验 | `npm run verify` | 类型检查 + 单测 + E2E + 文档契约 |
 
 Electron 打包配置集中在 `apps/desktop/electron-builder.yml`；Bridge 以 sidecar 形式随包分发（`extraResources`，含外部 `ssh2` 依赖），移动端不内置驱动。Bridge 使用 esbuild 打包为单文件 ESM。
