@@ -1,4 +1,4 @@
-package com.aidb.studio
+package top.keiskei.aidb
 
 import android.os.Build
 import android.os.Bundle

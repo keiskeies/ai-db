@@ -1,4 +1,4 @@
-package com.aidb.studio
+package top.keiskei.aidb
 
 import android.app.Application
 import android.content.res.Configuration
