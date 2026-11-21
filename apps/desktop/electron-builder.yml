@@ -82,9 +82,11 @@ deb:
   packageName: aidb-studio
 rpm:
   packageName: aidb-studio
-  # fpm 默认 --rpm-compression xzmt（多线程 xz）在部分 runner 镜像的 rpmbuild 上
-  # 稳定失败（rpmbuild exit 1，无具体 stderr）；xz 单线程是 fpm 最兼容的选项。
-  compression: xz
+  # app-builder 会把 compression: xz 静默升级成 --rpm-compression xzmt
+  # （fpm.go 里对 rpm 的硬编码），而 xzmt 在 2026-11 的 ubuntu runner 镜像
+  # 上稳定触发 rpmbuild 崩溃（rpmbuild exit 1，无具体 stderr）。gz 走
+  # --rpm-compression gz 原样下发，这是 rpm 最传统也最兼容的压缩。
+  compression: gz
 nsis:
   oneClick: false
   perMachine: false
