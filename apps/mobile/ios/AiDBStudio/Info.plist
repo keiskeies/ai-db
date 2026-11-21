@@ -33,7 +33,7 @@
       </dict>
     </array>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2</string>
     <key>LSMinimumSystemVersion</key>
     <string>12.0</string>
     <key>LSRequiresIPhoneOS</key>
@@ -43,8 +43,18 @@
       <key>NSAllowsLocalNetworking</key>
       <true/>
     </dict>
+    <key>NSBonjourServices</key>
+    <array>
+      <string>_aidb._tcp</string>
+    </array>
+    <key>NSCameraUsageDescription</key>
+    <string>允许 AiDB Studio 扫描桌面端配对二维码</string>
     <key>NSFaceIDUsageDescription</key>
     <string>Allow $(PRODUCT_NAME) to access your Face ID biometric data.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>AiDB Studio 需要访问局域网以发现并连接 Bridge。</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>允许 AiDB Studio 选择图片作为附件。</string>
     <key>UILaunchStoryboardName</key>
     <string>SplashScreen</string>
     <key>UIRequiredDeviceCapabilities</key>
