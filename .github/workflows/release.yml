@@ -23,7 +23,9 @@ jobs:
           - os: macos-latest
             target: --mac
             artifact: macos
-          - os: ubuntu-latest
+          # ubuntu-latest 已升到 RPM 6，fpm 1.9.3 生成的 spec 会被 rpmbuild 直接拒绝；
+          # 固定 24.04（RPM 4.18）保证 AppImage/deb/rpm 全链路可用
+          - os: ubuntu-24.04
             target: --linux
             artifact: linux
     steps:
@@ -103,8 +105,13 @@ jobs:
           set -euo pipefail
           real=$(command -v rpmbuild || true)
           if [ -z "$real" ]; then
-            echo "::warning::rpmbuild is not installed; fpm will fail with ENOENT"
-            exit 0
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq rpm
+            real=$(command -v rpmbuild || true)
+          fi
+          if [ -z "$real" ]; then
+            echo "::error::rpmbuild is not installed and could not be installed"
+            exit 1
           fi
           echo "rpmbuild: $real ($("$real" --version | head -n 1))"
           df -h /tmp / || true
@@ -367,6 +374,11 @@ jobs:
             tail -n 25 "$log" | while IFS= read -r line; do echo "::error::$line"; done
           else
             echo "::error::electron-builder.log was not created"
+          fi
+          # rpmbuild 的 stderr 被 fpm 吞掉，wrapper 已把它写到这个文件
+          out="$RUNNER_TEMP/rpmbuild.out"
+          if [ -f "$out" ]; then
+            tail -n 60 "$out" | while IFS= read -r line; do echo "::error::rpmbuild: $line"; done
           fi
 
       - name: Upload installer
