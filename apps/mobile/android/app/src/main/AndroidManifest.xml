@@ -25,7 +25,7 @@
         <category android:name="android.intent.category.DEFAULT"/>
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="aidb"/>
-        <data android:scheme="com.aidb.studio"/>
+        <data android:scheme="top.keiskei.aidb"/>
       </intent-filter>
     </activity>
   </application>

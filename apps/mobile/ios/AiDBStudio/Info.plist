@@ -28,7 +28,7 @@
         <key>CFBundleURLSchemes</key>
         <array>
           <string>aidb</string>
-          <string>com.aidb.studio</string>
+          <string>top.keiskei.ai-db</string>
         </array>
       </dict>
     </array>

@@ -86,9 +86,9 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace 'com.aidb.studio'
+    namespace 'top.keiskei.aidb'
     defaultConfig {
-        applicationId 'com.aidb.studio'
+        applicationId 'top.keiskei.aidb'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         def appVersion = new groovy.json.JsonSlurper().parse(file('../../app.json')).expo.version

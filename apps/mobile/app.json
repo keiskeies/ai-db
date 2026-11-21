@@ -18,7 +18,7 @@
       "web"
     ],
     "android": {
-      "package": "com.aidb.studio",
+      "package": "top.keiskei.aidb",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0B0E0D"
@@ -32,7 +32,7 @@
       ]
     },
     "ios": {
-      "bundleIdentifier": "com.aidb.studio",
+      "bundleIdentifier": "top.keiskei.ai-db",
       "supportsTablet": true,
       "infoPlist": {
         "NSAppTransportSecurity": {
