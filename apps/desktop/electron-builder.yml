@@ -82,6 +82,9 @@ deb:
   packageName: aidb-studio
 rpm:
   packageName: aidb-studio
+  # fpm 默认 --rpm-compression xzmt（多线程 xz）在部分 runner 镜像的 rpmbuild 上
+  # 稳定失败（rpmbuild exit 1，无具体 stderr）；xz 单线程是 fpm 最兼容的选项。
+  compression: xz
 nsis:
   oneClick: false
   perMachine: false
