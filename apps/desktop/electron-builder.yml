@@ -1,4 +1,4 @@
-appId: com.aidb.studio
+appId: top.keiskei.aidb
 # 自动更新：打包时生成 latest.yml（Windows NSIS）/ latest-linux.yml（AppImage），
 # 里面是版本号、文件名与 sha512，客户端据此判断是否有新版并做差分下载。
 # CI 用 --publish never，只把这份元数据产出到 release 目录，由发布步骤一并上传。

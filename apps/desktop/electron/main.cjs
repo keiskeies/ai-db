@@ -471,7 +471,7 @@ if (!hasSingleInstanceLock) {
   app.whenReady().then(() => {
     configureAboutPanel();
     // Windows 的任务栏分组、通知来源都靠 AppUserModelId；与 electron-builder 的 appId 保持一致。
-    if (process.platform === 'win32') app.setAppUserModelId('com.aidb.studio');
+    if (process.platform === 'win32') app.setAppUserModelId('top.keiskei.aidb');
     // macOS 开发态的 Dock 图标同样来自 Electron.app，未打包时手动换成产品图标。
     if (!app.isPackaged && process.platform === 'darwin' && windowIcon && app.dock) app.dock.setIcon(windowIcon);
     registerExportDialogs();
