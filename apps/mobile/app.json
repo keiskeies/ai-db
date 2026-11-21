@@ -26,7 +26,9 @@
       "permissions": [
         "INTERNET",
         "CHANGE_WIFI_MULTICAST_STATE",
-        "ACCESS_WIFI_STATE"
+        "ACCESS_WIFI_STATE",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "ios": {
@@ -58,8 +60,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "00000000-0000-0000-0000-000000000000"
+        "projectId": "e0fad574-fded-46b8-b447-a09dd8b4f7f6"
       }
-    }
+    },
+    "owner": "keiskeies"
   }
 }
