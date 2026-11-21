@@ -95,6 +95,34 @@ jobs:
           ls ../../node_modules/.bin 2>/dev/null | grep -i electron || true
           npx --no-install electron-builder --version || true
 
+      - name: Surface rpmbuild errors
+        # fpm 只抛出 "rpmbuild failed (exit code 1)"，真实 stderr 被吞掉；包一层带出来
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          real=$(command -v rpmbuild || true)
+          if [ -z "$real" ]; then
+            echo "::warning::rpmbuild is not installed; fpm will fail with ENOENT"
+            exit 0
+          fi
+          echo "rpmbuild: $real ($("$real" --version | head -n 1))"
+          df -h /tmp / || true
+          mkdir -p "$RUNNER_TEMP/rpmbin"
+          {
+            echo '#!/bin/bash'
+            echo '"$REAL_RPMBUILD" "$@" > "$RUNNER_TEMP/rpmbuild.out" 2>&1'
+            echo 'rc=$?'
+            echo 'if [ "$rc" -ne 0 ]; then'
+            echo '  echo "::error::rpmbuild failed (exit $rc): $*"'
+            echo '  tail -n 40 "$RUNNER_TEMP/rpmbuild.out" | while IFS= read -r line; do echo "::error::$line"; done'
+            echo 'fi'
+            echo 'exit "$rc"'
+          } > "$RUNNER_TEMP/rpmbin/rpmbuild"
+          chmod +x "$RUNNER_TEMP/rpmbin/rpmbuild"
+          echo "REAL_RPMBUILD=$real" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/rpmbin" >> "$GITHUB_PATH"
+
       - name: Package installer
         # 每个架构单独跑一次：NSIS 在一次传入多个架构时会额外产出一个合并安装器
         # （约 284 MB，内容与两个单架构包重复），分开跑才只留 x64 / arm64 各自的安装器。
