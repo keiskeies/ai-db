@@ -436,6 +436,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: npm
+
+      # eas-cli 在上传前会在本地解析 app.json 的 config plugins，没有 node_modules 会直接失败
+      - name: Install dependencies
+        run: npm ci
 
       - name: Verify native version sync
         shell: bash

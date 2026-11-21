@@ -84,9 +84,9 @@ rpm:
   packageName: aidb-studio
   # app-builder 会把 compression: xz 静默升级成 --rpm-compression xzmt
   # （fpm.go 里对 rpm 的硬编码），而 xzmt 在 2026-11 的 ubuntu runner 镜像
-  # 上稳定触发 rpmbuild 崩溃（rpmbuild exit 1，无具体 stderr）。gz 走
-  # --rpm-compression gz 原样下发，这是 rpm 最传统也最兼容的压缩。
-  compression: gz
+  # 上稳定触发 rpmbuild 崩溃（rpmbuild exit 1，无具体 stderr）。electron-builder
+  # 只下发 gz/bzip2/xz/lzo，而 fpm 只认 gzip（不认识 gz），两边交集里只剩 bzip2。
+  compression: bzip2
 nsis:
   oneClick: false
   perMachine: false
