@@ -12,6 +12,7 @@ import type {
   WriteDocumentInput,
   WriteDocumentResult,
 } from './types';
+import { authorityHost } from './host';
 import { DbError } from './types';
 import { mapLimit } from './concurrency';
 import { tlsDispatcher } from './ssl';
@@ -154,7 +155,7 @@ export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDri
     if (this.opts.host.startsWith('http://') || this.opts.host.startsWith('https://')) {
       return this.opts.host.replace(/\/+$/, '');
     }
-    return `${this.opts.ssl ? 'https' : 'http'}://${this.opts.host || '127.0.0.1'}:${this.opts.port || 9200}`;
+    return `${this.opts.ssl ? 'https' : 'http'}://${authorityHost(this.opts.host || '127.0.0.1')}:${this.opts.port || 9200}`;
   }
 
   private headers(): Record<string, string> {
@@ -206,7 +207,7 @@ export class ElasticsearchDriver implements DocumentWriteDriver, ObjectCreateDri
       const parsed = parseServerInfo(info);
       return { ok: true, version: `${parsed.label} ${parsed.number}`.trim(), latencyMs: Date.now() - started };
     } catch (err: any) {
-      return { ok: false, latencyMs: Date.now() - started, message: err?.message ?? '连接失败' };
+      return { ok: false, latencyMs: Date.now() - started, message: err?.message ?? '连接失败', code: typeof err?.code === 'string' ? err.code : undefined };
     }
   }
 

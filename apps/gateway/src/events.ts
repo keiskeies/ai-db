@@ -1,9 +1,9 @@
 /**
- * 结构变更事件总线。
+ * 网关变更事件总线。
  *
- * 只负责「把结构变了这个事实送到所有在线客户端」。不带变更明细（见设计文档 §2 非目标），
- * 由客户端自己重新拉一次 schema。放在网关而非 @aidb/core：只有网关生产这类事件，
- * 客户端只需要事件形状，用本地 interface 声明即可。
+ * 只负责把「结构变了」或「连接列表变了」送到所有在线客户端，不带变更明细；
+ * 客户端按事件类型重新拉取 schema 或连接列表。放在网关而非 @aidb/core：
+ * 只有网关生产这类事件，客户端用本地 interface 声明形状即可。
  */
 export type SchemaChangeCause = 'agent' | 'user';
 
@@ -15,11 +15,19 @@ export interface SchemaChangedEvent {
   at: string;
 }
 
+export interface ConnectionsChangedEvent {
+  type: 'connections_changed';
+  connectionId: string;
+  change: 'created' | 'updated' | 'deleted';
+  at: string;
+}
+
 export class GatewayEvents {
-  private listeners = new Set<(event: SchemaChangedEvent) => void>();
+  private schemaListeners = new Set<(event: SchemaChangedEvent) => void>();
+  private connectionListeners = new Set<(event: ConnectionsChangedEvent) => void>();
 
   emitSchemaChanged(event: SchemaChangedEvent): void {
-    for (const listener of this.listeners) {
+    for (const listener of this.schemaListeners) {
       // 一个坏监听不能拖垮触发它的那次 DB 操作：DB 已经改完了，事件只是通知。
       try {
         listener(event);
@@ -30,7 +38,22 @@ export class GatewayEvents {
   }
 
   onSchemaChanged(listener: (event: SchemaChangedEvent) => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    this.schemaListeners.add(listener);
+    return () => this.schemaListeners.delete(listener);
+  }
+
+  emitConnectionsChanged(event: ConnectionsChangedEvent): void {
+    for (const listener of this.connectionListeners) {
+      try {
+        listener(event);
+      } catch (err) {
+        console.error('[events] connections_changed listener failed', err);
+      }
+    }
+  }
+
+  onConnectionsChanged(listener: (event: ConnectionsChangedEvent) => void): () => void {
+    this.connectionListeners.add(listener);
+    return () => this.connectionListeners.delete(listener);
   }
 }

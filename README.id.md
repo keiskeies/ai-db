@@ -29,7 +29,7 @@
   <a href="./README.uk.md">Українська</a>
 </p>
 
-AiDB Studio menjadikan agen sebagai pintu masuk utama: koneksi, skema, SQL, data, dasbor, laporan, dan audit berbagi satu konteks eksekusi. Tersedia 41 mesin basis data, 14 modul produktivitas, dan 53 alat agen; setiap tindakan agen terlihat, dapat dikendalikan, dan dapat diaudit.
+AiDB Studio menjadikan agen sebagai pintu masuk utama: koneksi, skema, SQL, data, dasbor, laporan, dan audit berbagi satu konteks eksekusi. Tersedia 41 mesin basis data, 14 modul produktivitas, dan 55 alat agen; setiap tindakan agen terlihat, dapat dikendalikan, dan dapat diaudit.
 
 <p align="center">
   <img src="docs/screenshots/showcase/agent-workflow.gif" width="420" alt="AiDB Studio Agent" />

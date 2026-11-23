@@ -7,9 +7,18 @@ export interface SchemaChangedEvent {
   at: string;
 }
 
+export interface ConnectionsChangedEvent {
+  type: 'connections_changed';
+  connectionId: string;
+  change: 'created' | 'updated' | 'deleted';
+  at: string;
+}
+
 interface Handlers {
   /** 收到某连接的结构变更。 */
   onChange: (event: SchemaChangedEvent) => void;
+  /** 连接成员或配置变化后重新拉取连接列表。 */
+  onConnectionsChange: (event: ConnectionsChangedEvent) => void;
   /** 重连成功——用于补偿断线期间丢失的事件。 */
   onReconnect: () => void;
 }
@@ -21,14 +30,14 @@ const PING_INTERVAL_MS = 30000;
 const PONG_TIMEOUT_MS = 10000;
 
 /**
- * 订阅网关的结构变更广播。
+ * 订阅网关的结构与连接列表变更广播。
  *
- * 只负责连接与重连，业务语义（什么时候真正去拉 schema）由调用方决定。
+ * 只负责连接与重连，业务语义（什么时候重新拉 schema / 连接列表）由调用方决定。
  * 两种"不必再试"的情形必须终态化，否则会变成安静的无限重连：
  * - 没有 token：生产 Web 构建没带 #token= 时就是这样，连了也会被 4401。
  * - 服务端 4401：令牌无效或被吊销，重试多少次都一样。
  */
-export function startSchemaEvents({ onChange, onReconnect }: Handlers): () => void {
+export function startSchemaEvents({ onChange, onConnectionsChange, onReconnect }: Handlers): () => void {
   let disposed = false;
   let socket: WebSocket | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -91,6 +100,15 @@ export function startSchemaEvents({ onChange, onReconnect }: Handlers): () => vo
         return;
       }
       if (parsed?.type === 'pong') return;
+      if (parsed?.type === 'connections_changed' && typeof parsed.connectionId === 'string') {
+        onConnectionsChange({
+          type: 'connections_changed',
+          connectionId: parsed.connectionId,
+          change: parsed.change === 'created' || parsed.change === 'deleted' ? parsed.change : 'updated',
+          at: String(parsed.at ?? ''),
+        });
+        return;
+      }
       if (parsed?.type !== 'schema_changed' || typeof parsed.connectionId !== 'string') return;
       onChange({
         type: 'schema_changed',

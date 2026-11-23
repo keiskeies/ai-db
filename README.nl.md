@@ -29,7 +29,7 @@
   <a href="./README.uk.md">Українська</a>
 </p>
 
-AiDB Studio maakt de agent het primaire startpunt: verbindingen, schema, SQL, data, dashboards, rapporten en audit delen één uitvoerbare context. Het bevat 41 database-engines, 14 productiviteitsmodules en 53 agent-tools; elke actie van de agent is zichtbaar, bestuurbaar en controleerbaar.
+AiDB Studio maakt de agent het primaire startpunt: verbindingen, schema, SQL, data, dashboards, rapporten en audit delen één uitvoerbare context. Het bevat 41 database-engines, 14 productiviteitsmodules en 55 agent-tools; elke actie van de agent is zichtbaar, bestuurbaar en controleerbaar.
 
 <p align="center">
   <img src="docs/screenshots/showcase/agent-workflow.gif" width="420" alt="AiDB Studio Agent" />

@@ -29,7 +29,7 @@
   <a href="./README.uk.md">Українська</a>
 </p>
 
-AiDB Studio は Agent を主要な入口として扱います。接続、スキーマ、SQL、データ、ダッシュボード、レポート、監査が同じ実行コンテキストを共有します。41 のデータベースエンジン、14 の生産性モジュール、53 の Agent ツールを備え、Agent の操作はすべて可視化・制御・監査できます。
+AiDB Studio は Agent を主要な入口として扱います。接続、スキーマ、SQL、データ、ダッシュボード、レポート、監査が同じ実行コンテキストを共有します。41 のデータベースエンジン、14 の生産性モジュール、55 の Agent ツールを備え、Agent の操作はすべて可視化・制御・監査できます。
 
 <p align="center">
   <img src="docs/screenshots/showcase/agent-workflow.gif" width="420" alt="AiDB Studio Agent" />

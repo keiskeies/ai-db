@@ -267,7 +267,7 @@ try {
 const boot = (await api('/bootstrap')).body;
 demo = boot.connections.find((c) => c.engine === 'sqlite');
 check('bridge bootstrap', Boolean(demo), demo?.name);
-check('53 agent tools', boot.tools.length === 53, String(boot.tools.length));
+check('55 agent tools', boot.tools.length === 55, String(boot.tools.length));
 const builtinMcp = (await api('/mcp/servers')).body.servers.filter((server) => server.builtin);
 check('built-in MCP servers seeded', ['filesystem', 'git', 'web'].every((kind) => builtinMcp.some((server) => server.builtin === kind)), builtinMcp.map((server) => server.builtin).join(','));
 
@@ -1943,7 +1943,7 @@ const catalogRows = await toolCatalog.locator('.agent-catalog-row').count();
 const catalogGroups = await toolCatalog.locator('.agent-catalog-group-head').count();
 check(
   'agent tool catalog lists every tool grouped by capability',
-  catalogRows === 53 && catalogGroups >= 8,
+  catalogRows === 55 && catalogGroups >= 8,
   `rows=${catalogRows} groups=${catalogGroups}`,
 );
 const catalogText = await toolCatalog.evaluate((el) => el.textContent ?? '');

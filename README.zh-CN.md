@@ -39,7 +39,7 @@
 
 <p align="center">
   <img alt="41 种数据库引擎" src="https://img.shields.io/badge/Engines-41-45C8C3?style=flat-square" />
-  <img alt="53 个 Agent 工具" src="https://img.shields.io/badge/Agent%20Tools-53-45C8C3?style=flat-square" />
+  <img alt="55 个 Agent 工具" src="https://img.shields.io/badge/Agent%20Tools-55-45C8C3?style=flat-square" />
   <img alt="macOS、Windows、Linux" src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-0B0E0D?style=flat-square" />
   <img alt="MIT 许可" src="https://img.shields.io/badge/License-MIT-E0AF63?style=flat-square" />
   <a href="https://github.com/keiskeies/ai-db/releases/tag/v0.0.10"><img alt="Release v0.0.8" src="https://img.shields.io/badge/Release-v0.0.10-45C8C3?style=flat-square&logo=github" /></a>
@@ -48,7 +48,7 @@
 
 AiDB 不是把聊天框嵌进数据库客户端。它以 Agent 为第一入口，把连接、结构、SQL、数据、仪表板、报告与审计统一成一套可执行的上下文。你用一句业务目标发起任务，Agent 用与人类相同的工具去查证、执行、验证和交付。
 
-从 41 种数据库引擎到 14 个生产力模块，从 53 个工具到 6 个命令工作流，所有能力都围绕一个原则构建：**Agent 能做的，必须可见、可控、可审计；Agent 不能做的，绝不假装能做。**
+从 41 种数据库引擎到 14 个生产力模块，从 55 个工具到 6 个命令工作流，所有能力都围绕一个原则构建：**Agent 能做的，必须可见、可控、可审计；Agent 不能做的，绝不假装能做。**
 
 桌面端使用 Electron + React，可同时以浏览器形态运行；移动端使用 Expo / React Native，通过 Bridge 与桌面共享连接、会话、记忆和设置。支持 Windows、macOS、Linux、Android、iOS 与 Web。
 
@@ -89,7 +89,7 @@ AiDB 的选择是把 Agent 放在任务主路径上，而不是侧边栏里。�
 | 层 | Agent 在此获得什么 |
 |---|---|
 | 意图 | 自然语言、`@table`、图片、斜杠命令与命令工作流 |
-| 执行 | 53 个工具，覆盖查询、写入、DDL、事务、图表、体检、对比、迁移与数据流 |
+| 执行 | 55 个工具，覆盖查询、写入、DDL、事务、图表、体检、对比、迁移与数据流 |
 | 上下文 | 真实 schema、业务别名、术语、示例 SQL、长期记忆、大库候选表检索 |
 | 控制 | 只读 / 询问 / 自动 / 全自动，审批、备份、审计与执行轨迹 |
 | 交付 | 图表、PDF、仪表板卡片、报告、Excel / PPTX、可重跑产物 |
@@ -97,7 +97,7 @@ AiDB 的选择是把 Agent 放在任务主路径上，而不是侧边栏里。�
 
 ## 能力概览
 
-- **53 个 Agent 工具**：查询、结构变更、数据写入、图表、体检、对比、迁移、数据流、Skill、MCP。
+- **55 个 Agent 工具**：查询、结构变更、数据写入、图表、体检、对比、迁移、数据流、Skill、MCP。
 - **6 个命令工作流**：`/report`、`/compare`、`/diff`、`/recon`、`/fix`、`/ask`，外加 `/init` 数据库交接文档。
 - **41 种数据库引擎**：关系型、文档、键值、图、向量、搜索、宽列、时序。
 - **14 个工具箱模块**：报告、数据流处理、搜索、查询构建、结构同步、数据对比、传输、生成、监控、自动化、用户、字典、高级对象、Agent 上下文。
@@ -192,11 +192,11 @@ Agent 的能力不是一句“支持自然语言”。它由六件事共同决�
 - **中断**：可停止当前回合，已输出内容保留，当前工具执行完成后标记 aborted。
 - **诚实停止**：回合停止时一定说明原因——用户停止、模型限制、工具报错或无事可做——不再假装还在运行；「继续」能扛过连接变化。
 
-### 工具集：53 个可执行动作
+### 工具集：55 个可执行动作
 
 | 分组 | 工具 |
 |---|---|
-| 连接与结构 | `list_connections`、`inspect_schema`、`search_objects`、`get_query_history` |
+| 连接与结构 | `list_connections`、`probe_engine`、`create_connection`、`inspect_schema`、`search_objects`、`get_query_history` |
 | SQL 执行与事务 | `run_sql`、`explain_sql`、`sample_rows`、`profile_column`、`begin_transaction`、`commit_transaction`、`rollback_transaction` |
 | 多方言语句与检索 | `run_mql`、`run_redis`、`run_cypher`、`run_cql`、`run_aql`、`search_index`、`vector_search` |
 | 集合与文档 | `create_collection`、`delete_collection`、`upsert_document`、`import_documents`、`delete_documents`、`write_line_protocol` |
@@ -209,7 +209,7 @@ Agent 的能力不是一句“支持自然语言”。它由六件事共同决�
 | Skill | `skill_list`、`skill_read`、`skill_write`、`skill_run`、`skill_list_files`、`skill_worker_run` |
 | MCP | `mcp_list_servers`、`mcp_list_tools`、`mcp_call` |
 
-工具入参使用 JSON Schema（`additionalProperties: false`），风险分级为 `read < write < ddl < destructive`。命令私有工具（如 `compose_report`、`submit_fix_plan`）只在该命令内可用，不计入 53 个全局工具。
+工具入参使用 JSON Schema（`additionalProperties: false`），风险分级为 `read < write < ddl < destructive`。命令私有工具（如 `compose_report`、`submit_fix_plan`）只在该命令内可用，不计入 55 个全局工具。
 
 ### 能力目录：让模型知道边界
 
@@ -585,7 +585,7 @@ Agent 的价值不止于数据库内部。通知、Skill、MCP 与网络搜索�
   ```
 
   配对凭据被硬性限制在 21 个只读工具白名单内（`run_sql` 仅放行 SELECT），可随时在 设置 → 设备 吊销。完整用法见 [`packages/aidb-mcp/README.md`](packages/aidb-mcp/README.md)。
-- **工具目录**：设置 → MCP 与工具中可搜索、按分组查看全部 53 个 Agent 工具及其风险约束。
+- **工具目录**：设置 → MCP 与工具中可搜索、按分组查看全部 55 个 Agent 工具及其风险约束。
 
 ### 网络搜索
 

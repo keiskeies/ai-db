@@ -77,6 +77,7 @@ export function Sidebar() {
   const loadedDatabases = useApp((s) => s.loadedDatabases);
   const schemaLoading = useApp((s) => s.schemaLoading);
   const expanded = useApp((s) => s.expandedConnections);
+  const eventExpanded = useApp((s) => s.eventExpandedConnections);
   const expandedSchemas = useApp((s) => s.expandedSchemas);
   const collapsedGroupList = useApp((s) => s.collapsedGroups);
   const setCollapsedGroupList = useApp((s) => s.setCollapsedGroups);
@@ -157,7 +158,7 @@ export function Sidebar() {
 
   useEffect(() => {
     // 重启后只恢复了展开状态，schema 是内存态；不给展开的连接补一次加载会一直停在 Loading…
-    const pending = connections.filter((conn) => expanded[conn.id] && !schemas[conn.id]);
+    const pending = connections.filter((conn) => expanded[conn.id] && !schemas[conn.id] && !eventExpanded[conn.id]);
     if (!pending.length) return;
     let cancelled = false;
     // 展开状态可能一次恢复十几个连接，并发上限 2，避免启动瞬间同时打十几个库。
@@ -173,7 +174,7 @@ export function Sidebar() {
     return () => {
       cancelled = true;
     };
-  }, [connections, expanded, schemas, loadSchema]);
+  }, [connections, expanded, eventExpanded, schemas, loadSchema]);
 
   const openMenu = (e: React.MouseEvent, items: ContextMenuItem[]) => {
     e.preventDefault();
@@ -719,7 +720,7 @@ export function Sidebar() {
                       connSchemas.map((schema) => {
                         const schemaKey = `${conn.id}:${schema.name}`;
                         const single = connSchemas.length === 1;
-                        const schemaOpen = expandedSchemas[schemaKey] ?? single;
+                        const schemaOpen = expandedSchemas[schemaKey] ?? (single && !eventExpanded[conn.id]);
                         const loaded = (loadedDatabases[conn.id] ?? []).includes(schema.name);
                         const loading = Boolean(schemaLoading[schemaKey]);
                         const tables = [...schema.tables].sort((a, b) => a.name.localeCompare(b.name));
@@ -957,6 +958,8 @@ export function Sidebar() {
                           </div>
                         );
                       })
+                    ) : eventExpanded[conn.id] ? (
+                      <div className="muted" style={{ paddingLeft: INDENT.database, fontSize: 11, lineHeight: '24px' }}>{tr("点击连接加载数据库")}</div>
                     ) : (
                       <div className="loading-inline" style={{ paddingLeft: INDENT.database, height: 26 }}>
                         <span className="spinner" style={{ width: 10, height: 10, margin: 0, borderWidth: 1.5 }} /> {t('loading')}

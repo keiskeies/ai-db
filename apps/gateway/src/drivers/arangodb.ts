@@ -13,6 +13,7 @@ import type {
   WriteDocumentInput,
   WriteDocumentResult,
 } from './types';
+import { authorityHost } from './host';
 import { DbError } from './types';
 
 export interface ArangoOptions {
@@ -157,7 +158,7 @@ export class ArangoDriver implements Driver, StructuredQueryDriver, ObjectCreate
 
   private base(): string {
     if (/^https?:\/\//i.test(this.opts.host)) return this.opts.host.replace(/\/+$/, '');
-    return `${this.opts.ssl ? 'https' : 'http'}://${this.opts.host || '127.0.0.1'}:${this.opts.port || 8529}`;
+    return `${this.opts.ssl ? 'https' : 'http'}://${authorityHost(this.opts.host || '127.0.0.1')}:${this.opts.port || 8529}`;
   }
 
   private headers(): Record<string, string> {

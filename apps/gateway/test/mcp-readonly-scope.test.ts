@@ -65,6 +65,8 @@ test('mcp:readonly token can only reach the read-only MCP bridge', async () => {
     ['POST', '/agent/tools/update_plan', { body: JSON.stringify({ args: {} }) }, 403, 'TOOL_NOT_EXPOSED'],
     ['POST', '/agent/tools/backup_database', { body: JSON.stringify({ args: {} }) }, 403, 'TOOL_NOT_EXPOSED'],
     ['POST', '/agent/tools/create_table', { body: JSON.stringify({ args: {} }) }, 403, 'TOOL_NOT_EXPOSED'],
+    ['POST', '/agent/tools/create_connection', { body: JSON.stringify({ args: {} }) }, 403, 'TOOL_NOT_EXPOSED'],
+    ['POST', '/agent/tools/probe_engine', { body: JSON.stringify({ args: {} }) }, 403, 'TOOL_NOT_EXPOSED'],
     ['GET', '/connections', {}, 403, 'SCOPE_DENIED'],
     ['GET', '/settings', {}, 403, 'SCOPE_DENIED'],
     ['POST', '/query', { body: JSON.stringify({ connectionId: 'demo', sql: 'SELECT 1' }) }, 403, 'SCOPE_DENIED'],
@@ -89,7 +91,7 @@ test('mcp:readonly token cannot enumerate the full tool catalog', async () => {
   const res = await api('/agent/tools', {}, mcp.token);
   assert.equal(res.status, 200);
   const body = (await res.json()) as { tools: Array<{ name: string }> };
-  assert.ok(!body.tools.some((t) => ['mcp_call', 'mcp_list_servers', 'mcp_list_tools', 'memory_write', 'create_table'].includes(t.name)));
+  assert.ok(!body.tools.some((t) => ['mcp_call', 'mcp_list_servers', 'mcp_list_tools', 'memory_write', 'create_table', 'create_connection', 'probe_engine'].includes(t.name)));
 });
 
 test('revoking the device invalidates the mcp:readonly credential', async () => {

@@ -13,6 +13,7 @@ import type {
   WriteDocumentInput,
   WriteDocumentResult,
 } from './types';
+import { authorityHost } from './host';
 import { DbError } from './types';
 
 export interface WeaviateOptions {
@@ -93,7 +94,7 @@ export class WeaviateDriver implements VectorQueryDriver, DocumentWriteDriver, O
     if (this.opts.host.startsWith('http://') || this.opts.host.startsWith('https://')) {
       return this.opts.host.replace(/\/+$/, '');
     }
-    return `${this.opts.ssl ? 'https' : 'http'}://${this.opts.host || '127.0.0.1'}:${this.opts.port || 8080}`;
+    return `${this.opts.ssl ? 'https' : 'http'}://${authorityHost(this.opts.host || '127.0.0.1')}:${this.opts.port || 8080}`;
   }
 
   private headers(): Record<string, string> {

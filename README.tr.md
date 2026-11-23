@@ -29,7 +29,7 @@
   <a href="./README.uk.md">Українська</a>
 </p>
 
-AiDB Studio, ajanı ana giriş noktası olarak ele alır: bağlantılar, şema, SQL, veri, panolar, raporlar ve denetim aynı yürütme bağlamını paylaşır. 41 veritabanı motoru, 14 üretkenlik modülü ve 53 ajan aracı içerir; ajanın her eylemi görünür, denetlenebilir ve izlenebilirdir.
+AiDB Studio, ajanı ana giriş noktası olarak ele alır: bağlantılar, şema, SQL, veri, panolar, raporlar ve denetim aynı yürütme bağlamını paylaşır. 41 veritabanı motoru, 14 üretkenlik modülü ve 55 ajan aracı içerir; ajanın her eylemi görünür, denetlenebilir ve izlenebilirdir.
 
 <p align="center">
   <img src="docs/screenshots/showcase/agent-workflow.gif" width="420" alt="AiDB Studio Agent" />

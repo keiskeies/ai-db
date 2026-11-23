@@ -3656,5 +3656,17 @@
   "命令进度连接连续 {0} 秒没有任何响应，已断开。": "The command progress connection received no data for {0} seconds and was closed.",
   "Skill 进度连接连续 {0} 秒没有任何响应，已断开。": "The Skill progress connection received no data for {0} seconds and was closed.",
   "下载导出文件失败（{0}）": "Failed to download the exported file ({0})",
-  "导出结果缺少文件路径": "Export result is missing a file path"
+  "导出结果缺少文件路径": "Export result is missing a file path",
+  "创建连接 {0}（{1} {2}:{3}）": "Create connection {0} ({1} {2}:{3})",
+  "探测 {0}:{1} 的数据库类型": "Detect the database type of {0}:{1}",
+  "试探 {0}:{1} 的数据库类型": "Test the database type of {0}:{1}",
+  "{0} 可连接，识别为 {1}（{2}）": "{0} is reachable and identified as {1} ({2})",
+  "{0} 可连接，识别为 {1}": "{0} is reachable and identified as {1}",
+  "{0} 协议已识别为 {1}，但认证失败": "{0} was identified as {1}, but authentication failed",
+  "{0} 未能识别数据库类型": "Could not identify the database type at {0}",
+  "已创建连接 {0}（{1} {2}:{3}）": "Created connection {0} ({1} {2}:{3})",
+  "已创建连接 {0}（{1} {2}:{3}）；未保存密码，请在连接编辑器中补充": "Created connection {0} ({1} {2}:{3}); no password was saved. Add it in the connection editor.",
+  "已创建连接 {0}（{1} {2}:{3}）；按用户要求跳过了连通性测试": "Created connection {0} ({1} {2}:{3}); connectivity testing was skipped at the user's request.",
+  "连接已存在": "Connection already exists",
+  "点击连接加载数据库": "Click the connection to load databases"
 }

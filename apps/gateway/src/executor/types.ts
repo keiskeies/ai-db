@@ -1,4 +1,5 @@
 import type { AppSettings, ConnectionConfig, Engine, PipelineInfo, TableInfo, ToolCall, ToolResult } from '@aidb/core';
+import type { ConnectionProvisioner } from '../connectionProvisioner';
 import type { GatewayConfig } from '../config';
 import type { ConnectionManager } from '../manager';
 import type { Store } from '../store';
@@ -21,6 +22,7 @@ export interface ToolContext {
 export interface ExecutorServices {
   store: Store;
   manager: ConnectionManager;
+  connectionProvisioner: ConnectionProvisioner;
   config: GatewayConfig;
   getSettings: () => AppSettings;
   skills: SkillStore;

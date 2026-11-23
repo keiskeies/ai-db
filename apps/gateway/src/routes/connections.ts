@@ -13,7 +13,7 @@ import {
 } from './shared';
 
 export function createConnectionsRouter(deps: ApiDeps): Router {
-  const { store, manager, host } = deps;
+  const { store, manager, host, events } = deps;
   const router = Router();
 
   // ---------- connections ----------
@@ -46,6 +46,7 @@ export function createConnectionsRouter(deps: ApiDeps): Router {
         readonly: Boolean(body.readonly),
         note: str(body.note),
       });
+      events.emitConnectionsChanged({ type: 'connections_changed', connectionId: created.id, change: 'created', at: new Date().toISOString() });
       res.status(201).json({ connection: created });
     }),
   );
@@ -78,6 +79,7 @@ export function createConnectionsRouter(deps: ApiDeps): Router {
       });
       await manager.close(req.params.id);
       manager.invalidate(req.params.id);
+      events.emitConnectionsChanged({ type: 'connections_changed', connectionId: updated.id, change: 'updated', at: new Date().toISOString() });
       res.json({ connection: updated });
     }),
   );
@@ -108,6 +110,7 @@ export function createConnectionsRouter(deps: ApiDeps): Router {
     ah(async (req, res) => {
       await manager.close(req.params.id);
       store.deleteConnection(req.params.id);
+      events.emitConnectionsChanged({ type: 'connections_changed', connectionId: req.params.id, change: 'deleted', at: new Date().toISOString() });
       res.status(204).end();
     }),
   );

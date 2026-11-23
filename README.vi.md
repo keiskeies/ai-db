@@ -29,7 +29,7 @@
   <a href="./README.uk.md">Українська</a>
 </p>
 
-AiDB Studio lấy tác nhân làm cửa ngõ chính: kết nối, lược đồ, SQL, dữ liệu, bảng điều khiển, báo cáo và kiểm toán dùng chung một ngữ cảnh thực thi. Có 41 hệ quản trị cơ sở dữ liệu, 14 mô-đun năng suất và 53 công cụ cho tác nhân; mọi thao tác của tác nhân đều hiển thị, điều khiển được và kiểm toán được.
+AiDB Studio lấy tác nhân làm cửa ngõ chính: kết nối, lược đồ, SQL, dữ liệu, bảng điều khiển, báo cáo và kiểm toán dùng chung một ngữ cảnh thực thi. Có 41 hệ quản trị cơ sở dữ liệu, 14 mô-đun năng suất và 55 công cụ cho tác nhân; mọi thao tác của tác nhân đều hiển thị, điều khiển được và kiểm toán được.
 
 <p align="center">
   <img src="docs/screenshots/showcase/agent-workflow.gif" width="420" alt="AiDB Studio Agent" />

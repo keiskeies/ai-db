@@ -11,6 +11,7 @@ export interface DriverTestResult {
   version?: string;
   latencyMs: number;
   message?: string;
+  code?: string;
 }
 
 export interface Driver {

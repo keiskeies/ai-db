@@ -3631,5 +3631,7 @@
   "行 {0}：{1}": "Zeile {0}: {1}",
   "同义词（逗号分隔）": "Synonyme (kommagetrennt)",
   "拖拽排序": "Ziehen zum Sortieren",
-  "换一换": "Andere Vorschläge"
+  "换一换": "Andere Vorschläge",
+  "创建连接 {0}（{1} {2}:{3}）": "Verbindung erstellen {0} ({1} {2}:{3})",
+  "探测 {0}:{1} 的数据库类型": "Ermitteln Sie den Datenbanktyp von {0}:{1}"
 }

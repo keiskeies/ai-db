@@ -1,5 +1,5 @@
 import type { AgentPlanItem, Risk } from '../types';
-import { describeCall, evaluatePermission, resolveRisk, toolSignature } from './policy';
+import { describeCall, evaluatePermission, redactToolSecrets, resolveRisk, toolSignature } from './policy';
 import { getTool, providerTools } from './tools';
 import { rescueXmlToolCalls } from './xmlTools';
 import { PROVIDER_STALL_CODE } from './providers/common';
@@ -812,7 +812,11 @@ export class AgentRuntime {
       // 先取正文再提交：commitStepText 会清空 stepText（它现在负责把正文入账到 finalText）。
       const assistantText = stepText;
       commitStep();
-      messages.push({ role: 'assistant', content: assistantText, toolCalls: calls });
+      messages.push({
+        role: 'assistant',
+        content: assistantText,
+        toolCalls: calls.map((call) => ({ ...call, args: redactToolSecrets(call.args) as Record<string, unknown> })),
+      });
 
       let planUpdatedThisStep = false;
       for (const call of calls) {
@@ -828,7 +832,7 @@ export class AgentRuntime {
         const risk = resolveRisk(call, tool, input.context.connection?.engine);
         const described = describeCall(call);
         const summary = tool.summarize?.(call.args) ?? described.summary;
-        deps.emit({ type: 'tool_call', callId: call.id, tool: call.name, args: call.args, risk, summary });
+        deps.emit({ type: 'tool_call', callId: call.id, tool: call.name, args: redactToolSecrets(call.args) as Record<string, unknown>, risk, summary });
 
         if (call.name === 'update_plan') {
           const raw = Array.isArray(call.args.items) ? (call.args.items as Array<Record<string, unknown>>) : [];
@@ -870,14 +874,14 @@ export class AgentRuntime {
           deps.emit({
             type: 'approval_required',
             approvalId,
-            call: { tool: call.name, args: call.args, risk, summary: described.summary, sql: described.sql },
+            call: { tool: call.name, args: redactToolSecrets(call.args) as Record<string, unknown>, risk, summary: described.summary, sql: described.sql },
             expiresIn: 5 * 60 * 1000,
           });
           let decision: ApprovalDecision;
           try {
             decision = await deps.requestApproval({
               id: approvalId,
-              call,
+              call: { ...call, args: redactToolSecrets(call.args) as Record<string, unknown> },
               risk,
               summary: described.summary,
               sql: described.sql,

@@ -3631,5 +3631,7 @@
   "行 {0}：{1}": "Riga {0}: {1}",
   "同义词（逗号分隔）": "Sinonimi (separati da virgole)",
   "拖拽排序": "Trascina per riordinare",
-  "换一换": "Cambia"
+  "换一换": "Cambia",
+  "创建连接 {0}（{1} {2}:{3}）": "Crea connessione {0} ({1} {2}:{3})",
+  "探测 {0}:{1} 的数据库类型": "Rileva il tipo di database di {0}:{1}"
 }

@@ -29,7 +29,7 @@
   <a href="./README.uk.md">Українська</a>
 </p>
 
-AiDB Studio macht den Agenten zum primären Einstiegspunkt: Verbindungen, Schema, SQL, Daten, Dashboards, Berichte und Audit teilen einen ausführbaren Kontext. Enthalten sind 41 Datenbank-Engines, 14 Produktivitätsmodule und 53 Agent-Werkzeuge — jede Aktion des Agenten ist sichtbar, steuerbar und prüfbar.
+AiDB Studio macht den Agenten zum primären Einstiegspunkt: Verbindungen, Schema, SQL, Daten, Dashboards, Berichte und Audit teilen einen ausführbaren Kontext. Enthalten sind 41 Datenbank-Engines, 14 Produktivitätsmodule und 55 Agent-Werkzeuge — jede Aktion des Agenten ist sichtbar, steuerbar und prüfbar.
 
 <p align="center">
   <img src="docs/screenshots/showcase/agent-workflow.gif" width="420" alt="AiDB Studio Agent" />

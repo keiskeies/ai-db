@@ -3631,5 +3631,7 @@
   "行 {0}：{1}": "Linha {0}: {1}",
   "同义词（逗号分隔）": "Sinônimos (separados por vírgula)",
   "拖拽排序": "Arrastar para reordenar",
-  "换一换": "Trocar"
+  "换一换": "Trocar",
+  "创建连接 {0}（{1} {2}:{3}）": "Criar conexão {0} ({1} {2}:{3})",
+  "探测 {0}:{1} 的数据库类型": "Detecte o tipo de banco de dados {0}:{1}"
 }

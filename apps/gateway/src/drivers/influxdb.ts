@@ -1,5 +1,6 @@
 import type { ColumnInfo, Engine, QueryResult, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions } from './types';
+import { authorityHost } from './host';
 import { DbError } from './types';
 
 export interface InfluxdbOptions {
@@ -84,7 +85,7 @@ export class InfluxdbDriver implements Driver {
 
   private base(): string {
     if (/^https?:\/\//i.test(this.opts.host)) return this.opts.host.replace(/\/+$/, '');
-    return `${this.opts.ssl ? 'https' : 'http'}://${this.opts.host || '127.0.0.1'}:${this.opts.port || 8086}`;
+    return `${this.opts.ssl ? 'https' : 'http'}://${authorityHost(this.opts.host || '127.0.0.1')}:${this.opts.port || 8086}`;
   }
 
   private headers(basic = false): Record<string, string> {

@@ -39,7 +39,7 @@
 
 <p align="center">
   <img alt="41 database engines" src="https://img.shields.io/badge/Engines-41-45C8C3?style=flat-square" />
-  <img alt="53 agent tools" src="https://img.shields.io/badge/Agent%20Tools-53-45C8C3?style=flat-square" />
+  <img alt="55 agent tools" src="https://img.shields.io/badge/Agent%20Tools-55-45C8C3?style=flat-square" />
   <img alt="macOS, Windows, Linux" src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-0B0E0D?style=flat-square" />
   <img alt="MIT license" src="https://img.shields.io/badge/License-MIT-E0AF63?style=flat-square" />
   <a href="https://github.com/keiskeies/ai-db/releases/tag/v0.0.10"><img alt="Release v0.0.8" src="https://img.shields.io/badge/Release-v0.0.10-45C8C3?style=flat-square&logo=github" /></a>
@@ -48,7 +48,7 @@
 
 AiDB is not a chat box bolted onto a database client. It treats the Agent as the primary entry point, unifying connections, schema, SQL, data, dashboards, reports, and audit into one executable context. You start with a business goal; the Agent investigates, executes, verifies, and delivers using the same tools a human would.
 
-From 41 database engines to 14 productivity modules, from 53 tools to 6 command workflows, every capability follows one principle: **what the Agent can do must be visible, controllable, and auditable; what it cannot do, it must never pretend to do.**
+From 41 database engines to 14 productivity modules, from 55 tools to 6 command workflows, every capability follows one principle: **what the Agent can do must be visible, controllable, and auditable; what it cannot do, it must never pretend to do.**
 
 The desktop app is built with Electron + React and also runs in the browser. The mobile app uses Expo / React Native and shares connections, sessions, memory, and settings with the desktop through the Bridge. Windows, macOS, Linux, Android, iOS, and Web are supported.
 
@@ -89,7 +89,7 @@ AiDB puts the Agent on the main path of the task, not in a sidebar. Here, the Ag
 | Layer | What the Agent gets |
 |---|---|
 | Intent | Natural language, `@table`, images, slash commands, and command workflows |
-| Execution | 53 tools covering queries, writes, DDL, transactions, charts, health audits, comparison, migration, and data flows |
+| Execution | 55 tools covering queries, writes, DDL, transactions, charts, health audits, comparison, migration, and data flows |
 | Context | Real schema, business aliases, glossary, example SQL, long-term memory, and candidate-table retrieval for large databases |
 | Control | Read-only / ask / auto / full-auto, approvals, backups, audit, and execution traces |
 | Delivery | Charts, PDF, dashboard cards, reports, Excel / PPTX, and rerunnable artifacts |
@@ -97,7 +97,7 @@ AiDB puts the Agent on the main path of the task, not in a sidebar. Here, the Ag
 
 ## Capabilities at a glance
 
-- **53 Agent tools**: queries, schema changes, data writes, charts, health audits, comparison, migration, data flows, Skills, and MCP.
+- **55 Agent tools**: queries, schema changes, data writes, charts, health audits, comparison, migration, data flows, Skills, and MCP.
 - **6 command workflows**: `/report`, `/compare`, `/diff`, `/recon`, `/fix`, `/ask`, plus `/init` for a database handoff document.
 - **41 database engines**: relational, document, key-value, graph, vector, search, wide-column, and time-series.
 - **14 toolbox modules**: reports, data flow, search, query builder, schema sync, data comparison, transfer, generation, monitoring, automation, users, dictionary, advanced objects, and Agent context.
@@ -192,11 +192,11 @@ The Agent's capability is not a claim of "natural language support." It is defin
 - **Interrupt**: Stop the current turn; output already produced is kept, and the running tool is marked aborted after it finishes.
 - **Honest stops**: a turn always states why it stopped — user stop, model limit, tool error, or nothing left to do — instead of pretending it is still running; "Continue" survives connection changes.
 
-### Toolset: 53 executable actions
+### Toolset: 55 executable actions
 
 | Group | Tools |
 |---|---|
-| Connections and schema | `list_connections`, `inspect_schema`, `search_objects`, `get_query_history` |
+| Connections and schema | `list_connections`, `probe_engine`, `create_connection`, `inspect_schema`, `search_objects`, `get_query_history` |
 | SQL execution and transactions | `run_sql`, `explain_sql`, `sample_rows`, `profile_column`, `begin_transaction`, `commit_transaction`, `rollback_transaction` |
 | Multi-dialect statements and retrieval | `run_mql`, `run_redis`, `run_cypher`, `run_cql`, `run_aql`, `search_index`, `vector_search` |
 | Collections and documents | `create_collection`, `delete_collection`, `upsert_document`, `import_documents`, `delete_documents`, `write_line_protocol` |
@@ -209,7 +209,7 @@ The Agent's capability is not a claim of "natural language support." It is defin
 | Skills | `skill_list`, `skill_read`, `skill_write`, `skill_run`, `skill_list_files`, `skill_worker_run` |
 | MCP | `mcp_list_servers`, `mcp_list_tools`, `mcp_call` |
 
-Tool inputs use JSON Schema (`additionalProperties: false`), with risk levels ordered `read < write < ddl < destructive`. Command-private tools (such as `compose_report` and `submit_fix_plan`) are only available inside their command and are not counted among the 53 global tools.
+Tool inputs use JSON Schema (`additionalProperties: false`), with risk levels ordered `read < write < ddl < destructive`. Command-private tools (such as `compose_report` and `submit_fix_plan`) are only available inside their command and are not counted among the 55 global tools.
 
 ### Capability catalog: making boundaries explicit
 
@@ -585,7 +585,7 @@ The Agent's value extends beyond the database. Notifications, Skills, MCP, and w
   ```
 
   Paired credentials are hard-scoped to a 21-tool read-only allowlist (`run_sql` only passes SELECT) and can be revoked any time under Settings → Devices. Full usage: [`packages/aidb-mcp/README.md`](packages/aidb-mcp/README.md).
-- **Tool catalog**: Settings → MCP and Tools lets you search and browse all 53 Agent tools by group, including their risk constraints.
+- **Tool catalog**: Settings → MCP and Tools lets you search and browse all 55 Agent tools by group, including their risk constraints.
 
 ### Web search
 

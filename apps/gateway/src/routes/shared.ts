@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import { classifySql, engineMeta, engineUsesSchema, isSqlEngine, type ConnectionConfig } from '@aidb/core';
+import type { GatewayEvents } from '../events';
 import type { GatewayConfig } from '../config';
 import type { ConnectionManager } from '../manager';
 import type { Store } from '../store';
@@ -33,6 +34,7 @@ export interface ApiDeps {
   /** MCP 配对专用码池，与移动端 pairCodes 完全隔离，防止跨端点铸造凭据。 */
   mcpPairCodes: Map<string, { expiresAt: number }>;
   scheduler: JobScheduler;
+  events: GatewayEvents;
   commands: CommandRunner;
   startedAt: number;
 }

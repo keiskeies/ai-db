@@ -49,7 +49,7 @@ import { withQueryTimeout } from './drivers/timeout';
 import { GatewayEvents, type SchemaChangeCause } from './events';
 import { normalizeMql } from './drivers/mongodb';
 import type { CreateRedisKeyInput, RedisKeyDriver } from './drivers/types';
-import { supportsCollectionIndexes, supportsDocumentRead, supportsDocumentWrite, supportsFieldAdd, supportsKeyDetail, supportsLineProtocol, supportsObjectCreate, supportsStructuredQuery, supportsTransaction, supportsVectorSearch, type TransactionDriver } from './drivers/types';
+import { supportsCollectionIndexes, supportsDocumentRead, supportsDocumentWrite, supportsFieldAdd, supportsKeyDetail, supportsLineProtocol, supportsObjectCreate, supportsStructuredQuery, supportsTransaction, supportsVectorSearch, type DriverTestResult, type TransactionDriver } from './drivers/types';
 import { embedText } from './embeddings';
 import type { Store } from './store';
 
@@ -196,7 +196,7 @@ export class ConnectionManager {
     return this.testConfig(conn, this.store.getConnectionSecret(connectionId));
   }
 
-  async testConfig(conn: ConnectionConfig, secret: ConnectionSecret): Promise<{ ok: boolean; version?: string; latencyMs: number; message?: string }> {
+  async testConfig(conn: ConnectionConfig, secret: ConnectionSecret): Promise<DriverTestResult> {
     const started = Date.now();
     let bundle: Awaited<ReturnType<typeof createDriver>> | undefined;
     try {
@@ -204,7 +204,7 @@ export class ConnectionManager {
       const result = await bundle.driver.test();
       return result;
     } catch (err: any) {
-      return { ok: false, latencyMs: Date.now() - started, message: err?.message ?? '连接失败' };
+      return { ok: false, latencyMs: Date.now() - started, message: err?.message ?? '连接失败', code: typeof err?.code === 'string' ? err.code : undefined };
     } finally {
       await bundle?.close().catch(() => undefined);
     }

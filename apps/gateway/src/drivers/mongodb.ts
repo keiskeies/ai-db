@@ -16,6 +16,7 @@ import type {
   WriteDocumentInput,
   WriteDocumentResult,
 } from './types';
+import { authorityHost } from './host';
 import { DbError } from './types';
 
 export interface MongoOptions {
@@ -245,7 +246,12 @@ export class MongoDriver implements StructuredQueryDriver, DocumentWriteDriver, 
       .split(',')
       .map((item) => item.trim())
       .filter(Boolean)
-      .map((item) => (item.includes(':') ? item : `${item}:${this.opts.port || 27017}`))
+      .map((item) => {
+        const host = item.trim();
+        if (host.startsWith('[')) return host.includes(']:') ? host : `${host}]:${this.opts.port || 27017}`;
+        if (authorityHost(host) !== host) return `[${host}]:${this.opts.port || 27017}`;
+        return host.includes(':') ? host : `${host}:${this.opts.port || 27017}`;
+      })
       .join(',');
     return `mongodb://${auth}${hosts}${database}${query ? `?${query}` : ''}`;
   }

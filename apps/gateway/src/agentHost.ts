@@ -12,6 +12,7 @@ import {
   getTool,
   historyTokenBudget,
   providerTools,
+  redactToolSecrets,
   maxOutputTokensOf,
   modelResultCharBudget,
   midContextTokenBudget,
@@ -117,6 +118,7 @@ export function capToolResult(result: ToolResult, maxChars = TOOL_RESULT_STORE_C
 
 /** 工具入参同样可能巨大（write_file 的正文等）：只裁超长的字符串值，保留参数形状。 */
 export function capToolArgs(args: unknown, maxChars = TOOL_RESULT_STORE_CHARS): unknown {
+  args = redactToolSecrets(args);
   if (args === null || args === undefined || typeof args !== 'object' || Array.isArray(args)) return args;
   const text = JSON.stringify(args);
   if (text.length <= maxChars) return args;
@@ -404,10 +406,12 @@ export class AgentHost {
     clearTimeout(pending.timer);
     this.approvals.delete(id);
     const session = this.opts.store.getSession(pending.sessionId);
-    const connId =
-      typeof pending.payload.call.args.connectionId === 'string'
+    const connectionScoped = pending.payload.call.name !== 'create_connection';
+    const connId = connectionScoped
+      ? typeof pending.payload.call.args.connectionId === 'string'
         ? pending.payload.call.args.connectionId
-        : session?.connectionId;
+        : session?.connectionId
+      : undefined;
     this.opts.store.addAudit({
       actor: 'agent',
       connectionId: connId,
@@ -416,7 +420,12 @@ export class AgentHost {
       risk: pending.payload.risk,
       approval: `${decision}:${scope}`,
       status: decision === 'allow' ? 'ok' : 'denied',
-      meta: { approvalId: id, sessionId: pending.sessionId, scope },
+      meta: {
+        approvalId: id,
+        sessionId: pending.sessionId,
+        scope,
+        ...(!connectionScoped ? { target: { host: pending.payload.call.args.host, port: pending.payload.call.args.port, engine: pending.payload.call.args.engine, username: pending.payload.call.args.username } } : {}),
+      },
     });
     pending.resolve({ decision, scope });
     return true;

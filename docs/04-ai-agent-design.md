@@ -205,9 +205,9 @@ for (step = 0; step < maxSteps; step++) {
 - `audit_database` 在入口过滤禁用表（实测 116 表库禁用 1 张后 `tablesChecked=115`），
   聚合结果再做一次递归脱敏，防止 findings/结果对象带出禁用表名。
 
-## 4. 工具目录（53 个）
+## 4. 工具目录（55 个）
 
-> 命令化的任务入口（`/report`、`/compare`、`/diff`、`/recon`、`/fix`）见 [命令化 Agent 工作流设计与开发计划](./11-command-workflows.md)。命令私有工具（如 `compose_report`）只在该命令的 Agent 步骤内可用，不计入下表的 53 个全局工具。
+> 命令化的任务入口（`/report`、`/compare`、`/diff`、`/recon`、`/fix`）见 [命令化 Agent 工作流设计与开发计划](./11-command-workflows.md)。命令私有工具（如 `compose_report`）只在该命令的 Agent 步骤内可用，不计入下表的 55 个全局工具。
 
 ### 4.0 能力目录（Capabilities）
 
@@ -223,58 +223,60 @@ for (step = 0; step < maxSteps; step++) {
 | # | 工具 | 风险 | 作用 | 关键参数 |
 |---|---|---|---|---|
 | 1 | `list_connections` | read | 列出可用连接与库 | `{ includeOffline?: boolean }` |
-| 2 | `inspect_schema` | read | 获取库/表结构（列、索引、外键、注释） | `{ connectionId, database?, tables?: string[] }` |
-| 3 | `search_objects` | read | 按名称/注释搜索表、列 | `{ connectionId, query, limit? }` |
-| 4 | `run_sql` | 动态* | 执行 SQL（SELECT/DML/DDL，按语句分类） | `{ connectionId, database?, sql, maxRows?, dryRun? }` |
-| 5 | `explain_sql` | read | 执行计划 | `{ connectionId, database?, sql }` |
-| 6 | `sample_rows` | read | 表样例数据（脱敏可选） | `{ connectionId, database?, table, limit? }` |
-| 7 | `profile_column` | read | 列画像（空值率、基数、Top 值、min/max） | `{ connectionId, table, column }` |
-| 8 | `create_table` | ddl | 结构化建表（列/索引定义） | `{ connectionId, database?, table, columns[], indexes? }` |
-| 9 | `alter_table` | 动态* | 增删改列、重命名、改类型（风险按操作动态判定：`add_column` 为 ddl、`drop_column` 为 destructive）；Elasticsearch/OpenSearch（mapping）与 Weaviate（property）只支持 add_column | `{ connectionId, table, operations[] }` |
-| 10 | `drop_object` | destructive | 删除表/视图/索引 | `{ connectionId, kind, name, cascade? }` |
-| 11 | `manage_index` | ddl | 创建/删除索引（SQL 表；MongoDB 集合支持 unique / sparse / TTL，`_id_` 拒删；Qdrant 建 payload 索引，单字段 + `type`） | `{ connectionId, table, action, index, name?, sparse?, expireAfterSeconds?, type? }` |
-| 12 | `export_result` | write | 导出查询或整表到文件 | `{ connectionId, sql?, table?, format, path? , limit? }` |
-| 13 | `import_csv` | write | CSV 导入（映射 + 事务） | `{ connectionId, table, path, mapping[], hasHeader, delimiter }` |
-| 14 | `backup_database` | read | 备份（SQL dump / SQLite 快照） | `{ connectionId, database?, label? }` |
-| 15 | `get_query_history` | read | 最近查询历史 | `{ connectionId?, limit?, search? }` |
-| 16 | `update_plan` | read | 维护任务计划清单 | `{ items: [{text, status}] }` |
-| 17 | `memory_write` | read | 写入长期记忆 | `{ kind, title, content, scope?, tags?, importance? }` |
-| 18 | `memory_search` | read | 检索记忆 | `{ query, limit?, scope? }` |
-| 19 | `audit_database` | read | 数据库体检：缺主键、外键缺索引、重复索引、空表，返回可执行修复 SQL | `{ connectionId, database? }` |
-| 20 | `check_data_quality` | read | 表级数据质量：空值率、空串、区分度、重复主键 | `{ connectionId, table, columns? }` |
-| 21 | `render_chart` | read | 执行 SQL 并渲染柱状/堆叠/折线/饼/散点/热力/雷达；`ys` 附加最多 4 个数值度量，热力用 `value` 度量、散点用 `label` 点标签；类型选择规则写在工具描述里 | `{ connectionId, sql, type, title?, x?, y?, ys?, value?, label?, stacked? }` |
-| 22 | `analyze_chart` | read | 执行聚合 SQL，在 Bridge 侧算好统计量（合计/均值/极值/TopN 占比/环比），模型只负责解读，不得自行重算 | `{ connectionId, sql, x?, y?, topN? }` |
-| 23 | `forecast_chart` | read | 时间序列外推：最小二乘或移动平均（按 \|r\| 自动选择），返回方法、斜率/窗口、拟合度、±1.28σ 粗略区间与原始序列；样本 <4 直接拒绝 | `{ connectionId, sql, x?, y?, periods?, method? }` |
-| 24 | `generate_data` | write | 按列语义/类型 + 外键生成并插入测试数据 | `{ connectionId, table, rows?, dryRun? }` |
-| 25 | `run_mql` | 动态* | MongoDB 结构化查询（find/aggregate/count/distinct），不接受 SQL | `{ connectionId, database?, collection, op, filter?, pipeline?, projection?, sort?, limit?, skip?, field?, maxRows? }` |
-| 26 | `run_redis` | 动态* | 执行单条 Redis 命令；SCAN 优先于 KEYS | `{ connectionId, database?, command, args?, maxRows? }` |
-| 27 | `run_cypher` | 动态* | 执行 Neo4j Cypher；支持 `$params`，只读连接拒绝写子句 | `{ connectionId, database?, query, params?, maxRows? }` |
-| 28 | `vector_search` | read | 向量检索：pgvector 指定 field，Qdrant/Milvus/Weaviate 可选命名向量；文本走 Embedding | `{ connectionId, database?, collection, field?, vector?, text?, topK?, filter? }` |
-| 29 | `search_index` | read | Elasticsearch/OpenSearch `_search` JSON DSL | `{ connectionId, database?, index, query?, body?, size? }` |
-| 30 | `run_cql` | 动态* | Cassandra/ScyllaDB CQL，支持 `?` 参数 | `{ connectionId, database?, query, params?, maxRows? }` |
-| 31 | `run_aql` | 动态* | ArangoDB AQL；支持 `@bindVar` 与 `@@collection`，只读连接拒绝写操作 | `{ connectionId, database?, query, params?, maxRows? }` |
-| 32 | `upsert_document` | write | 写入 MongoDB 文档、ArangoDB 文档（`_key` 相同则覆盖）、Qdrant/Weaviate/Milvus 向量点或 Elasticsearch/OpenSearch 文档（`document` 单条或 `documents` 批量，ID 写在文档里） | `{ connectionId, database?, collection, document?, documents? }` |
-| 33 | `write_line_protocol` | write | 按 InfluxDB 行协议写入时序样本（v3 的 SQL 只读，写只能走 `/api/v3/write_lp`）；`lines` 可以是多行字符串或数组，时间戳用纳秒；仅 InfluxDB 可用 | `{ connectionId, database?, lines }` |
-| 34 | `begin_transaction` | write | 在关系型连接上开启跨语句事务；之后同一连接上的 `run_sql` 都并入该事务，直到提交或回滚。事务结束前会占用一条数据库连接 | `{ connectionId, database? }` |
-| 35 | `commit_transaction` | write | 提交本会话的事务；没有进行中的事务时报错 | `{ connectionId }` |
-| 36 | `rollback_transaction` | destructive | 回滚本会话事务中已写入的所有内容；没有进行中的事务时报错 | `{ connectionId }` |
-| 37 | `delete_documents` | destructive | 按明确 id 列表删除 MongoDB 文档 / ArangoDB 文档（`_key`） / 向量点 / 搜索文档，删除前必须先用查询确认范围 | `{ connectionId, database?, collection, ids[] }` |
-| 38 | `import_documents` | write | CSV 批量导入 MongoDB 文档 / ArangoDB 文档 / 向量点 / 搜索文档（≤5000 行，列名即字段，id/vector 列单独指定） | `{ connectionId, database?, collection, csv?/path?, hasHeader?, delimiter?, idColumn?, vectorColumn? }` |
-| 39 | `create_collection` | ddl | 创建向量集合（Qdrant 需维度/距离）、搜索索引 / Weaviate class（字段列表）、MongoDB 集合或 ArangoDB 文档/边集合（`edge=true`）；Milvus 明确拒绝 | `{ connectionId, database?, name, dimension?, distance?, fields?[], edge? }` |
-| 40 | `delete_collection` | destructive | 删除 Qdrant 集合 / ES·OpenSearch 索引 / Weaviate class / MongoDB 集合 / ArangoDB 集合；`confirm` 必须与 `name` 完全一致 | `{ connectionId, database?, name, confirm }` |
-| 41 | `schema_diff` | read | 两个连接的结构差异、破坏性标记与目标方言 DDL | `{ sourceConnectionId, targetConnectionId, sourceDatabase?, targetDatabase?, tables?, includeDrops? }` |
-| 42 | `recon_data` | read | 两个源的键级 / 字段级对账（SQL 表、Redis 键空间、MongoDB/Elasticsearch 文档） | `{ left, right, fieldMap?, level?, baseSide?, maxKeys? }` |
-| 43 | `transfer_data` | write | 跨连接复制表结构与数据，目标缺失表自动创建；返回 `meta.state`（ok/partial/failed）与 `meta.progress`（逐表进度快照） | `{ sourceConnectionId, targetConnectionId, tables?, mode?, createMissing?, limit? }` |
-| 44 | `mcp_list_tools` | read | 列出已配置 MCP Server 的工具 | `{ server }` |
-| 45 | `mcp_list_servers` | read | 列出已配置 MCP Server（含内置与外部）、id、启停状态、目录/域名与内置工具名；调用前先看这里，禁止猜服务器名 | `{ includeDisabled? }` |
-| 46 | `mcp_call` | 动态* | 调用 MCP Server 工具；内置只读工具直接执行，写工具与外部 Server 需审批 | `{ server, tool, arguments? }` |
-| 47 | `skill_list` | read | 列出已安装的 Skill（SKILL.md 目录包） | `{ includeDisabled? }` |
-| 48 | `skill_read` | read | 读取 Skill 内的文本文件（SKILL.md / references / workflows） | `{ skill, path?, maxChars? }` |
-| 49 | `skill_write` | write | 写入 Skill 运行 workspace / output | `{ skill, runId?, area?, path, content }` |
-| 50 | `skill_run` | write | 按 aidb.skill.json 声明运行 python/node 入口 | `{ skill, entrypoint, runId? }` |
-| 51 | `skill_list_files` | read | 列出 Skill 运行的 workspace/input/output | `{ runId }` |
-| 52 | `skill_worker_run` | write | 在独立 Skill Worker 中运行技能，等待完成后返回最终答复与产物 | `{ skill, prompt }`（等待无上限，见 §2「回合没有截止时间」） |
-| 53 | `manage_pipeline` | write | 数据流处理的增删改查与运行：`list` / `validate` / `create` / `update` / `run` / `delete`；`run` 支持 `dryRun` 只渲染目标端 SQL/请求体不写库；返回逐步状态与行数，不含样本行 | `{ action, id?, name?, description?, connectionId?, database?, spec?, params?, dryRun? }` |
+| 2 | `probe_engine` | read | 探测数据库端点、识别引擎并验证连通性，可复用已保存凭据，不持久化连接 | `{ host, port, username, database?, ssl? }` |
+| 3 | `create_connection` | write | 创建并保存数据库连接，可复用凭据引用并按需跳过探测；不接受密码字段 | `{ name, engine, host, port, username, database?, passwordRef?, useSavedCredential?, skipProbe? }` |
+| 4 | `inspect_schema` | read | 获取库/表结构（列、索引、外键、注释） | `{ connectionId, database?, tables?: string[] }` |
+| 5 | `search_objects` | read | 按名称/注释搜索表、列 | `{ connectionId, query, limit? }` |
+| 6 | `run_sql` | 动态* | 执行 SQL（SELECT/DML/DDL，按语句分类） | `{ connectionId, database?, sql, maxRows?, dryRun? }` |
+| 7 | `explain_sql` | read | 执行计划 | `{ connectionId, database?, sql }` |
+| 8 | `sample_rows` | read | 表样例数据（脱敏可选） | `{ connectionId, database?, table, limit? }` |
+| 9 | `profile_column` | read | 列画像（空值率、基数、Top 值、min/max） | `{ connectionId, table, column }` |
+| 10 | `create_table` | ddl | 结构化建表（列/索引定义） | `{ connectionId, database?, table, columns[], indexes? }` |
+| 11 | `alter_table` | 动态* | 增删改列、重命名、改类型（风险按操作动态判定：`add_column` 为 ddl、`drop_column` 为 destructive）；Elasticsearch/OpenSearch（mapping）与 Weaviate（property）只支持 add_column | `{ connectionId, table, operations[] }` |
+| 12 | `drop_object` | destructive | 删除表/视图/索引 | `{ connectionId, kind, name, cascade? }` |
+| 13 | `manage_index` | ddl | 创建/删除索引（SQL 表；MongoDB 集合支持 unique / sparse / TTL，`_id_` 拒删；Qdrant 建 payload 索引，单字段 + `type`） | `{ connectionId, table, action, index, name?, sparse?, expireAfterSeconds?, type? }` |
+| 14 | `export_result` | write | 导出查询或整表到文件 | `{ connectionId, sql?, table?, format, path? , limit? }` |
+| 15 | `import_csv` | write | CSV 导入（映射 + 事务） | `{ connectionId, table, path, mapping[], hasHeader, delimiter }` |
+| 16 | `backup_database` | read | 备份（SQL dump / SQLite 快照） | `{ connectionId, database?, label? }` |
+| 17 | `get_query_history` | read | 最近查询历史 | `{ connectionId?, limit?, search? }` |
+| 18 | `update_plan` | read | 维护任务计划清单 | `{ items: [{text, status}] }` |
+| 19 | `memory_write` | read | 写入长期记忆 | `{ kind, title, content, scope?, tags?, importance? }` |
+| 20 | `memory_search` | read | 检索记忆 | `{ query, limit?, scope? }` |
+| 21 | `audit_database` | read | 数据库体检：缺主键、外键缺索引、重复索引、空表，返回可执行修复 SQL | `{ connectionId, database? }` |
+| 22 | `check_data_quality` | read | 表级数据质量：空值率、空串、区分度、重复主键 | `{ connectionId, table, columns? }` |
+| 23 | `render_chart` | read | 执行 SQL 并渲染柱状/堆叠/折线/饼/散点/热力/雷达；`ys` 附加最多 4 个数值度量，热力用 `value` 度量、散点用 `label` 点标签；类型选择规则写在工具描述里 | `{ connectionId, sql, type, title?, x?, y?, ys?, value?, label?, stacked? }` |
+| 24 | `analyze_chart` | read | 执行聚合 SQL，在 Bridge 侧算好统计量（合计/均值/极值/TopN 占比/环比），模型只负责解读，不得自行重算 | `{ connectionId, sql, x?, y?, topN? }` |
+| 25 | `forecast_chart` | read | 时间序列外推：最小二乘或移动平均（按 \|r\| 自动选择），返回方法、斜率/窗口、拟合度、±1.28σ 粗略区间与原始序列；样本 <4 直接拒绝 | `{ connectionId, sql, x?, y?, periods?, method? }` |
+| 26 | `generate_data` | write | 按列语义/类型 + 外键生成并插入测试数据 | `{ connectionId, table, rows?, dryRun? }` |
+| 27 | `run_mql` | 动态* | MongoDB 结构化查询（find/aggregate/count/distinct），不接受 SQL | `{ connectionId, database?, collection, op, filter?, pipeline?, projection?, sort?, limit?, skip?, field?, maxRows? }` |
+| 28 | `run_redis` | 动态* | 执行单条 Redis 命令；SCAN 优先于 KEYS | `{ connectionId, database?, command, args?, maxRows? }` |
+| 29 | `run_cypher` | 动态* | 执行 Neo4j Cypher；支持 `$params`，只读连接拒绝写子句 | `{ connectionId, database?, query, params?, maxRows? }` |
+| 30 | `vector_search` | read | 向量检索：pgvector 指定 field，Qdrant/Milvus/Weaviate 可选命名向量；文本走 Embedding | `{ connectionId, database?, collection, field?, vector?, text?, topK?, filter? }` |
+| 31 | `search_index` | read | Elasticsearch/OpenSearch `_search` JSON DSL | `{ connectionId, database?, index, query?, body?, size? }` |
+| 32 | `run_cql` | 动态* | Cassandra/ScyllaDB CQL，支持 `?` 参数 | `{ connectionId, database?, query, params?, maxRows? }` |
+| 33 | `run_aql` | 动态* | ArangoDB AQL；支持 `@bindVar` 与 `@@collection`，只读连接拒绝写操作 | `{ connectionId, database?, query, params?, maxRows? }` |
+| 34 | `upsert_document` | write | 写入 MongoDB 文档、ArangoDB 文档（`_key` 相同则覆盖）、Qdrant/Weaviate/Milvus 向量点或 Elasticsearch/OpenSearch 文档（`document` 单条或 `documents` 批量，ID 写在文档里） | `{ connectionId, database?, collection, document?, documents? }` |
+| 35 | `write_line_protocol` | write | 按 InfluxDB 行协议写入时序样本（v3 的 SQL 只读，写只能走 `/api/v3/write_lp`）；`lines` 可以是多行字符串或数组，时间戳用纳秒；仅 InfluxDB 可用 | `{ connectionId, database?, lines }` |
+| 36 | `begin_transaction` | write | 在关系型连接上开启跨语句事务；之后同一连接上的 `run_sql` 都并入该事务，直到提交或回滚。事务结束前会占用一条数据库连接 | `{ connectionId, database? }` |
+| 37 | `commit_transaction` | write | 提交本会话的事务；没有进行中的事务时报错 | `{ connectionId }` |
+| 38 | `rollback_transaction` | destructive | 回滚本会话事务中已写入的所有内容；没有进行中的事务时报错 | `{ connectionId }` |
+| 39 | `delete_documents` | destructive | 按明确 id 列表删除 MongoDB 文档 / ArangoDB 文档（`_key`） / 向量点 / 搜索文档，删除前必须先用查询确认范围 | `{ connectionId, database?, collection, ids[] }` |
+| 40 | `import_documents` | write | CSV 批量导入 MongoDB 文档 / ArangoDB 文档 / 向量点 / 搜索文档（≤5000 行，列名即字段，id/vector 列单独指定） | `{ connectionId, database?, collection, csv?/path?, hasHeader?, delimiter?, idColumn?, vectorColumn? }` |
+| 41 | `create_collection` | ddl | 创建向量集合（Qdrant 需维度/距离）、搜索索引 / Weaviate class（字段列表）、MongoDB 集合或 ArangoDB 文档/边集合（`edge=true`）；Milvus 明确拒绝 | `{ connectionId, database?, name, dimension?, distance?, fields?[], edge? }` |
+| 42 | `delete_collection` | destructive | 删除 Qdrant 集合 / ES·OpenSearch 索引 / Weaviate class / MongoDB 集合 / ArangoDB 集合；`confirm` 必须与 `name` 完全一致 | `{ connectionId, database?, name, confirm }` |
+| 43 | `schema_diff` | read | 两个连接的结构差异、破坏性标记与目标方言 DDL | `{ sourceConnectionId, targetConnectionId, sourceDatabase?, targetDatabase?, tables?, includeDrops? }` |
+| 44 | `recon_data` | read | 两个源的键级 / 字段级对账（SQL 表、Redis 键空间、MongoDB/Elasticsearch 文档） | `{ left, right, fieldMap?, level?, baseSide?, maxKeys? }` |
+| 45 | `transfer_data` | write | 跨连接复制表结构与数据，目标缺失表自动创建；返回 `meta.state`（ok/partial/failed）与 `meta.progress`（逐表进度快照） | `{ sourceConnectionId, targetConnectionId, tables?, mode?, createMissing?, limit? }` |
+| 46 | `mcp_list_tools` | read | 列出已配置 MCP Server 的工具 | `{ server }` |
+| 47 | `mcp_list_servers` | read | 列出已配置 MCP Server（含内置与外部）、id、启停状态、目录/域名与内置工具名；调用前先看这里，禁止猜服务器名 | `{ includeDisabled? }` |
+| 48 | `mcp_call` | 动态* | 调用 MCP Server 工具；内置只读工具直接执行，写工具与外部 Server 需审批 | `{ server, tool, arguments? }` |
+| 49 | `skill_list` | read | 列出已安装的 Skill（SKILL.md 目录包） | `{ includeDisabled? }` |
+| 50 | `skill_read` | read | 读取 Skill 内的文本文件（SKILL.md / references / workflows） | `{ skill, path?, maxChars? }` |
+| 51 | `skill_write` | write | 写入 Skill 运行 workspace / output | `{ skill, runId?, area?, path, content }` |
+| 52 | `skill_run` | write | 按 aidb.skill.json 声明运行 python/node 入口 | `{ skill, entrypoint, runId? }` |
+| 53 | `skill_list_files` | read | 列出 Skill 运行的 workspace/input/output | `{ runId }` |
+| 54 | `skill_worker_run` | write | 在独立 Skill Worker 中运行技能，等待完成后返回最终答复与产物 | `{ skill, prompt }`（等待无上限，见 §2「回合没有截止时间」） |
+| 55 | `manage_pipeline` | write | 数据流处理的增删改查与运行：`list` / `validate` / `create` / `update` / `run` / `delete`；`run` 支持 `dryRun` 只渲染目标端 SQL/请求体不写库；返回逐步状态与行数，不含样本行 | `{ action, id?, name?, description?, connectionId?, database?, spec?, params?, dryRun? }` |
 
 \* `run_sql`、`run_mql`、`run_redis`、`run_cypher`、`run_cql`、`run_aql` 风险按各自语言的安全分类动态提升；`alter_table` 按 `operations` 动态判定（`add_column` 为 ddl、`drop_column` 为 destructive）；`mcp_call` 按内置 Server 的工具声明动态判定（只读工具为 read，写工具与外部 Server 为 write）；`dryRun=true` 时 DDL 只返回将执行的 SQL（用于预览）。`run_mql` / `run_redis` / `run_cypher` / `run_aql` / `vector_search` 仅用于对应模型的连接，SQL 专属工具（DDL、审计、图表等）在非 SQL 连接上明确返回不支持；例外是 `manage_index`，在 MongoDB 连接上改走结构化索引通道（同一实现服务对象信息面板的建删），不拼 SQL DDL。
 \** 导出写文件为 `write`，不触碰数据库。

@@ -20,7 +20,7 @@ import { DEFAULT_SETTINGS, engineMeta, normalizeLocale } from '@aidb/core';
 import { ApiError, api, streamTurn, type BootstrapData, type UnavailableEngine } from './lib/api';
 import { NO_APPROVAL, enqueueApproval, settleApproval } from './lib/approvalQueue';
 import type { TimelineItem } from './lib/agentTimeline';
-import { startSchemaEvents } from './lib/schemaEvents';
+import { startSchemaEvents, type ConnectionsChangedEvent } from './lib/schemaEvents';
 import { getI18nLocale, setI18nLocale, translate, type I18nKey, type I18nVars } from './i18n';
 import { t as tr } from './i18n';
 export type Tab =
@@ -193,6 +193,8 @@ interface AppStore {
   loadedDatabases: Record<string, string[]>;
   schemaLoading: Record<string, boolean>;
   expandedConnections: Record<string, boolean>;
+  /** 外部事件展开的连接：只展开节点，不触发 schema 懒加载或默认库展开。 */
+  eventExpandedConnections: Record<string, boolean>;
   expandedSchemas: Record<string, boolean>;
   activeConnectionId?: string;
   tabs: Tab[];
@@ -269,6 +271,7 @@ interface AppStore {
   setHomeDatabase: (database: string) => void;
   setActiveConnection: (id?: string) => void;
   toggleConnection: (id: string) => void;
+  syncConnectionsFromEvent: (event?: ConnectionsChangedEvent) => Promise<void>;
   toggleSchema: (key: string) => void;
 
   openData: (connectionId: string, table: string, database?: string) => void;
@@ -430,6 +433,7 @@ const SCHEMA_ECHO_WINDOW_MS = 1500;
 // 1.5s 的"丢事件"窗口，期间真到达的变更会被当成回声丢掉且永不纠正。
 let schemaReloadByEvent = false;
 let schemaEventsStop: (() => void) | undefined;
+let connectionsEventSeq = 0;
 
 function requestSchemaReload(connectionId: string, immediate = false): void {
   const run = () => {
@@ -491,6 +495,7 @@ export const useApp = create<AppStore>((set, get) => ({
   loadedDatabases: {},
   schemaLoading: {},
   expandedConnections: readUiPrefs().expandedConnections ?? {},
+  eventExpandedConnections: {},
   expandedSchemas: readUiPrefs().expandedSchemas ?? {},
   tabs: [WELCOME],
   activeTabId: 'welcome',
@@ -559,24 +564,28 @@ export const useApp = create<AppStore>((set, get) => ({
         tools: data.tools,
         agentMode: (data.sessions[0]?.permissionMode as PermissionMode) ?? 'ask',
       });
-      if (!data.connections.length) return;
-      const prefs = readUiPrefs();
-      const preferred = prefs.activeConnectionId ? data.connections.find((c) => c.id === prefs.activeConnectionId) : undefined;
-      const target = preferred ?? data.connections.find((c) => c.name.startsWith('Demo')) ?? data.connections[0];
-      set({
-        activeConnectionId: target.id,
-        agentDatabase: rememberedAgentDatabase(target.id),
-        // 重启后首页要停在关闭前看的那个库（§9.5(c)），不能退回连接默认库
-        homeDatabase: prefs.homeDatabaseByConnection?.[target.id] ?? '',
-      });
-      await get().loadSchema(target.id);
+      if (data.connections.length) {
+        const prefs = readUiPrefs();
+        const preferred = prefs.activeConnectionId ? data.connections.find((c) => c.id === prefs.activeConnectionId) : undefined;
+        const target = preferred ?? data.connections.find((c) => c.name.startsWith('Demo')) ?? data.connections[0];
+        set({
+          activeConnectionId: target.id,
+          agentDatabase: rememberedAgentDatabase(target.id),
+          // 重启后首页要停在关闭前看的那个库（§9.5(c)），不能退回连接默认库
+          homeDatabase: prefs.homeDatabaseByConnection?.[target.id] ?? '',
+        });
+        await get().loadSchema(target.id);
+      }
 
       if (!schemaEventsStop) {
         schemaEventsStop = startSchemaEvents({
           onChange: (event) => get().applySchemaChange(event.connectionId),
+          onConnectionsChange: (event) => { void get().syncConnectionsFromEvent(event); },
           // 断线期间的事件不会补发，重连后对已知连接各刷一次。
           onReconnect: () => {
-            for (const conn of get().connections) requestSchemaReload(conn.id, true);
+            void get().syncConnectionsFromEvent().then(() => {
+              for (const conn of get().connections) requestSchemaReload(conn.id, true);
+            });
           },
         });
       }
@@ -680,8 +689,11 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 
   selectConnection: (id) => {
+    const eventExpandedConnections = { ...get().eventExpandedConnections };
+    delete eventExpandedConnections[id];
     const previous = get().activeConnectionId;
     if (previous === id) {
+      set({ eventExpandedConnections });
       if (!get().schemas[id]) void get().loadSchema(id);
       return;
     }
@@ -689,6 +701,7 @@ export const useApp = create<AppStore>((set, get) => ({
     const rememberedHome = readUiPrefs().homeDatabaseByConnection?.[id] ?? '';
     set({
       activeConnectionId: id,
+      eventExpandedConnections,
       agentDatabase: rememberedAgentDatabase(id),
       homeDatabase: rememberedHome,
     });
@@ -714,10 +727,70 @@ export const useApp = create<AppStore>((set, get) => ({
   toggleConnection: (id) => {
     const open = !get().expandedConnections[id];
     const expandedConnections = { ...get().expandedConnections, [id]: open };
+    const eventExpandedConnections = { ...get().eventExpandedConnections };
+    delete eventExpandedConnections[id];
     const previous = get().activeConnectionId;
-    set({ expandedConnections, activeConnectionId: id, ...(previous === id ? {} : { agentDatabase: rememberedAgentDatabase(id) }) });
+    set({ expandedConnections, eventExpandedConnections, activeConnectionId: id, ...(previous === id ? {} : { agentDatabase: rememberedAgentDatabase(id) }) });
     saveUiPrefs({ expandedConnections });
     if (open && !get().schemas[id]) void get().loadSchema(id);
+  },
+
+  syncConnectionsFromEvent: async (event) => {
+    const seq = ++connectionsEventSeq;
+    try {
+      const fetched = await api.connections();
+      // 迟到响应只放弃“列表快照”，事件清理仍必须执行：例如删除 A 慢、创建 B 快时，
+      // B 的快照已移除 A，但 A 的 tab/schema 不能因为 A 的响应过期而永久残留。
+      const connections = seq === connectionsEventSeq ? fetched.connections : get().connections;
+      const liveIds = new Set(connections.map((item) => item.id));
+      const removedIds = get().connections.filter((item) => !liveIds.has(item.id)).map((item) => item.id);
+      const invalidatedIds = new Set(removedIds);
+      const deletedEventIsStale = event?.change === 'deleted' && liveIds.has(event.connectionId);
+      if (event?.change === 'updated' || (event?.change === 'deleted' && !deletedEventIsStale)) invalidatedIds.add(event.connectionId);
+      const removedTabIds = new Set(removedIds);
+      if (event?.change === 'deleted' && !deletedEventIsStale) removedTabIds.add(event.connectionId);
+
+      const expandedConnections = { ...get().expandedConnections };
+      const eventExpandedConnections = { ...get().eventExpandedConnections };
+      const schemas = { ...get().schemas };
+      const loadedDatabases = { ...get().loadedDatabases };
+      const schemaLoading = { ...get().schemaLoading };
+      const expandedSchemas = { ...get().expandedSchemas };
+      if (event?.change === 'created' && liveIds.has(event.connectionId)) {
+        expandedConnections[event.connectionId] = true;
+        eventExpandedConnections[event.connectionId] = true;
+      }
+      for (const id of invalidatedIds) {
+        schemaReloadSeq.set(id, (schemaReloadSeq.get(id) ?? 0) + 1);
+        delete schemas[id];
+        delete loadedDatabases[id];
+        delete eventExpandedConnections[id];
+        for (const key of Object.keys(schemaLoading)) if (key.startsWith(`${id}:`)) delete schemaLoading[key];
+        for (const key of Object.keys(expandedSchemas)) if (key.startsWith(`${id}:`)) delete expandedSchemas[key];
+      }
+      for (const id of removedTabIds) delete expandedConnections[id];
+      let tabs = get().tabs.filter((tab) => !('connectionId' in tab && removedTabIds.has(tab.connectionId)));
+      if (!tabs.length) tabs = [WELCOME];
+      const reloadSchema = event?.change === 'updated' && get().activeConnectionId === event.connectionId && Boolean(get().schemas[event.connectionId]);
+      const activeConnectionId = get().activeConnectionId;
+      const activeRemoved = activeConnectionId !== undefined && removedTabIds.has(activeConnectionId);
+      set({
+        connections,
+        expandedConnections,
+        eventExpandedConnections,
+        schemas,
+        loadedDatabases,
+        schemaLoading,
+        expandedSchemas,
+        tabs,
+        activeTabId: tabs.some((tab) => tab.id === get().activeTabId) ? get().activeTabId : tabs[0]?.id ?? 'welcome',
+        ...(activeRemoved ? { activeConnectionId: connections[0]?.id, agentDatabase: '' } : {}),
+      });
+      saveUiPrefs({ expandedConnections });
+      if (reloadSchema) void get().loadSchema(event.connectionId);
+    } catch (err) {
+      if (seq === connectionsEventSeq) get().notify('error', get().t('error'), errorText(err));
+    }
   },
 
   toggleSchema: (key) => {
@@ -901,14 +974,24 @@ export const useApp = create<AppStore>((set, get) => ({
       const current = get().connectionEditor;
       const creating = !(current?.mode === 'edit' && current.connection);
       const result = current?.mode === 'edit' && current.connection ? await api.updateConnection(current.connection.id, body) : await api.createConnection(body);
-      const { connections } = await api.connections();
+      const seq = ++connectionsEventSeq;
+      const fetched = await api.connections();
+      const currentConnections = get().connections;
+      const connections = seq === connectionsEventSeq
+        ? fetched.connections
+        : currentConnections.some((item) => item.id === result.connection.id)
+          ? currentConnections.map((item) => item.id === result.connection.id ? result.connection : item)
+          : [...currentConnections, result.connection];
       const previousActive = get().activeConnectionId;
       const expandedConnections = { ...get().expandedConnections, [result.connection.id]: true };
+      const eventExpandedConnections = { ...get().eventExpandedConnections };
+      delete eventExpandedConnections[result.connection.id];
       set({
         connections,
         connectionEditor: undefined,
         activeConnectionId: result.connection.id,
         expandedConnections,
+        eventExpandedConnections,
         schemas: { ...get().schemas, [result.connection.id]: get().schemas[result.connection.id] ?? [] },
         ...(previousActive !== result.connection.id ? { agentDatabase: '' } : {}),
       });
@@ -933,17 +1016,7 @@ export const useApp = create<AppStore>((set, get) => ({
   deleteConnection: async (id) => {
     try {
       await api.deleteConnection(id);
-      const connections = get().connections.filter((c) => c.id !== id);
-      const schemas = { ...get().schemas };
-      delete schemas[id];
-      const tabs = get().tabs.filter((tab) => !('connectionId' in tab && tab.connectionId === id));
-      set({
-        connections,
-        schemas,
-        tabs: tabs.length ? tabs : [WELCOME],
-        activeTabId: tabs.some((t) => t.id === get().activeTabId) ? get().activeTabId : tabs[0]?.id ?? 'welcome',
-        activeConnectionId: get().activeConnectionId === id ? connections[0]?.id : get().activeConnectionId,
-      });
+      await get().syncConnectionsFromEvent({ type: 'connections_changed', connectionId: id, change: 'deleted', at: new Date().toISOString() });
       get().notify('success', get().t('saved'));
     } catch (err) {
       get().notify('error', get().t('error'), errorText(err));

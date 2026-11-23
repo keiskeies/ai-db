@@ -3631,5 +3631,7 @@
   "行 {0}：{1}": "Rij {0}: {1}",
   "同义词（逗号分隔）": "Synoniemen (kommagescheiden)",
   "拖拽排序": "Sleep om te sorteren",
-  "换一换": "Andere suggesties"
+  "换一换": "Andere suggesties",
+  "创建连接 {0}（{1} {2}:{3}）": "Verbinding maken {0} ({1} {2}:{3})",
+  "探测 {0}:{1} 的数据库类型": "Detecteer het databasetype van {0}:{1}"
 }

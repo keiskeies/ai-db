@@ -29,7 +29,7 @@ AiDB Studio 已有对应地基（见 §3），真正缺口是五处。本文档�
 - 行/列级权限规则组：同上，属于服务端多租户 BI 的权限体系。
 - 流程图渲染（render_flow）：用户已明确否决。
 - 仪表板定时刷新 / 卡片加宽 / 实时刷新：已存在（`dashboardSetSchedule`、span 切换、逐卡刷新），不重复建设。
-- 新增 Agent 工具：工具目录保持 53 个不变（`verify:docs` 门禁约束）。图表解读/预测走 HTTP 端点复用既有工具，
+- 新增 Agent 工具：工具目录保持 55 个不变（`verify:docs` 门禁约束）。图表解读/预测走 HTTP 端点复用既有工具，
   不新增工具定义，`docs/04-ai-agent-design.md` 工具表不动。
 
 ## 3. 现有地基（实现时直接复用，不重复造）
@@ -280,7 +280,7 @@ npm run verify:docs && npm run verify:i18n && npm run typecheck && npm test && n
   全部补齐翻译；`verify:i18n --strict` 必须 0 缺失。
 - CRLF worktree：多行 Edit 会失败，用单行 Edit 或 `\r\n` 归一化的 Node 补丁脚本（match-count===1 断言）， scratch 用完即删。
 - E2E 跑在预构建 dist 上：改完必须 `npm run build && npm run e2e`。
-- 工具目录保持 53 个；`docs/04` 工具表、`docs/16` 能力契约不动（chart-insight 是 HTTP 端点不是工具）。
+- 工具目录保持 55 个；`docs/04` 工具表、`docs/16` 能力契约不动（chart-insight 是 HTTP 端点不是工具）。
 - 不提交代码，除非用户明确要求。
 
 ## 11. 风险与回退

@@ -3631,5 +3631,7 @@
   "行 {0}：{1}": "Fila {0}: {1}",
   "同义词（逗号分隔）": "Sinónimos (separados por comas)",
   "拖拽排序": "Arrastrar para reordenar",
-  "换一换": "Cambiar"
+  "换一换": "Cambiar",
+  "创建连接 {0}（{1} {2}:{3}）": "Crear conexión {0} ({1} {2}:{3})",
+  "探测 {0}:{1} 的数据库类型": "Detectar el tipo de base de datos de {0}:{1}"
 }

@@ -29,7 +29,7 @@
   <a href="./README.uk.md">Українська</a>
 </p>
 
-AiDB Studio considera l'agente il punto di ingresso principale: connessioni, schema, SQL, dati, dashboard, report e audit condividono lo stesso contesto eseguibile. Include 41 motori di database, 14 moduli di produttività e 53 strumenti per l'agente; ogni azione dell'agente è visibile, controllabile e verificabile.
+AiDB Studio considera l'agente il punto di ingresso principale: connessioni, schema, SQL, dati, dashboard, report e audit condividono lo stesso contesto eseguibile. Include 41 motori di database, 14 moduli di produttività e 55 strumenti per l'agente; ogni azione dell'agente è visibile, controllabile e verificabile.
 
 <p align="center">
   <img src="docs/screenshots/showcase/agent-workflow.gif" width="420" alt="AiDB Studio Agent" />

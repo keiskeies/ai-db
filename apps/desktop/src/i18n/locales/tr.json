@@ -3631,5 +3631,7 @@
   "行 {0}：{1}": "Satır {0}: {1}",
   "同义词（逗号分隔）": "Eş anlamlılar (virgülle ayrılmış)",
   "拖拽排序": "Sıralamak için sürükleyin",
-  "换一换": "Başka öneriler"
+  "换一换": "Başka öneriler",
+  "创建连接 {0}（{1} {2}:{3}）": "Bağlantıyı oluştur {0} ({1} {2}:{3})",
+  "探测 {0}:{1} 的数据库类型": "{0}:{1} veritabanı türünü algıla"
 }

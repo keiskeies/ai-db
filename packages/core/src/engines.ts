@@ -960,6 +960,17 @@ export function engineDefaultPort(engine: Engine): number | undefined {
   return engineMeta(engine).defaultPort;
 }
 
+export const PROBE_RANK: Engine[] = ['mysql', 'postgresql', 'mongodb', 'redis', 'sqlserver', 'clickhouse', 'oracle', 'elasticsearch', 'neo4j'];
+
+/** Port hints narrow the search but never assert an engine; same-port products share a transport. */
+export function probeCandidates(port?: number): Engine[] {
+  if (port !== undefined) {
+    const matched = ENGINES.filter((item) => !item.fileBased && item.defaultPort === port);
+    if (matched.length) return matched.map((item) => item.id);
+  }
+  return [...PROBE_RANK];
+}
+
 /** 该引擎能否在对象树中创建并删除集合/索引（驱动实现了对象生命周期）。 */
 export function managesObjects(engine: Engine): boolean {
   return engineMeta(engine).capabilities.objectLifecycle === true;

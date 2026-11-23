@@ -7,7 +7,7 @@
 
 ## 0. 摘要
 
-AiDB 的 Agent 目前每一回合都向模型下发**全部 53 个工具**，无论用户打的是 `/report` 还是随便问一句。命令（`/report`、`/compare`、`/diff`、`/recon`、`/fix`、`/init`）只是"提示词开关"，不改变模型能看见的工具集合。
+AiDB 的 Agent 目前每一回合都向模型下发**全部 55 个工具**，无论用户打的是 `/report` 还是随便问一句。命令（`/report`、`/compare`、`/diff`、`/recon`、`/fix`、`/init`）只是"提示词开关"，不改变模型能看见的工具集合。
 
 本文定义 **命令作用域（command scope）**：把命令从"提示词"升级为"工具作用域 + 提示词 + 风险上限"的三元组，并规定它在各种输入形态下的确定性解析规则。
 
@@ -20,7 +20,7 @@ AiDB 的 Agent 目前每一回合都向模型下发**全部 53 个工具**，无
 ### 0.2 非目标
 
 - 不做自然语言意图分类（属阶段二，§10.1）。
-- 不新增工具、不改 `TOOLS` 数组、不改工具数量契约（保持 52）。
+- 不新增工具、不改 `TOOLS` 数组、不改工具数量契约（保持 55）。
 - 不改调度器、不改 jobs / artifacts / dashboards。
 - 不改权限模式语义（`readonly` / `ask` / `auto` / `full` 保持原样，作用域是叠加在它之上的一层）。
 - 不做工具懒加载 / 按需发现（v1 用静态子集；动态发现见 §9.3）。
@@ -37,7 +37,7 @@ AiDB 的 Agent 目前每一回合都向模型下发**全部 53 个工具**，无
 | `packages/core/src/commands/registry.ts:151` | `/fix` → `allowedTools: FIX_TOOLS` + `extraTools: ['submit_fix_plan']` | **无消费方** |
 | `packages/core/src/commands/registry.ts:44,78,102,119,149,179` | 6 处 `maxRisk` | **无消费方** |
 | `packages/core/src/agent/runtime.ts:269` | `tools: deps.tools ?? providerTools()` —— 注入点早就留好了 | — |
-| `apps/gateway/src/agentHost.ts:356` | `const allowedTools = visibleAgentTools(settings, allowMcp)` | **永远返回全量 52** |
+| `apps/gateway/src/agentHost.ts:356` | `const allowedTools = visibleAgentTools(settings, allowMcp)` | **永远返回全量 55** |
 | `apps/gateway/src/agentHost.ts:392` | `getTool` 白名单同样用全量 | — |
 
 `grep -rn "allowedTools\|extraTools" apps/ packages/` 在 `apps/gateway/src` 与 `apps/desktop/src` 下**零命中**；`maxRisk` 同样零命中。结论：`/report` 名义上是"只读报告"，实际模型手里有 `drop_object`、`restore_backup`（未实现）、`transfer_data`。
@@ -51,7 +51,7 @@ AiDB 的 Agent 目前每一回合都向模型下发**全部 53 个工具**，无
 | `apps/gateway/src/agentHost.ts:233` | `/init` 的独立正则 `/^\/init(?:\s+([\s\S]+))?$/i` | 单独分支 → `runInit()` |
 | `apps/desktop/src/components/AgentPanel.tsx:74-110` | 10 条 `SLASH` 宏（`/init` `/schema` `/audit` `/quality` `/chart` `/explain` `/optimize` `/backup` `/memory` `/clear`），只往输入框塞 prompt | 前端自己 |
 
-后果：`/init` 与那 10 条 SLASH 宏**不在注册表里**，拿不到作用域，永远走全量 52 工具。`commandIntents.ts:126` 的正则硬编码 `/report|compare|diff|recon|fix`，与 registry 的 `COMMAND_IDS` 是两套真相。
+后果：`/init` 与那 10 条 SLASH 宏**不在注册表里**，拿不到作用域，永远走全量 55 工具。`commandIntents.ts:126` 的正则硬编码 `/report|compare|diff|recon|fix`，与 registry 的 `COMMAND_IDS` 是两套真相。
 
 ### 1.2 还有第四份工具清单副本
 
@@ -59,7 +59,7 @@ AiDB 的 Agent 目前每一回合都向模型下发**全部 53 个工具**，无
 
 ### 1.3 现成的分组表被当成说明书
 
-`packages/core/src/agent/toolGroups.ts:16-50` 已把 53 个工具分成 12 组（connection 4 / sql 7 / dialect 7 / document 6 / structure 7 / analysis 5 / compare 3 / pipeline 1 / ops 1 / plan 3 / skill 6 / mcp 3），但只被"设置 → MCP 与工具"的只读目录页消费（`agentToolCatalog()`）。它是一张现成的路由表。
+`packages/core/src/agent/toolGroups.ts:16-50` 已把 55 个工具分成 12 组（connection 6 / sql 7 / dialect 7 / document 6 / structure 7 / analysis 5 / compare 3 / pipeline 1 / ops 1 / plan 3 / skill 6 / mcp 3），但只被"设置 → MCP 与工具"的只读目录页消费（`agentToolCatalog()`）。它是一张现成的路由表。
 
 ## 2. 概念模型
 
@@ -101,7 +101,7 @@ export interface CommandDefinition {
 
   /** 本命令可见的工具白名单。undefined = 全量（兼容期），M3 后不允许 undefined。 */
   allowedTools?: string[];
-  /** 命令私有工具（不进 52 工具目录），如 compose_report。 */
+  /** 命令私有工具（不进 55 工具目录），如 compose_report。 */
   extraTools?: string[];
 
   /** 允许出现的最高"声明风险"；对 dynamic 工具放行但运行时再判。 */
@@ -538,7 +538,7 @@ for (const name of command.allowedTools ?? []) {
   | `docs/05-data-and-api.md:403` | `user_version` 由"当前 3"更正为 8 |
   | `docs/06-delivery-and-verification.md` | §2.1 增加作用域验收场景 |
   | `scripts/verify-docs.mjs` | `required` 增加 `docs/15-command-scoping.md`；`requiredSections` 增加 `['命令作用域','输入矩阵','开发计划']`；新增"每个 agent/hybrid/inline 命令都有 allowedTools"校验 |
-  | `README.md` | 工具数量仍 52（不变），命令数量 6 → 14 |
+  | `README.md` | 工具数量仍 55（不变），命令数量 6 → 14 |
 - **工作量**：0.5d。
 
 **总工作量：约 3.5 人日。**
@@ -581,7 +581,7 @@ M1 与 M2 之间存在**唯一一次行为变更**：`/report` 下 `run_sql` 写
 | 14 | `/report` + `run_sql` UPDATE | 工具结果 `error.code === 'OUT_OF_SCOPE'`，审计 `status='error'` |
 | 15 | `/report` + `run_sql` SELECT | 正常返回 |
 | 16 | `/fix` + `run_sql` UPDATE（ask 模式） | 触发 `approval_required`，批准后执行成功 |
-| 17 | 无命令回合 | 全量（等价 `/ask`），工具数 = 52 − features 裁剪 |
+| 17 | 无命令回合 | 全量（等价 `/ask`），工具数 = 55 − features 裁剪 |
 | 18 | `/init` | 仍走确定性分支，不产生工具调用，`AI_DB.md` 落盘 |
 | 19 | 机器人回合 `/report` | `mode='readonly'`，MCP 不在工具列表 |
 | 20 | 模型调用作用域外工具 | `OUT_OF_SCOPE`，消息含"改用 /fix" |
@@ -609,7 +609,7 @@ M1 与 M2 之间存在**唯一一次行为变更**：`/report` 下 `run_sql` 写
 
 ### 9.1 为什么不用 `/tool <name>` 直接暴露工具箱
 
-`/tool` 若做成"打开全部工具箱"，等于把 53 个工具换个地方，仍是全量。正确的形态是 `/tool <domain>`（`/tool analysis`、`/tool transfer`），映射到 `scopeGroups`，每个 domain 3–7 个工具。本阶段先把 `scopeGroups` 字段与展开逻辑做好，命令本身留到 §10.2。
+`/tool` 若做成"打开全部工具箱"，等于把 55 个工具换个地方，仍是全量。正确的形态是 `/tool <domain>`（`/tool analysis`、`/tool transfer`），映射到 `scopeGroups`，每个 domain 3–7 个工具。本阶段先把 `scopeGroups` 字段与展开逻辑做好，命令本身留到 §10.2。
 
 ### 9.2 作用域是回合级，不跨回合继承
 
@@ -627,7 +627,7 @@ Anthropic / OpenAI 都在推"按需发现工具"，能彻底解决工具膨胀�
 
 - 需要 provider 支持 `tool_search` 类原语，当前 3 个 provider（`packages/core/src/agent/providers/`）都没有；
 - 会引入"模型搜不到工具"的新失败模式，比"少几个工具"更难诊断；
-- 静态子集对本仓库的规模（52 → 每个命令 3–13）已足够。
+- 静态子集对本仓库的规模（55 → 每个命令 3–13）已足够。
 
 结论：v1 静态，v2 若 provider 支持再评估。
 

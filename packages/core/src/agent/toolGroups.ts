@@ -14,7 +14,7 @@ export interface AgentToolGroup {
  * (not in the UI) so a new tool without a home fails the coverage test.
  */
 export const AGENT_TOOL_GROUPS: AgentToolGroup[] = [
-  { id: 'connection', label: '连接与结构', tools: ['list_connections', 'inspect_schema', 'search_objects', 'get_query_history'] },
+  { id: 'connection', label: '连接与结构', tools: ['list_connections', 'probe_engine', 'create_connection', 'inspect_schema', 'search_objects', 'get_query_history'] },
   {
     id: 'sql',
     label: 'SQL 执行与事务',

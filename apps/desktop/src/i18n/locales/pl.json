@@ -3631,5 +3631,7 @@
   "行 {0}：{1}": "Wiersz {0}: {1}",
   "同义词（逗号分隔）": "Synonimy (oddzielone przecinkami)",
   "拖拽排序": "Przeciągnij, aby zmienić kolejność",
-  "换一换": "Inne propozycje"
+  "换一换": "Inne propozycje",
+  "创建连接 {0}（{1} {2}:{3}）": "Utwórz połączenie {0} ({1} {2}:{3})",
+  "探测 {0}:{1} 的数据库类型": "Wykryj typ bazy danych {0}:{1}"
 }

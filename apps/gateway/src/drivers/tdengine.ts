@@ -1,5 +1,6 @@
 import type { ColumnInfo, Engine, QueryResult, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions } from './types';
+import { authorityHost } from './host';
 import { DbError } from './types';
 
 export interface TdengineOptions {
@@ -44,7 +45,7 @@ export class TdengineDriver implements Driver {
     if (this.opts.host.startsWith('http://') || this.opts.host.startsWith('https://')) {
       return this.opts.host.replace(/\/+$/, '');
     }
-    return `${this.opts.ssl ? 'https' : 'http'}://${this.opts.host || '127.0.0.1'}:${this.opts.port || 6041}`;
+    return `${this.opts.ssl ? 'https' : 'http'}://${authorityHost(this.opts.host || '127.0.0.1')}:${this.opts.port || 6041}`;
   }
 
   private auth(): string {

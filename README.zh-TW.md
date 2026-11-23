@@ -29,7 +29,7 @@
   <a href="./README.uk.md">Українська</a>
 </p>
 
-AiDB Studio 把 Agent 當作主要入口：連線、結構、SQL、資料、儀表板、報表與稽核共用同一個可執行上下文。內建 41 種資料庫引擎、14 個生產力模組與 53 個 Agent 工具，Agent 的每個動作都看得見、控制得住、留得下紀錄。
+AiDB Studio 把 Agent 當作主要入口：連線、結構、SQL、資料、儀表板、報表與稽核共用同一個可執行上下文。內建 41 種資料庫引擎、14 個生產力模組與 55 個 Agent 工具，Agent 的每個動作都看得見、控制得住、留得下紀錄。
 
 <p align="center">
   <img src="docs/screenshots/showcase/agent-workflow.gif" width="420" alt="AiDB Studio Agent" />

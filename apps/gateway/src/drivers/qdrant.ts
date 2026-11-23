@@ -15,6 +15,7 @@ import type {
   WriteDocumentInput,
   WriteDocumentResult,
 } from './types';
+import { authorityHost } from './host';
 import { DbError } from './types';
 
 export interface QdrantOptions {
@@ -83,7 +84,7 @@ export class QdrantDriver implements VectorQueryDriver, DocumentWriteDriver, Obj
     if (this.opts.host.startsWith('http://') || this.opts.host.startsWith('https://')) {
       return this.opts.host.replace(/\/+$/, '');
     }
-    return `${this.opts.ssl ? 'https' : 'http'}://${this.opts.host || '127.0.0.1'}:${this.opts.port || 6333}`;
+    return `${this.opts.ssl ? 'https' : 'http'}://${authorityHost(this.opts.host || '127.0.0.1')}:${this.opts.port || 6333}`;
   }
 
   private headers(): Record<string, string> {

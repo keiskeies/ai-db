@@ -545,7 +545,7 @@ export function AgentContextTool() {
             <span className="spacer" />
             <button className="btn small" onClick={exportCsv} disabled={busy || (!terms.length && !examples.length)} data-testid="ctx-export-csv"><Download size={11} /> {tr(" 导出 CSV ")}</button>
             <button className="btn small" onClick={() => fileRef.current?.click()} disabled={busy} data-testid="ctx-import-csv"><Upload size={11} /> {tr(" 导入 CSV ")}</button>
-            <input ref={fileRef} type="file" accept=".csv,text/csv" style={{ display: 'none' }} data-testid="ctx-import-file" onChange={(e) => { const f = e.target.files?.[0]; if (f) importCsv(f); e.target.value = ''; }} />
+            <input ref={fileRef} className="file-input" type="file" accept=".csv,text/csv" data-testid="ctx-import-file" onChange={(e) => { const f = e.target.files?.[0]; if (f) importCsv(f); e.target.value = ''; }} />
           </div>
           <div className="ctx-section">
             <div className="ctx-section-head">{tr("术语词典（消除简称 / 黑话歧义）")}</div>

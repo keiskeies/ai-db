@@ -2,6 +2,7 @@ import type { ColumnInfo, Engine, QueryResult, StructuredQuery, TableInfo, Vecto
 import { vectorQueryFromArgs } from '@aidb/core';
 import { mapLimit } from './concurrency';
 import type { DeleteDocumentsInput, DocumentWriteDriver, DriverTestResult, RunOptions, VectorQueryDriver, WriteDocumentInput, WriteDocumentResult } from './types';
+import { authorityHost } from './host';
 import { DbError } from './types';
 
 export interface MilvusOptions {
@@ -90,7 +91,7 @@ export class MilvusDriver implements VectorQueryDriver, DocumentWriteDriver {
     if (this.opts.host.startsWith('http://') || this.opts.host.startsWith('https://')) {
       return this.opts.host.replace(/\/+$/, '');
     }
-    return `${this.opts.ssl ? 'https' : 'http'}://${this.opts.host || '127.0.0.1'}:${this.opts.port || 19530}`;
+    return `${this.opts.ssl ? 'https' : 'http'}://${authorityHost(this.opts.host || '127.0.0.1')}:${this.opts.port || 19530}`;
   }
 
   private headers(): Record<string, string> {

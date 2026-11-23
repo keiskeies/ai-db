@@ -1,6 +1,7 @@
 import { TOOLS } from '@aidb/core';
 import type { ToolHandler } from './types';
 import { listConnectionsTool, inspectSchemaTool, searchObjectsTool } from './schema';
+import { createConnectionTool, probeEngineTool } from './connections';
 import { beginTransactionTool, commitTransactionTool, rollbackTransactionTool } from './transaction';
 import { runSqlTool, runMqlTool, runRedisTool, runCypherTool, runCqlTool, runAqlTool, vectorSearchTool, searchIndexTool, explainSqlTool, sampleRowsTool, profileColumnTool } from './query';
 import { createCollectionTool, deleteCollectionTool, upsertDocumentTool, writeLineProtocolTool, importDocumentsTool, deleteDocumentsTool } from './documents';
@@ -14,6 +15,8 @@ import { transferDataTool, managePipelineTool } from './transfer';
 
 const entries = [
   listConnectionsTool,
+  probeEngineTool,
+  createConnectionTool,
   inspectSchemaTool,
   searchObjectsTool,
   beginTransactionTool,

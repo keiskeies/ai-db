@@ -3,6 +3,7 @@ import type { Driver as BoltDriver, Node as Neo4jNode, Relationship as Neo4jRela
 import type { ColumnInfo, Engine, GraphData, QueryResult, StructuredQuery, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions, StructuredQueryDriver } from './types';
 import { mapLimit } from './concurrency';
+import { authorityHost } from './host';
 import { DbError } from './types';
 
 export interface Neo4jOptions {
@@ -208,7 +209,7 @@ export class Neo4jDriver implements StructuredQueryDriver {
     }
     const scheme = this.opts.ssl ? 'neo4j+s' : 'neo4j';
     const direct = this.opts.ssl ? 'bolt+s' : 'bolt';
-    return `${this.engine === 'memgraph' ? direct : scheme}://${this.opts.host || '127.0.0.1'}:${this.opts.port || 7687}`;
+    return `${this.engine === 'memgraph' ? direct : scheme}://${authorityHost(this.opts.host || '127.0.0.1')}:${this.opts.port || 7687}`;
   }
 
   private driver(): BoltDriver {

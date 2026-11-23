@@ -3631,5 +3631,7 @@
   "行 {0}：{1}": "Baris {0}: {1}",
   "同义词（逗号分隔）": "Sinonim (dipisah koma)",
   "拖拽排序": "Seret untuk mengurutkan",
-  "换一换": "Saran lain"
+  "换一换": "Saran lain",
+  "创建连接 {0}（{1} {2}:{3}）": "Buat koneksi {0} ({1} {2}:{3})",
+  "探测 {0}:{1} 的数据库类型": "Deteksi jenis basis data {0}:{1}"
 }

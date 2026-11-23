@@ -15,7 +15,9 @@ import {
   type ToolResult,
 } from '@aidb/core';
 import type { GatewayConfig } from './config';
+import { ConnectionProvisioner } from './connectionProvisioner';
 import { DbError } from './drivers';
+import type { GatewayEvents } from './events';
 import type { ConnectionManager } from './manager';
 import { SkillStore } from './skills';
 import { SkillRunner } from './skillRunner';
@@ -27,6 +29,7 @@ import type { ExecutorServices, ToolContext } from './executor/types';
 export type { ToolContext } from './executor/types';
 
 const DB_TOOLS = new Set([
+  'create_connection',
   'inspect_schema',
   'search_objects',
   'run_sql',
@@ -92,6 +95,7 @@ export class ToolExecutor {
   private skillRunner: SkillRunner;
   private skillWorker?: SkillWorker;
   private skillRuns = new Map<string, string>();
+  private connectionProvisioner: ConnectionProvisioner;
 
   constructor(
     private store: Store,
@@ -100,9 +104,11 @@ export class ToolExecutor {
     private getSettings: () => AppSettings,
     skills?: SkillStore,
     skillRunner?: SkillRunner,
+    events?: GatewayEvents,
   ) {
     this.skills = skills ?? new SkillStore(config.home);
     this.skillRunner = skillRunner ?? new SkillRunner(this.skills, config.home);
+    this.connectionProvisioner = new ConnectionProvisioner(store, manager, events);
   }
 
   setSkillWorker(worker: SkillWorker): void {
@@ -183,10 +189,14 @@ export class ToolExecutor {
       const risk = tool ? resolveRisk(call, tool, riskConn?.engine) : undefined;
       const generated = (result.data as { ddl?: string; statements?: string[] } | undefined)?.ddl
         ?? (result.data as { statements?: string[] } | undefined)?.statements?.join(';\n');
+      const createdConnectionId = call.name === 'create_connection'
+        ? (result.data as { connectionId?: string; existingConnectionId?: string } | undefined)?.connectionId
+          ?? (result.data as { existingConnectionId?: string } | undefined)?.existingConnectionId
+        : undefined;
       const sql = typeof call.args.sql === 'string' ? call.args.sql : generated;
       this.store.addAudit({
         actor: 'agent',
-        connectionId: this.connectionIdOf(call, ctx),
+        connectionId: call.name === 'create_connection' ? createdConnectionId : this.connectionIdOf(call, ctx),
         database: typeof call.args.database === 'string' ? call.args.database : ctx.database,
         tool: call.name,
         sql,
@@ -313,6 +323,7 @@ export class ToolExecutor {
     const services: ExecutorServices = {
       store: this.store,
       manager: this.manager,
+      connectionProvisioner: this.connectionProvisioner,
       config: this.config,
       getSettings: this.getSettings,
       skills: this.skills,

@@ -1,6 +1,7 @@
 import dmdb from 'dmdb';
 import type { ColumnInfo, Engine, IndexInfo, QueryResult, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions } from './types';
+import { authorityHost } from './host';
 import { DbError } from './types';
 import { withQueryTimeout } from './timeout';
 
@@ -56,7 +57,7 @@ export class DmDriver implements Driver {
     if (!this.connecting) {
       const user = encodeURIComponent(this.opts.user ?? 'SYSDBA');
       const password = encodeURIComponent(this.opts.password ?? '');
-      const connectString = `dm://${user}:${password}@${this.opts.host || '127.0.0.1'}:${this.opts.port || 5236}`;
+      const connectString = `dm://${user}:${password}@${authorityHost(this.opts.host || '127.0.0.1')}:${this.opts.port || 5236}`;
       this.connecting = dmdb
         .createPool({
           connectString,

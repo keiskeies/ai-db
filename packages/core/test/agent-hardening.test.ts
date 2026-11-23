@@ -25,6 +25,28 @@ test('run_sql 预授权签名覆盖风险级/全部表/语句数', () => {
   assert.equal(evaluatePermission('write', ctx, mixed), 'ask');
 });
 
+test('工具参数中的密码不会随 assistant tool_calls 再次进入模型历史', async () => {
+  const provider = new Scripted([
+    [{ type: 'tool_call', call: { id: 'secret', name: 'create_connection', args: { name: 'x', engine: 'mysql', host: '127.0.0.1', port: 3306, username: 'root', Password: 'plain-secret' } } }, { type: 'done', stopReason: 'tool_use' }],
+    [{ type: 'text', text: 'denied' }, { type: 'done', stopReason: 'end_turn' }],
+  ]);
+  let executed = false;
+  const runtime = new AgentRuntime({
+    provider,
+    buildSystem: () => 'sys',
+    executeTool: async () => { executed = true; return { ok: true, summary: 'ok', meta: { durationMs: 1 } }; },
+    requestApproval: async () => ({ decision: 'deny', scope: 'once' }),
+    emit: () => {},
+    generateId: () => 'id',
+  });
+  await runtime.run({ sessionId: 's', userText: 'create it', mode: 'ask', environment: 'dev', connectionReadonly: false, history: [], context: {}, sessionAllowed: new Set(), alwaysAllowed: new Set() });
+  assert.equal(executed, false);
+  const second = provider.requests[1];
+  assert.ok(second);
+  assert.ok(!JSON.stringify(second.messages).includes('plain-secret'));
+  assert.ok(JSON.stringify(second.messages).includes('***'));
+});
+
 const tag = (body: string) => '<' + body + '>';
 
 test('XML 抢救的参数还原类型：dryRun 不再静默变成真执行', () => {

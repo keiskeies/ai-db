@@ -1,6 +1,7 @@
 import type { ColumnInfo, QueryResult, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions } from './types';
 import { DbError, toRowArray } from './types';
+import { authorityHost } from './host';
 
 export interface ClickHouseOptions {
   host: string;
@@ -31,7 +32,7 @@ export class ClickHouseDriver implements Driver {
   constructor(private opts: ClickHouseOptions) {}
 
   private async request(sql: string, database?: string, timeoutMs?: number): Promise<string> {
-    const url = new URL(`${this.opts.ssl ? 'https' : 'http'}://${this.opts.host}:${this.opts.port}/`);
+    const url = new URL(`${this.opts.ssl ? 'https' : 'http'}://${authorityHost(this.opts.host)}:${this.opts.port}/`);
     const db = database || this.opts.database;
     if (db) url.searchParams.set('database', db);
     url.searchParams.set('default_format', 'JSONCompact');
@@ -63,11 +64,11 @@ export class ClickHouseDriver implements Driver {
   async test(): Promise<DriverTestResult> {
     const started = Date.now();
     try {
-      const text = await this.request('SELECT version() AS v');
+      const text = await this.request('SELECT version() AS v', undefined, 5000);
       const parsed = JSON.parse(text) as { data?: unknown[][] };
       return { ok: true, version: `ClickHouse ${parsed.data?.[0]?.[0] ?? ''}`, latencyMs: Date.now() - started };
     } catch (err: any) {
-      return { ok: false, latencyMs: Date.now() - started, message: err.message };
+      return { ok: false, latencyMs: Date.now() - started, message: err.message, code: typeof err?.code === 'string' ? err.code : undefined };
     }
   }
 

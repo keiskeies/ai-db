@@ -46,6 +46,13 @@ export function resolveRisk(call: ToolCall, tool: ToolDefinition, engine?: Engin
 
 export function toolSignature(call: ToolCall): string {
   const conn = String(call.args.connectionId ?? '*');
+  if (call.name === 'create_connection') {
+    const credential = typeof call.args.passwordRef === 'string' && call.args.passwordRef ? 'ref' : call.args.useSavedCredential === true ? 'saved' : 'none';
+    return `${call.name}:${String(call.args.host ?? '*')}:${String(call.args.port ?? '*')}:${String(call.args.engine ?? '*')}:${String(call.args.username ?? '*')}:${String(call.args.database ?? '*')}:${credential}:${call.args.skipProbe === true ? 'skip' : 'test'}:${String(call.args.environment ?? 'dev')}:${call.args.readonly === true ? 'readonly' : 'write'}:${call.args.ssl === true ? 'ssl' : 'plain'}:${call.args.sslInsecure === true ? 'insecure' : 'verified'}`;
+  }
+  if (call.name === 'probe_engine') {
+    return `${call.name}:${String(call.args.host ?? '*')}:${String(call.args.port ?? '*')}:${String(call.args.username ?? '*')}:${String(call.args.database ?? '*')}:${call.args.ssl === true ? 'ssl' : 'plain'}:${call.args.sslInsecure === true ? 'insecure' : 'verified'}`;
+  }
   let target = '';
   const explicit = call.args.table ?? call.args.name;
   if (typeof explicit === 'string') target = explicit;
@@ -90,11 +97,48 @@ export function toolSignature(call: ToolCall): string {
   return `${call.name}:${conn}:${target || '*'}`;
 }
 
+const SECRET_ARG_KEYS = new Set(['password', 'sshpassword', 'sshprivatekey', 'sshpassphrase', 'passphrase']);
+
+export function isSecretToolArgKey(key: string): boolean {
+  return SECRET_ARG_KEYS.has(key.toLowerCase().replace(/[_-]/g, ''));
+}
+
+export function redactToolSecrets(value: unknown): unknown {
+  const walk = (current: unknown): { value: unknown; changed: boolean } => {
+    if (Array.isArray(current)) {
+      let changed = false;
+      const items = current.map((item) => {
+        const next = walk(item);
+        changed ||= next.changed;
+        return next.value;
+      });
+      return { value: changed ? items : current, changed };
+    }
+    if (!current || typeof current !== 'object') return { value: current, changed: false };
+    let changed = false;
+    const entries = Object.entries(current as Record<string, unknown>).map(([key, child]) => {
+      if (isSecretToolArgKey(key)) {
+        changed = true;
+        return [key, '***'];
+      }
+      const next = walk(child);
+      changed ||= next.changed;
+      return [key, next.value];
+    });
+    return { value: changed ? Object.fromEntries(entries) : current, changed };
+  };
+  return walk(value).value;
+}
+
 /** SQL shown in the approval dialog / audit log for the call. */
 export function describeCall(call: ToolCall): { summary: string; sql?: string } {
   const a = call.args;
   const sql = typeof a.sql === 'string' ? a.sql : undefined;
   switch (call.name) {
+    case 'probe_engine':
+      return { summary: `探测 ${String(a.host ?? '')}:${String(a.port ?? '')} 的数据库类型` };
+    case 'create_connection':
+      return { summary: `创建连接 ${String(a.name ?? '')}（${String(a.engine ?? '')} ${String(a.host ?? '')}:${String(a.port ?? '')}）` };
     case 'run_sql': {
       if (!sql) return { summary: '执行 SQL', sql };
       // 多语句脚本的规模要在审批弹窗里看得见：18 条 ALTER 和 1 条 SELECT 的后果差别很大，
