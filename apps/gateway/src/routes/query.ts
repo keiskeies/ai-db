@@ -30,6 +30,7 @@ import {
   defaultSchema,
   assertSqlEngine,
   classifyForAudit,
+  requestExecution,
   type ApiDeps,
 } from './shared';
 
@@ -503,8 +504,13 @@ export function createQueryRouter(deps: ApiDeps): Router {
       const body = obj(req.body, 'body');
       const connectionId = str(body.connectionId);
       if (!connectionId) throw Object.assign(new Error('connectionId 必填'), { code: 'INVALID_INPUT', status: 400 });
-      const backup = await dumpDatabase(store, manager, config, connectionId, str(body.database), str(body.label));
-      res.status(201).json({ backup });
+      const execution = requestExecution(manager, res);
+      try {
+        const backup = await dumpDatabase(store, manager, config, connectionId, str(body.database), str(body.label), execution.signal, execution.executionId);
+        res.status(201).json({ backup });
+      } finally {
+        execution.release();
+      }
     }),
   );
 

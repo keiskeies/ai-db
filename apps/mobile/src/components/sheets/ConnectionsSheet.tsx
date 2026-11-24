@@ -7,7 +7,7 @@ import { styles } from '../../styles';
 import type { PickerKind, EdgeInsets } from '../../types';
 import { Text, EngineLogo } from '../../components/base';
 
-export function ConnectionsSheet({ setPicker, insets, connections, activeConnectionId, pendingDatabasePickerRef, setActiveConnectionId, activeDatabase }: { setPicker: Dispatch<SetStateAction<PickerKind>>; insets: EdgeInsets; connections: ConnectionConfig[]; activeConnectionId: string | undefined; pendingDatabasePickerRef: { current: boolean }; setActiveConnectionId: Dispatch<SetStateAction<string | undefined>>; activeDatabase: string | undefined; }) {
+export function ConnectionsSheet({ setPicker, insets, connections, activeConnectionId, pendingDatabasePickerRef, setActiveConnectionId, activeDatabase, disabled }: { setPicker: Dispatch<SetStateAction<PickerKind>>; insets: EdgeInsets; connections: ConnectionConfig[]; activeConnectionId: string | undefined; pendingDatabasePickerRef: { current: boolean }; setActiveConnectionId: Dispatch<SetStateAction<string | undefined>>; activeDatabase: string | undefined; disabled: boolean; }) {
   return (
         <Modal visible transparent animationType="slide" onRequestClose={() => setPicker(null)}>
           <View style={styles.modalBackdrop}>
@@ -23,6 +23,7 @@ export function ConnectionsSheet({ setPicker, insets, connections, activeConnect
                   key={conn.id}
                   testID={`m-connection-${conn.id}`}
                   style={[styles.sessionRow, conn.id === activeConnectionId && { backgroundColor: colors.accentSoft }]}
+                  disabled={disabled}
                   onPress={() => {
                     if (conn.id !== activeConnectionId) pendingDatabasePickerRef.current = true;
                     setActiveConnectionId(conn.id);

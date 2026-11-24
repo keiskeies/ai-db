@@ -1,10 +1,11 @@
 import pg from 'pg';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import type { ColumnInfo, Engine, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions } from './types';
 import { DbError, estimateValueBytes, MAX_RESULT_BYTES } from './types';
 import { wrapSelectLimit } from './sqlCap';
 import { nodeTlsOptions } from './ssl';
+import { throwIfAborted } from './timeout';
 
 const { Pool: PgPool } = pg;
 
@@ -515,18 +516,29 @@ export class PostgresDriver implements Driver {
   }
 
   /** 备份恢复用：PG 的 simple query 一次往返执行整段脚本，脚本内任一语句失败整段回滚。 */
-  async execScript(sql: string, database?: string): Promise<void> {
-    const client = await this.pool(database).connect();
+  async execScript(sql: string, database?: string, opts: RunOptions = {}): Promise<void> {
+    throwIfAborted(opts.signal);
+    let client: PoolClient | undefined;
+    const onAbort = () => client?.connection?.stream?.destroy();
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
     let ok = false;
     try {
+      client = await this.pool(database).connect();
+      throwIfAborted(opts.signal);
       // 池默认 statement_timeout 是内省用的 30s，恢复脚本的大语句必须放宽，否则中途被 57014 掐断。
       await client.query(`SET statement_timeout = ${SCRIPT_TIMEOUT_MS}`);
       await client.query(sql);
+      throwIfAborted(opts.signal);
       ok = true;
     } catch (err: any) {
+      if (opts.signal?.aborted) {
+        ok = false;
+        throw new DbError('工具执行已取消', { code: 'ABORTED' });
+      }
       throw new DbError(err?.message ?? 'PostgreSQL 脚本执行失败', { code: err?.code ?? 'PG_SCRIPT_ERROR' });
     } finally {
-      if (ok) {
+      opts.signal?.removeEventListener('abort', onAbort);
+      if (ok && client) {
         try {
           await client.query('RESET statement_timeout');
           client.release();
@@ -535,7 +547,7 @@ export class PostgresDriver implements Driver {
         }
       } else {
         // 脚本失败后 client 可能停在 aborted 事务/断连状态，RESET 不可靠，直接销毁。
-        client.release(true);
+        client?.release(true);
       }
     }
   }

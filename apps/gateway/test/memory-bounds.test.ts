@@ -568,6 +568,22 @@ test('迁移：用户中止抛 TransferAbortedError，源端连接不泄漏', as
   assert.ok(h.state().closed);
 });
 
+test('迁移：AbortSignal 在首批写入后中止，不写下一批且事务目标回滚', async () => {
+  const h = transferHarness({ batches: [mkRows(250), mkRows(250, 250)], tx: true });
+  const controller = new AbortController();
+  const runParams = h.manager.runParams;
+  h.manager.runParams = async (...args: Parameters<typeof runParams>) => {
+    const result = await runParams(...args);
+    controller.abort();
+    return result;
+  };
+  await assert.rejects(h.run({ mode: 'replace', signal: controller.signal }), (err: unknown) => err instanceof TransferAbortedError);
+  assert.equal(h.inserts.length, 1, '取消后不能继续第二批 INSERT');
+  assert.equal(h.tx.commit, 0);
+  assert.equal(h.tx.rollback, 1, 'replace 事务必须回滚，不能留下半张表');
+  assert.ok(h.state().closed);
+});
+
 test('迁移：非流式驱动走整批读老路径，历史由 manager.query 记录', async () => {
   const h = transferHarness({ batches: [mkRows(600)], streamed: false });
   const events: TransferEvent[] = [];

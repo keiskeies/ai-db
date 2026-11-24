@@ -1,6 +1,7 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import fs, { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { AddressInfo } from 'node:net';
@@ -163,7 +164,7 @@ test('Skills API 与 skill_list/skill_read 工具可用', async () => {
 });
 
 
-test('Skill 沙箱：写入、运行、文件清单、超时与权限', async () => {
+test('Skill 路径边界与权限：写入、运行、文件清单、超时与权限', async () => {
   const executor = new ToolExecutor(gateway.store, gateway.manager, gateway.config, () => gateway.store.getSettings(), gateway.skills);
   const write = await executor.execute(
     { id: 'sw', name: 'skill_write', args: { skill: 'api-skill', area: 'workspace', path: 'notes/a.txt', content: 'hello sandbox' } },
@@ -213,6 +214,122 @@ test('Skill 沙箱：写入、运行、文件清单、超时与权限', async ()
   assert.equal(readFileSync(join(secretRun.workspace, 'output', 'secret.txt'), 'utf8'), 's3cret');
 });
 
+
+test('SkillRunner 拒绝目录/文件符号链接越界并支持不存在路径', async (t) => {
+  const store = new SkillStore(home);
+  store.importDirectory(skillDir, 'path-skill');
+  const runner = new SkillRunner(store, join(home, 'path-runner-home'));
+  const run = runner.createRun('path-skill');
+  const workspace = join(run.workspace, 'workspace');
+  const outside = join(home, 'path-outside');
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(join(outside, 'secret.txt'), 'outside');
+  const link = join(workspace, 'outside-link');
+  try {
+    symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (err: any) {
+    if (err?.code === 'EPERM' || err?.code === 'EACCES') {
+      t.skip('当前 Windows 账户不能创建符号链接');
+      return;
+    }
+    throw err;
+  }
+
+  assert.throws(() => runner.resolveFile(run.id, 'workspace', 'outside-link/secret.txt'), /越界/);
+  assert.throws(() => runner.writeFile(run.id, 'workspace', 'outside-link/new.txt', 'bad'), /越界/);
+  assert.equal(existsSync(join(outside, 'new.txt')), false);
+  assert.ok(!runner.listFiles(run.id).some((file) => file.path.includes('outside-link')));
+
+  const missing = runner.resolveFile(run.id, 'workspace', 'new/deep/file.txt');
+  assert.equal(missing, join(workspace, 'new', 'deep', 'file.txt'));
+  assert.equal(runner.writeFile(run.id, 'workspace', 'new/deep/file.txt', 'safe'), realpathSync(missing));
+  assert.equal(runner.resolveFile(run.id, 'workspace', 'new/deep/file.txt'), realpathSync(missing));
+
+  if (process.platform !== 'win32') {
+    const fileLink = join(workspace, 'secret-link.txt');
+    symlinkSync(join(outside, 'secret.txt'), fileLink, 'file');
+    assert.throws(() => runner.resolveFile(run.id, 'workspace', 'secret-link.txt'), /越界/);
+    assert.throws(() => runner.writeFile(run.id, 'workspace', 'secret-link.txt', 'bad'), /越界/);
+    assert.equal(readFileSync(join(outside, 'secret.txt'), 'utf8'), 'outside');
+
+    const dangling = join(workspace, 'dangling.txt');
+    symlinkSync(join(outside, 'missing.txt'), dangling, 'file');
+    assert.throws(() => runner.writeFile(run.id, 'workspace', 'dangling.txt', 'bad'), /符号链接/);
+  }
+
+  // 用独立的 run 验证“区域根目录本身被替换为外链”也会失败。
+  const linkedRun = runner.createRun('path-skill');
+  const linkedArea = join(linkedRun.workspace, 'workspace');
+  const savedArea = `${linkedArea}-saved`;
+  renameSync(linkedArea, savedArea);
+  symlinkSync(outside, linkedArea, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.throws(() => runner.resolveFile(linkedRun.id, 'workspace', 'secret.txt'), /越界/);
+  assert.throws(() => runner.writeFile(linkedRun.id, 'workspace', 'new.txt', 'bad'), /越界/);
+  assert.throws(() => runner.listFiles(linkedRun.id), /越界/);
+  await assert.rejects(() => runner.run(linkedRun.id, 'make'), /越界/);
+  unlinkSync(linkedArea);
+  renameSync(savedArea, linkedArea);
+});
+
+test('SkillRunner 写入阻止最终文件被竞态替换为外链', { skip: process.platform === 'win32' }, async (t) => {
+  const store = new SkillStore(home);
+  store.importDirectory(skillDir, 'race-skill');
+  const runner = new SkillRunner(store, join(home, 'race-runner-home'));
+  const run = runner.createRun('race-skill');
+  const target = join(run.workspace, 'workspace', 'existing.txt');
+  const outside = join(home, 'race-outside.txt');
+  writeFileSync(target, 'inside');
+  writeFileSync(outside, 'untouched');
+  const originalExists = fs.existsSync;
+  const mocked = t.mock.method(fs, 'existsSync', (value: fs.PathLike) => {
+    if (String(value) === target) {
+      unlinkSync(target);
+      symlinkSync(outside, target, 'file');
+    }
+    return originalExists(value);
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.throws(() => runner.writeFile(run.id, 'workspace', 'existing.txt', 'attacker'), /ELOOP|符号链接|越界/);
+    assert.equal(readFileSync(outside, 'utf8'), 'untouched');
+  } finally {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
+test('SkillRunner 在父目录竞态替换后、截断前拒绝写入外链目标', { skip: process.platform === 'win32' }, async (t) => {
+  const store = new SkillStore(home);
+  store.importDirectory(skillDir, 'parent-race-skill');
+  const runner = new SkillRunner(store, join(home, 'parent-race-runner-home'));
+  const run = runner.createRun('parent-race-skill');
+  const parent = join(run.workspace, 'workspace', 'nested');
+  const target = join(parent, 'existing.txt');
+  const outside = join(home, 'parent-race-outside');
+  mkdirSync(parent);
+  mkdirSync(outside);
+  writeFileSync(target, 'inside');
+  writeFileSync(join(outside, 'existing.txt'), 'untouched');
+  const saved = `${parent}-saved`;
+  const originalExists = fs.existsSync;
+  const mocked = t.mock.method(fs, 'existsSync', (value: fs.PathLike) => {
+    if (String(value) === target) {
+      renameSync(parent, saved);
+      symlinkSync(outside, parent, 'dir');
+    }
+    return originalExists(value);
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.throws(() => runner.writeFile(run.id, 'workspace', 'nested/existing.txt', 'attacker'), /越界|发生变化/);
+    assert.equal(readFileSync(join(outside, 'existing.txt'), 'utf8'), 'untouched', '不得截断或改写外链目录中的文件');
+  } finally {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+    unlinkSync(parent);
+    renameSync(saved, parent);
+  }
+});
 
 test('project-init 将项目固定在 workspace 并解析 ${project}', async () => {
   const runner = new SkillRunner(gateway.skills, home);
@@ -417,7 +534,7 @@ test('Skill Worker 拒绝未授权的 MCP Server', async () => {
 });
 
 
-test('Skill Worker 不执行破坏性 MCP 工具', async () => {
+test('Skill Worker 拒绝外部与写操作 MCP 工具', async () => {
   if (!gateway.skills.getSkill('api-skill')) {
     await api('/skills/import', { method: 'POST', body: JSON.stringify({ path: skillDir, id: 'api-skill' }) });
   }
@@ -448,6 +565,14 @@ test('Skill Worker 不执行破坏性 MCP 工具', async () => {
             args: { tool: 'delete_file', arguments: { path: 'C:/server/kbook/backend/delete-me.txt', confirm: 'delete-me.txt' } },
           },
         };
+        yield {
+          type: 'tool_call',
+          call: {
+            id: 'd3',
+            name: 'mcp_call',
+            args: { server: 'external', tool: 'write_records', arguments: { table: 'orders' } },
+          },
+        };
         yield { type: 'done', stopReason: 'tool_use' };
         return;
       }
@@ -471,9 +596,11 @@ test('Skill Worker 不执行破坏性 MCP 工具', async () => {
   const state = worker.get(started.runId)!;
   assert.equal(state.status, 'succeeded', state.error);
   const denied = state.events.filter(
-    (event) => event.type === 'tool_result' && event.tool === 'mcp_call' && !event.result.ok && event.result.error?.code === 'SKILL_MCP_DESTRUCTIVE_DENIED',
+    (event) => event.type === 'tool_result' && event.tool === 'mcp_call' && !event.result.ok,
   );
-  assert.equal(denied.length, 2, '两种写法（显式 server 与按工具名反推）都必须被拒绝');
+  assert.equal(denied.length, 3, '显式内置 server、省略 server 和外部 MCP 写操作都必须被拒绝');
+  assert.ok(denied.some((event) => event.type === 'tool_result' && event.result.error?.code === 'SKILL_MCP_WRITE_DENIED'));
+  assert.ok(denied.some((event) => event.type === 'tool_result' && event.result.error?.code === 'SKILL_MCP_DENIED'));
 });
 
 test('Skill 升级保留旧版本备份且新版本生效', () => {

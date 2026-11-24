@@ -2,7 +2,7 @@ import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -62,8 +62,32 @@ function makeClient(child: ReturnType<typeof spawn>) {
 }
 
 test('stdio MCP server exposes and calls AiDB read tools', async () => {
+  const headers = { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` };
+  const started = await fetch(`http://127.0.0.1:${port}/api/pair/mcp/start`, { method: 'POST', headers });
+  assert.equal(started.status, 200);
+  const { code } = await started.json() as { code: string };
+  const claimed = await fetch(`http://127.0.0.1:${port}/api/pair/mcp/claim`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ code, deviceName: 'stdio test', platform: 'test' }),
+  });
+  assert.equal(claimed.status, 200);
+  const credential = await claimed.json() as { token: string; device: { id: string; scope: string } };
+  assert.equal(credential.device.scope, 'mcp:readonly');
+  const restricted = await fetch(`http://127.0.0.1:${port}/api/connections`, {
+    headers: { authorization: `Bearer ${credential.token}` },
+  });
+  assert.equal(restricted.status, 403, 'stdio 必须使用只读设备令牌，不能退回网关主令牌');
+  const credentialFile = join(home, 'mcp-credentials.json');
+  writeFileSync(credentialFile, JSON.stringify({
+    url: `http://127.0.0.1:${port}`,
+    token: credential.token,
+    deviceId: credential.device.id,
+    pairedAt: new Date().toISOString(),
+  }), { mode: 0o600 });
+
   const child = spawn(process.execPath, [fileURLToPath(new URL('../../../scripts/aidb-mcp-server.mjs', import.meta.url))], {
-    env: { ...process.env, AIDB_URL: `http://127.0.0.1:${port}`, AIDB_TOKEN: TOKEN },
+    env: { ...process.env, AIDB_MCP_CREDENTIALS: credentialFile, AIDB_URL: 'http://127.0.0.1:1', AIDB_TOKEN: TOKEN },
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
   });

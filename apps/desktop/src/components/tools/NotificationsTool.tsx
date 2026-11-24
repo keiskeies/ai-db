@@ -271,7 +271,7 @@ export function NotificationsTool() {
               {inbound ? (
                 <div className="tool-row" style={{ padding: 0, border: 0, marginTop: 6 }}>
                   <div className="field" style={{ flex: 1 }}>
-                    <label>{tr("允许的会话 ID（逗号分隔；留空=全部）")}</label>
+                    <label>{tr("允许的会话 ID（逗号分隔；留空=拒绝所有入站消息）")}</label>
                     <input className="input" value={allowedChats} onChange={(e) => setAllowedChats(e.target.value)} placeholder={tr("群 chat_id / group:123")} />
                   </div>
                   <div className="field" style={{ width: 170 }}>

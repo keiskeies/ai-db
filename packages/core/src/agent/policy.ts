@@ -1,6 +1,5 @@
 import type { Engine, Environment, PermissionMode, Risk } from '../types';
 import { classifySql, countStatements } from '../sql/classify';
-import { tablesFromSql } from './suggest';
 import { classifyAql, classifyCql, classifyCypher, classifyMql, classifyRedis, aqlQueryFromArgs, cqlQueryFromArgs, cypherQueryFromArgs, formatStructuredQuery, mqlQueryFromArgs, redisQueryFromArgs } from '../query';
 import { builtinMcpToolRisk, builtinMcpToolRiskByName } from './builtinMcp';
 import type { ToolCall, ToolDefinition } from './types';
@@ -11,8 +10,144 @@ export interface PermissionContext {
   mode: PermissionMode;
   connectionReadonly: boolean;
   environment: Environment;
+  connectionId?: string;
+  database?: string;
   sessionAllowed?: Set<string>;
   alwaysAllowed?: Set<string>;
+}
+
+export interface ToolSignatureScope {
+  connectionId?: string;
+  database?: string;
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  return `{${Object.keys(value as Record<string, unknown>).sort().map((key) =>
+    `${JSON.stringify(key)}:${stableStringify((value as Record<string, unknown>)[key])}`,
+  ).join(',')}}`;
+}
+
+const SHA256_K = [
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+];
+
+function stableDigest(value: unknown): string {
+  const input = new TextEncoder().encode(stableStringify(value));
+  const padded = new Uint8Array(Math.ceil((input.length + 9) / 64) * 64);
+  padded.set(input);
+  padded[input.length] = 0x80;
+  const view = new DataView(padded.buffer);
+  view.setUint32(padded.length - 8, Math.floor(input.length / 0x20000000));
+  view.setUint32(padded.length - 4, (input.length * 8) >>> 0);
+  const hash = new Uint32Array([
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+  ]);
+  const words = new Uint32Array(64);
+  const rotate = (value: number, bits: number) => (value >>> bits) | (value << (32 - bits));
+  for (let offset = 0; offset < padded.length; offset += 64) {
+    for (let i = 0; i < 16; i++) words[i] = view.getUint32(offset + i * 4);
+    for (let i = 16; i < 64; i++) {
+      const s0 = rotate(words[i - 15], 7) ^ rotate(words[i - 15], 18) ^ (words[i - 15] >>> 3);
+      const s1 = rotate(words[i - 2], 17) ^ rotate(words[i - 2], 19) ^ (words[i - 2] >>> 10);
+      words[i] = (words[i - 16] + s0 + words[i - 7] + s1) >>> 0;
+    }
+    let [a, b, c, d, e, f, g, h] = hash;
+    for (let i = 0; i < 64; i++) {
+      const s1 = rotate(e, 6) ^ rotate(e, 11) ^ rotate(e, 25);
+      const choice = (e & f) ^ (~e & g);
+      const temp1 = (h + s1 + choice + SHA256_K[i] + words[i]) >>> 0;
+      const s0 = rotate(a, 2) ^ rotate(a, 13) ^ rotate(a, 22);
+      const majority = (a & b) ^ (a & c) ^ (b & c);
+      const temp2 = (s0 + majority) >>> 0;
+      h = g; g = f; f = e; e = (d + temp1) >>> 0;
+      d = c; c = b; b = a; a = (temp1 + temp2) >>> 0;
+    }
+    hash[0] = (hash[0] + a) >>> 0; hash[1] = (hash[1] + b) >>> 0;
+    hash[2] = (hash[2] + c) >>> 0; hash[3] = (hash[3] + d) >>> 0;
+    hash[4] = (hash[4] + e) >>> 0; hash[5] = (hash[5] + f) >>> 0;
+    hash[6] = (hash[6] + g) >>> 0; hash[7] = (hash[7] + h) >>> 0;
+  }
+  return [...hash].map((word) => word.toString(16).padStart(8, '0')).join('');
+}
+
+function normalizeSql(sql: string): string {
+  let out = '';
+  let pendingSpace = false;
+  for (let i = 0; i < sql.length;) {
+    const char = sql[i];
+    if (/\s/.test(char)) {
+      pendingSpace = Boolean(out);
+      i++;
+      continue;
+    }
+    if (pendingSpace) { out += ' '; pendingSpace = false; }
+    if (char === "'" || char === '"' || char === '`') {
+      const quote = char;
+      out += char;
+      i++;
+      while (i < sql.length) {
+        out += sql[i];
+        if (sql[i] === '\\' && i + 1 < sql.length) { out += sql[++i]; i++; continue; }
+        if (sql[i] === quote) {
+          if (sql[i + 1] === quote) { out += sql[++i]; i++; continue; }
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (char === '[') {
+      out += char;
+      i++;
+      while (i < sql.length) {
+        out += sql[i];
+        if (sql[i] === ']') {
+          if (sql[i + 1] === ']') { out += sql[++i]; i++; continue; }
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (char === '$') {
+      const tag = sql.slice(i).match(/^\$[A-Za-z_0-9]*\$/)?.[0];
+      if (tag) {
+        const end = sql.indexOf(tag, i + tag.length);
+        const stop = end < 0 ? sql.length : end + tag.length;
+        out += sql.slice(i, stop);
+        i = stop;
+        continue;
+      }
+    }
+    if ((char === '-' && sql[i + 1] === '-') || (char === '/' && sql[i + 1] === '*')) {
+      const line = char === '-';
+      const end = line ? sql.slice(i + 2).search(/[\r\n]/) : sql.indexOf('*/', i + 2);
+      const stop = line ? (end < 0 ? sql.length : i + 2 + end) : (end < 0 ? sql.length : end + 2);
+      out += sql.slice(i, stop);
+      // 行注释的换行是 SQL 边界，折叠成空格会让被注释的 WHERE 混进注释。
+      if (line && end >= 0) {
+        out += '\n';
+        i = stop + 1;
+      } else {
+        i = stop;
+      }
+      continue;
+    }
+    out += char;
+    i++;
+  }
+  return out.trim().replace(/;+$/, '');
 }
 
 /** Resolve the effective risk for a call, including dynamic SQL classification. */
@@ -44,57 +179,17 @@ export function resolveRisk(call: ToolCall, tool: ToolDefinition, engine?: Engin
   return tool.risk;
 }
 
-export function toolSignature(call: ToolCall): string {
-  const conn = String(call.args.connectionId ?? '*');
-  if (call.name === 'create_connection') {
-    const credential = typeof call.args.passwordRef === 'string' && call.args.passwordRef ? 'ref' : call.args.useSavedCredential === true ? 'saved' : 'none';
-    return `${call.name}:${String(call.args.host ?? '*')}:${String(call.args.port ?? '*')}:${String(call.args.engine ?? '*')}:${String(call.args.username ?? '*')}:${String(call.args.database ?? '*')}:${credential}:${call.args.skipProbe === true ? 'skip' : 'test'}:${String(call.args.environment ?? 'dev')}:${call.args.readonly === true ? 'readonly' : 'write'}:${call.args.ssl === true ? 'ssl' : 'plain'}:${call.args.sslInsecure === true ? 'insecure' : 'verified'}`;
+export function toolSignature(call: ToolCall, scope: ToolSignatureScope = {}): string {
+  if (call.name === 'create_connection' || call.name === 'probe_engine') {
+    return `${call.name}:<unscoped>:<unscoped>:${stableDigest(call.args)}`;
   }
-  if (call.name === 'probe_engine') {
-    return `${call.name}:${String(call.args.host ?? '*')}:${String(call.args.port ?? '*')}:${String(call.args.username ?? '*')}:${String(call.args.database ?? '*')}:${call.args.ssl === true ? 'ssl' : 'plain'}:${call.args.sslInsecure === true ? 'insecure' : 'verified'}`;
-  }
-  let target = '';
-  const explicit = call.args.table ?? call.args.name;
-  if (typeof explicit === 'string') target = explicit;
-  else if (typeof call.args.sql === 'string') {
-    // 签名必须覆盖整段脚本：风险级 + 全部引用表 + 动词序列 + 语句数。只取第一个 FROM 表时，
-    // INSERT/UPDATE/DELETE（没有 FROM）会落成 run_sql:conn:*，一次「始终允许」
-    // 就等于该连接上所有非破坏性写的通行证；多语句脚本也能借首表相同的签名混过去。
-    // 动词也要进签名：批准 INSERT orders 不应顺带放行同表的 UPDATE。
-    const sql = String(call.args.sql);
-    const classification = classifySql(sql);
-    const tables = [...new Set(tablesFromSql(sql))].sort().join(',');
-    const verbs = classification.statements.map((s) => s.verb).join(',');
-    target = `${classification.risk}:${tables || '*'}:${verbs}#${classification.statements.length}`;
-  }
-  else if (call.name === 'run_mql' && typeof call.args.collection === 'string') target = call.args.collection;
-  else if (call.name === 'run_redis' && typeof call.args.command === 'string') target = call.args.command;
-  else if (call.name === 'run_cypher' && typeof call.args.query === 'string') target = call.args.query.slice(0, 40);
-  else if (call.name === 'vector_search' && typeof call.args.collection === 'string') target = call.args.collection;
-  else if (call.name === 'search_index' && typeof call.args.index === 'string') target = call.args.index;
-  else if (call.name === 'upsert_document' && typeof call.args.collection === 'string') target = call.args.collection;
-  else if (call.name === 'delete_documents' && typeof call.args.collection === 'string') target = call.args.collection;
-  else if (call.name === 'import_documents' && typeof call.args.collection === 'string') target = call.args.collection;
-  else if (call.name === 'create_collection' && typeof call.args.name === 'string') target = call.args.name;
-  else if (call.name === 'delete_collection' && typeof call.args.name === 'string') target = call.args.name;
-  else if (call.name === 'run_cql' && typeof call.args.query === 'string') target = call.args.query.slice(0, 40);
-  else if (call.name === 'run_aql' && typeof call.args.query === 'string') target = call.args.query.slice(0, 40);
-  else if (call.name === 'mcp_call') {
-    const mcpArgs = call.args.arguments && typeof call.args.arguments === 'object' ? (call.args.arguments as Record<string, unknown>) : undefined;
-    const detail = typeof mcpArgs?.path === 'string'
-      ? mcpArgs.path
-      : typeof mcpArgs?.url === 'string'
-        ? mcpArgs.url
-        : typeof mcpArgs?.source === 'string'
-          ? `${mcpArgs.source}>${String(mcpArgs.destination ?? '')}`
-          : '';
-    target = `${String(call.args.server ?? 'builtin')}.${String(call.args.tool ?? '')}${detail ? `:${detail.slice(0, 200)}` : ''}`;
-  }
-  else if (call.args.index && typeof call.args.index === 'object') {
-    const idx = call.args.index as Record<string, unknown>;
-    if (typeof idx.name === 'string') target = idx.name;
-  }
-  return `${call.name}:${conn}:${target || '*'}`;
+  const explicitConnection = typeof call.args.connectionId === 'string' && call.args.connectionId ? call.args.connectionId : undefined;
+  const explicitDatabase = typeof call.args.database === 'string' && call.args.database ? call.args.database : undefined;
+  const conn = explicitConnection ?? (scope.connectionId || '<unscoped>');
+  const database = explicitDatabase ?? (scope.database || '<unscoped>');
+  const scopedArgs = Object.fromEntries(Object.entries(call.args).filter(([key]) => key !== 'connectionId' && key !== 'database'));
+  if (call.name === 'run_sql' && typeof scopedArgs.sql === 'string') scopedArgs.sql = normalizeSql(scopedArgs.sql);
+  return `${call.name}:${conn}:${database}:${stableDigest(scopedArgs)}`;
 }
 
 const SECRET_ARG_KEYS = new Set(['password', 'sshpassword', 'sshprivatekey', 'sshpassphrase', 'passphrase']);
@@ -213,7 +308,7 @@ export function evaluatePermission(risk: Risk, ctx: PermissionContext, call?: To
   if (ctx.connectionReadonly) return 'deny';
   if (ctx.mode === 'readonly') return 'deny';
 
-  const sig = call ? toolSignature(call) : '';
+  const sig = call ? toolSignature(call, ctx) : '';
   const preApproved = risk !== 'destructive' && sig.length > 0 && (ctx.sessionAllowed?.has(sig) || ctx.alwaysAllowed?.has(sig));
 
   // full = 「全权交给 Agent」，包括生产环境的破坏性操作：选了这一档就是不要中间人，

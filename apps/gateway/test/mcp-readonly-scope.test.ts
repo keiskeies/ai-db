@@ -64,6 +64,9 @@ test('mcp:readonly token can only reach the read-only MCP bridge', async () => {
     ['POST', '/agent/tools/memory_write', { body: JSON.stringify({ args: { kind: 'fact', title: 'PWN', content: 'x' } }) }, 403, 'TOOL_NOT_EXPOSED'],
     ['POST', '/agent/tools/update_plan', { body: JSON.stringify({ args: {} }) }, 403, 'TOOL_NOT_EXPOSED'],
     ['POST', '/agent/tools/backup_database', { body: JSON.stringify({ args: {} }) }, 403, 'TOOL_NOT_EXPOSED'],
+    ['POST', '/agent/tools/render_chart', { body: JSON.stringify({ args: {} }) }, 403, 'TOOL_NOT_EXPOSED'],
+    ['POST', '/agent/tools/analyze_chart', { body: JSON.stringify({ args: {} }) }, 403, 'TOOL_NOT_EXPOSED'],
+    ['POST', '/agent/tools/forecast_chart', { body: JSON.stringify({ args: {} }) }, 403, 'TOOL_NOT_EXPOSED'],
     ['POST', '/agent/tools/create_table', { body: JSON.stringify({ args: {} }) }, 403, 'TOOL_NOT_EXPOSED'],
     ['POST', '/agent/tools/create_connection', { body: JSON.stringify({ args: {} }) }, 403, 'TOOL_NOT_EXPOSED'],
     ['POST', '/agent/tools/probe_engine', { body: JSON.stringify({ args: {} }) }, 403, 'TOOL_NOT_EXPOSED'],
@@ -91,7 +94,26 @@ test('mcp:readonly token cannot enumerate the full tool catalog', async () => {
   const res = await api('/agent/tools', {}, mcp.token);
   assert.equal(res.status, 200);
   const body = (await res.json()) as { tools: Array<{ name: string }> };
-  assert.ok(!body.tools.some((t) => ['mcp_call', 'mcp_list_servers', 'mcp_list_tools', 'memory_write', 'create_table', 'create_connection', 'probe_engine'].includes(t.name)));
+  assert.ok(!body.tools.some((t) => ['mcp_call', 'mcp_list_servers', 'mcp_list_tools', 'memory_write', 'create_table', 'create_connection', 'probe_engine', 'backup_database', 'render_chart', 'analyze_chart', 'forecast_chart'].includes(t.name)));
+});
+
+test('mcp:readonly 在执行前拒绝 run_sql/explain_sql 携带的写 SQL', async () => {
+  const mcp = await claim('mcp:readonly');
+  const connection = gateway.store.listConnections().find((item) => item.engine === 'sqlite');
+  assert.ok(connection);
+  const count = async () => (await gateway.manager.query(connection.id, 'SELECT COUNT(*) AS n FROM users', { maxRows: 1, actor: 'user' })).sets[0]?.rows?.[0]?.[0];
+  const before = await count();
+
+  for (const name of ['run_sql', 'explain_sql']) {
+    const response = await api(`/agent/tools/${name}`, {
+      method: 'POST',
+      body: JSON.stringify({ args: { connectionId: connection.id, sql: 'DELETE FROM users' } }),
+    }, mcp.token);
+    assert.equal(response.status, 403, name);
+    const body = (await response.json()) as { error?: { code?: string } };
+    assert.equal(body.error?.code, 'TOOL_READ_ONLY', name);
+  }
+  assert.equal(await count(), before, '只读 MCP 请求不能改变数据库');
 });
 
 test('revoking the device invalidates the mcp:readonly credential', async () => {

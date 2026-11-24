@@ -1,8 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { deflateRaw } from 'node:zlib';
 import { escapeCsv, neutralizeFormula, toSqlInserts, type ExportInput, type XlsxSheet } from './exportFormat';
+import { throwIfAborted } from './drivers/timeout';
 
 export type { XlsxSheet } from './exportFormat';
 
@@ -57,12 +59,14 @@ const SHEET_CHUNK_ROWS = 2000;
 /** 文本格式导出的分批写入行数：批与批之间让出事件循环，导出不再一次性占住主线程。 */
 const EXPORT_BATCH_ROWS = 1000;
 
-async function buildSheetXml(sheet: XlsxSheet): Promise<Buffer> {
+async function buildSheetXml(sheet: XlsxSheet, signal?: AbortSignal): Promise<Buffer> {
+  throwIfAborted(signal);
   const chunks: Buffer[] = [];
   let pending =
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>';
   pending += `<row r="1">${sheet.columns.map((column, position) => cellXml(column, cellRef(position, 1))).join('')}</row>`;
   for (let i = 0; i < sheet.rows.length; i += 1) {
+    throwIfAborted(signal);
     const row = sheet.rows[i] ?? [];
     const r = i + 2;
     pending += `<row r="${r}">${row.map((value, position) => cellXml(value, cellRef(position, r))).join('')}</row>`;
@@ -88,9 +92,11 @@ class ZipWriter {
   private offset = 0;
   private count = 0;
 
-  async add(name: string, content: string | Buffer): Promise<void> {
+  async add(name: string, content: string | Buffer, signal?: AbortSignal): Promise<void> {
+    throwIfAborted(signal);
     const data = typeof content === 'string' ? Buffer.from(content, 'utf8') : content;
     const compressed = await deflateRawAsync(data);
+    throwIfAborted(signal);
     const crc = crc32(data);
     const nameBuf = Buffer.from(name, 'utf8');
     const local = Buffer.alloc(30);
@@ -131,15 +137,16 @@ class ZipWriter {
   }
 }
 
-export async function toXlsx(columns: string[], rows: unknown[][]): Promise<Buffer> {
-  return toXlsxSheets([{ name: 'Sheet1', columns, rows }]);
+export async function toXlsx(columns: string[], rows: unknown[][], signal?: AbortSignal): Promise<Buffer> {
+  return toXlsxSheets([{ name: 'Sheet1', columns, rows }], signal);
 }
 
 /**
  * 多 sheet 工作簿。报告的表格块各占一张表：
  * 把表格压成「章节 | 类型 | 内容」三列再拼上 `a | b | c`，业务读者就没法拿去用了。
  */
-export async function toXlsxSheets(sheets: XlsxSheet[]): Promise<Buffer> {
+export async function toXlsxSheets(sheets: XlsxSheet[], signal?: AbortSignal): Promise<Buffer> {
+  throwIfAborted(signal);
   const safe = (name: string, index: number): string => {
     const cleaned = String(name ?? '').replace(/[\\/:*?[\]]/g, ' ').trim().slice(0, 31);
     return cleaned || `Sheet${index + 1}`;
@@ -170,24 +177,29 @@ export async function toXlsxSheets(sheets: XlsxSheet[]): Promise<Buffer> {
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
       overrides +
       '</Types>',
+    signal,
   );
   await writer.add(
     '_rels/.rels',
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+    signal,
   );
   await writer.add(
     'xl/workbook.xml',
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheetEntries}</sheets></workbook>`,
+    signal,
   );
   await writer.add(
     'xl/_rels/workbook.xml.rels',
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${relationships}</Relationships>`,
+    signal,
   );
   for (let index = 0; index < sheets.length; index += 1) {
     // 逐 sheet「构建 → 压缩 → 释放」，多 sheet 大表也不会同时驻留所有原始 XML。
-    const xml = await buildSheetXml(sheets[index]!);
-    await writer.add(`xl/worksheets/sheet${index + 1}.xml`, xml);
+    const xml = await buildSheetXml(sheets[index]!, signal);
+    await writer.add(`xl/worksheets/sheet${index + 1}.xml`, xml, signal);
   }
+  throwIfAborted(signal);
   return writer.finish();
 }
 
@@ -196,65 +208,85 @@ export async function toXlsxSheets(sheets: XlsxSheet[]): Promise<Buffer> {
  * 文本格式分批写文件；xlsx 由异步压缩生成。调用方（routes/executor/commands）需 await。
  */
 export async function writeExportFile(input: ExportInput): Promise<{ path: string; bytes: number; rows: number }> {
+  throwIfAborted(input.signal);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const safeBase = (input.baseName || input.tableName || 'query').replace(/[^\w\u4e00-\u9fff-]+/g, '_').slice(0, 40);
-  const filePath = join(input.dir, `${safeBase}-${stamp}.${input.format}`);
+  const filePath = join(input.dir, `${safeBase}-${stamp}-${randomUUID().slice(0, 8)}.${input.format}`);
+  const tempPath = `${filePath}.${randomUUID()}.tmp`;
   const rowCount = input.sheets?.length ? input.sheets.reduce((sum, sheet) => sum + sheet.rows.length, 0) : input.rows.length;
+  let published = false;
 
-  if (input.format === 'xlsx') {
-    const buffer = input.sheets?.length ? await toXlsxSheets(input.sheets) : await toXlsx(input.columns, input.rows);
-    await fsp.writeFile(filePath, buffer);
-  } else {
-    const handle = await fsp.open(filePath, 'w');
-    try {
-      if (input.format === 'csv') {
-        await handle.writeFile('\uFEFF' + input.columns.map(escapeCsv).join(',') + '\r\n');
-        for (let i = 0; i < input.rows.length; i += EXPORT_BATCH_ROWS) {
-          const batch = input.rows.slice(i, i + EXPORT_BATCH_ROWS);
-          await handle.writeFile(batch.map((row) => row.map(escapeCsv).join(',')).join('\r\n') + '\r\n');
-        }
-      } else if (input.format === 'xml') {
-        const tag = (value: string) => {
-          const cleaned = value.replace(/[^A-Za-z0-9_.-]/g, '_');
-          return /^[A-Za-z_]/.test(cleaned) ? cleaned : `col_${cleaned}`;
-        };
-        await handle.writeFile('<?xml version="1.0" encoding="UTF-8"?>\n<rows>\n');
-        for (let i = 0; i < input.rows.length; i += EXPORT_BATCH_ROWS) {
-          const batch = input.rows.slice(i, i + EXPORT_BATCH_ROWS);
-          const xmlRows = batch
-            .map((row) => '  <row>' + input.columns.map((column, index) => `<${tag(column)}>${escapeXml(row[index])}</${tag(column)}>`).join('') + '</row>')
-            .join('\n');
-          await handle.writeFile(xmlRows + '\n');
-        }
-        if (!input.rows.length) await handle.writeFile('\n');
-        await handle.writeFile('</rows>\n');
-      } else if (input.format === 'json') {
-        if (!input.rows.length) {
-          await handle.writeFile('[]');
-        } else {
-          await handle.writeFile('[\n');
+  try {
+    if (input.format === 'xlsx') {
+      const buffer = input.sheets?.length
+        ? await toXlsxSheets(input.sheets, input.signal)
+        : await toXlsx(input.columns, input.rows, input.signal);
+      throwIfAborted(input.signal);
+      await fsp.writeFile(tempPath, buffer);
+    } else {
+      throwIfAborted(input.signal);
+      const handle = await fsp.open(tempPath, 'w');
+      const write = async (text: string) => {
+        throwIfAborted(input.signal);
+        await handle.writeFile(text);
+        throwIfAborted(input.signal);
+      };
+      try {
+        if (input.format === 'csv') {
+          await write('\uFEFF' + input.columns.map(escapeCsv).join(',') + '\r\n');
           for (let i = 0; i < input.rows.length; i += EXPORT_BATCH_ROWS) {
             const batch = input.rows.slice(i, i + EXPORT_BATCH_ROWS);
-            const text = batch
-              .map((row) => '  ' + JSON.stringify(Object.fromEntries(input.columns.map((c, index) => [c, row[index] === undefined ? null : row[index]]))))
-              .join(',\n');
-            const hasMore = i + EXPORT_BATCH_ROWS < input.rows.length;
-            await handle.writeFile(text + (hasMore ? ',\n' : '\n'));
+            await write(batch.map((row) => row.map(escapeCsv).join(',')).join('\r\n') + '\r\n');
           }
-          await handle.writeFile(']');
+        } else if (input.format === 'xml') {
+          const tag = (value: string) => {
+            const cleaned = value.replace(/[^A-Za-z0-9_.-]/g, '_');
+            return /^[A-Za-z_]/.test(cleaned) ? cleaned : `col_${cleaned}`;
+          };
+          await write('<?xml version="1.0" encoding="UTF-8"?>\n<rows>\n');
+          for (let i = 0; i < input.rows.length; i += EXPORT_BATCH_ROWS) {
+            const batch = input.rows.slice(i, i + EXPORT_BATCH_ROWS);
+            const xmlRows = batch
+              .map((row) => '  <row>' + input.columns.map((column, index) => `<${tag(column)}>${escapeXml(row[index])}</${tag(column)}>`).join('') + '</row>')
+              .join('\n');
+            await write(xmlRows + '\n');
+          }
+          if (!input.rows.length) await write('\n');
+          await write('</rows>\n');
+        } else if (input.format === 'json') {
+          if (!input.rows.length) {
+            await write('[]');
+          } else {
+            await write('[\n');
+            for (let i = 0; i < input.rows.length; i += EXPORT_BATCH_ROWS) {
+              const batch = input.rows.slice(i, i + EXPORT_BATCH_ROWS);
+              const text = batch
+                .map((row) => '  ' + JSON.stringify(Object.fromEntries(input.columns.map((c, index) => [c, row[index] === undefined ? null : row[index]]))))
+                .join(',\n');
+              const hasMore = i + EXPORT_BATCH_ROWS < input.rows.length;
+              await write(text + (hasMore ? ',\n' : '\n'));
+            }
+            await write(']');
+          }
+        } else {
+          await write(`-- AiDB Studio export (${new Date().toISOString()})\n`);
+          for (let i = 0; i < input.rows.length; i += EXPORT_BATCH_ROWS) {
+            const batch = input.rows.slice(i, i + EXPORT_BATCH_ROWS);
+            await write(toSqlInserts(input.engine, input.tableName || 'exported_data', input.columns, batch) + '\n');
+          }
+          if (!input.rows.length) await write('\n');
         }
-      } else {
-        await handle.writeFile(`-- AiDB Studio export (${new Date().toISOString()})\n`);
-        for (let i = 0; i < input.rows.length; i += EXPORT_BATCH_ROWS) {
-          const batch = input.rows.slice(i, i + EXPORT_BATCH_ROWS);
-          await handle.writeFile(toSqlInserts(input.engine, input.tableName || 'exported_data', input.columns, batch) + '\n');
-        }
-        if (!input.rows.length) await handle.writeFile('\n');
+      } finally {
+        await handle.close();
       }
-    } finally {
-      await handle.close();
     }
+    throwIfAborted(input.signal);
+    await fsp.rename(tempPath, filePath);
+    published = true;
+    const stat = await fsp.stat(filePath);
+    throwIfAborted(input.signal);
+    return { path: filePath, bytes: stat.size, rows: rowCount };
+  } finally {
+    if (!published) await fsp.rm(tempPath, { force: true });
   }
-  const stat = await fsp.stat(filePath);
-  return { path: filePath, bytes: stat.size, rows: rowCount };
 }

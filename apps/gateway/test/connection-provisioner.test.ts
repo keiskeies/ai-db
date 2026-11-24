@@ -73,6 +73,47 @@ test('probe_engine keeps the real driver concurrency at four', async () => {
   assert.equal(maxActive, 4);
 });
 
+test('probe_engine shares the real driver cap across concurrent probes', async () => {
+  let active = 0;
+  let maxActive = 0;
+  const h = harness({ test: async () => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    active -= 1;
+    return { ok: false, message: 'Protocol error', code: 'EPROTO', latencyMs: 20 };
+  } });
+  await Promise.all([
+    h.provisioner.probe({ host: '192.168.1.7', port: 1, username: 'root' }),
+    h.provisioner.probe({ host: '192.168.1.8', port: 1, username: 'root' }),
+  ]);
+  assert.equal(maxActive, 4);
+});
+
+test('timed-out drivers keep their in-flight slot until the driver really settles', async () => {
+  let active = 0;
+  let maxActive = 0;
+  let calls = 0;
+  const h = harness({ test: async () => {
+    const call = ++calls;
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise((resolve) => setTimeout(resolve, call <= 4 ? 5500 : 10));
+    active -= 1;
+    return { ok: false, message: 'Protocol error', code: 'EPROTO', latencyMs: call <= 4 ? 5500 : 10 };
+  } });
+  const first = await h.provisioner.probe({ host: '192.168.1.7', port: 1, username: 'root' });
+  assert.equal(first.outcome, 'unknown');
+  assert.equal(calls, 4, 'timed-out workers must retire instead of starting more attempts');
+
+  const second = h.provisioner.probe({ host: '192.168.1.8', port: 1, username: 'root' });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(calls, 4, '超时提示不能释放仍由底层驱动占用的名额');
+  await second;
+  assert.equal(maxActive, 4);
+  assert.equal(calls, 4 + PROBE_RANK.length);
+});
+
 test('authentication errors identify the protocol instead of reporting an unknown database', () => {
   assert.equal(classifyProbeFailure({ code: 'ER_ACCESS_DENIED_ERROR', message: 'Access denied for user root' }), 'auth_failed');
   assert.equal(classifyProbeFailure({ code: '28P01', message: 'password authentication failed' }), 'auth_failed');

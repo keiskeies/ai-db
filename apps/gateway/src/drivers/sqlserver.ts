@@ -1,11 +1,12 @@
 // mssql 是 CJS 包：命名空间导入在 Node ESM/tsx 下拿不到 ConnectionPool（只有 esbuild 打包才正常），
 // 因此用默认导入取运行时值，类型走 import type。
 import mssql from 'mssql';
-import type { ConnectionPool, Transaction } from 'mssql';
+import type { ConnectionPool, Request, Transaction } from 'mssql';
 import type { ColumnInfo, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions } from './types';
 import { DbError, toRowArray } from './types';
 import { trustServerCertificate } from './ssl';
+import { throwIfAborted } from './timeout';
 
 export interface SqlServerOptions {
   host: string;
@@ -288,12 +289,23 @@ export class SqlServerDriver implements Driver {
   }
 
   /** 备份恢复用：整段 T-SQL 批处理一次提交，省掉逐条语句的往返。 */
-  async execScript(sql: string, database?: string): Promise<void> {
+  async execScript(sql: string, database?: string, opts: RunOptions = {}): Promise<void> {
+    throwIfAborted(opts.signal);
     const pool = await this.pool(database);
+    throwIfAborted(opts.signal);
+    const request = pool.request();
+    const onAbort = () => {
+      try { request.cancel(); } catch { /* 查询已结束时无需再取消 */ }
+    };
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
     try {
-      await pool.request().batch(sql);
+      await request.batch(sql);
+      throwIfAborted(opts.signal);
     } catch (err: any) {
+      if (opts.signal?.aborted) throw new DbError('工具执行已取消', { code: 'ABORTED' });
       throw new DbError(err?.message ?? 'SQL Server 脚本执行失败', { code: err?.code ?? 'MSSQL_SCRIPT_ERROR' });
+    } finally {
+      opts.signal?.removeEventListener('abort', onAbort);
     }
   }
 

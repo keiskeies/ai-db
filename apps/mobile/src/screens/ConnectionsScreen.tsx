@@ -7,7 +7,7 @@ import { styles } from '../styles';
 import type { TabKey } from '../types';
 import { Text, EngineLogo } from '../components/base';
 
-export function ConnectionsScreen({ setMePage, refreshing, refreshAll, connections, activeConnectionId, setActiveConnectionId, setTab, activeDatabase, databases }: { setMePage: Dispatch<SetStateAction<'memory' | 'connections' | 'settings' | null>>; refreshing: boolean; refreshAll: () => Promise<void>; connections: ConnectionConfig[]; activeConnectionId: string | undefined; setActiveConnectionId: Dispatch<SetStateAction<string | undefined>>; setTab: Dispatch<SetStateAction<TabKey>>; activeDatabase: string | undefined; databases: string[]; }) {
+export function ConnectionsScreen({ setMePage, refreshing, refreshAll, connections, activeConnectionId, setActiveConnectionId, setTab, activeDatabase, databases, scopeLocked }: { setMePage: Dispatch<SetStateAction<'memory' | 'connections' | 'settings' | null>>; refreshing: boolean; refreshAll: () => Promise<void>; connections: ConnectionConfig[]; activeConnectionId: string | undefined; setActiveConnectionId: Dispatch<SetStateAction<string | undefined>>; setTab: Dispatch<SetStateAction<TabKey>>; activeDatabase: string | undefined; databases: string[]; scopeLocked: boolean; }) {
   return (
           <View style={{ flex: 1 }}>
             <View style={styles.tableHead}>
@@ -28,6 +28,7 @@ export function ConnectionsScreen({ setMePage, refreshing, refreshAll, connectio
                   key={conn.id}
                   testID={`m-connection-${conn.id}`}
                   style={[styles.connCard, conn.id === activeConnectionId && { borderColor: colors.accent }]}
+                  disabled={scopeLocked}
                   onPress={() => {
                     setActiveConnectionId(conn.id);
                     setMePage(null);

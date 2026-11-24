@@ -12,6 +12,7 @@ import {
   type IndexDef,
 } from '@aidb/core';
 import { DbError } from '../drivers';
+import { throwIfAborted } from '../drivers/timeout';
 import { dumpDatabase } from '../services';
 import { defineTool, ok } from './types';
 
@@ -48,6 +49,8 @@ export const createTableTool = defineTool('create_table', async (call, ctx, s) =
     autoLimit: false,
     timeoutMs: settings.queryTimeoutMs,
     actor: 'agent',
+    executionId: ctx.executionId,
+    signal: ctx.signal,
   });
   return ok(started, `已创建表 ${tableName}`, { table: tableName, ddl, statements: batch.sets.length, messages: batch.messages });
 });
@@ -59,11 +62,13 @@ export const alterTableTool = defineTool('alter_table', async (call, ctx, s) => 
   const database = s.databaseOf(call, conn);
   const tableName = String(a.table ?? '');
   const { table } = await s.manager.findTable(conn.id, database, tableName);
+  throwIfAborted(ctx.signal);
   if (addField(conn.engine)) {
     const ops = Array.isArray(a.operations) ? (a.operations as Array<Record<string, unknown>>) : [];
     if (!ops.length) throw new DbError('operations 不能为空');
     const added: string[] = [];
     for (const op of ops) {
+      throwIfAborted(ctx.signal);
       if (op.op !== 'add_column') {
         throw new DbError(`${engineMeta(conn.engine).label} 的结构变更只支持 add_column`, {
           code: 'UNSUPPORTED_ENGINE',
@@ -74,7 +79,8 @@ export const alterTableTool = defineTool('alter_table', async (call, ctx, s) => 
       const result = await s.manager.createField(
         conn.id,
         { object: tableName, name: String(column.name ?? ''), type: String(column.type ?? 'text') },
-        { database, timeoutMs: s.getSettings().queryTimeoutMs, actor: 'agent' },
+        { database, timeoutMs: s.getSettings().queryTimeoutMs, actor: 'agent', executionId: ctx.executionId,
+    signal: ctx.signal },
       );
       added.push(`${result.name}:${result.type}`);
     }
@@ -90,6 +96,8 @@ export const alterTableTool = defineTool('alter_table', async (call, ctx, s) => 
     autoLimit: false,
     timeoutMs: settings.queryTimeoutMs,
     actor: 'agent',
+    executionId: ctx.executionId,
+    signal: ctx.signal,
   });
   return ok(started, `已修改表 ${tableName}（${statements.length} 条语句）`, { table: tableName, statements });
 });
@@ -107,11 +115,20 @@ export const dropObjectTool = defineTool('drop_object', async (call, ctx, s) => 
   let backupPath: string | undefined;
   const settings = s.getSettings();
   if (settings.agent.snapshotBeforeWrite) {
-    const backup = await dumpDatabase(s.store, s.manager, s.config, conn.id, database, `auto-before-drop:${name}`);
+    const backup = await dumpDatabase(s.store, s.manager, s.config, conn.id, database, `auto-before-drop:${name}`, ctx.signal, ctx.executionId);
     backupPath = backup.path;
   }
+  throwIfAborted(ctx.signal);
   const sql = buildDropObject(conn.engine, kind, found.name, Boolean(a.cascade), s.schemaFor(conn, found));
-  await s.manager.query(conn.id, sql, { database, allowMulti: false, autoLimit: false, timeoutMs: settings.queryTimeoutMs, actor: 'agent' });
+  await s.manager.query(conn.id, sql, {
+    database,
+    allowMulti: false,
+    autoLimit: false,
+    timeoutMs: settings.queryTimeoutMs,
+    actor: 'agent',
+    executionId: ctx.executionId,
+    signal: ctx.signal,
+  });
   return ok(started, `已删除${kind === 'view' ? '视图' : '表'} ${found.name}`, { name: found.name, kind, sql, backupPath }, { backupPath });
 });
 
@@ -129,7 +146,8 @@ export const manageIndexTool = defineTool('manage_index', async (call, ctx, s) =
         ? await s.manager.dropCollectionIndex(
             conn.id,
             { collection: tableName, name: String(a.name ?? raw.name ?? '') },
-            { database, timeoutMs: settings.queryTimeoutMs, actor: 'agent' },
+            { database, timeoutMs: settings.queryTimeoutMs, actor: 'agent', executionId: ctx.executionId,
+    signal: ctx.signal },
           )
         : await s.manager.createCollectionIndex(
             conn.id,
@@ -142,7 +160,8 @@ export const manageIndexTool = defineTool('manage_index', async (call, ctx, s) =
               expireAfterSeconds: Number(a.expireAfterSeconds ?? 0) > 0 ? Math.floor(Number(a.expireAfterSeconds)) : undefined,
               type: typeof a.type === 'string' ? a.type : undefined,
             },
-            { database, timeoutMs: settings.queryTimeoutMs, actor: 'agent' },
+            { database, timeoutMs: settings.queryTimeoutMs, actor: 'agent', executionId: ctx.executionId,
+    signal: ctx.signal },
           );
     return ok(started, a.action === 'drop' ? '索引已删除' : '索引已创建', { table: tableName, index: result.name });
   }
@@ -168,6 +187,14 @@ export const manageIndexTool = defineTool('manage_index', async (call, ctx, s) =
     );
   }
   const settings = s.getSettings();
-  await s.manager.query(conn.id, sql, { database, allowMulti: false, autoLimit: false, timeoutMs: settings.queryTimeoutMs, actor: 'agent' });
+  await s.manager.query(conn.id, sql, {
+    database,
+    allowMulti: false,
+    autoLimit: false,
+    timeoutMs: settings.queryTimeoutMs,
+    actor: 'agent',
+    executionId: ctx.executionId,
+    signal: ctx.signal,
+  });
   return ok(started, action === 'drop' ? '索引已删除' : '索引已创建', { table: table.name, sql });
 });

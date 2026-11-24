@@ -19,6 +19,8 @@ export const transferDataTool = defineTool('transfer_data', async (call, ctx, s)
     mode: a.mode === 'replace' ? 'replace' : 'append',
     createMissing: a.createMissing !== false,
     limit: typeof a.limit === 'number' ? a.limit : undefined,
+    executionId: ctx.executionId,
+    signal: ctx.signal,
     onEvent: (event) => {
       if (event.type === 'table-start') {
         progress = { current: event.index, total: event.total, unit: 'table', label: event.table };
@@ -104,6 +106,8 @@ export const managePipelineTool = defineTool('manage_pipeline', async (call, ctx
       trigger: 'manual',
       params: a.params && typeof a.params === 'object' ? (a.params as Record<string, unknown>) : undefined,
       previewOnly: dryRun,
+      executionId: ctx.executionId,
+      signal: ctx.signal,
     });
     // 样本行不上对话：一行几百字节，历史里已经存过了。
     const stepViews = run.steps.map((step) => ({

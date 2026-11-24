@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import AdmZip from 'adm-zip';
 import { toXlsx, toXlsxSheets, writeExportFile } from '../src/xlsx';
 
@@ -154,6 +154,21 @@ test('writeExportFile csv/json/xml/sql 分批落盘内容可解析', () =>
     const sql = await writeExportFile({ dir, format: 'sql', columns, rows, tableName: 't', engine: 'sqlite' });
     const sqlText = readFileSync(sql.path, 'utf8');
     assert.equal((sqlText.match(/INSERT INTO/g) ?? []).length, 2500);
+  }));
+
+test('writeExportFile 并发同名导出使用不同文件，取消任务不删他人产物', () =>
+  withDir(async (dir) => {
+    const input = { dir, format: 'csv' as const, columns: ['id'], rows: [[1], [2]], tableName: 'same', engine: 'sqlite' as const };
+    const [first, second] = await Promise.all([writeExportFile(input), writeExportFile(input)]);
+    assert.notEqual(first.path, second.path);
+    assert.equal(readFileSync(first.path, 'utf8'), readFileSync(second.path, 'utf8'));
+
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(writeExportFile({ ...input, signal: controller.signal }), { code: 'ABORTED' });
+    assert.deepEqual(readdirSync(dir).sort(), [basename(first.path), basename(second.path)].sort());
+    assert.ok(readdirSync(dir).every((name) => !name.endsWith('.tmp')));
+    assert.equal(existsSync(first.path), true);
   }));
 
 test('writeExportFile 空结果集各格式仍产出合法文件', () =>

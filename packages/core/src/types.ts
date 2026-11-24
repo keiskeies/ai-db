@@ -773,7 +773,7 @@ export interface AgentPlanItem {
  * 'stalled' 与 'disconnected' 也必须分开：前者是模型端不回话，后者是界面那侧断开，
  * 排查方向完全相反。
  */
-export type AgentResumeCause = 'stalled' | 'truncated' | 'empty' | 'disconnected' | 'max_steps';
+export type AgentResumeCause = 'stalled' | 'truncated' | 'empty' | 'disconnected' | 'max_steps' | 'provider_incomplete';
 
 export interface AgentSessionMeta {
   id: string;

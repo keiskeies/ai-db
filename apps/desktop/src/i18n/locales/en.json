@@ -3668,5 +3668,13 @@
   "已创建连接 {0}（{1} {2}:{3}）；未保存密码，请在连接编辑器中补充": "Created connection {0} ({1} {2}:{3}); no password was saved. Add it in the connection editor.",
   "已创建连接 {0}（{1} {2}:{3}）；按用户要求跳过了连通性测试": "Created connection {0} ({1} {2}:{3}); connectivity testing was skipped at the user's request.",
   "连接已存在": "Connection already exists",
-  "点击连接加载数据库": "Click the connection to load databases"
+  "点击连接加载数据库": "Click the connection to load databases",
+  "服务端是否结束尚未确认，请重试停止后再切换会话或作用域。": "Whether the server-side turn has ended is not confirmed. Retry Stop before switching sessions or scope.",
+  "重试停止": "Retry Stop",
+  "允许的会话 ID（逗号分隔；留空=拒绝所有入站消息）": "Allowed session IDs (comma-separated; leave blank to reject all inbound messages)",
+  "停止确认后才能切换连接或数据库。": "You can switch connections or databases only after Stop is confirmed.",
+  "Agent 正在创建会话": "Agent is creating a session",
+  "请等创建完成或停止后再切换会话。": "Wait for session creation to finish or stop it before switching sessions.",
+  "本地连接已停止，但未能确认服务端是否结束；请稍后重试停止。": "The local connection was stopped, but the server-side turn could not be confirmed as ended. Retry Stop shortly.",
+  "停止请求未确认": "Stop request was not confirmed"
 }

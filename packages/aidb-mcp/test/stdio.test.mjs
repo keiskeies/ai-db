@@ -45,13 +45,14 @@ test.after(async () => {
 
 // 真实配对流程换取 mcp:readonly token，写入临时凭据文件。
 const h = { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` };
-const started = await fetch(`http://127.0.0.1:${port}/api/pair/start`, { method: 'POST', headers: h });
+const started = await fetch(`http://127.0.0.1:${port}/api/pair/mcp/start`, { method: 'POST', headers: h });
 const { code } = await started.json();
-const claimed = await fetch(`http://127.0.0.1:${port}/api/pair/claim`, {
+const claimed = await fetch(`http://127.0.0.1:${port}/api/pair/mcp/claim`, {
   method: 'POST', headers: h,
-  body: JSON.stringify({ code, deviceName: 'Claude Code', platform: 'claude-code', scope: 'mcp:readonly' }),
+  body: JSON.stringify({ code, deviceName: 'Claude Code', platform: 'claude-code' }),
 });
-const { token } = await claimed.json();
+const { token, device } = await claimed.json();
+assert.equal(device.scope, 'mcp:readonly');
 const credFile = join(home, 'credentials.json');
 writeFileSync(credFile, JSON.stringify({ url: `http://127.0.0.1:${port}`, token, deviceId: 'd1', pairedAt: new Date().toISOString() }));
 

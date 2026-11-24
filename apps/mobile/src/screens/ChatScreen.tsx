@@ -13,11 +13,13 @@ import { PermissionSelect } from '../components/PermissionSelect';
 import { Markdown } from '../components/markdown';
 import { ChartInsightContext } from '../components/chart/ChartInsightContext';
 import { MobileChart } from '../components/chart/MobileChart';
-import { chartOf, mobileTurnFromLive } from '../components/chat/turnModel';
+import { chartOf, isUnfinishedLiveTurn, liveTurnEndLabel, mobileTurnFromLive } from '../components/chat/turnModel';
 import { UserBubble, ThinkingBlock, ExecutionSection, MobileToolCard, PlanCard } from '../components/chat/cards';
 import { AssistantMessage, MobileTurnTimeline } from '../components/chat/AssistantMessage';
+import type { BridgeClient } from '../bridge';
 
 export function ChatScreen({
+  client,
   sessionMeta,
   connection,
   sessions,
@@ -28,9 +30,12 @@ export function ChatScreen({
   mode,
   setMode,
   busy,
+  sending,
+  scopeLocked,
   connected,
   onSend,
   onStop,
+  onCancelSend,
   onNew,
   onOpenSessions,
   onOpenConnections,
@@ -53,6 +58,7 @@ export function ChatScreen({
   onPickImage,
   onRemoveImage,
 }: {
+  client: BridgeClient;
   sessionMeta?: AgentSessionMeta;
   connection?: ConnectionConfig;
   connections: ConnectionConfig[];
@@ -64,9 +70,12 @@ export function ChatScreen({
   mode: PermissionMode;
   setMode: (mode: PermissionMode) => void;
   busy: boolean;
+  sending: boolean;
+  scopeLocked: boolean;
   connected: boolean;
   onSend: () => void;
   onStop: () => void;
+  onCancelSend: () => void;
   onNew: () => void;
   onOpenSessions: () => void;
   onOpenConnections: () => void;
@@ -181,13 +190,13 @@ export function ChatScreen({
         <View style={{ flex: 1 }}>
           <Text style={styles.chatTitle} numberOfLines={1}>{sessionMeta?.title ?? 'AI 助手'}</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 1 }}>
-            <Pressable testID="m-connection" style={styles.connInline} onPress={onOpenConnections}>
+            <Pressable testID="m-connection" style={styles.connInline} onPress={onOpenConnections} disabled={scopeLocked}>
               <EngineLogo engine={connection?.engine} size={14} />
               <Text style={styles.listMeta} numberOfLines={1}>{connection?.name ?? '未选择连接'}</Text>
               <ChevronDown size={11} color={colors.muted} />
             </Pressable>
             {databases.length > 1 ? (
-              <Pressable testID="m-database" style={styles.connInline} onPress={onOpenDatabases}>
+              <Pressable testID="m-database" style={styles.connInline} onPress={onOpenDatabases} disabled={scopeLocked}>
                 <Database size={10} color={colors.accent} />
                 <Text style={styles.listMeta} numberOfLines={1}>{database ?? '选择库'}</Text>
                 <ChevronDown size={10} color={colors.muted} />
@@ -198,7 +207,7 @@ export function ChatScreen({
         <Pressable testID="m-sessions" style={styles.iconButton} onPress={onOpenSessions}>
           <History size={16} color={colors.text} />
         </Pressable>
-        <Pressable testID="m-new-session" style={styles.iconButton} onPress={onNew}>
+        <Pressable testID="m-new-session" style={styles.iconButton} onPress={onNew} disabled={scopeLocked}>
           <MessageSquarePlus size={16} color={colors.text} />
         </Pressable>
       </View>
@@ -268,7 +277,7 @@ export function ChatScreen({
 
         {messages.map((message) =>
           message.role === 'user' ? (
-            <UserBubble key={message.id} text={message.content} />
+            <UserBubble key={message.id} client={client} text={message.content} images={message.blocks.flatMap((block) => block.type === 'image' && block.attachmentId ? [block.attachmentId] : [])} />
           ) : (
             <AssistantMessage key={message.id} message={message} />
           ),
@@ -276,7 +285,7 @@ export function ChatScreen({
 
         {live ? (
           <>
-            <UserBubble text={live.userText} />
+            <UserBubble client={client} text={live.userText} images={live.userImages} />
             <View style={{ gap: 10 }}>
               {live.memories.length ? (
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 5 }}>
@@ -325,10 +334,33 @@ export function ChatScreen({
                 </View>
               ) : null}
               {live.error ? <Text style={styles.error}>{live.error}</Text> : null}
+              {!busy && !live.error && isUnfinishedLiveTurn(live) ? (
+                <Text style={[styles.hint, { color: colors.warning }]}>
+                  {live.status === 'aborted' && live.abortCause === 'stalled'
+                    ? live.abortReason ?? '模型连接无响应，本回合已停止。'
+                    : live.stop === 'max_steps'
+                      ? '已达到本次工具步数上限，剩下的步骤还没做。'
+                      : live.stop === 'max_output_tokens'
+                        ? '模型输出被截断，本回合尚未完成。'
+                        : '模型这一轮没有返回完整内容。'}
+                </Text>
+              ) : null}
               {!busy ? (
                 <Text style={styles.turnEnd}>
-                  {live.status === 'aborted' ? live.abortReason ?? '已中止' : live.status === 'error' ? '失败' : '已完成'} · {live.tools.length} 次工具 · {Math.max(1, Math.round((Date.now() - live.startedAt) / 1000))}s
+                  {live.status === 'aborted' && live.abortCause !== 'stalled' ? live.abortReason ?? liveTurnEndLabel(live) : liveTurnEndLabel(live)} · {live.tools.length} 次工具 · {Math.max(1, Math.round(((live.endedAt ?? Date.now()) - live.startedAt) / 1000))}s
+                  {live.tokensIn || live.tokensOut ? ` · ↑${live.tokensIn} ↓${live.tokensOut}` : ''}
                 </Text>
+              ) : null}
+              {!busy && live.suggestions.length ? (
+                <View style={styles.suggestList}>
+                  <Text style={styles.sectionLabel}>继续问：</Text>
+                  {live.suggestions.map((suggestion) => (
+                    <Pressable key={suggestion.id} style={styles.capItem} onPress={() => setInput(suggestion.prompt)}>
+                      <Sparkles size={12} color={colors.agent} />
+                      <Text style={[styles.capText, { flex: 1 }]} numberOfLines={1}>{suggestion.prompt}</Text>
+                    </Pressable>
+                  ))}
+                </View>
               ) : null}
             </View>
           </>
@@ -388,12 +420,12 @@ export function ChatScreen({
               {uploadingImage ? <ActivityIndicator size="small" color={colors.accent} /> : <ImagePlus size={15} color={colors.muted} />}
             </Pressable>
             <View style={{ flex: 1 }} />
-            {busy ? (
-              <Pressable style={[styles.sendButton, { backgroundColor: colors.danger }]} onPress={onStop}>
+            {busy || sending ? (
+              <Pressable testID={sending ? 'm-cancel-send' : 'm-stop'} accessibilityLabel={sending ? '取消发送' : '停止'} style={[styles.sendButton, { backgroundColor: colors.danger }]} onPress={sending ? onCancelSend : onStop}>
                 <Square size={13} color={colors.onSolid} />
               </Pressable>
             ) : (
-              <Pressable testID="m-send" style={[styles.sendButton, (!input.trim() || !connected) && { opacity: 0.4 }]} onPress={onSend} disabled={!input.trim() || !connected}>
+              <Pressable testID="m-send" style={[styles.sendButton, (!input.trim() || !connected || uploadingImage || sending) && { opacity: 0.4 }]} onPress={onSend} disabled={!input.trim() || !connected || uploadingImage || sending}>
                 <Send size={14} color={colors.onSolid} />
               </Pressable>
             )}

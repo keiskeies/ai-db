@@ -32,6 +32,9 @@ export const PROVIDER_STALL_MS = 300_000;
 
 /** 停摆错误的 code；runtime 据此把停摆与真正的调用失败分开处理。 */
 export const PROVIDER_STALL_CODE = 'PROVIDER_STALLED';
+export const PROVIDER_STREAM_CODE = 'PROVIDER_STREAM';
+const ERROR_BODY_MAX_BYTES = 64 * 1024;
+const ERROR_BODY_TIMEOUT_MS = 10_000;
 
 export interface SseOptions {
   /** 连续无字节多久算停摆；0 表示关闭（本地模型首 token 前可能静默很久）。 */
@@ -147,8 +150,62 @@ async function readChunk(
     });
   } finally {
     if (timer) clearTimeout(timer);
-    // 阈值先到时调用方会直接退出循环，替它收尾，否则底层连接挂在 await 上。
-    if (stalled) await reader.cancel().catch(() => undefined);
+    // 阈值先到时调用方会直接退出循环；cancel 若卡住不能把停摆错误一起拖死。
+    if (stalled) void reader.cancel().catch(() => undefined);
+  }
+}
+
+export function providerStreamError(message: string): ProviderError {
+  return new ProviderError(message, { code: PROVIDER_STREAM_CODE, retryable: true });
+}
+
+export function parseToolArguments(text: string, provider: string, tool: string): Record<string, unknown> {
+  if (!text.trim()) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw providerStreamError(`${provider} 返回的工具 ${tool} 参数 JSON 未闭合或格式无效`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw providerStreamError(`${provider} 返回的工具 ${tool} 参数必须是 JSON 对象`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+export async function readResponseText(
+  body: ReadableStream<Uint8Array>,
+  opts: { signal?: AbortSignal; stallMs?: number; timeoutMs?: number; maxBytes?: number } = {},
+): Promise<string> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const controller = new AbortController();
+  const timeoutMs = opts.timeoutMs ?? ERROR_BODY_TIMEOUT_MS;
+  const maxBytes = opts.maxBytes ?? ERROR_BODY_MAX_BYTES;
+  const onAbort = () => { void reader.cancel(controller.signal.reason).catch(() => undefined); };
+  const onOuterAbort = () => controller.abort(opts.signal?.reason);
+  controller.signal.addEventListener('abort', onAbort, { once: true });
+  if (opts.signal?.aborted) controller.abort(opts.signal.reason);
+  else opts.signal?.addEventListener('abort', onOuterAbort, { once: true });
+  const timer = setTimeout(() => controller.abort(providerStreamError('读取模型错误响应超时')), Math.max(1, timeoutMs));
+  timer.unref?.();
+  let size = 0;
+  let text = '';
+  try {
+    while (true) {
+      if (controller.signal.aborted) throw controller.signal.reason;
+      const chunk = await readChunk(reader, opts.stallMs ?? PROVIDER_STALL_MS);
+      if (controller.signal.aborted) throw controller.signal.reason;
+      if (chunk.done) return text + decoder.decode();
+      size += chunk.value.byteLength;
+      if (size > maxBytes) throw providerStreamError('模型错误响应超过读取上限');
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+  } finally {
+    clearTimeout(timer);
+    controller.signal.removeEventListener('abort', onAbort);
+    opts.signal?.removeEventListener('abort', onOuterAbort);
+    void reader.cancel().catch(() => undefined);
   }
 }
 
@@ -207,18 +264,22 @@ export async function* readSse(
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let pendingCr = false;
   let done = false;
   while (!done) {
     const chunk = await readChunk(reader, opts.stallMs ?? PROVIDER_STALL_MS);
     if (chunk.done) {
       done = true;
+      buffer += ((pendingCr ? '\r' : '') + decoder.decode()).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       if (buffer.trim()) {
         const last = parseFrame(buffer);
         if (last) yield last;
       }
       break;
     }
-    buffer += decoder.decode(chunk.value, { stream: true }).replace(/\r\n/g, '\n');
+    const decoded: string = (pendingCr ? '\r' : '') + decoder.decode(chunk.value, { stream: true });
+    pendingCr = decoded.endsWith('\r');
+    buffer += (pendingCr ? decoded.slice(0, -1) : decoded).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     let idx = buffer.indexOf('\n\n');
     while (idx !== -1) {
       const raw = buffer.slice(0, idx);

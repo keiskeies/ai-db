@@ -443,11 +443,12 @@ ${(skill.body ?? '').slice(0, 20000)}`;
             };
           }
           const declared = declaredMcp.find((item) => item.id === server || item.name === server);
-          if (call.name === 'mcp_call' && builtinMcpToolRisk(declared?.id ?? server, String(call.args.tool ?? '')) === 'destructive') {
+          const mcpRisk = call.name === 'mcp_call' ? builtinMcpToolRisk(declared?.id ?? server, String(call.args.tool ?? '')) : undefined;
+          if (call.name === 'mcp_call' && mcpRisk !== 'read') {
             return {
               ok: false,
-              summary: 'Skill 不能执行破坏性 MCP 工具',
-              error: { code: 'SKILL_MCP_DESTRUCTIVE_DENIED', message: 'Skill Worker 不执行破坏性 MCP 工具（如 delete_file），请让用户在主会话确认' },
+              summary: 'Skill 不能执行写操作 MCP 工具',
+              error: { code: 'SKILL_MCP_WRITE_DENIED', message: 'Skill Worker 只执行已确认只读的内置 MCP 工具；外部或写操作工具请让用户在主会话确认' },
               meta: { durationMs: 0 },
             };
           }

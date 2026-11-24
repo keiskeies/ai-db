@@ -709,9 +709,9 @@ export const api = {
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     return request<{ sessions: AgentSessionMeta[] }>(`/agent/sessions${suffix}`);
   },
-  createSession: (body: { connectionId?: string; database?: string; title?: string; permissionMode?: string }) =>
-    request<{ session: AgentSessionMeta }>('/agent/sessions', { method: 'POST', body: JSON.stringify(body) }),
-  getSession: (id: string) => request<SessionDetail>(`/agent/sessions/${id}`),
+  createSession: (body: { connectionId?: string; database?: string; title?: string; permissionMode?: string }, signal?: AbortSignal) =>
+    request<{ session: AgentSessionMeta }>('/agent/sessions', { method: 'POST', body: JSON.stringify(body), signal }),
+  getSession: (id: string, signal?: AbortSignal) => request<SessionDetail>(`/agent/sessions/${id}`, { signal }),
   updateSession: (id: string, body: Record<string, unknown>) => request<{ session: AgentSessionMeta }>(`/agent/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteSession: (id: string) => request<void>(`/agent/sessions/${id}`, { method: 'DELETE' }),
   abort: (id: string) => request<{ ok: boolean }>(`/agent/sessions/${id}/abort`, { method: 'POST' }),

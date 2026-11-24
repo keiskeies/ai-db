@@ -16,7 +16,7 @@ import test, { beforeEach } from 'node:test';
  * 这些断言拿住的是：除文件库外，任何 /schema 请求都必须带 database。
  */
 
-type Route = { status?: number; body?: unknown };
+type Route = { status?: number; body?: unknown; wait?: Promise<void> };
 const installed = await (async () => {
   const calls: string[] = [];
   const routes = new Map<string, Route>();
@@ -34,6 +34,7 @@ const installed = await (async () => {
     const path = String(input);
     calls.push(path);
     const route = routes.get(path) ?? { status: 200, body: { ok: true } };
+    if (route.wait) await route.wait;
     return new Response(JSON.stringify(route.body ?? { ok: true }), {
       status: route.status ?? 200,
       headers: { 'content-type': 'application/json' },
@@ -115,4 +116,35 @@ test('连接配了默认库时预取那个库，不碰其它库', async () => {
   useApp.setState({ connections: [{ ...MYSQL, database: 'mysql' }] as any });
   await state().loadSchema('c-mysql');
   assert.deepEqual(schemaCalls(), ['/api/connections/c-mysql/schema?refresh=0&database=mysql']);
+});
+
+test('同连接跨数据库并行内省时，各库互不作废且 loading 各自清理', async () => {
+  let releaseShop!: () => void;
+  let releaseMysql!: () => void;
+  const shopWait = new Promise<void>((resolve) => { releaseShop = resolve; });
+  const mysqlWait = new Promise<void>((resolve) => { releaseMysql = resolve; });
+  routes.set('/api/connections/c-mysql/schema?refresh=0&database=shop', {
+    wait: shopWait,
+    body: { schemas: [{ name: 'shop', tables: [] }] },
+  });
+  routes.set('/api/connections/c-mysql/schema?refresh=0&database=mysql', {
+    wait: mysqlWait,
+    body: { schemas: [{ name: 'mysql', tables: [] }] },
+  });
+
+  const shop = state().loadSchema('c-mysql', false, 'shop');
+  const mysql = state().loadSchema('c-mysql', false, 'mysql');
+  assert.equal(state().schemaLoading['c-mysql:shop'], true);
+  assert.equal(state().schemaLoading['c-mysql:mysql'], true);
+
+  releaseMysql();
+  await mysql;
+  assert.equal(state().schemaLoading['c-mysql:mysql'], false);
+  assert.equal(state().schemaLoading['c-mysql:shop'], true, '另一个库收尾不能清掉仍在飞的 shop');
+
+  releaseShop();
+  await shop;
+  assert.equal(state().schemaLoading['c-mysql:shop'], false, '旧请求跨库回来后也必须清自己的 loading');
+  assert.equal(state().schemaLoading['c-mysql:mysql'], false);
+  assert.deepEqual((state().schemas['c-mysql'] ?? []).map((item) => item.name).sort(), ['mysql', 'shop']);
 });

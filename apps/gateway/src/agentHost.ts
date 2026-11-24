@@ -26,6 +26,7 @@ import {
   type Capability,
   type AgentContextBundle,
   type AgentEvent,
+  type AgentMessage,
   type AgentMessageBlock,
   type AgentRunInput,
   type AgentResumeCause,
@@ -179,7 +180,7 @@ function humanDuration(ms: number): string {
  * 这条把「做到哪、剩下什么、下一步做什么」显式留在历史里，续跑才有落点。
  *
  * 触发条件是「非用户主动停止且没跑完」：连接停摆、客户端连接断开、输出被 max_tokens
- * 截断、空响应、跑满步数。用户点停止不写检查点——那是他自己的决定，不该替他留一句「可以继续」。
+ * 截断、空响应、跑满步数、服务商未完成。用户点停止不写检查点——那是他自己的决定，不该替他留一句「可以继续」。
  *
  * 措辞同时面向两类读者：模型（拿它当上下文继续干）和人（看懂为什么断在这里）。
  */
@@ -202,7 +203,9 @@ export function buildResumeCheckpoint(input: {
           ? '本回合因客户端连接中断而未完成（进度已保留，回复「继续」可接着做）'
           : cause === 'max_steps'
             ? '本回合跑满工具步数上限而未完成（进度已保留，回复「继续」可接着做）'
-            : '本回合因模型连接无响应而中止（进度已保留，回复「继续」可接着做）';
+            : cause === 'provider_incomplete'
+              ? '本回合因模型返回未完成状态而未完成（进度已保留，回复「继续」可接着做）'
+              : '本回合因模型连接无响应而中止（进度已保留，回复「继续」可接着做）';
   const why =
     cause === 'truncated'
       ? `已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）后，模型的回复连续写到超出单次输出上限，最后一步没有执行。这不是执行出错，也不是模型放弃——已完成的部分都算数。`
@@ -212,6 +215,8 @@ export function buildResumeCheckpoint(input: {
         ? `已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）后，界面那一侧的连接断了（页面关闭，或客户端判定通道无响应后主动断开），本回合因此中止。**没有人点过停止**，已完成的部分都算数。`
       : cause === 'max_steps'
         ? `已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）后，到达本次允许的工具步数上限，剩下的步骤没有执行。这不是执行出错，也不是模型放弃——已完成的部分都算数。续跑时把同类操作合并成批量写法，同样的工作量能少花很多步。`
+      : cause === 'provider_incomplete'
+        ? `已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）后，模型返回了内容过滤、暂停或上下文超限等未完成状态，不能视为正常结束。已完成的部分都算数。`
         : `已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）后，模型端连续无响应，连接被判定为已死。这不是执行出错，也不是模型放弃——已完成的部分都算数。`;
   const lines: string[] = [`## ${headline}`, '', why];
   if (plan.length) {
@@ -245,6 +250,15 @@ interface PendingApproval {
   payload: ApprovalPayload;
 }
 
+interface ActiveTurn {
+  id: string;
+  controller: AbortController;
+  invalidated: boolean;
+  abortCause?: 'user' | 'disconnected';
+  settled: Promise<void>;
+  finish: () => void;
+}
+
 const MODES: PermissionMode[] = ['readonly', 'ask', 'auto', 'full'];
 
 /** 一轮最多带几张图，再多只会让 prompt 变贵，不会更准。 */
@@ -262,6 +276,102 @@ async function imagesOf(blocks: AgentMessageBlock[], dir: string): Promise<Attac
     if (block.type !== 'image' || !block.attachmentId) continue;
     const file = await readAttachment(dir, block.attachmentId);
     if (file) out.push({ id: block.attachmentId, mime: file.mime, base64: file.buffer.toString('base64'), bytes: file.buffer.length });
+  }
+  return out;
+}
+
+function toolResultContent(result: unknown): string {
+  if (typeof result === 'string') return result;
+  try {
+    return JSON.stringify(result) ?? String(result);
+  } catch {
+    return String(result);
+  }
+}
+
+/**
+ * 把落库的 blocks 还原成 ProviderMessage。工具调用必须保留完整参数，并且每条
+ * tool_result 都要紧跟对应的 assistant.toolCalls；只留工具名会让下一轮模型
+ * 忘记查过什么，而没有宿主的孤立 tool 消息则会被服务商直接拒绝。
+ */
+export async function providerHistory(messages: AgentMessage[], attachmentDir: string): Promise<ProviderMessage[]> {
+  const history: ProviderMessage[] = [];
+  for (const message of messages) {
+    if (message.role === 'user') {
+      const past = await imagesOf(message.blocks, attachmentDir);
+      history.push({ role: 'user', content: message.content, ...(past.length ? { images: past } : {}) });
+      continue;
+    }
+    if (message.role !== 'assistant' || (!message.content && !message.blocks.length)) continue;
+
+    const resultIds = new Set(
+      message.blocks.filter((block) => block.type === 'tool_result' && block.callId).map((block) => block.callId!),
+    );
+    const calls: ToolCall[] = [];
+    const callIds = new Set<string>();
+    for (const block of message.blocks) {
+      // 中止发生在工具执行中时可能只有 call 没有 result；丢弃未完成的一对，
+      // 否则下一轮会因 tool_calls 缺少对应 tool 消息而被服务商拒绝。
+      if (block.type !== 'tool_call' || !block.callId || !block.tool || !resultIds.has(block.callId)) continue;
+      calls.push({
+        id: block.callId,
+        name: block.tool,
+        args: block.args && typeof block.args === 'object' && !Array.isArray(block.args)
+          ? block.args as Record<string, unknown>
+          : {},
+      });
+      callIds.add(block.callId);
+    }
+    if (!calls.length) {
+      // 兼容没有 callId 的老 blocks：仍保留原来的工具摘要，不制造孤立 tool 消息。
+      const trace = message.blocks.filter((block) => block.type === 'tool_call').map((block) => block.tool).filter(Boolean);
+      history.push({
+        role: 'assistant',
+        content: `${message.content}${trace.length ? `\n\n[used tools: ${[...new Set(trace)].join(', ')}]` : ''}`.trim(),
+      });
+      continue;
+    }
+    history.push({ role: 'assistant', content: message.content, toolCalls: calls });
+    for (const block of message.blocks) {
+      if (block.type !== 'tool_result' || !block.callId || !callIds.has(block.callId)) continue;
+      history.push({
+        role: 'tool',
+        toolCallId: block.callId,
+        name: block.tool ?? calls.find((call) => call.id === block.callId)?.name ?? '',
+        content: toolResultContent(block.result),
+      });
+    }
+  }
+  return history;
+}
+
+/** 压缩历史时按 tool_call/tool_result 整组保留，避免预算裁剪制造服务商拒绝的残对。 */
+export function compactProviderHistory(messages: ProviderMessage[], maxTokens: number): ProviderMessage[] {
+  const compacted = compactHistory(messages, maxTokens);
+  const out: ProviderMessage[] = [];
+  for (let i = 0; i < compacted.length;) {
+    const message = compacted[i];
+    if (message.role === 'tool') {
+      // 压缩可能已裁掉对应的 assistant.toolCalls；孤立 tool 消息不能送给服务商。
+      i += 1;
+      continue;
+    }
+    if (message.role !== 'assistant' || !message.toolCalls?.length) {
+      out.push(message);
+      i += 1;
+      continue;
+    }
+    let end = i + 1;
+    while (end < compacted.length && compacted[end].role === 'tool') end += 1;
+    const results = compacted.slice(i + 1, end).filter((item) => item.role === 'tool');
+    const resultIds = new Set(results.map((item) => item.toolCallId));
+    if (message.toolCalls.every((call) => resultIds.has(call.id))) {
+      out.push(message, ...results);
+    } else if (message.content) {
+      // 结果被预算裁掉时保留正文，但去掉不完整的 toolCalls。
+      out.push({ role: 'assistant', content: message.content });
+    }
+    i = end;
   }
   return out;
 }
@@ -338,23 +448,9 @@ export function visibleAgentTools(settings: Pick<AppSettings, 'features'>, allow
 }
 
 export class AgentHost {
-  private active = new Map<string, AbortController>();
-  /**
-   * 回合被 abort() 标记为失效：停止/断开后 runtime 可能仍跑完最后一步并正常返回，
-   * 此时不能让它把「完成」终态写回 store——否则用户已点掉的回合看起来像跑完了，
-   * summary/turns 也被继续累积。标记在回合 finally 里清除。
-   */
-  private turnInvalidated = new Map<string, boolean>();
-  /**
-   * 回合被中止的那一下是**谁动的手**：用户点了停止，还是连接没了。
-   *
-   * 两条路径以前都汇到 abort() 再统一记成「用户中止」，但它们在 SSE 上分得清清楚楚：
-   * 点停止是显式的 POST /abort，而客户端的静默上限（readWithIdleCeiling）与关页面
-   * 都只是连接断开——res.on('close')，且此前没收到过任何 abort 请求。
-   * 混在一起的代价是断线那一档落不下续跑检查点：用户回来点「继续」，
-   * 模型只看得到半截正文，上一回合烧掉的时间白烧。
-   */
-  private abortCauses = new Map<string, 'user' | 'disconnected'>();
+  private active = new Map<string, ActiveTurn>();
+  /** 删除会话期间禁止新回合，直到旧回合收尾并从 store 删除。 */
+  private deletingSessions = new Set<string>();
   private approvals = new Map<string, PendingApproval>();
   /** "本会话允许"：跨回合保留，直到会话删除或进程退出。 */
   private sessionAllowed = new Map<string, Set<string>>();
@@ -371,25 +467,48 @@ export class AgentHost {
     return this.active.has(sessionId);
   }
 
+  /** WebSocket 用代次识别自己发起的回合，旧连接关闭不能中止同会话的新回合。 */
+  getTurnId(sessionId: string): string | undefined {
+    return this.active.get(sessionId)?.id;
+  }
+
+  private isCurrentTurn(sessionId: string, turn: ActiveTurn): boolean {
+    return this.active.get(sessionId) === turn;
+  }
+
+  waitForTurn(sessionId: string): Promise<void> {
+    return this.active.get(sessionId)?.settled ?? Promise.resolve();
+  }
+
+  private beginTurn(sessionId: string): ActiveTurn {
+    let finish!: () => void;
+    const settled = new Promise<void>((resolve) => { finish = resolve; });
+    const turn: ActiveTurn = {
+      id: randomUUID(),
+      controller: new AbortController(),
+      invalidated: false,
+      settled,
+      finish: () => {
+        if (this.active.get(sessionId) === turn) this.active.delete(sessionId);
+        finish();
+      },
+    };
+    this.active.set(sessionId, turn);
+    return turn;
+  }
+
   /**
-   * 中止一个回合，并记下是**谁**中止的。
-   *
-   * cause 默认 'user'：显式的 POST /abort 就是用户点的。SSE 路由在连接断开时传
-   * 'disconnected'——那条路径上没人点过停止，客户端可能只是被静默上限掐断、或用户关了页面。
-   * 同一个回合只认第一次记录：用户点停止之后，流随后才会关闭并再报一次 'disconnected'，
-   * 那时不能改口。
+   * 中止一个回合，并记下是谁中止的。传 turnId 时只中止该代次，旧 WebSocket
+   * 的迟到 close 不会影响同会话已经启动的新回合。
    */
-  abort(sessionId: string, cause: 'user' | 'disconnected' = 'user'): boolean {
-    const controller = this.active.get(sessionId);
-    if (!controller) return false;
-    if (!this.abortCauses.has(sessionId)) this.abortCauses.set(sessionId, cause);
-    // 只有「用户手动停止」才让回合失效：断线（disconnected）时用户没喊停，
-    // 业务语义是保留续跑检查点，不能一并跳过收尾。失效标记在回合 finally 里清除。
-    if (cause === 'user') {
-      this.turnInvalidated.set(sessionId, true);
-    }
-    controller.abort();
-    // 立即落状态：provider 卡住时 runtime 可能迟迟不返回，UI 不能一直显示“运行中”
+  abort(sessionId: string, cause: 'user' | 'disconnected' = 'user', turnId?: string): boolean {
+    const turn = this.active.get(sessionId);
+    if (!turn || (turnId !== undefined && turn.id !== turnId)) return false;
+    if (!turn.abortCause) turn.abortCause = cause;
+    // 只有用户手动停止/删除才让回合失效；断线仍要写续跑检查点。
+    if (cause === 'user') turn.invalidated = true;
+    turn.controller.abort();
+    // 立即落状态：provider 卡住时 runtime 可能迟迟不返回，UI 不能一直显示“运行中”。
     this.opts.store.updateSession(sessionId, { status: 'aborted' });
     for (const [id, pending] of this.approvals) {
       if (pending.sessionId !== sessionId) continue;
@@ -400,11 +519,22 @@ export class AgentHost {
     return true;
   }
 
+  /** 先封住新回合，再取消并等待旧回合收尾，最后按原语义删除会话。 */
+  async deleteSession(sessionId: string): Promise<void> {
+    this.deletingSessions.add(sessionId);
+    try {
+      this.abort(sessionId, 'user');
+      await this.waitForTurn(sessionId);
+      this.forgetSessionApprovals(sessionId);
+      this.opts.store.deleteSession(sessionId);
+    } finally {
+      this.deletingSessions.delete(sessionId);
+    }
+  }
+
   resolveApproval(id: string, decision: ApprovalDecision['decision'], scope: ApprovalDecision['scope']): boolean {
     const pending = this.approvals.get(id);
     if (!pending) return false;
-    clearTimeout(pending.timer);
-    this.approvals.delete(id);
     const session = this.opts.store.getSession(pending.sessionId);
     const connectionScoped = pending.payload.call.name !== 'create_connection';
     const connId = connectionScoped
@@ -427,6 +557,10 @@ export class AgentHost {
         ...(!connectionScoped ? { target: { host: pending.payload.call.args.host, port: pending.payload.call.args.port, engine: pending.payload.call.args.engine, username: pending.payload.call.args.username } } : {}),
       },
     });
+    // 审计成功后才消费审批并结算 Promise；审计失败时保留 pending 和超时，
+    // 调用方可重试，不会出现审批已消失、runtime 却永远等待的情况。
+    clearTimeout(pending.timer);
+    this.approvals.delete(id);
     pending.resolve({ decision, scope });
     return true;
   }
@@ -452,11 +586,27 @@ export class AgentHost {
   }
 
   async startTurn(sessionId: string, input: TurnInput, emit: (event: AgentEvent) => void): Promise<void> {
-    if (this.active.has(sessionId)) throw new DbError('该会话正在运行，请先中止或等待完成', { code: 'SESSION_BUSY', status: 409 });
-    // abort 之后旧回合的收尾（写 history/finally）可能还没跑完：
-    // 此刻放行新回合会造成两回合并发写 store。旧回合由 runtime 的
-    // signal.aborted 在下一步退出，finally 会清掉这个标记，届时即可再开。
-    if (this.turnInvalidated.has(sessionId)) throw new DbError('该会话正在结束，请稍后再试', { code: 'SESSION_BUSY', status: 409 });
+    if (this.deletingSessions.has(sessionId) || this.active.has(sessionId)) {
+      throw new DbError('该会话正在运行或删除，请先中止或等待完成', { code: 'SESSION_BUSY', status: 409 });
+    }
+    // 在第一次 await 前原子占用回合。图片、历史和 schema 加载都让出执行权，
+    // 不能等它们做完才注册，否则并发请求会各自创建 controller、互相覆盖。
+    const turn = this.beginTurn(sessionId);
+    try {
+      await this.startTurnOwned(sessionId, input, emit, turn);
+    } finally {
+      for (const [id, pending] of this.approvals) {
+        if (pending.sessionId !== sessionId) continue;
+        clearTimeout(pending.timer);
+        this.approvals.delete(id);
+        pending.resolve({ decision: 'deny', scope: 'once' });
+      }
+      // 只清理自己的代次；即使测试/异常路径替换了 active，也不能删掉新回合。
+      turn.finish();
+    }
+  }
+
+  private async startTurnOwned(sessionId: string, input: TurnInput, emit: (event: AgentEvent) => void, turn: ActiveTurn): Promise<void> {
     const rawText = input.text?.trim();
     if (!rawText) throw new DbError('消息不能为空', { code: 'EMPTY_MESSAGE', status: 400 });
     // 斜杠命令是目的信号：裸命令也有默认任务，不让用户补表单参数。
@@ -476,7 +626,7 @@ export class AgentHost {
     const conn = stored ? { ...stored, database } : undefined;
     const initMatch = /^\/init(?:\s+([\s\S]+))?$/i.exec(rawText);
     if (initMatch) {
-      await this.runInit(sessionId, input, rawText, initMatch[1]?.trim(), emit);
+      await this.runInit(sessionId, input, rawText, initMatch[1]?.trim(), emit, turn);
       return;
     }
     const settings = this.opts.store.getSettings();
@@ -485,30 +635,20 @@ export class AgentHost {
       throw new DbError('当前模型没有开启图片输入，请在 设置 → 模型能力 里勾选「图片」。', { code: 'MODEL_NO_VISION', status: 400 });
     }
     const images = await this.loadImages(input.images);
+    if (!this.isCurrentTurn(sessionId, turn) || turn.controller.signal.aborted) return;
     const provider = createProvider(settings.agent);
     // 语义命令通常要「看结构 → 多次查数 → 出图」，给足步数；普通提问保持用户设置。
     // 这是回合唯一的量上限：时间不参与判定（见文件头那段说明），0 表示不限步数，
     // 一直跑到模型自己收尾、用户中止或连接停摆。
     const maxSteps = intent ? Math.min(40, Math.max(16, (settings.agent.maxSteps || 12) * 2)) : settings.agent.maxSteps;
     const startedAt = Date.now();
-    const controller = new AbortController();
-    this.active.set(sessionId, controller);
+    const controller = turn.controller;
 
     const store = this.opts.store;
     const historyMessages = store.listMessages(sessionId);
-    const history: ProviderMessage[] = [];
-    for (const m of historyMessages) {
-      if (m.role === 'user') {
-        const past = await imagesOf(m.blocks, this.opts.config.attachmentDir);
-        history.push({ role: 'user', content: m.content, ...(past.length ? { images: past } : {}) });
-      } else if (m.role === 'assistant' && (m.content || m.blocks.length)) {
-        const trace = m.blocks.filter((b) => b.type === 'tool_call').map((b) => b.tool).filter(Boolean);
-        history.push({
-          role: 'assistant',
-          content: `${m.content}${trace.length ? `\n\n[used tools: ${[...new Set(trace)].join(', ')}]` : ''}`.trim(),
-        });
-      }
-    }
+    // 按落库消息成组还原，避免先切 ProviderMessage 再把 tool_call 与结果拆散。
+    const history = await providerHistory(historyMessages.slice(-24), this.opts.config.attachmentDir);
+    if (!this.isCurrentTurn(sessionId, turn) || controller.signal.aborted) return;
 
     let schemas: DatabaseSchema[] | undefined;
     let schemaError: string | undefined;
@@ -533,7 +673,8 @@ export class AgentHost {
     const memories = recall.memories;
     const businessContext = conn ? store.agentContextBundle(conn.id, conn.database) : undefined;
     const attachmentTables = (input.attachments ?? []).map(String).slice(0, 12);
-    const compacted = compactHistory(history.slice(-24), historyTokenBudget(settings.agent, profile));
+    const compacted = compactProviderHistory(history, historyTokenBudget(settings.agent, profile));
+    if (!this.isCurrentTurn(sessionId, turn) || controller.signal.aborted) return;
 
     const title = session.title === '新会话' || !session.title ? rawText.slice(0, 28) : session.title;
     store.updateSession(sessionId, {
@@ -580,6 +721,7 @@ export class AgentHost {
           return;
         }
         case 'tool_result': {
+          if (turn.invalidated || !this.isCurrentTurn(sessionId, turn)) return;
           // 落库/推送用裁剪副本；runtime 自己那份完整结果只用于当步模型序列化，不受影响。
           const capped = capToolResult(event.result);
           blocks.push({
@@ -742,18 +884,19 @@ export class AgentHost {
       });
       status = result.status;
       usage = result.usage;
+      if (!this.isCurrentTurn(sessionId, turn)) return;
       // 被中止（用户停止或断线触发 abort）的回合不再写「完成」终态：
       // abort 已经置过 status='aborted' 并清了审批，runtime 的收尾若照常写
       // assistant 消息/检查点/summary/turns，会把用户已停掉的回合伪装成正常收尾。
-      const invalidated = this.turnInvalidated.get(sessionId) === true;
+      const invalidated = turn.invalidated;
       if (!invalidated) {
         // 有分段思考块就不再拼整回合那一坨（同一段文字存两遍，界面也会重复渲染）；
         // 没有分段块的模型（不发 step_thinking 的旧路径/本地推理器）保留原兜底。
         const hasStepThinking = blocks.some((b) => b.type === 'thinking' && b.step !== undefined);
         const finalBlocks = thinking && !hasStepThinking ? [{ type: 'thinking' as const, text: thinking }, ...blocks] : blocks;
         store.appendMessage({ sessionId, role: 'assistant', content: result.text, blocks: finalBlocks, tokens: result.usage.tokensOut });
-        // 回合**没跑完就结束**时补一条续跑检查点。五种情况共用这一手：连接停摆、界面那侧
-        // 连接断开、回复被输出上限截断、模型空返回、跑满步数。共同点是「进度还在，但事没做完」。
+        // 回合**没跑完就结束**时补一条续跑检查点。六种情况共用这一手：连接停摆、界面那侧
+        // 连接断开、回复被输出上限截断、模型空返回、跑满步数、服务商未完成。共同点是「进度还在，但事没做完」。
         // 没有检查点的话，用户点「继续」时模型只能看到半截正文，等于把已烧掉的时间扔掉重来。
         // 必须写在半截正文之后：正文是模型说过的话，检查点是「它本来还要做什么」，
         // 两者顺序颠倒会让下一轮的上下文读起来像倒叙。
@@ -761,7 +904,7 @@ export class AgentHost {
         // 用户点停止一模一样——都只是 signal.aborted，所以 abortCause 一律是 'user'。
         // 区别只存在于传输层，只能由 abort() 记下的那一份来补：没人点过停止的中止，
         // 就该留检查点，否则用户重开页面点「继续」时模型只看得到半截正文。
-        const disconnected = this.abortCauses.get(sessionId) === 'disconnected';
+        const disconnected = turn.abortCause === 'disconnected';
         const unfinished: AgentResumeCause | undefined = result.status === 'aborted' && result.abortCause === 'stalled'
           ? 'stalled'
           : result.status === 'aborted' && disconnected
@@ -775,7 +918,9 @@ export class AgentHost {
                   // 点下去等于让模型从半截正文里猜自己刚才在干什么。
                   result.stop === 'max_steps'
                   ? 'max_steps'
-                  : undefined;
+                  : result.stop === 'provider_incomplete'
+                    ? 'provider_incomplete'
+                    : undefined;
         if (unfinished) {
           store.appendMessage({
             sessionId,
@@ -815,28 +960,16 @@ export class AgentHost {
         // 中止的回合只保留 aborted 状态与「不可继续」，不累积任何统计。
         store.updateSession(sessionId, { status: 'aborted', resume: null });
       }
-      if (result.status === 'done' && settings.agent.followUpSuggestions) {
+      if (!turn.invalidated && result.status === 'done' && settings.agent.followUpSuggestions) {
         for (const item of this.followUps(blocks, schemas, businessContext)) emit({ type: 'suggestions', items: item });
       }
-      if (settings.agent.autoMemory) this.captureMemories(text, result.text, sessionId, conn);
+      if (!turn.invalidated && settings.agent.autoMemory) this.captureMemories(text, result.text, sessionId, conn);
     } catch (err: any) {
       status = 'error';
       // 已停止的回合出错不再把状态改成 error：abort 时说好的 aborted 就是最终状态。
-      if (this.turnInvalidated.get(sessionId) !== true) {
+      if (!turn.invalidated && this.isCurrentTurn(sessionId, turn)) {
         store.updateSession(sessionId, { status: 'error' });
         emit({ type: 'error', code: err?.code ?? 'AGENT_ERROR', message: err?.message ?? 'Agent 运行失败', retryable: false });
-      }
-    } finally {
-      this.active.delete(sessionId);
-      // 中止原因的登记只在写检查点时读一次，回合结束就该清掉：会话 id 会被复用，
-      // 留着上一回合的 'disconnected' 会让下一次正常结束的回合也被写成断线。
-      this.abortCauses.delete(sessionId);
-      this.turnInvalidated.delete(sessionId);
-      for (const [id, pending] of this.approvals) {
-        if (pending.sessionId !== sessionId) continue;
-        clearTimeout(pending.timer);
-        this.approvals.delete(id);
-        pending.resolve({ decision: 'deny', scope: 'once' });
       }
     }
     if (status === 'done' && usage.tokensIn + usage.tokensOut > 0) {
@@ -848,7 +981,7 @@ export class AgentHost {
    * `/init`：扫描当前库并维护 AI_DB.md。每次执行全量刷新自动段落（新表/删表/改列都会反映），
    * 只有数据流与人工补充这两个 manual 段落保留；确定性清单是主体，模型只补充注解。
    */
-  private async runInit(sessionId: string, input: TurnInput, rawText: string, requestedPath: string | undefined, emit: (event: AgentEvent) => void): Promise<void> {
+  private async runInit(sessionId: string, input: TurnInput, rawText: string, requestedPath: string | undefined, emit: (event: AgentEvent) => void, turn: ActiveTurn): Promise<void> {
     const store = this.opts.store;
     const session = store.getSession(sessionId);
     if (!session) {
@@ -864,9 +997,8 @@ export class AgentHost {
     const sameConnection = !session.connectionId || !connectionId || session.connectionId === connectionId;
     const database = input.database || (sameConnection ? session.database : undefined) || stored.database;
     const conn = { ...stored, database };
-    const turnId = randomUUID();
-    const controller = new AbortController();
-    this.active.set(sessionId, controller);
+    const turnId = turn.id;
+    const controller = turn.controller;
     // 这里原来有个 5 分钟到点就 abort 的定时器。删掉了，理由和回合计时器一样：
     // 几百张表的库扫 schema + 补注解就是会跑很久，到点掐断只会把已经扫完的部分扔掉，
     // 而且它 abort 之后照实报的是「用户中止」——用户根本没点过停止。
@@ -885,7 +1017,7 @@ export class AgentHost {
     emit({ type: 'start', turnId, sessionId, model: 'init' });
     try {
       const schemas = await this.opts.manager.schema(conn.id, conn.database);
-      if (controller.signal.aborted) throw Object.assign(new Error('已中止'), { code: 'ABORTED' });
+      if (!this.isCurrentTurn(sessionId, turn) || controller.signal.aborted) throw Object.assign(new Error('已中止'), { code: 'ABORTED' });
       const settings = store.getSettings();
       const recall = store.recallForTurn('', { connectionId: conn.id, database: conn.database });
       const history = store.listHistory({ connectionId: conn.id, limit: 100 }).map((item) => ({ sql: item.sql, status: item.status }));
@@ -919,8 +1051,9 @@ export class AgentHost {
         storedPath: record?.path,
         existing: existing ?? undefined,
       });
-      if (controller.signal.aborted) throw Object.assign(new Error('已中止'), { code: 'ABORTED' });
+      if (!this.isCurrentTurn(sessionId, turn) || controller.signal.aborted) throw Object.assign(new Error('已中止'), { code: 'ABORTED' });
       await writeDatabaseBrief(result.path, result.markdown, existing ?? undefined);
+      if (!this.isCurrentTurn(sessionId, turn) || controller.signal.aborted) throw Object.assign(new Error('已中止'), { code: 'ABORTED' });
       const generatedAt = new Date().toISOString();
       store.saveDatabaseBrief({
         connectionId: conn.id,
@@ -931,7 +1064,6 @@ export class AgentHost {
       });
       const content = [summarizeInit(result), existing ? '\n\n已更新现有文件：自动段落全部刷新，数据流与人工补充段落保留。' : '\n\n这是首次生成，后续对话会自动加载它。'].join('');
       store.appendMessage({ sessionId, role: 'assistant', content });
-      this.active.delete(sessionId);
       store.updateSession(sessionId, {
         status: 'done',
         summary: `Q: ${rawText.slice(0, 200)}\nA: ${content.slice(0, 400)}`,
@@ -957,9 +1089,9 @@ export class AgentHost {
         },
       });
     } catch (err: any) {
-      this.active.delete(sessionId);
+      if (!this.isCurrentTurn(sessionId, turn)) return;
       const aborted = controller.signal.aborted || err?.code === 'ABORTED';
-      store.updateSession(sessionId, { status: aborted ? 'aborted' : 'error' });
+      if (!turn.invalidated) store.updateSession(sessionId, { status: aborted ? 'aborted' : 'error' });
       if (aborted) emit({ type: 'aborted', turnId, reason: '用户中止' });
       else emit({ type: 'error', code: err?.code ?? 'INIT_FAILED', message: err?.message ?? '初始化失败' });
       store.addAudit({

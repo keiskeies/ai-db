@@ -23,6 +23,7 @@ export interface ExportInput {
   tableName?: string;
   engine: Engine;
   baseName?: string;
+  signal?: AbortSignal;
   /**
    * 多 sheet 输出（仅 xlsx）。报告的表格块各占一张表时用它；
    * 给了 sheets 就忽略 columns/rows。

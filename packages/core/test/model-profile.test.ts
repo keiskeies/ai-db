@@ -45,7 +45,11 @@ async function captureBody(stream: AsyncIterable<ProviderEvent>): Promise<Record
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (_url: string, init: any) => {
     captured = JSON.parse(init.body);
-    return sseResponse('data: [DONE]\n\n');
+    return sseResponse([
+      'data: [DONE]\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ].join(''));
   }) as unknown as typeof fetch;
   try {
     await collect(stream);

@@ -47,6 +47,8 @@ export const runSqlTool = defineTool('run_sql', async (call, ctx, s) => {
     allowMulti: settings.allowMultiStatement || a.allowMulti === true,
     autoLimit: settings.autoLimit,
     actor: 'agent',
+    executionId: ctx.executionId,
+    signal: ctx.signal,
     // 事务已开启时让语句走被固定的那条连接，否则提交/回滚作用不到。
     sessionId: s.manager.transactionOf(agentTxKey(ctx))?.connectionId === conn.id ? agentTxKey(ctx) : undefined,
   });
@@ -82,6 +84,8 @@ export const runMqlTool = defineTool('run_mql', async (call, ctx, s) => {
     maxRows,
     timeoutMs: settings.queryTimeoutMs,
     actor: 'agent',
+    executionId: ctx.executionId,
+    signal: ctx.signal,
   });
   const last = batch.sets[0];
   return ok(started, `返回 ${last?.rowCount ?? 0} 条文档`, {
@@ -107,6 +111,8 @@ export const runRedisTool = defineTool('run_redis', async (call, ctx, s) => {
     maxRows,
     timeoutMs: settings.queryTimeoutMs,
     actor: 'agent',
+    executionId: ctx.executionId,
+    signal: ctx.signal,
   });
   const last = batch.sets[0];
   return ok(started, `返回 ${last?.rowCount ?? 0} 行`, {
@@ -132,6 +138,8 @@ export const runCypherTool = defineTool('run_cypher', async (call, ctx, s) => {
     maxRows,
     timeoutMs: settings.queryTimeoutMs,
     actor: 'agent',
+    executionId: ctx.executionId,
+    signal: ctx.signal,
   });
   const last = batch.sets[0];
   return ok(started, `返回 ${last?.rowCount ?? 0} 行`, {
@@ -156,6 +164,8 @@ export const runCqlTool = defineTool('run_cql', async (call, ctx, s) => {
     maxRows: Math.min(5000, Math.max(1, Number(a.maxRows) || settings.defaultLimit)),
     timeoutMs: settings.queryTimeoutMs,
     actor: 'agent',
+    executionId: ctx.executionId,
+    signal: ctx.signal,
   });
   const last = batch.sets[0];
   return ok(started, `返回 ${last?.rowCount ?? 0} 行`, {
@@ -180,6 +190,8 @@ export const runAqlTool = defineTool('run_aql', async (call, ctx, s) => {
     maxRows: Math.min(5000, Math.max(1, Number(a.maxRows) || settings.defaultLimit)),
     timeoutMs: settings.queryTimeoutMs,
     actor: 'agent',
+    executionId: ctx.executionId,
+    signal: ctx.signal,
   });
   const last = batch.sets[0];
   return ok(started, `返回 ${last?.rowCount ?? 0} 行`, {
@@ -201,6 +213,8 @@ export const vectorSearchTool = defineTool('vector_search', async (call, ctx, s)
     maxRows: query.topK,
     timeoutMs: settings.queryTimeoutMs,
     actor: 'agent',
+    executionId: ctx.executionId,
+    signal: ctx.signal,
   });
   return ok(started, `返回 ${result.rowCount} 个向量结果`, { ...result });
 });
@@ -218,6 +232,8 @@ export const searchIndexTool = defineTool('search_index', async (call, ctx, s) =
     maxRows: Math.min(10000, Math.max(1, Number(a.size) || settings.defaultLimit)),
     timeoutMs: settings.queryTimeoutMs,
     actor: 'agent',
+    executionId: ctx.executionId,
+    signal: ctx.signal,
   });
   const last = batch.sets[0];
   return ok(started, `返回 ${last?.rowCount ?? 0} 条命中`, {
@@ -251,6 +267,8 @@ SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
     allowMulti: conn.engine === 'oracle',
     autoLimit: false,
     actor: 'agent',
+    executionId: ctx.executionId,
+    signal: ctx.signal,
   });
   const last = batch.sets[batch.sets.length - 1];
   return ok(started, '执行计划已生成', { sql: explain, plan: last?.rows ?? [], columns: last?.columns ?? [] });
@@ -276,6 +294,8 @@ export const sampleRowsTool = defineTool('sample_rows', async (call, ctx, s) => 
       maxRows: limit,
       timeoutMs: s.getSettings().queryTimeoutMs,
       actor: 'agent',
+    executionId: ctx.executionId,
+    signal: ctx.signal,
     });
     const result = batch.sets[0];
     if (result && a.maskSensitive !== false) {
@@ -291,6 +311,8 @@ export const sampleRowsTool = defineTool('sample_rows', async (call, ctx, s) => 
       maxRows: limit,
       timeoutMs: s.getSettings().queryTimeoutMs,
       actor: 'agent',
+    executionId: ctx.executionId,
+    signal: ctx.signal,
     });
     const result = batch.sets[0];
     if (result && a.maskSensitive !== false) {
@@ -306,6 +328,8 @@ export const sampleRowsTool = defineTool('sample_rows', async (call, ctx, s) => 
       maxRows: limit,
       timeoutMs: s.getSettings().queryTimeoutMs,
       actor: 'agent',
+    executionId: ctx.executionId,
+    signal: ctx.signal,
     });
     const result = batch.sets[0];
     if (result && a.maskSensitive !== false) {
@@ -333,7 +357,7 @@ export const sampleRowsTool = defineTool('sample_rows', async (call, ctx, s) => 
   }
   const sql = buildSelectTable(conn.engine, table.name, { schema: s.schemaFor(conn, table), limit });
   // G2：样例查询此前漏传 timeoutMs，走驱动默认值不受设置约束；普通查询用现有默认口径。
-  const batch = await s.manager.query(conn.id, sql, { database, maxRows: limit, allowMulti: false, autoLimit: false, actor: 'agent', timeoutMs: s.getSettings().queryTimeoutMs });
+  const batch = await s.manager.query(conn.id, sql, { database, maxRows: limit, allowMulti: false, autoLimit: false, actor: 'agent', timeoutMs: s.getSettings().queryTimeoutMs, executionId: ctx.executionId });
   const result = batch.sets[0];
   if (result && a.maskSensitive !== false) {
     const sensitive = result.columns.map((c) => SENSITIVE.test(c.name));
@@ -355,7 +379,7 @@ export const profileColumnTool = defineTool('profile_column', async (call, ctx, 
   const col = quoteIdent(column, conn.engine);
   const run = async (sql: string): Promise<QueryResult> => {
     // G2：画像含 COUNT DISTINCT 全表聚合，此前漏传超时；质检口径 120s。
-    const batch = await s.manager.query(conn.id, sql, { database, maxRows: 20, allowMulti: false, autoLimit: false, actor: 'agent', timeoutMs: QUALITY_CHECK_TIMEOUT_MS });
+    const batch = await s.manager.query(conn.id, sql, { database, maxRows: 20, allowMulti: false, autoLimit: false, actor: 'agent', timeoutMs: QUALITY_CHECK_TIMEOUT_MS, executionId: ctx.executionId });
     return batch.sets[0];
   };
   const overview = await run(`SELECT COUNT(*) AS total, SUM(CASE WHEN ${col} IS NULL THEN 1 ELSE 0 END) AS nulls FROM ${ref}`);

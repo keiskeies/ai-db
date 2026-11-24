@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import {
   TOOLS,
+  classifySql,
   encodeSse,
   getTool,
   isAgentContextActive,
@@ -31,6 +32,8 @@ const MCP_BRIDGE_EXCLUDED = new Set(['mcp_list_servers', 'mcp_list_tools', 'mcp_
  * 出站只读桥的工具白名单。不能只靠 tool.risk：memory_write / update_plan /
  * backup_database 等被（错误地）标成 risk='read'，但会写持久状态或落盘。
  * 这里只列真正「读数据、无副作用」的工具，作为 mcp:readonly 凭据的硬边界。
+ * render/analyze/forecast_chart 与 backup_database 虽被静态标成 read，前者会执行
+ * 调用方 SQL、后者会落盘，均不能靠 risk 字段放行。
  */
 const MCP_READONLY_TOOLS = new Set([
   'list_connections',
@@ -41,9 +44,6 @@ const MCP_READONLY_TOOLS = new Set([
   'sample_rows',
   'profile_column',
   'get_query_history',
-  'analyze_chart',
-  'forecast_chart',
-  'render_chart',
   'schema_diff',
   'recon_data',
   'memory_search',
@@ -103,7 +103,14 @@ export function createAgentRouter(deps: ApiDeps): Router {
       const call = { id: `http-${Date.now()}`, name, args };
       const riskConnId = typeof args.connectionId === 'string' ? args.connectionId
         : typeof body.connectionId === 'string' && body.connectionId ? body.connectionId : undefined;
-      const risk = resolveRisk(call, tool, riskConnId ? store.getConnection(riskConnId)?.engine : undefined);
+      const riskEngine = riskConnId ? store.getConnection(riskConnId)?.engine : undefined;
+      const risk = resolveRisk(call, tool, riskEngine);
+      // explain_sql 等静态 read 工具同样携带调用方 SQL；只读配对凭据必须在
+      // 执行器之前按真实语句风险拦截，不能只信任工具定义上的 risk。
+      if (res.locals.mcpReadonly && typeof args.sql === 'string' && classifySql(args.sql, riskEngine).risk !== 'read') {
+        res.status(403).json({ error: { code: 'TOOL_READ_ONLY', message: `MCP 只读桥不允许执行 ${name} 中的写 SQL` } });
+        return;
+      }
       if (risk !== 'read') {
         res.status(403).json({ error: { code: 'TOOL_READ_ONLY', message: `MCP 只读桥不允许执行 ${name}（风险 ${risk}）` } });
         return;
@@ -248,11 +255,10 @@ export function createAgentRouter(deps: ApiDeps): Router {
     }),
   );
 
-  router.delete('/agent/sessions/:id', (req, res) => {
-    host.forgetSessionApprovals(req.params.id);
-    store.deleteSession(req.params.id);
+  router.delete('/agent/sessions/:id', ah(async (req, res) => {
+    await host.deleteSession(req.params.id);
     res.status(204).end();
-  });
+  }));
 
   router.post(
     '/agent/sessions/:id/turns',

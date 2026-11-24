@@ -607,10 +607,20 @@ export function estimateTokens(text: string): number {
   return Math.ceil(cjk * 1.3 + (text.length - cjk) / 4);
 }
 
+export function estimateMessageTokens(message: ProviderMessage): number {
+  const toolCalls = message.role === 'assistant' && message.toolCalls?.length
+    ? estimateTokens(JSON.stringify(message.toolCalls))
+    : 0;
+  return 20 + estimateTokens(message.content) + toolCalls + (message.role === 'user' ? (message.images?.length ?? 0) * 1000 : 0);
+}
+
+export function estimateMessagesTokens(messages: ProviderMessage[]): number {
+  return messages.reduce((total, message) => total + estimateMessageTokens(message), 0);
+}
+
 /** Keep recent messages while staying under a rough token budget; drop oldest first, preserving the current user turn. */
 export function compactHistory(messages: ProviderMessage[], maxTokens: number): ProviderMessage[] {
-  // 图片按每张约 1k tokens 估算，否则带图的多轮会把压缩后的上下文撑爆。
-  const cost = (m: ProviderMessage) => estimateTokens(m.content) + 20 + ('images' in m ? (m.images?.length ?? 0) * 1000 : 0);
+  const cost = estimateMessageTokens;
   let total = messages.reduce((a, m) => a + cost(m), 0);
   if (total <= maxTokens) return messages;
   const out = [...messages];

@@ -190,6 +190,7 @@ export function PipelinesTool() {
   const [showRuns, setShowRuns] = useState(false);
   const [runs, setRuns] = useState<PipelineRunInfo[]>([]);
   const [showCredentials, setShowCredentials] = useState(false);
+  const [hydrating, setHydrating] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
 
   const loadLists = useCallback(async () => {
@@ -208,7 +209,9 @@ export function PipelinesTool() {
   useEffect(() => {
     // 打开面板就落一份可用草稿：有已存流水线则载入第一条，否则新建并带上默认连接，
     // 免得首屏是个连保存都会失败的半成品。
-    void loadLists().then((list) => beginDraft(list[0]));
+    void loadLists()
+      .then((list) => beginDraft(list[0]))
+      .finally(() => setHydrating(false));
   }, [loadLists]);
 
   const beginDraft = (pipeline?: PipelineInfo) => {
@@ -452,6 +455,7 @@ export function PipelinesTool() {
   };
 
   const runNow = async () => {
+    if (hydrating) return;
     const target = dirty || !draftId ? await persist() : draftId;
     if (!target) return;
     setRunning(true);
@@ -490,6 +494,7 @@ export function PipelinesTool() {
   };
 
   const trialTo = async (index: number) => {
+    if (hydrating) return;
     setBusy(`trial-${index}`);
     setIssues([]);
     try {
@@ -562,13 +567,13 @@ export function PipelinesTool() {
             </Option>
           ))}
         </Select>
-        <button className="btn" onClick={() => beginDraft()} disabled={running}>
+        <button className="btn" onClick={() => beginDraft()} disabled={running || hydrating}>
           <Plus size={12} /> {tr(' 新建 ')}
         </button>
         <button className="btn primary" onClick={() => void save()} disabled={busy === 'save' || !dirty}>
           {busy === 'save' ? <Loader2 size={12} className="spin" /> : <Save size={12} />} {tr(' 保存 ')}
         </button>
-        <button className="btn" onClick={() => void runNow()} disabled={running}>
+        <button className="btn" onClick={() => void runNow()} disabled={running || hydrating}>
           {running ? <Loader2 size={12} className="spin" /> : <Play size={12} />} {tr(' 运行 ')}
         </button>
         {running ? (
@@ -805,7 +810,7 @@ export function PipelinesTool() {
                     {live.error ?? ''}
                   </button>
                 ) : null}
-                <button className="btn small" title={tr('试运行到这一步')} onClick={() => void trialTo(index)} disabled={busy === `trial-${index}`}>
+                <button className="btn small" title={tr('试运行到这一步')} onClick={() => void trialTo(index)} disabled={busy === `trial-${index}` || hydrating}>
                   {busy === `trial-${index}` ? <Loader2 size={11} className="spin" /> : <FlaskConical size={11} />} {tr(' 试到这步 ')}
                 </button>
                 <button className="icon-btn" onClick={() => moveStep(index, -1)} disabled={index === 0} title={tr('上移')}>

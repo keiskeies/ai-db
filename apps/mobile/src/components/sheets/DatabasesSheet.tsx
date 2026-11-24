@@ -7,7 +7,7 @@ import { styles } from '../../styles';
 import type { PickerKind, EdgeInsets } from '../../types';
 import { Text } from '../../components/base';
 
-export function DatabasesSheet({ setPicker, insets, activeConnection, databases, activeDatabase, setActiveDatabase }: { setPicker: Dispatch<SetStateAction<PickerKind>>; insets: EdgeInsets; activeConnection: ConnectionConfig | undefined; databases: string[]; activeDatabase: string | undefined; setActiveDatabase: Dispatch<SetStateAction<string | undefined>>; }) {
+export function DatabasesSheet({ setPicker, insets, activeConnection, databases, activeDatabase, setActiveDatabase, disabled }: { setPicker: Dispatch<SetStateAction<PickerKind>>; insets: EdgeInsets; activeConnection: ConnectionConfig | undefined; databases: string[]; activeDatabase: string | undefined; setActiveDatabase: Dispatch<SetStateAction<string | undefined>>; disabled: boolean; }) {
   return (
         <Modal visible transparent animationType="slide" onRequestClose={() => setPicker(null)}>
           <View style={styles.modalBackdrop}>
@@ -27,6 +27,7 @@ export function DatabasesSheet({ setPicker, insets, activeConnection, databases,
                     key={name}
                     testID={`m-database-${name}`}
                     style={[styles.sessionRow, activeDatabase === name && { backgroundColor: colors.accentSoft }]}
+                    disabled={disabled}
                     onPress={() => {
                       setActiveDatabase(name);
                       setPicker(null);

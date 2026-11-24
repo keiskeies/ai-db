@@ -195,6 +195,8 @@ export type AgentStopReason =
   | 'max_output_tokens'
   /** 跑满 maxSteps 步数上限。 */
   | 'max_steps'
+  /** 服务商正常结束帧，但内容过滤、暂停或上下文超限表明本轮尚未完成。 */
+  | 'provider_incomplete'
   /**
    * 模型这一轮既没说正文也没发起工具调用，等于空转一圈就返回。
    *
@@ -221,7 +223,19 @@ export type AgentStopReason =
 /** 服务商 stop_reason 里表示「输出被截断」的取值（OpenAI 系 length，Anthropic 系 max_tokens）。 */
 export function isTruncatedStop(reason: string | undefined): boolean {
   if (!reason) return false;
-  return /^(length|max_tokens|max_output_tokens|incomplete)$/i.test(reason);
+  return /^(length|max_tokens|max_output_tokens)$/i.test(reason);
+}
+
+const PROVIDER_INCOMPLETE_REASONS = new Set([
+  'provider_incomplete',
+  'incomplete',
+  'content_filter',
+  'pause_turn',
+  'model_context_window_exceeded',
+]);
+
+export function isProviderIncompleteStop(reason: string | undefined): boolean {
+  return Boolean(reason && PROVIDER_INCOMPLETE_REASONS.has(reason.toLowerCase()));
 }
 
 /**
@@ -229,7 +243,7 @@ export function isTruncatedStop(reason: string | undefined): boolean {
  *
  * end_turn 不在里面：那是模型自己说完了，不该催用户继续。
  */
-export const UNFINISHED_STOP_REASONS = ['max_output_tokens', 'max_steps', 'empty_response', 'channel_idle'] as const;
+export const UNFINISHED_STOP_REASONS = ['max_output_tokens', 'max_steps', 'provider_incomplete', 'empty_response', 'channel_idle'] as const;
 
 export function isUnfinishedStop(reason: AgentStopReason | undefined): boolean {
   return Boolean(reason && (UNFINISHED_STOP_REASONS as readonly string[]).includes(reason));

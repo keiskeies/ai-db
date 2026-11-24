@@ -41,6 +41,7 @@ const { store, routes, pending } = installed;
 const { useApp } = store;
 
 const liveTurn = () => ({
+  generation: 0,
   userText: '建两张表',
   text: '',
   thinking: '',

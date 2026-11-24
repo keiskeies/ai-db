@@ -33,6 +33,7 @@ const send = (event: AgentEvent) => state().handleAgentEvent(event);
 const startLive = () => {
   useApp.setState({
     live: {
+      generation: 0,
       userText: '按 status 统计 orders',
       text: '',
       thinking: '',
@@ -150,4 +151,19 @@ test('整回合的 text/thinking 累计不被分段交付破坏（老兜底与�
   assert.equal(live.thinking, '想一下');
   // 这条里没有 step_thinking：thinking_delta 只进整回合累计，时间线上不该凭空多出一格
   assert.deepEqual(live.timeline.map((item) => item.kind), ['text', 'tool', 'text']);
+});
+
+test('done 之后补发的 suggestions 不会被终态守卫吞掉', () => {
+  startLive();
+  send({ type: 'done', turnId: 't1', durationMs: 12 } as AgentEvent);
+  assert.equal(state().live!.status, 'done');
+  send({ type: 'text_delta', text: '迟到的正文' } as AgentEvent);
+  assert.equal(state().live!.text, '', '终态后的展示事件仍然必须忽略');
+
+  send({
+    type: 'suggestions',
+    items: [{ id: 'trend:orders', kind: 'trend', prompt: '按月看订单趋势', reason: 'orders 有时间列', table: 'orders' }],
+  } as AgentEvent);
+  assert.equal(state().agentFollowUps.length, 1, '追问建议属于回合结果，done 之后到达也要留下');
+  assert.equal(state().live!.status, 'done', '写入建议不能把回合状态改回运行态');
 });

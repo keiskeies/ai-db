@@ -78,7 +78,8 @@ npx -y @aidb-studio/aidb-studio pair
 | --- | --- |
 | `AIDB_MCP_CREDENTIALS` | 覆盖凭据文件路径 |
 | `AIDB_URL` | `pair` 时 Bridge 地址的默认值（直接回车时取它） |
-| `AIDB_TOKEN` | **遗留用法**：直接用网关主令牌启动，权限不受限，**不推荐**；已配对就别设 |
+
+Server 只读取 `pair` 写入的只读设备凭据；`AIDB_TOKEN` 网关主令牌不再作为启动凭据。
 
 ## 常见问题
 
@@ -101,8 +102,8 @@ npx -y @aidb-studio/aidb-studio pair
 - 配对限流按 TCP 远端地址计数（不可被 `X-Forwarded-For` 伪造），配对码由 `crypto.randomInt`
   生成；`features.mcp=false` 时 MCP 配对端点不可用。
 - 网关只保存 token 的 SHA-256 hash；桌面端 **设置 → 设备** 可随时吊销，立即生效。
-- 遗留用法：设置 `AIDB_URL` + `AIDB_TOKEN` 环境变量也能启动，但那是网关主令牌、
-  权限不受限，**不推荐**。
+- Server 拒绝回退到 `AIDB_TOKEN` 网关主令牌；缺少配对凭据时必须先运行 `pair`，
+  避免外部 MCP 客户端绕过 `mcp:readonly` 作用域。
 
 ## 暴露的工具
 

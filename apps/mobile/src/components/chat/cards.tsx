@@ -1,6 +1,6 @@
 import React from 'react';
-import { Pressable, ScrollView, View } from 'react-native';
-import { Check, Loader2, X } from 'lucide-react-native';
+import { Image, Pressable, ScrollView, View } from 'react-native';
+import { Check, ImagePlus, Loader2, X } from 'lucide-react-native';
 import type { AgentPlanItem, Risk, ToolResult } from '@aidb/core';
 import type { LiveTool } from '../../types';
 import { colors, riskColor, riskLabels } from '../../theme';
@@ -8,12 +8,49 @@ import { styles } from '../../styles';
 import { Text } from '../base';
 import type { ChartShape } from '../chart/model';
 import { MobileChart } from '../chart/MobileChart';
+import type { BridgeClient } from '../../bridge';
 
-export function UserBubble({ text }: { text: string }) {
+function ChatImage({ client, attachmentId }: { client: BridgeClient; attachmentId: string }) {
+  const [url, setUrl] = React.useState('');
+  const [failed, setFailed] = React.useState(false);
+  React.useEffect(() => {
+    let disposed = false;
+    let revoke: (() => void) | undefined;
+    setUrl('');
+    setFailed(false);
+    client.attachmentImageSource(attachmentId).then((source) => {
+      if (disposed) source.revoke();
+      else {
+        revoke = source.revoke;
+        setUrl(source.url);
+      }
+    }).catch(() => {
+      if (!disposed) setFailed(true);
+    });
+    return () => {
+      disposed = true;
+      revoke?.();
+    };
+  }, [client, attachmentId]);
+  if (url) return <Image source={{ uri: url }} style={{ width: 132, height: 132, borderRadius: 8 }} resizeMode="contain" />;
+  return (
+    <View style={{ width: 84, height: 84, borderRadius: 8, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' }}>
+      <ImagePlus size={16} color={colors.muted} />
+      <Text style={styles.listMeta}>{failed ? '图片读取失败' : '加载图片…'}</Text>
+    </View>
+  );
+}
+
+export function UserBubble({ client, text, images }: { client: BridgeClient; text: string; images?: string[] }) {
   return (
     <View style={styles.userRow}>
       <Text style={styles.promptMark}>❯</Text>
       <View style={styles.userBubble}>
+        {images?.length ? (
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: text ? 8 : 0 }}>
+            {images.map((id) => <ChatImage key={id} client={client} attachmentId={id} />)}
+          </View>
+        ) : null}
         <Text style={styles.userText}>{text}</Text>
       </View>
     </View>

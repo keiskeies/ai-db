@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { classifySql, engineMeta, engineUsesSchema, isSqlEngine, type ConnectionConfig } from '@aidb/core';
 import type { GatewayEvents } from '../events';
@@ -44,6 +45,26 @@ export const ah =
   (req: Request, res: Response, next: NextFunction): void => {
     fn(req, res, next).catch(next);
   };
+
+export function requestExecution(manager: ConnectionManager, res: Response) {
+  const controller = new AbortController();
+  const executionId = randomUUID();
+  const onAbort = () => manager.cancelExecution(executionId);
+  controller.signal.addEventListener('abort', onAbort, { once: true });
+  const onClose = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+  res.once('close', onClose);
+  return {
+    executionId,
+    signal: controller.signal,
+    release: () => {
+      res.removeListener('close', onClose);
+      controller.signal.removeEventListener('abort', onAbort);
+      manager.releaseExecution(executionId);
+    },
+  };
+}
 
 /**
  * SSE 背压护栏（G5）：write() 返回 false 说明缓冲区已满，不读流的慢客户端会让

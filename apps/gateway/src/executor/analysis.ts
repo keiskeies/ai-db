@@ -4,6 +4,7 @@ import {
   buildDropIndex,
   chartSuitability,
   CHART_KIND_LABELS,
+  classifySql,
   deltas,
   forecastSeries,
   guessAxes,
@@ -28,7 +29,7 @@ import { defineTool, ok, ExecutorServices } from './types';
 
 type RenderChartType = 'bar' | 'stacked' | 'line' | 'pie' | 'scatter' | 'heatmap' | 'radar';
 
-async function auditDatabase(s: ExecutorServices, conn: ConnectionConfig, database: string | undefined, started: number, disabledTables: string[] = []): Promise<ToolResult> {
+async function auditDatabase(s: ExecutorServices, conn: ConnectionConfig, database: string | undefined, started: number, disabledTables: string[] = [], executionId?: string): Promise<ToolResult> {
   const schemas = await s.manager.schema(conn.id, database);
   const disabled = new Set(disabledTables.map((name) => name.toLowerCase()));
   const tables = schemas.flatMap((schema) => schema.tables).filter((table) => !disabled.has(table.name.toLowerCase()));
@@ -95,6 +96,7 @@ async function auditDatabase(s: ExecutorServices, conn: ConnectionConfig, databa
           allowMulti: false,
           autoLimit: false,
           actor: 'agent',
+          executionId,
         });
         const count = Number(countBatch.sets[0]?.rows?.[0]?.[0] ?? 0);
         if (count === 0) {
@@ -131,6 +133,7 @@ async function checkDataQuality(s: ExecutorServices,
   tableName: string,
   requestedColumns: string[] | undefined,
   started: number,
+  executionId?: string,
 ): Promise<ToolResult> {
   if (!tableName) throw new DbError('table 不能为空');
   const { table } = await s.manager.findTable(conn.id, database, tableName);
@@ -154,6 +157,7 @@ async function checkDataQuality(s: ExecutorServices,
     allowMulti: false,
     autoLimit: false,
     actor: 'agent',
+    executionId,
     // G2：质检 COUNT DISTINCT 全表聚合此前漏传超时；质检口径 120s。
     timeoutMs: QUALITY_CHECK_TIMEOUT_MS,
   });
@@ -188,6 +192,7 @@ async function checkDataQuality(s: ExecutorServices,
       // 重复主键组可能有几十万，必须让数据库只回 5 行，而不是全表分组后在内存里截。
       autoLimit: true,
       actor: 'agent',
+      executionId,
       // G2：重复主键检查同样是全表分组，质检口径 120s。
       timeoutMs: QUALITY_CHECK_TIMEOUT_MS,
     });
@@ -234,20 +239,30 @@ async function checkDataQuality(s: ExecutorServices,
  * 跑一次 SELECT 并把结果解析成 (x, y) 序列，render_chart / analyze_chart / forecast_chart 共用。
  * NULL 由 core 的 toSeries 丢弃：早期 render_chart 直接 Number(null) 会把空值画成 0 点。
  */
-async function chartSeries(s: ExecutorServices, conn: ConnectionConfig, database: string | undefined, sqlText: string, xName?: string, yName?: string) {
+async function chartQuery(s: ExecutorServices, conn: ConnectionConfig, database: string | undefined, sqlText: string, executionId?: string) {
   const sql = sqlText.trim();
   if (!sql) throw new DbError('该工具需要 SQL');
+  const classification = classifySql(sql, conn.engine);
+  if (classification.statements.length !== 1 || classification.risk !== 'read') {
+    throw new DbError('图表工具只允许单条只读查询', { code: 'CHART_SQL_NOT_READONLY' });
+  }
   const batch = await s.manager.query(conn.id, sql, {
     database,
     maxRows: 500,
     allowMulti: false,
     autoLimit: true,
     actor: 'agent',
+    executionId,
   });
   const set = batch.sets[0];
   if (!set || !set.columns.length) throw new DbError('SQL 没有返回结果集');
   const names = set.columns.map((column) => column.name);
   const objects = set.rows.map((row) => Object.fromEntries(names.map((name, index) => [name, row[index]])));
+  return { sql, set, names, objects };
+}
+
+async function chartSeries(s: ExecutorServices, conn: ConnectionConfig, database: string | undefined, sqlText: string, xName?: string, yName?: string, executionId?: string) {
+  const { sql, set, names, objects } = await chartQuery(s, conn, database, sqlText, executionId);
   const guessed = guessAxes(names, objects);
   const x = xName ?? guessed?.x ?? names[0];
   const y = yName ?? guessed?.y ?? names.find((name) => name !== x);
@@ -269,8 +284,9 @@ async function renderChart(s: ExecutorServices,
   stacked: boolean,
   labelName: string | undefined,
   started: number,
+  executionId?: string,
 ): Promise<ToolResult> {
-  const { sql, columns, rows, x, y, objects } = await chartSeries(s, conn, database, sqlText, xName, yName);
+  const { sql, columns, rows, x, y, objects } = await chartSeries(s, conn, database, sqlText, xName, yName, executionId);
 
   if (type === 'scatter') {
     // 散点要保留每一行，不能走 toSeries 的 24 点截断；两个轴都必须是数值。
@@ -374,14 +390,9 @@ async function renderHeatmap(s: ExecutorServices,
   yName: string | undefined,
   valueName: string | undefined,
   started: number,
+  executionId?: string,
 ): Promise<ToolResult> {
-  const sql = sqlText.trim();
-  if (!sql) throw new DbError('该工具需要 SQL');
-  const batch = await s.manager.query(conn.id, sql, { database, maxRows: 500, allowMulti: false, autoLimit: true, actor: 'agent' });
-  const set = batch.sets[0];
-  if (!set || !set.columns.length) throw new DbError('SQL 没有返回结果集');
-  const names = set.columns.map((column) => column.name);
-  const objects = set.rows.map((row) => Object.fromEntries(names.map((name, index) => [name, row[index]])));
+  const { sql, set, names, objects } = await chartQuery(s, conn, database, sqlText, executionId);
   const isNumeric = (name: string) => objects.some((row) => {
     const value = row[name];
     return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(String(value).trim()));
@@ -444,8 +455,9 @@ async function analyzeChart(s: ExecutorServices,
   yName: string | undefined,
   topN: number | undefined,
   started: number,
+  executionId?: string,
 ): Promise<ToolResult> {
-  const { sql, x, y, points } = await chartSeries(s, conn, database, sqlText, xName, yName);
+  const { sql, x, y, points } = await chartSeries(s, conn, database, sqlText, xName, yName, executionId);
   if (!points.length) throw new DbError('没有可统计的有效数据点（全为 NULL 或空结果）', { code: 'EMPTY_SERIES' });
   const stats = summarize(points)!;
   const limit = Math.min(20, Math.max(1, Math.trunc(topN ?? 5)));
@@ -483,8 +495,9 @@ async function forecastChart(s: ExecutorServices,
   periods: number | undefined,
   method: ForecastMethod | undefined,
   started: number,
+  executionId?: string,
 ): Promise<ToolResult> {
-  const { sql, x, y, points } = await chartSeries(s, conn, database, sqlText, xName, yName);
+  const { sql, x, y, points } = await chartSeries(s, conn, database, sqlText, xName, yName, executionId);
   const timeSeries = isTimeSeries(points);
   const result = forecastSeries(points, {
     periods,
@@ -516,7 +529,7 @@ export const auditDatabaseTool = defineTool('audit_database', async (call, ctx, 
   const a = call.args;
   const started = s.started;
   const conn = s.requireConnection(call, ctx);
-  return auditDatabase(s, conn, s.databaseOf(call, conn), started, ctx.disabledTables);
+  return auditDatabase(s, conn, s.databaseOf(call, conn), started, ctx.disabledTables, ctx.executionId);
 });
 
 export const checkDataQualityTool = defineTool('check_data_quality', async (call, ctx, s) => {
@@ -529,6 +542,7 @@ export const checkDataQualityTool = defineTool('check_data_quality', async (call
     String(a.table ?? ''),
     Array.isArray(a.columns) ? (a.columns as string[]) : undefined,
     started,
+    ctx.executionId,
   );
 });
 
@@ -542,6 +556,8 @@ export const generateDataTool = defineTool('generate_data', async (call, ctx, s)
     table: String(a.table ?? ''),
     rows: Math.min(5000, Number(a.rows) || 10),
     dryRun: a.dryRun === true,
+    executionId: ctx.executionId,
+    signal: ctx.signal,
   });
   return ok(started, result.dryRun ? `生成预览 ${result.rowsPreview.length} 行` : `已生成 ${result.inserted} 行数据`, result);
 });
@@ -562,6 +578,7 @@ export const renderChartTool = defineTool('render_chart', async (call, ctx, s) =
       typeof a.y === 'string' ? a.y : undefined,
       typeof a.value === 'string' ? a.value : undefined,
       started,
+      ctx.executionId,
     );
   }
   return renderChart(s, 
@@ -576,6 +593,7 @@ export const renderChartTool = defineTool('render_chart', async (call, ctx, s) =
     a.stacked === true,
     typeof a.label === 'string' ? a.label : undefined,
     started,
+    ctx.executionId,
   );
 });
 
@@ -583,7 +601,7 @@ export const analyzeChartTool = defineTool('analyze_chart', async (call, ctx, s)
   const a = call.args;
   const started = s.started;
   const conn = s.requireConnection(call, ctx);
-  return analyzeChart(s, conn, s.databaseOf(call, conn), String(a.sql ?? ''), typeof a.x === 'string' ? a.x : undefined, typeof a.y === 'string' ? a.y : undefined, typeof a.topN === 'number' ? a.topN : undefined, started);
+  return analyzeChart(s, conn, s.databaseOf(call, conn), String(a.sql ?? ''), typeof a.x === 'string' ? a.x : undefined, typeof a.y === 'string' ? a.y : undefined, typeof a.topN === 'number' ? a.topN : undefined, started, ctx.executionId);
 });
 
 export const forecastChartTool = defineTool('forecast_chart', async (call, ctx, s) => {
@@ -599,6 +617,7 @@ export const forecastChartTool = defineTool('forecast_chart', async (call, ctx, 
     typeof a.periods === 'number' ? a.periods : undefined,
     a.method === 'linear' || a.method === 'moving_average' || a.method === 'auto' ? (a.method as ForecastMethod) : undefined,
     started,
+    ctx.executionId,
   );
 });
 

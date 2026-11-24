@@ -1,4 +1,4 @@
-import { PipelineError, type PipelineCredentialSecret } from './types';
+import { PipelineAbortedError, PipelineError, type PipelineCredentialSecret } from './types';
 
 /**
  * 数据流的出站 HTTP。
@@ -18,6 +18,7 @@ export interface HttpRequestInput {
   timeoutMs?: number;
   maxBytes?: number;
   auth?: { mode: string; credential?: PipelineCredentialSecret | null; field?: string };
+  signal?: AbortSignal;
 }
 
 export interface HttpResponse {
@@ -85,9 +86,12 @@ export async function httpRequest(input: HttpRequestInput): Promise<HttpResponse
   const timeoutMs = Math.min(Math.max(input.timeoutMs ?? DEFAULT_TIMEOUT, 1000), 120000);
   // 单个信号覆盖「请求 + body 读取」全程：拿到响应头就停表的话，服务端headers 回得快、
   // body 却一直不吐完的场景会无限挂起（与 search.ts 曾有的 bug 同模式）。
-  const signal = AbortSignal.timeout(timeoutMs);
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const signal = input.signal ? AbortSignal.any([input.signal, timeoutSignal]) : timeoutSignal;
+  if (input.signal?.aborted) throw new PipelineAbortedError();
   const started = Date.now();
   const networkError = (err: any): PipelineError => {
+    if (input.signal?.aborted) return new PipelineAbortedError();
     const timedOut = err?.name === 'AbortError' || err?.name === 'TimeoutError';
     const reason = timedOut ? `超过 ${Math.round(timeoutMs / 1000)} 秒未完成（含响应体读取）` : (err?.cause?.message ?? err?.message ?? '连接失败');
     return new PipelineError(`接口请求失败：${reason}`, 'PIPELINE_HTTP_NETWORK', `检查 ${new URL(url, 'http://localhost').host} 是否可达`);

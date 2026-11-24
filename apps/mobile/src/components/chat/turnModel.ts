@@ -1,3 +1,4 @@
+import { isUnfinishedStop } from '@aidb/core';
 import type { AgentMessageBlock, AgentPlanItem, Risk, ToolResult } from '@aidb/core';
 import type { LiveTool, LiveTurn } from '../../types';
 import type { ChartShape } from '../chart/model';
@@ -79,4 +80,134 @@ export function mobileTurnFromLive(live: LiveTurn): { entries: MobileTurnEntry[]
   if (live.streamThinking) entries.push({ kind: 'thinking', key: 'thinking_live', text: live.streamThinking });
   if (live.stream) entries.push({ kind: 'text', key: 'text_live', text: live.stream });
   return { entries, toolCount: live.tools.length, stepped: entries.some((entry) => entry.kind === 'text' || entry.kind === 'thinking') };
+}
+
+export function isLiveTurnRunning(live: Pick<LiveTurn, 'status'>): boolean {
+  return live.status === 'streaming' || live.status === 'awaiting';
+}
+
+export function applyAgentEvent(live: LiveTurn, event: any): LiveTurn {
+  if (!isLiveTurnRunning(live) && !['usage', 'turn_usage', 'suggestions'].includes(event.type)) return live;
+  const next: LiveTurn = {
+    ...live,
+    tools: live.tools.map((tool) => ({ ...tool })),
+    plan: [...live.plan],
+    memories: [...live.memories],
+    timeline: [...live.timeline],
+    pendingApprovalIds: [...live.pendingApprovalIds],
+    suggestions: [...live.suggestions],
+  };
+  const committedText = () => next.timeline.filter((item) => item.kind === 'text').map((item) => item.text).join('\n\n');
+  switch (event.type) {
+    case 'start':
+      next.status = 'streaming';
+      if (event.turnId) next.turnId = event.turnId;
+      break;
+    case 'text_delta':
+      next.text += event.text;
+      next.stream += event.text;
+      break;
+    case 'text_replace':
+      next.stream = event.text;
+      next.text = [committedText(), event.text].filter(Boolean).join('\n\n');
+      break;
+    case 'thinking_delta':
+      next.thinking += event.text;
+      next.streamThinking += event.text;
+      break;
+    case 'step_text':
+      next.timeline.push({ kind: 'text', text: event.text, step: event.step });
+      next.stream = '';
+      break;
+    case 'step_thinking':
+      next.timeline.push({ kind: 'thinking', text: event.text, step: event.step });
+      next.streamThinking = '';
+      break;
+    case 'tool_call':
+      next.tools.push({ callId: event.callId, tool: event.tool, args: event.args, risk: event.risk, status: 'running', summary: event.summary });
+      next.timeline.push({ kind: 'tool', callId: event.callId });
+      break;
+    case 'tool_result': {
+      const tool = next.tools.find((item) => item.callId === event.callId);
+      if (tool) {
+        tool.status = event.result.ok ? 'ok' : 'error';
+        tool.result = event.result;
+      }
+      next.status = 'streaming';
+      break;
+    }
+    case 'approval_required':
+      next.status = 'awaiting';
+      next.tools = next.tools.map((tool) => tool.tool === event.call.tool && tool.status === 'running' ? { ...tool, status: 'awaiting' } : tool);
+      if (!next.pendingApprovalIds.includes(event.approvalId)) next.pendingApprovalIds.push(event.approvalId);
+      break;
+    case 'approval_resolved':
+      next.pendingApprovalIds = next.pendingApprovalIds.filter((id) => id !== event.approvalId);
+      next.status = next.pendingApprovalIds.length ? 'awaiting' : 'streaming';
+      break;
+    case 'plan':
+      next.plan = event.items;
+      break;
+    case 'memory_used':
+      next.memories = event.memories;
+      break;
+    case 'suggestions':
+      next.suggestions = event.items;
+      break;
+    case 'user_images':
+      if (Array.isArray(event.images)) next.userImages = [...new Set([...(next.userImages ?? []), ...event.images])];
+      break;
+    case 'usage':
+      next.tokensIn += event.tokensIn;
+      next.tokensOut += event.tokensOut;
+      next.contextTokens = event.tokensIn;
+      next.modelDurationMs += event.durationMs ?? 0;
+      if (event.cacheHitTokens !== undefined) next.cacheHitTokens = (next.cacheHitTokens ?? 0) + event.cacheHitTokens;
+      if (event.cacheMissTokens !== undefined) next.cacheMissTokens = (next.cacheMissTokens ?? 0) + event.cacheMissTokens;
+      break;
+    case 'turn_usage':
+      next.steps = event.steps;
+      next.modelCalls = event.modelCalls;
+      next.tokensIn = event.tokensIn;
+      next.tokensOut = event.tokensOut;
+      next.contextTokens = event.contextTokens;
+      next.modelDurationMs = event.modelDurationMs;
+      if (event.cacheHitTokens !== undefined) next.cacheHitTokens = event.cacheHitTokens;
+      if (event.cacheMissTokens !== undefined) next.cacheMissTokens = event.cacheMissTokens;
+      break;
+    case 'done':
+      next.status = 'done';
+      next.stop = event.stop ?? 'end_turn';
+      next.endedAt = Date.now();
+      next.pendingApprovalIds = [];
+      break;
+    case 'aborted':
+      next.status = 'aborted';
+      next.abortCause = event.cause ?? 'user';
+      next.abortReason = event.reason;
+      next.endedAt = Date.now();
+      next.pendingApprovalIds = [];
+      break;
+    case 'error':
+      next.status = 'error';
+      next.error = event.message;
+      if (event.stop) next.stop = event.stop;
+      next.endedAt = Date.now();
+      next.pendingApprovalIds = [];
+      break;
+    default:
+      return live;
+  }
+  return next;
+}
+
+export function isUnfinishedLiveTurn(live: LiveTurn): boolean {
+  if (live.status === 'aborted') return live.abortCause === 'stalled';
+  return isUnfinishedStop(live.stop) || (live.status === 'done' && !live.text.trim() && !live.tools.length);
+}
+
+export function liveTurnEndLabel(live: LiveTurn): string {
+  if (live.status === 'aborted') return live.abortCause === 'stalled' ? '连接中断' : '已中止';
+  if (isUnfinishedLiveTurn(live)) return '未完成';
+  return live.status === 'error' ? '失败' : '已完成';
 }

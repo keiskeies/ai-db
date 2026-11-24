@@ -9,7 +9,8 @@
     "ios": "expo run:ios",
     "web": "expo start --web --port 8081",
     "export:web": "expo export --platform web",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@aidb/client": "*",

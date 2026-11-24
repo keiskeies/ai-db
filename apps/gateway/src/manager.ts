@@ -45,7 +45,7 @@ import {
 } from '@aidb/core';
 import type { GatewayConfig } from './config';
 import { createDriver, DbError, type Driver } from './drivers';
-import { withQueryTimeout } from './drivers/timeout';
+import { throwIfAborted, withQueryTimeout } from './drivers/timeout';
 import { GatewayEvents, type SchemaChangeCause } from './events';
 import { normalizeMql } from './drivers/mongodb';
 import type { CreateRedisKeyInput, RedisKeyDriver } from './drivers/types';
@@ -111,7 +111,11 @@ export interface QueryOptions {
   sessionId?: string;
   /** 执行追踪 id（G1）：路由生成并传入，客户端提前断开时据此取消，见 cancelExecution。 */
   executionId?: string;
+  /** Agent stop / 请求断连信号；复合任务会把它贯通到每一批。 */
+  signal?: AbortSignal;
 }
+
+type ExecutionOptions = Pick<QueryOptions, 'executionId' | 'signal' | 'sessionId'>;
 
 export class ConnectionManager {
   private clients = new Map<string, CachedDriver>();
@@ -131,6 +135,67 @@ export class ConnectionManager {
    * 客户端提前断开时据此销毁连接，终止服务端仍在跑的查询；查询结束即移除。
    */
   private activeExecutions = new Map<string, { connectionId: string; sessionId?: string; inTx: boolean; abandoned?: boolean }>();
+  /** 一次 Agent 工具调用会顺序执行多批查询；单批 finally 不能抹掉整次调用的取消态。 */
+  private abandonedExecutions = new Set<string>();
+
+  private throwIfAborted(opts: ExecutionOptions): void {
+    throwIfAborted(opts.signal);
+    if (opts.executionId && this.abandonedExecutions.has(opts.executionId)) {
+      throw new DbError('工具执行已取消', { code: 'ABORTED' });
+    }
+  }
+
+  private beginExecution(connectionId: string, opts: ExecutionOptions, inTx = false): void {
+    this.throwIfAborted(opts);
+    if (opts.executionId) {
+      this.activeExecutions.set(opts.executionId, { connectionId, sessionId: inTx ? opts.sessionId : undefined, inTx });
+    }
+  }
+
+  /** 直驱操作没有 SQL 批次循环，也必须像 query/runParams 一样可被 stop 定位并断开。 */
+  private async trackWrite<T>(connectionId: string, opts: ExecutionOptions, write: (driver: Driver) => Promise<T>): Promise<T> {
+    this.beginExecution(connectionId, opts);
+    let settled = false;
+    const release = () => {
+      if (settled) return;
+      settled = true;
+      if (opts.executionId) {
+        const active = this.activeExecutions.get(opts.executionId);
+        this.activeExecutions.delete(opts.executionId);
+        if (active?.abandoned) this.abandonedExecutions.delete(opts.executionId);
+      }
+    };
+    const work = (async () => {
+      const driver = await this.driverFor(connectionId);
+      this.throwIfAborted(opts);
+      return write(driver);
+    })();
+    work.then(release, release);
+    let onAbort: (() => void) | undefined;
+    try {
+      const result = opts.signal
+        ? await Promise.race([
+            work,
+            new Promise<never>((_, reject) => {
+              onAbort = () => {
+                if (opts.executionId) this.cancelExecution(opts.executionId);
+                reject(new DbError('工具执行已取消', { code: 'ABORTED' }));
+              };
+              opts.signal!.addEventListener('abort', onAbort, { once: true });
+              if (opts.signal!.aborted) onAbort();
+            }),
+          ])
+        : await work;
+      this.throwIfAborted(opts);
+      return result;
+    } finally {
+      if (onAbort) opts.signal?.removeEventListener('abort', onAbort);
+      if (!settled) {
+        const driver = this.clients.get(connectionId)?.driver;
+        if (opts.signal?.aborted && driver) this.destroyDriverConnections(driver);
+      }
+    }
+  }
 
   constructor(
     private store: Store,
@@ -215,12 +280,12 @@ export class ConnectionManager {
     return driver.listDatabases();
   }
 
-  async describe(connectionId: string, database?: string): Promise<TableInfo[]> {
-    const driver = await this.driverFor(connectionId);
-    return driver.describe(database);
+  async describe(connectionId: string, database?: string, opts: ExecutionOptions = {}): Promise<TableInfo[]> {
+    return this.trackWrite(connectionId, opts, async (driver) => driver.describe(database));
   }
 
-  async schema(connectionId: string, database?: string, refresh = false, ttlMs = 30000): Promise<DatabaseSchema[]> {
+  async schema(connectionId: string, database?: string, refresh = false, ttlMs = 30000, opts: ExecutionOptions = {}): Promise<DatabaseSchema[]> {
+    this.throwIfAborted(opts);
     const conn = this.store.getConnection(connectionId);
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
     const dbKey = database ?? conn.database ?? (conn.engine === 'sqlite' ? 'main' : conn.engine === 'redis' ? '0' : conn.engine === 'neo4j' ? 'neo4j' : conn.engine === 'memgraph' ? 'memgraph' : conn.engine === 'falkordb' ? (conn.database || 'aidb') : conn.engine === 'influxdb' ? (conn.database || 'aidb') : conn.engine === 'arangodb' ? (conn.database || '_system') : conn.engine === 'elasticsearch' || conn.engine === 'opensearch' ? 'default' : conn.engine === 'cassandra' || conn.engine === 'scylla' ? 'system' : '');
@@ -244,7 +309,8 @@ export class ConnectionManager {
         /* fall through */
       }
     }
-    const tables = await this.describe(connectionId, database);
+    const tables = await this.describe(connectionId, database, opts);
+    this.throwIfAborted(opts);
     let schemas: DatabaseSchema[];
     if (engineUsesSchema(conn.engine)) {
       const groups = new Map<string, TableInfo[]>();
@@ -439,14 +505,19 @@ export class ConnectionManager {
         });
       }
     }
-    const driver = await this.driverFor(connectionId);
+    // G1：结构化查询不进事务会话，断开时可直接销毁连接。
+    this.beginExecution(connectionId, opts);
+    const driver = await this.driverFor(connectionId).catch((err) => {
+      if (opts.executionId) this.activeExecutions.delete(opts.executionId);
+      throw err;
+    });
     if (!supportsStructuredQuery(driver)) {
+      if (opts.executionId) this.activeExecutions.delete(opts.executionId);
       throw new DbError(`${engineMeta(conn.engine).label} 驱动不支持结构化查询`, { code: 'UNSUPPORTED_ENGINE' });
     }
-    // G1：结构化查询不进事务会话，断开时可直接销毁连接。
-    if (opts.executionId) this.activeExecutions.set(opts.executionId, { connectionId, inTx: false });
     const started = Date.now();
     try {
+      this.throwIfAborted(opts);
       let effective = query;
       if (query.language === 'vector' && query.text && !query.vector?.length) {
         const vector = await embedText(this.settings(), query.text);
@@ -457,6 +528,7 @@ export class ConnectionManager {
         maxRows: opts.maxRows,
         timeoutMs: opts.timeoutMs,
       });
+      this.throwIfAborted(opts);
       this.store.addHistory({
         connectionId,
         database: opts.database ?? conn.database,
@@ -491,21 +563,16 @@ export class ConnectionManager {
     return this.executeStructured(connectionId, conn, query, opts);
   }
 
-  private async documentWriter(connectionId: string, collection: string) {
+  private documentContext(connectionId: string, collection: string) {
     const conn = this.store.getConnection(connectionId);
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
-    const meta = engineMeta(conn.engine);
     if (conn.readonly) {
       throw new DbError('只读连接不允许写入', { code: 'READONLY', status: 403, hint: '在连接设置中关闭只读后才可写入' });
     }
     if (!collection || !collection.trim()) {
       throw new DbError('collection 不能为空', { code: 'WRITE_COLLECTION' });
     }
-    const driver = await this.driverFor(connectionId);
-    if (!supportsDocumentWrite(driver)) {
-      throw new DbError(`${meta.label} 暂不支持写入文档/向量`, { code: 'UNSUPPORTED_ENGINE', hint: '当前支持 MongoDB / ArangoDB / Qdrant / Weaviate / Milvus / Elasticsearch / OpenSearch' });
-    }
-    return { conn, driver, name: collection.trim() };
+    return { conn, name: collection.trim() };
   }
 
   /** 批量写入历史只留摘要，避免把整批文档塞进历史表。 */
@@ -624,15 +691,16 @@ export class ConnectionManager {
     }
     if (!input.collection?.trim()) throw new DbError('collection 不能为空', { code: 'MQL_COLLECTION' });
     if (!input.columns.some((column) => column.trim())) throw new DbError('索引至少需要一个字段', { code: 'MQL_INDEX' });
-    const driver = await this.driverFor(connectionId);
-    if (!supportsCollectionIndexes(driver)) {
-      throw new DbError(`${meta.label} 驱动不支持索引管理`, { code: 'UNSUPPORTED_ENGINE' });
-    }
     const started = Date.now();
-    const result = await driver.createIndex(
-      { ...input, collection: input.collection.trim() },
-      { database: opts.database, timeoutMs: opts.timeoutMs },
-    );
+    const result = await this.trackWrite(connectionId, opts, async (driver) => {
+      if (!supportsCollectionIndexes(driver)) {
+        throw new DbError(`${meta.label} 驱动不支持索引管理`, { code: 'UNSUPPORTED_ENGINE' });
+      }
+      return driver.createIndex(
+        { ...input, collection: input.collection.trim() },
+        { database: opts.database, timeoutMs: opts.timeoutMs },
+      );
+    });
     this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
@@ -659,14 +727,15 @@ export class ConnectionManager {
       throw new DbError(`${meta.label} 暂不支持在此删除索引`, { code: 'UNSUPPORTED_ENGINE', hint: '请使用该引擎自身的索引命令' });
     }
     if (!input.collection?.trim() || !input.name?.trim()) throw new DbError('collection 与索引名必填', { code: 'MQL_INDEX' });
-    const driver = await this.driverFor(connectionId);
-    if (!supportsCollectionIndexes(driver)) {
-      throw new DbError(`${meta.label} 驱动不支持索引管理`, { code: 'UNSUPPORTED_ENGINE' });
-    }
     const started = Date.now();
-    const result = await driver.dropIndex({ collection: input.collection.trim(), name: input.name.trim() }, {
-      database: opts.database,
-      timeoutMs: opts.timeoutMs,
+    const result = await this.trackWrite(connectionId, opts, async (driver) => {
+      if (!supportsCollectionIndexes(driver)) {
+        throw new DbError(`${meta.label} 驱动不支持索引管理`, { code: 'UNSUPPORTED_ENGINE' });
+      }
+      return driver.dropIndex({ collection: input.collection.trim(), name: input.name.trim() }, {
+        database: opts.database,
+        timeoutMs: opts.timeoutMs,
+      });
     });
     this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
@@ -698,15 +767,16 @@ export class ConnectionManager {
       });
     }
     if (!input.object?.trim() || !input.name?.trim()) throw new DbError('对象与字段名必填', { code: 'FIELD_INPUT' });
-    const driver = await this.driverFor(connectionId);
-    if (!supportsFieldAdd(driver)) {
-      throw new DbError(`${meta.label} 驱动不支持追加字段`, { code: 'UNSUPPORTED_ENGINE' });
-    }
     const started = Date.now();
-    const result = await driver.createField(
-      { object: input.object.trim(), name: input.name.trim(), type: input.type?.trim() || 'text' },
-      { database: opts.database, timeoutMs: opts.timeoutMs },
-    );
+    const result = await this.trackWrite(connectionId, opts, async (driver) => {
+      if (!supportsFieldAdd(driver)) {
+        throw new DbError(`${meta.label} 驱动不支持追加字段`, { code: 'UNSUPPORTED_ENGINE' });
+      }
+      return driver.createField(
+        { object: input.object.trim(), name: input.name.trim(), type: input.type?.trim() || 'text' },
+        { database: opts.database, timeoutMs: opts.timeoutMs },
+      );
+    });
     this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
@@ -887,12 +957,13 @@ export class ConnectionManager {
     if (!writesLineProtocol(conn.engine)) {
       throw new DbError(`${meta.label} 没有行协议写入入口`, { code: 'UNSUPPORTED_ENGINE' });
     }
-    const driver = await this.driverFor(connectionId);
-    if (!supportsLineProtocol(driver)) {
-      throw new DbError(`${meta.label} 驱动不支持行协议写入`, { code: 'UNSUPPORTED_ENGINE' });
-    }
     const started = Date.now();
-    const result = await driver.writeLineProtocol(lines, opts.database ?? conn.database, opts.timeoutMs);
+    const result = await this.trackWrite(connectionId, opts, async (driver) => {
+      if (!supportsLineProtocol(driver)) {
+        throw new DbError(`${meta.label} 驱动不支持行协议写入`, { code: 'UNSUPPORTED_ENGINE' });
+      }
+      return driver.writeLineProtocol(lines, opts.database ?? conn.database, opts.timeoutMs);
+    });
     this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
@@ -923,15 +994,16 @@ export class ConnectionManager {
       });
     }
     if (!input.name?.trim()) throw new DbError('名称不能为空', { code: 'OBJECT_NAME' });
-    const driver = await this.driverFor(connectionId);
-    if (!supportsObjectCreate(driver)) {
-      throw new DbError(`${meta.label} 驱动不支持创建对象`, { code: 'UNSUPPORTED_ENGINE' });
-    }
     const started = Date.now();
-    const result = await driver.createObject(
-      { name: input.name.trim(), dimension: input.dimension, distance: input.distance, fields: input.fields ?? [], edge: input.edge },
-      { database: opts.database, timeoutMs: opts.timeoutMs },
-    );
+    const result = await this.trackWrite(connectionId, opts, async (driver) => {
+      if (!supportsObjectCreate(driver)) {
+        throw new DbError(`${meta.label} 驱动不支持创建对象`, { code: 'UNSUPPORTED_ENGINE' });
+      }
+      return driver.createObject(
+        { name: input.name.trim(), dimension: input.dimension, distance: input.distance, fields: input.fields ?? [], edge: input.edge },
+        { database: opts.database, timeoutMs: opts.timeoutMs },
+      );
+    });
     this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
@@ -954,12 +1026,13 @@ export class ConnectionManager {
     if (!managesObjects(conn.engine)) {
       throw new DbError(`${meta.label} 暂不支持删除集合/索引`, { code: 'UNSUPPORTED_ENGINE', hint: '请在对应控制台执行删除命令' });
     }
-    const driver = await this.driverFor(connectionId);
-    if (!supportsObjectCreate(driver)) {
-      throw new DbError(`${meta.label} 暂不支持删除集合/索引`, { code: 'UNSUPPORTED_ENGINE', hint: '请在对应控制台执行删除命令' });
-    }
     const started = Date.now();
-    const result = await driver.dropObject(name, { database: opts.database, timeoutMs: opts.timeoutMs });
+    const result = await this.trackWrite(connectionId, opts, async (driver) => {
+      if (!supportsObjectCreate(driver)) {
+        throw new DbError(`${meta.label} 暂不支持删除集合/索引`, { code: 'UNSUPPORTED_ENGINE', hint: '请在对应控制台执行删除命令' });
+      }
+      return driver.dropObject(name, { database: opts.database, timeoutMs: opts.timeoutMs });
+    });
     this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,
@@ -976,7 +1049,7 @@ export class ConnectionManager {
     input: { collection: string; documents: Record<string, unknown>[] },
     opts: QueryOptions,
   ): Promise<{ ids: string[]; upserted: number }> {
-    const { conn, driver, name } = await this.documentWriter(connectionId, input.collection);
+    const { conn, name } = this.documentContext(connectionId, input.collection);
     const documents = input.documents ?? [];
     if (!documents.length) throw new DbError('至少需要一个文档', { code: 'WRITE_DOCUMENT' });
     if (documents.some((document) => !document || typeof document !== 'object' || Array.isArray(document))) {
@@ -984,7 +1057,12 @@ export class ConnectionManager {
     }
     const started = Date.now();
     try {
-      const result = await driver.upsertDocuments({ collection: name, documents }, { database: opts.database, timeoutMs: opts.timeoutMs });
+      const result = await this.trackWrite(connectionId, opts, async (driver) => {
+        if (!supportsDocumentWrite(driver)) {
+          throw new DbError(`${engineMeta(conn.engine).label} 暂不支持写入文档/向量`, { code: 'UNSUPPORTED_ENGINE' });
+        }
+        return driver.upsertDocuments({ collection: name, documents }, { database: opts.database, timeoutMs: opts.timeoutMs });
+      });
       this.store.addHistory({
         connectionId,
         database: opts.database ?? conn.database,
@@ -1012,12 +1090,17 @@ export class ConnectionManager {
     input: { collection: string; ids: string[] },
     opts: QueryOptions,
   ): Promise<{ deleted: number }> {
-    const { conn, driver, name } = await this.documentWriter(connectionId, input.collection);
+    const { conn, name } = this.documentContext(connectionId, input.collection);
     const ids = input.ids.map((id) => String(id).trim()).filter(Boolean);
     if (!ids.length) throw new DbError('ids 不能为空', { code: 'WRITE_IDS', hint: '删除必须给出明确的 id 列表' });
     const started = Date.now();
     try {
-      const result = await driver.deleteDocuments({ collection: name, ids }, { database: opts.database, timeoutMs: opts.timeoutMs });
+      const result = await this.trackWrite(connectionId, opts, async (driver) => {
+        if (!supportsDocumentWrite(driver)) {
+          throw new DbError(`${engineMeta(conn.engine).label} 暂不支持写入文档/向量`, { code: 'UNSUPPORTED_ENGINE' });
+        }
+        return driver.deleteDocuments({ collection: name, ids }, { database: opts.database, timeoutMs: opts.timeoutMs });
+      });
       this.store.addHistory({
         connectionId,
         database: opts.database ?? conn.database,
@@ -1058,78 +1141,90 @@ export class ConnectionManager {
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
     const meta = engineMeta(conn.engine);
     const topK = Math.max(1, Math.min(1000, Number(query.topK) || 10));
-    let vector = query.vector;
-    if (!vector?.length && query.text) vector = await embedText(this.settings(), query.text);
-    if (vector?.length) vector = this.sanitizeVector(vector);
+    this.beginExecution(connectionId, opts);
     const started = Date.now();
-    const driver = await this.driverFor(connectionId);
+    try {
+      let vector = query.vector;
+      if (!vector?.length && query.text) {
+        this.throwIfAborted(opts);
+        vector = await embedText(this.settings(), query.text);
+      }
+      if (vector?.length) vector = this.sanitizeVector(vector);
+      this.throwIfAborted(opts);
+      const driver = await this.driverFor(connectionId);
+      this.throwIfAborted(opts);
 
-    if (meta.model === 'vector') {
-      if (!supportsVectorSearch(driver)) {
-        throw new DbError(`${meta.label} 驱动不支持向量检索`, { code: 'UNSUPPORTED_ENGINE' });
+      if (meta.model === 'vector') {
+        if (!supportsVectorSearch(driver)) {
+          throw new DbError(`${meta.label} 驱动不支持向量检索`, { code: 'UNSUPPORTED_ENGINE' });
+        }
+        try {
+          const result = await driver.vectorSearch({ ...query, topK, vector }, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs });
+          this.throwIfAborted(opts);
+          this.store.addHistory({
+            connectionId,
+            database: opts.database ?? conn.database,
+            sql: formatStructuredQuery(query),
+            status: 'ok',
+            durationMs: result.durationMs,
+            rowCount: result.rowCount,
+          });
+          return result;
+        } catch (err: any) {
+          this.store.addHistory({
+            connectionId,
+            database: opts.database ?? conn.database,
+            sql: formatStructuredQuery(query),
+            status: 'error',
+            durationMs: Date.now() - started,
+            error: err?.message ?? '向量检索失败',
+          });
+          throw err instanceof DbError ? err : new DbError(err?.message ?? '向量检索失败');
+        }
       }
-      try {
-        const result = await driver.vectorSearch({ ...query, topK, vector }, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs });
-        this.store.addHistory({
-          connectionId,
-          database: opts.database ?? conn.database,
-          sql: formatStructuredQuery(query),
-          status: 'ok',
-          durationMs: result.durationMs,
-          rowCount: result.rowCount,
-        });
-        return result;
-      } catch (err: any) {
-        this.store.addHistory({
-          connectionId,
-          database: opts.database ?? conn.database,
-          sql: formatStructuredQuery(query),
-          status: 'error',
-          durationMs: Date.now() - started,
-          error: err?.message ?? '向量检索失败',
-        });
-        throw err instanceof DbError ? err : new DbError(err?.message ?? '向量检索失败');
+
+      if (meta.dialect === 'postgres') {
+        if (!query.field) throw new DbError('pgvector 检索需要指定向量列 field', { code: 'VECTOR_FIELD' });
+        if (!vector?.length) throw new DbError('pgvector 检索需要 vector 或 text', { code: 'VECTOR_REQUIRED' });
+        const { table } = await this.findTable(connectionId, opts.database, query.collection);
+        const column = (table.columns ?? []).find((item) => item.name.toLowerCase() === query.field!.toLowerCase());
+        if (!column || !/^vector/i.test(column.type)) {
+          throw new DbError(`列 ${query.field} 不是 vector 类型`, { code: 'VECTOR_FIELD' });
+        }
+        const target = quoteQualified([table.schema, table.name], conn.engine);
+        const vectorColumn = quoteIdent(column.name, conn.engine);
+        const nums = this.sanitizeVector(vector);
+        const literal = `[${nums.join(',')}]`;
+        const sql = `SELECT *, 1 - (${vectorColumn} <=> $1::vector) AS score FROM ${target} ORDER BY ${vectorColumn} <=> $1::vector LIMIT ${topK}`;
+        try {
+          const result = await driver.runParams(sql, [literal], { database: opts.database, maxRows: topK, timeoutMs: opts.timeoutMs });
+          this.throwIfAborted(opts);
+          this.store.addHistory({
+            connectionId,
+            database: opts.database ?? conn.database,
+            sql,
+            status: 'ok',
+            durationMs: result.durationMs,
+            rowCount: result.rowCount,
+          });
+          return result;
+        } catch (err: any) {
+          this.store.addHistory({
+            connectionId,
+            database: opts.database ?? conn.database,
+            sql,
+            status: 'error',
+            durationMs: Date.now() - started,
+            error: err?.message ?? '向量检索失败',
+          });
+          throw err instanceof DbError ? err : new DbError(err?.message ?? '向量检索失败');
+        }
       }
+
+      throw new DbError(`${meta.label} 不支持向量检索`, { code: 'UNSUPPORTED_ENGINE' });
+    } finally {
+      if (opts.executionId) this.activeExecutions.delete(opts.executionId);
     }
-
-    if (meta.dialect === 'postgres') {
-      if (!query.field) throw new DbError('pgvector 检索需要指定向量列 field', { code: 'VECTOR_FIELD' });
-      if (!vector?.length) throw new DbError('pgvector 检索需要 vector 或 text', { code: 'VECTOR_REQUIRED' });
-      const { table } = await this.findTable(connectionId, opts.database, query.collection);
-      const column = (table.columns ?? []).find((item) => item.name.toLowerCase() === query.field!.toLowerCase());
-      if (!column || !/^vector/i.test(column.type)) {
-        throw new DbError(`列 ${query.field} 不是 vector 类型`, { code: 'VECTOR_FIELD' });
-      }
-      const target = quoteQualified([table.schema, table.name], conn.engine);
-      const vectorColumn = quoteIdent(column.name, conn.engine);
-      const nums = this.sanitizeVector(vector);
-      const literal = `[${nums.join(',')}]`;
-      const sql = `SELECT *, 1 - (${vectorColumn} <=> $1::vector) AS score FROM ${target} ORDER BY ${vectorColumn} <=> $1::vector LIMIT ${topK}`;
-      try {
-        const result = await driver.runParams(sql, [literal], { database: opts.database, maxRows: topK, timeoutMs: opts.timeoutMs });
-        this.store.addHistory({
-          connectionId,
-          database: opts.database ?? conn.database,
-          sql,
-          status: 'ok',
-          durationMs: result.durationMs,
-          rowCount: result.rowCount,
-        });
-        return result;
-      } catch (err: any) {
-        this.store.addHistory({
-          connectionId,
-          database: opts.database ?? conn.database,
-          sql,
-          status: 'error',
-          durationMs: Date.now() - started,
-          error: err?.message ?? '向量检索失败',
-        });
-        throw err instanceof DbError ? err : new DbError(err?.message ?? '向量检索失败');
-      }
-    }
-
-    throw new DbError(`${meta.label} 不支持向量检索`, { code: 'UNSUPPORTED_ENGINE' });
   }
 
   /** 跨请求事务：只有固定得住连接的驱动（目前 MySQL）支持。 */
@@ -1182,11 +1277,20 @@ export class ConnectionManager {
   }
 
   async beginTransaction(sessionId: string, connectionId: string, opts: QueryOptions): Promise<{ sessionId: string; database?: string }> {
+    throwIfAborted(opts.signal);
     await this.reapIdleTransactions();
+    throwIfAborted(opts.signal);
     const { conn, driver } = await this.txDriver(connectionId);
+    throwIfAborted(opts.signal);
     if (this.txSessions.has(sessionId)) throw new DbError('该会话已有进行中的事务', { code: 'TX_ACTIVE' });
     const database = opts.database ?? conn.database;
     await driver.beginTransaction(sessionId, database);
+    try {
+      throwIfAborted(opts.signal);
+    } catch (err) {
+      await driver.rollbackTransaction(sessionId).catch(() => undefined);
+      throw err;
+    }
     this.txSessions.set(sessionId, { connectionId, database, startedAt: Date.now(), lastUsedAt: Date.now() });
     this.store.addHistory({
       connectionId,
@@ -1252,8 +1356,15 @@ export class ConnectionManager {
    * 避免连带回滚别人的事务。其余情况销毁该连接的缓存驱动：MySQL/PG 连接
    * 断开即终止服务端查询；其他引擎按驱动能力尽力而为。驱动会在下次查询时重建。
    */
+  releaseExecution(executionId: string): void {
+    // 已取消但底层写仍未结束时，追踪必须保留到写真正完成，重试停止才找得到连接。
+    this.abandonedExecutions.delete(executionId);
+  }
+
   cancelExecution(executionId: string): boolean {
     const active = this.activeExecutions.get(executionId);
+    // 复合任务在批次间隙没有活动查询，stop 仍必须否决下一批。
+    this.abandonedExecutions.add(executionId);
     if (!active) return false;
     active.abandoned = true;
     const txOnConnection = [...this.txSessions.values()].some((s) => s.connectionId === active.connectionId);
@@ -1335,30 +1446,46 @@ export class ConnectionManager {
         if (violation) throw new DbError(violation, { code: 'READONLY', status: 403, hint: '在连接设置中关闭只读后才可写入' });
       }
     }
-    const driver = await this.driverFor(connectionId);
     // 事务会话里的语句必须走被固定的那条连接，否则 COMMIT/ROLLBACK 作用不到。
     // 同时也必须校验归属：别的连接的事务 id 混进来时应当普通执行，而不是抛 TX_NOT_FOUND。
     const candidate = opts.sessionId ? this.txSessions.get(opts.sessionId) : undefined;
+    this.beginExecution(connectionId, opts, Boolean(candidate));
+    const driver = await this.driverFor(connectionId).catch((err) => {
+      if (opts.executionId) this.activeExecutions.delete(opts.executionId);
+      throw err;
+    });
     const txSession = candidate && candidate.connectionId === connectionId ? candidate : undefined;
     const txDriver = txSession && supportsTransaction(driver) ? driver : undefined;
     if (txSession) txSession.lastUsedAt = Date.now();
     // G1：登记执行追踪，客户端提前断开时 cancelExecution 据此定位连接与事务归属。
     const inTx = Boolean(txDriver && opts.sessionId);
-    if (opts.executionId) this.activeExecutions.set(opts.executionId, { connectionId, sessionId: inTx ? opts.sessionId : undefined, inTx });
+    if (opts.executionId) {
+      const abandoned = this.activeExecutions.get(opts.executionId)?.abandoned;
+      this.activeExecutions.set(opts.executionId, { connectionId, sessionId: inTx ? opts.sessionId : undefined, inTx, abandoned });
+    }
     const started = Date.now();
     const sets: QueryResult[] = [];
     const messages: string[] = [];
     let failure: Error | undefined;
+    let failedStatementIndex: number | undefined;
     // 已成功执行并落库的语句。用于判断结构是否真的变了：脚本第 3 条失败时
     // 第 1 条 DDL 已经生效，按「整段成功」判定就等于永远不通知。
     const applied: string[] = [];
     try {
+      this.throwIfAborted(opts);
       for (const [index, statement] of statements.entries()) {
+        try {
+          this.throwIfAborted(opts);
+        } catch (err) {
+          failedStatementIndex = index;
+          throw err;
+        }
         const prepared = opts.autoLimit !== false && opts.maxRows ? applyLimit(statement, opts.maxRows, conn.engine) : statement;
         try {
           const result = txDriver && opts.sessionId
             ? await txDriver.runInTransaction(opts.sessionId, prepared, [], { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs })
             : await driver.run(prepared, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs });
+          this.throwIfAborted(opts);
           sets.push(result);
           applied.push(statement);
           // applyLimit 已经把 SQL 改写成带 LIMIT 的形式，驱动无法再通过原始行数判断截断。
@@ -1372,6 +1499,7 @@ export class ConnectionManager {
           );
         } catch (err: any) {
           failure = err;
+          failedStatementIndex = index;
           throw err;
         }
       }
@@ -1389,7 +1517,20 @@ export class ConnectionManager {
         durationMs: Date.now() - started,
         error: err?.message ?? '执行失败',
       });
-      throw err instanceof DbError ? err : new DbError(err?.message ?? '执行失败');
+      const error = err instanceof DbError ? err : new DbError(err?.message ?? '执行失败');
+      if (sets.length) {
+        Object.assign(error, {
+          data: {
+            sets,
+            messages,
+            multiStatement: true,
+            partial: true,
+            failedStatementIndex,
+            appliedStatements: applied.length,
+          },
+        });
+      }
+      throw error;
     } finally {
       if (opts.executionId) this.activeExecutions.delete(opts.executionId);
       if (!failure && sets.length) {
@@ -1434,7 +1575,7 @@ export class ConnectionManager {
     connectionId: string,
     sql: string,
     params: unknown[],
-    opts: { database?: string; timeoutMs?: number; maxRows?: number; actor: 'user' | 'agent'; sessionId?: string },
+    opts: QueryOptions,
   ): Promise<QueryResult> {
     const conn = this.store.getConnection(connectionId);
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
@@ -1442,47 +1583,60 @@ export class ConnectionManager {
       throw new DbError(`${engineMeta(conn.engine).label} 不支持参数化 SQL`, { code: 'UNSUPPORTED_ENGINE' });
     }
     if (conn.readonly) throw new DbError('该连接为只读，禁止写入', { code: 'READONLY', status: 403 });
-    const driver = await this.driverFor(connectionId);
-    // 事务里的参数化语句必须走被固定的那条连接，与 query() 的逻辑一致。
     const candidate = opts.sessionId ? this.txSessions.get(opts.sessionId) : undefined;
+    this.beginExecution(connectionId, opts, Boolean(candidate));
+    const driver = await this.driverFor(connectionId).catch((err) => {
+      if (opts.executionId) this.activeExecutions.delete(opts.executionId);
+      throw err;
+    });
+    // 事务里的参数化语句必须走被固定的那条连接，与 query() 的逻辑一致。
     const txSession = candidate && candidate.connectionId === connectionId ? candidate : undefined;
     const txDriver = txSession && supportsTransaction(driver) ? driver : undefined;
     if (txSession) txSession.lastUsedAt = Date.now();
     // 与 query() 相同的内存上限语义：调用方传 maxRows 时用 applyLimit 追加 LIMIT，
     // 只改动 SQL 末尾，不破坏 $1 占位符，参数化执行安全。
     const prepared = opts.maxRows && opts.maxRows > 0 ? applyLimit(sql, opts.maxRows, conn.engine) : sql;
-    const result = txDriver && opts.sessionId
-      ? await txDriver.runInTransaction(opts.sessionId, prepared, params, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs })
-      : await driver.runParams(prepared, params, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs });
-    if (prepared !== sql && opts.maxRows && result.rowCount >= opts.maxRows) result.truncated = true;
-    return result;
+    try {
+      this.throwIfAborted(opts);
+      const result = txDriver && opts.sessionId
+        ? await txDriver.runInTransaction(opts.sessionId, prepared, params, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs })
+        : await driver.runParams(prepared, params, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs });
+      this.throwIfAborted(opts);
+      if (prepared !== sql && opts.maxRows && result.rowCount >= opts.maxRows) result.truncated = true;
+      return result;
+    } finally {
+      if (opts.executionId) this.activeExecutions.delete(opts.executionId);
+    }
   }
 
   /**
    * 一次性执行整段脚本（备份恢复）。只有部分驱动支持；返回 false 时调用方回退到 query()。
    */
-  async execScript(connectionId: string, sql: string, opts: { database?: string; timeoutMs?: number; actor: 'user' | 'agent' }): Promise<boolean> {
+  async execScript(connectionId: string, sql: string, opts: QueryOptions): Promise<boolean> {
     const conn = this.store.getConnection(connectionId);
     if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
     if (conn.readonly) throw new DbError('该连接为只读，禁止写入', { code: 'READONLY', status: 403 });
-    const driver = await this.driverFor(connectionId);
-    if (!driver.execScript) return false;
     const started = Date.now();
     // G2：execScript 此前完全没超时——驱动签名不收 timeoutMs，挂死的脚本会永久
     // 占住连接。这里在 manager 侧套看门狗；整段脚本不是单条查询，调用方传的
     // queryTimeoutMs 是单语句口径，统一抬到脚本级 600s 下限（允许调用方加长）。
     const scriptTimeoutMs = Math.max(opts.timeoutMs ?? 0, EXEC_SCRIPT_TIMEOUT_MS);
-    await withQueryTimeout(driver.execScript(sql, opts.database ?? conn.database), scriptTimeoutMs, {
-      code: 'SCRIPT_TIMEOUT',
-      label: '脚本执行',
-      // 超时后断连接才能真正停掉 MySQL/PG 服务端脚本；MySQL 驱动的 execScript
-      // 走独立连接，池销毁够不到它，残留执行由驱动自身超时兜底（WP1）。
-      onTimeout: () => {
-        const cached = this.clients.get(connectionId);
-        if (cached) this.destroyDriverConnections(cached.driver);
-        void this.close(connectionId).catch(() => undefined);
-      },
+    const executed = await this.trackWrite(connectionId, opts, async (driver) => {
+      if (!driver.execScript) return false;
+      await withQueryTimeout(driver.execScript(sql, opts.database ?? conn.database, { signal: opts.signal }), scriptTimeoutMs, {
+        code: 'SCRIPT_TIMEOUT',
+        label: '脚本执行',
+        // 超时后断连接才能真正停掉 MySQL/PG 服务端脚本；MySQL 驱动的 execScript
+        // 走独立连接，池销毁够不到它，残留执行由驱动自身超时兜底（WP1）。
+        onTimeout: () => {
+          const cached = this.clients.get(connectionId);
+          if (cached) this.destroyDriverConnections(cached.driver);
+          void this.close(connectionId).catch(() => undefined);
+        },
+      });
+      return true;
     });
+    if (!executed) return false;
     this.invalidate(connectionId, opts.actor);
     this.store.addHistory({
       connectionId,

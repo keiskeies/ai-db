@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AgentRuntime } from '../src/agent/runtime';
 import { ProviderError } from '../src/agent/providers/common';
+import { isUnfinishedStop } from '../src/agent/types';
 import type { AgentEvent, LlmProvider, ProviderEvent, ProviderRequest, ToolResult } from '../src/agent/types';
 
 // C7：429/5xx/网络瞬态最多重试 2 次（退避 1s/3s，429 尊重 Retry-After），
@@ -111,16 +112,51 @@ test('已经吐过字节就不重试：半截回复保留，直接报错', async
   assert.equal(outcome.status, 'error');
   assert.equal(provider.calls, 1, '吐过字节后绝不能重发');
   assert.equal(outcome.text, '半截', '已交付的半截正文要入账');
+  assert.equal(outcome.stop, 'provider_incomplete');
+  assert.equal(isUnfinishedStop(outcome.stop), true);
+  const errorEvent = events.find((event) => event.type === 'error');
+  assert.ok(errorEvent && errorEvent.type === 'error');
+  assert.equal(errorEvent.retryable, true);
+  assert.equal(errorEvent.stop, 'provider_incomplete');
   assert.ok(events.some((e) => e.type === 'step_text' && e.text === '半截'));
 });
 
-test('不可重试错误（400）不浪费重试', async () => {
+test('不可重试错误（400）不浪费重试，也不伪装成可继续', async () => {
   const provider = new FlakyProvider([
     { error: new ProviderError('模型接口返回 400：bad request', { code: 'PROVIDER_HTTP', status: 400, retryable: false }) },
   ]);
-  const outcome = await makeRuntime(provider).run(baseInput);
-  assert.equal(outcome.status, 'error');
+  const events: AgentEvent[] = [];
+  const outcome = await makeRuntime(provider, events).run(baseInput);
   assert.equal(provider.calls, 1);
+  assert.equal(outcome.stop, undefined);
+  const errorEvent = events.find((event) => event.type === 'error');
+  assert.ok(errorEvent && errorEvent.type === 'error');
+  assert.equal(errorEvent.retryable, false);
+  assert.equal(errorEvent.stop, undefined);
+});
+
+test('服务商未完成原因保留 provider_incomplete，且不执行半截工具调用', async () => {
+  for (const reason of ['content_filter', 'pause_turn', 'model_context_window_exceeded']) {
+    let executed = false;
+    const provider = new FlakyProvider([{ events: [
+      { type: 'text', text: 'partial' },
+      { type: 'tool_call', call: { id: 'a', name: 'run_sql', args: { sql: 'DELETE FROM orders' } } },
+      { type: 'done', stopReason: reason },
+    ] }]);
+    const runtime = new AgentRuntime({
+      provider,
+      buildSystem: () => 'system',
+      executeTool: async () => { executed = true; return okResult(); },
+      requestApproval: async () => ({ decision: 'allow', scope: 'once' }),
+      emit: () => {},
+      generateId: () => 'id',
+    });
+    const outcome = await runtime.run(baseInput);
+    assert.equal(outcome.status, 'error');
+    assert.equal(outcome.stop, 'provider_incomplete');
+    assert.equal(outcome.text, 'partial');
+    assert.equal(executed, false);
+  }
 });
 
 test('退避期间用户中止：立即按 aborted 收尾，不再发起重试', async () => {

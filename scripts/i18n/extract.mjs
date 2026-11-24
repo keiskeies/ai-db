@@ -10,7 +10,7 @@ function walk(dir, acc = []) {
     const p = path.join(dir, entry);
     const stat = fs.statSync(p);
     if (stat.isDirectory()) {
-      if (entry === 'node_modules' || entry === 'dist' || entry === '.expo' || entry === 'i18n') continue;
+      if (entry === 'node_modules' || entry === 'dist' || entry === '.expo' || entry === 'i18n' || entry === 'test') continue;
       walk(p, acc);
     } else if (/\.(tsx?|jsx?)$/.test(entry) && !/\.d\.ts$/.test(entry)) {
       acc.push(p);

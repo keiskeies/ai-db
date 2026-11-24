@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { LocalProvider, detectIntent, parseCreateSpec } from '../src/agent/providers/local';
 import type { AgentContextData, ProviderEvent, ProviderMessage } from '../src/agent/types';
 import { EMPTY_AGENT_CONTEXT_BUNDLE } from '../src/types';
+import { estimateMessageTokens, estimateMessagesTokens, estimateTokens } from '../src/agent/prompt';
 import type { AgentContextBundle, ConnectionConfig, TableInfo } from '../src/types';
 
 const connectionBase: Omit<ConnectionConfig, 'id' | 'name' | 'engine'> = {
@@ -27,6 +28,25 @@ async function collect(iterable: AsyncIterable<ProviderEvent>): Promise<Provider
   for await (const event of iterable) events.push(event);
   return events;
 }
+
+test('local tokensIn 使用压缩同一估算，覆盖完整历史、工具参数、结果与图片', async () => {
+  const messages: ProviderMessage[] = [
+    { role: 'user', content: '之前的图片问题', images: [{ mime: 'image/png', base64: 'a'.repeat(1000) }] },
+    { role: 'assistant', content: '查询中', toolCalls: [{ id: 'a', name: 'run_sql', args: { sql: 'SELECT * FROM orders WHERE active = 1' } }] },
+    { role: 'tool', toolCallId: 'a', name: 'run_sql', content: JSON.stringify({ ok: true, data: { rows: [{ id: 1, note: 'x'.repeat(500) }] } }) },
+    { role: 'user', content: '你好' },
+  ];
+  const expected = estimateMessagesTokens(messages) + estimateTokens('system prompt');
+  const latestOnly = estimateMessageTokens(messages[messages.length - 1]) + estimateTokens('system prompt');
+  assert.ok(expected > latestOnly);
+  assert.ok(estimateMessageTokens(messages[0]) >= 1000);
+  assert.ok(estimateMessageTokens(messages[1]) > estimateMessageTokens({ role: 'assistant', content: '查询中' }));
+  assert.ok(estimateMessageTokens(messages[2]) > 20);
+  const events = await collect(new LocalProvider().stream({ system: 'system prompt', messages, tools: [], context: {} }));
+  const usage = events.find((event) => event.type === 'usage');
+  assert.ok(usage && usage.type === 'usage');
+  assert.equal(usage.tokensIn, expected);
+});
 
 test('intent detection covers common offline requests', () => {
   assert.equal(detectIntent('看看有哪些表'), 'list_tables');

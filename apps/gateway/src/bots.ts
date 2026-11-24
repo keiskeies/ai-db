@@ -73,9 +73,22 @@ async function replyOneBot(config: BotConfig, target: { type: 'group' | 'private
   await postJson(`${endpoint}/${action}`, body, config.token ? { authorization: `Bearer ${config.token}` } : {});
 }
 
+function configuredToken(config: BotConfig, key: 'token' | 'verificationToken'): string | undefined {
+  const value = config[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function tokenMatches(config: BotConfig, key: 'token' | 'verificationToken', supplied: unknown): boolean {
+  const expected = configuredToken(config, key);
+  return expected !== undefined && typeof supplied === 'string' && supplied === expected;
+}
+
 function allowed(config: BotConfig, chatKey: string): boolean {
-  const list = Array.isArray(config.allowedChats) ? config.allowedChats.map(String) : [];
-  return !list.length || list.includes(chatKey);
+  // 空白项没有语义；清洗后为空必须拒绝所有会话，不能退化成“允许所有”。
+  const list = Array.isArray(config.allowedChats)
+    ? config.allowedChats.map((value) => String(value).trim()).filter(Boolean)
+    : [];
+  return list.includes(chatKey);
 }
 
 async function askAndReply(
@@ -158,13 +171,14 @@ export async function handleBotEvent(
   if (!channel || !channel.enabled) return { status: 404, body: { error: 'channel not found' } };
   const config = configOf(store, channel);
   if (channel.type === 'feishu') {
+    if (!configuredToken(config, 'verificationToken')) return { status: 503, body: { error: 'bot verification token is not configured' } };
     if (body?.type === 'url_verification') {
-      if (config.verificationToken && body.token !== config.verificationToken) return { status: 403, body: { error: 'invalid token' } };
+      if (!tokenMatches(config, 'verificationToken', body.token)) return { status: 403, body: { error: 'invalid token' } };
       return { status: 200, body: { challenge: body.challenge } };
     }
     if (body?.encrypt) return { status: 400, body: { error: 'encrypted events are not supported yet' } };
     const token = body?.header?.token ?? body?.token;
-    if (config.verificationToken && token !== config.verificationToken) return { status: 403, body: { error: 'invalid token' } };
+    if (!tokenMatches(config, 'verificationToken', token)) return { status: 403, body: { error: 'invalid token' } };
     if (body?.header?.event_type !== 'im.message.receive_v1') return { status: 200, body: { code: 0 } };
     const event = body?.event;
     if (event?.sender?.sender_type === 'app' || event?.sender?.sender_type === 'bot') return { status: 200, body: { code: 0 } };
@@ -190,7 +204,7 @@ export async function handleBotEvent(
 
   if (channel.type === 'qq-onebot') {
     const authorization = String(headers.authorization ?? '');
-    if (config.token && authorization !== `Bearer ${config.token}`) return { status: 403, body: { error: 'invalid bot token' } };
+    if (!configuredToken(config, 'token') || authorization !== `Bearer ${config.token}`) return { status: 403, body: { error: 'invalid bot token' } };
     if (body?.post_type !== 'message') return { status: 200, body: { status: 'ok', retcode: 0 } };
     const selfId = String(body?.self_id ?? '');
     const senderId = String(body?.sender?.user_id ?? body?.user_id ?? '');

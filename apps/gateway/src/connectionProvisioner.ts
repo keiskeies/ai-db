@@ -198,6 +198,8 @@ async function withTimeout<T>(promise: Promise<T>, fallback: T): Promise<T> {
   }
 }
 
+type DriverTestResult = Awaited<ReturnType<ConnectionManager['testConfig']>>;
+
 const VERSION_ENGINE_HINTS: Array<[Engine, RegExp]> = [
   ['tidb', /TiDB/i], ['oceanbase', /OceanBase/i], ['mariadb', /MariaDB/i], ['greatsql', /GreatSQL/i],
   ['goldendb', /GoldenDB/i], ['tdsql', /TDSQL/i], ['polardb', /PolarDB/i], ['opengauss', /openGauss/i],
@@ -209,8 +211,36 @@ const VERSION_ENGINE_HINTS: Array<[Engine, RegExp]> = [
 export class ConnectionProvisioner {
   private credentialRefs = new Map<string, CredentialRef>();
   private createLocks = new Map<string, Promise<void>>();
+  private activeDriverTests = 0;
+  private driverTestWaiters: Array<() => void> = [];
 
   constructor(private store: Store, private manager: ConnectionManager, private events?: GatewayEvents) {}
+
+  private async acquireDriverTestSlot(): Promise<() => void> {
+    while (this.activeDriverTests >= PROBE_CONCURRENCY) {
+      await new Promise<void>((resolve) => this.driverTestWaiters.push(resolve));
+    }
+    this.activeDriverTests += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.activeDriverTests -= 1;
+      this.driverTestWaiters.shift()?.();
+    };
+  }
+
+  private async testConfigLimited(config: ConnectionConfig, secret: ConnectionSecret): Promise<DriverTestResult> {
+    const release = await this.acquireDriverTestSlot();
+    try {
+      return await this.manager.testConfig(config, secret);
+    } catch (err: any) {
+      return { ok: false, latencyMs: 0, message: err?.message ?? '连接失败', code: typeof err?.code === 'string' ? err.code : undefined };
+    } finally {
+      // 只有驱动真正结束才释放名额。withTimeout 返回不会造成“退休 worker 但底层仍跑”的超额并发。
+      release();
+    }
+  }
 
   private savedPassword(host: string, port: number, username: string): string | undefined {
     const wantedHost = host.toLowerCase();
@@ -274,17 +304,17 @@ export class ConnectionProvisioner {
     const password = this.savedPassword(displayHost, port, username) ?? (host !== displayHost ? this.savedPassword(host, port, username) : undefined);
     const secret: ConnectionSecret = password === undefined ? {} : { password };
     const attempts = this.attempts(port);
-    const results = new Map<string, Awaited<ReturnType<ConnectionManager['testConfig']>>>();
+    const results = new Map<string, DriverTestResult>();
     let cursor = 0;
     const worker = async () => {
       while (cursor < attempts.length) {
         const attempt = attempts[cursor++];
         const config = draftConfig(attempt.engine, host, port, username, database, ssl);
-        const pending = this.manager.testConfig(config, secret).catch((err: any) => ({ ok: false as const, latencyMs: 0, message: err?.message ?? '连接失败', code: typeof err?.code === 'string' ? err.code : undefined }));
+        const pending = this.testConfigLimited(config, secret);
         const result = await withTimeout(pending, timeoutResult(attempt.engine));
         results.set(attempt.transport, result);
-        // 超时候选直接退休，不再用这个 worker 起新尝试；底层驱动继续按自身超时收尾。
-        // 这样既不让实际并发超过 4，也不会把整个探测卡在 HTTP 驱动的 30 秒超时上。
+        // 超时候选直接退休，不再用这个 worker 起新尝试。驱动没有统一取消 API，
+        // 但其在途名额由 testConfigLimited 持有到真实结束，且上限跨 probe/create 共享。
         if (result.code === 'ETIMEDOUT' && result.latencyMs >= PROBE_TIMEOUT_MS) return;
       }
     };
@@ -303,7 +333,7 @@ export class ConnectionProvisioner {
           return { engine, label: engineMeta(engine).label, version: result.ok ? result.version : undefined, latencyMs: result.latencyMs };
         }).sort((a, b) => Number(b.engine === hintedEngine) - Number(a.engine === hintedEngine))
       : [];
-    const failures = attempts.filter((attempt) => !results.get(attempt.transport)?.ok).map((attempt) => {
+    const failures = attempts.filter((attempt) => results.has(attempt.transport) && !results.get(attempt.transport)?.ok).map((attempt) => {
       const result = results.get(attempt.transport)!;
       return { engine: attempt.engine, category: classifyProbeFailure(result), message: result.message ?? '无法识别' };
     });
@@ -363,9 +393,9 @@ export class ConnectionProvisioner {
       let password: string | undefined;
       if (input.passwordRef !== undefined) password = this.consumePasswordRef(input.passwordRef, displayHost, host, port, username);
       else if (input.useSavedCredential === true) password = this.savedPassword(displayHost, port, username) ?? (host !== displayHost ? this.savedPassword(host, port, username) : undefined);
-      let testResult: Awaited<ReturnType<ConnectionManager['testConfig']>> | undefined;
+      let testResult: DriverTestResult | undefined;
       if (password !== undefined && input.skipProbe !== true) {
-        testResult = await withTimeout(this.manager.testConfig(draftConfig(engine, host, port, username, database, input.ssl === true, input.sslInsecure === true), { password }), timeoutResult(engine));
+        testResult = await withTimeout(this.testConfigLimited(draftConfig(engine, host, port, username, database, input.ssl === true, input.sslInsecure === true), { password }), timeoutResult(engine));
         if (!testResult.ok) {
           const category = classifyProbeFailure(testResult);
           throw new DbError(testResult.message ?? '连接测试失败', {

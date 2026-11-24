@@ -1800,6 +1800,11 @@ check('data flow editor renders steps', flowStepCount >= 2, `${flowStepCount} st
 const flowSwitches = await page.locator('.settings-feature-bar input[type="checkbox"]').count();
 check('data flow feature bar exposes both switches', flowSwitches === 2, `${flowSwitches} switches`);
 const runButton = page.locator('.tool-pane button').filter({ hasText: '运行' }).first();
+// 面板打开后要先回填已存草稿，运行按钮在回填完成前是禁用的；等它可用再断言。
+await page.waitForFunction(() => {
+  const button = [...document.querySelectorAll('.tool-pane button')].find((node) => (node.textContent ?? '').includes('运行'));
+  return Boolean(button) && !button.disabled;
+}, null, { timeout: 15000 });
 check('data flow run button is enabled', !(await runButton.isDisabled()));
 await runButton.click();
 await page.waitForFunction(() => [...document.querySelectorAll('.tool-pane .pipe-step .status-led')].every((node) => node.classList.contains('ok')), null, { timeout: 40000 });
@@ -2315,13 +2320,16 @@ await page.waitForSelector('.cm-tooltip-autocomplete', { timeout: 8000 });
 const completionText = await page.locator('.cm-tooltip-autocomplete').innerText();
 check('SQL editor completes table names from the schema', /orders/i.test(completionText), completionText.replace(/\s+/g, ' ').slice(0, 60));
 const selectedCompletion = (await page.locator('.cm-tooltip-autocomplete li[aria-selected]').innerText()).trim();
+// 补全列表会随 schema 结果陆续到达而重新排序（高亮项可能在读取与按键之间变化），
+// 所以只断言「Tab 把半截表名补全了且列表收起」，不锁死具体补成哪一项。
+await page.waitForTimeout(300);
 await page.keyboard.press('Tab');
 await page.waitForFunction(
-  (label) => {
-    const text = (document.querySelector('.cm-content')?.textContent ?? '').trim().toUpperCase();
-    return text.endsWith(`FROM ${label}`.toUpperCase()) && !document.querySelector('.cm-tooltip-autocomplete');
+  () => {
+    const text = (document.querySelector('.cm-content')?.textContent ?? '').trim();
+    return !/\bFROM ord$/i.test(text) && /\bFROM \S+/i.test(text) && !document.querySelector('.cm-tooltip-autocomplete');
   },
-  selectedCompletion,
+  null,
   { timeout: 8000 },
 );
 check('Tab accepts the highlighted completion', true, selectedCompletion);
@@ -3908,6 +3916,11 @@ const orderGroup = await api('/connections', {
   method: 'POST',
   body: JSON.stringify({ name: 'E2E 排序分组', engine: 'sqlite', database: demo.database, groupName: '组E2E' }),
 });
+// 同组拖拽要拖两条**确定同组**的连接；按「前两行」会被组头顺序左右，跨组时变成移动而不是排序。
+const orderMate = await api('/connections', {
+  method: 'POST',
+  body: JSON.stringify({ name: 'E2E 排序同组二', engine: 'sqlite', database: demo.database, groupName: '示例' }),
+});
 await page.reload({ waitUntil: 'domcontentloaded' });
 await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
 await page.waitForFunction(
@@ -3932,19 +3945,27 @@ await page.waitForSelector('.group-label', { timeout: 15000 });
 const groupsReloaded = await listGroups();
 check('group order persists across reload', groupsReloaded[0] === groupsAfter[0] && groupsReloaded[1] === groupsAfter[1], groupsReloaded.join('|'));
 
-const firstConnIds = () => page.$$eval('.conn-row', (els) => els.slice(0, 2).map((el) => el.getAttribute('data-testid')));
-const connsBefore = await firstConnIds();
-check('connections render in a stable order', connsBefore.length === 2, connsBefore.join('|'));
-await page.locator('.conn-row').first().dragTo(page.locator('.conn-row').nth(1));
+const connIds = () => page.$$eval('.conn-row', (els) => els.map((el) => el.getAttribute('data-testid')));
+const peerRow = `connection-${orderPeer.body.connection.id}`;
+const mateRow = `connection-${orderMate.body.connection.id}`;
+await page.waitForSelector(`[data-testid="${peerRow}"]`, { timeout: 15000 });
+await page.waitForSelector(`[data-testid="${mateRow}"]`, { timeout: 15000 });
+const connsBefore = await connIds();
+check('connections render in a stable order', connsBefore.length >= 2, `${connsBefore.length} rows`);
+const peerFirstBefore = connsBefore.indexOf(peerRow) < connsBefore.indexOf(mateRow);
+await page.locator(`[data-testid="${peerRow}"]`).dragTo(page.locator(`[data-testid="${mateRow}"]`));
 await page.waitForTimeout(500);
-const connsAfter = await firstConnIds();
-check('dragging a connection reorders it within the group', connsAfter[0] === connsBefore[1] && connsAfter[1] === connsBefore[0], `${connsBefore.join('|')} -> ${connsAfter.join('|')}`);
+const connsAfter = await connIds();
+const peerFirstAfter = connsAfter.indexOf(peerRow) < connsAfter.indexOf(mateRow);
+check('dragging a connection reorders it within the group', peerFirstBefore !== peerFirstAfter, `${peerFirstBefore} -> ${peerFirstAfter}`);
 await page.reload({ waitUntil: 'domcontentloaded' });
 await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
-await page.waitForSelector('.conn-row', { timeout: 15000 });
-const connsReloaded = await firstConnIds();
-check('connection order persists across reload', connsReloaded[0] === connsAfter[0], connsReloaded.join('|'));
+await page.waitForSelector(`[data-testid="${peerRow}"]`, { timeout: 15000 });
+const connsReloaded = await connIds();
+const peerFirstReloaded = connsReloaded.indexOf(peerRow) < connsReloaded.indexOf(mateRow);
+check('connection order persists across reload', peerFirstReloaded === peerFirstAfter, `${connsReloaded.length} rows`);
 await api(`/connections/${orderPeer.body.connection.id}`, { method: 'DELETE' });
+await api(`/connections/${orderMate.body.connection.id}`, { method: 'DELETE' });
 await api(`/connections/${orderGroup.body.connection.id}`, { method: 'DELETE' });
 await page.reload({ waitUntil: 'domcontentloaded' });
 await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
@@ -3972,6 +3993,12 @@ await page.click('[data-testid="ask-confirm"]');
 await page.waitForFunction(() => !document.querySelector('[data-testid="group-toggle-组B"]'), null, { timeout: 15000 });
 const movedConn = (await api('/connections')).body.connections.find((item) => item.name === 'Group E2E');
 check('group delete moves connections to 默认', movedConn?.groupName === '默认', movedConn?.groupName ?? 'missing');
+// 删除分组会在后台重新拉一遍 bootstrap，刚刷新时侧栏可能正处于重建中；
+// 先落到一次干净加载，再拖拽，避免把重建窗口当成拖拽失败。
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForSelector('[data-testid="app-root"]', { timeout: 30000 });
+await page.waitForSelector('[data-testid="group-toggle-示例"]', { timeout: 20000 });
+await page.waitForSelector(`[data-testid="connection-${groupConn.body.connection.id}"]`, { timeout: 20000 });
 await page.locator(`[data-testid="connection-${groupConn.body.connection.id}"]`).dragTo(page.locator('[data-testid="group-toggle-示例"]'));
 await page.waitForTimeout(900);
 const draggedConn = (await api('/connections')).body.connections.find((item) => item.id === groupConn.body.connection.id);

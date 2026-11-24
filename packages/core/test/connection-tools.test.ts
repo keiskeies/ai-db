@@ -17,7 +17,7 @@ test('connection tools expose the intended risk and never accept a password fiel
 test('connection approvals describe the endpoint and signatures are scoped to it', () => {
   const call = { id: '1', name: 'create_connection', args: { name: 'same-name', engine: 'mysql', host: '192.168.1.7', port: 3306 } };
   assert.match(describeCall(call).summary, /192\.168\.1\.7:3306/);
-  assert.equal(toolSignature(call), 'create_connection:192.168.1.7:3306:mysql:*:*:none:test:dev:write:plain:verified');
+  assert.match(toolSignature(call), /^create_connection:<unscoped>:<unscoped>:[a-f0-9]{64}$/);
   assert.notEqual(toolSignature(call), toolSignature({ ...call, args: { ...call.args, host: '192.168.1.8' } }));
   assert.notEqual(toolSignature(call), toolSignature({ ...call, args: { ...call.args, username: 'admin' } }));
   assert.notEqual(toolSignature(call), toolSignature({ ...call, args: { ...call.args, skipProbe: true } }));

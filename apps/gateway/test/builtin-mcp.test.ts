@@ -1,15 +1,18 @@
-import test, { after } from 'node:test';
+import test, { after, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
+import dnsPromises from 'node:dns/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { getTool, resolveRisk, toolSignature } from '@aidb/core';
 import { createGateway } from '../src/server';
 import { visibleAgentTools } from '../src/agentHost';
 import { ToolExecutor } from '../src/executor';
+import { assertPublicUrl, BuiltinMcpClient } from '../src/builtinMcp';
 import { listenRandom } from './helpers';
 
 const home = mkdtempSync(join(tmpdir(), 'aidb-builtin-mcp-'));
@@ -73,6 +76,32 @@ async function serverId(kind: 'filesystem' | 'git' | 'web'): Promise<string> {
   const server = listed.body.servers.find((item: any) => item.builtin === kind);
   assert.ok(server, `missing built-in ${kind}`);
   return server.id;
+}
+
+function mockDnsLookup(t: TestContext, lookup: (host: string) => Promise<Array<{ address: string; family: number }>>): () => void {
+  const mocked = t.mock.method(dnsPromises, 'lookup', lookup as unknown as typeof dnsPromises.lookup);
+  syncBuiltinESMExports();
+  return () => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  };
+}
+
+function webClient(args: string[]): BuiltinMcpClient {
+  const now = new Date().toISOString();
+  return new BuiltinMcpClient({ id: 'builtin-web', name: 'web', command: 'builtin:web', args, enabled: true, createdAt: now, updatedAt: now });
+}
+
+async function dispatcherPinnedAddress(dispatcher: unknown): Promise<{ address: string; family: number }> {
+  // 直接调用连接器的 lookup，证明 fetch 没有把 hostname 再交给系统 DNS。
+  const optionsKey = Reflect.ownKeys(dispatcher as object).find((key) => String(key) === 'Symbol(options)');
+  assert.ok(optionsKey);
+  const lookup = (dispatcher as any)[optionsKey]?.connect?.lookup;
+  assert.equal(typeof lookup, 'function');
+  return new Promise((resolve, reject) => lookup('allowed.example', {}, (err: Error | null, address: string, family: number) => {
+    if (err) reject(err);
+    else resolve({ address, family });
+  }));
 }
 
 test('内置 MCP 默认预置且不可删除/改造', async () => {
@@ -373,6 +402,76 @@ test('web 拒绝内网地址，且默认关闭', async () => {
   });
   assert.equal(mapped.ok, false);
   assert.equal(mapped.error?.code, 'MCP_URL_DENIED');
+});
+
+test('fetch_url 将 DNS 校验结果固定给实际连接，防止重绑定', async (t) => {
+  let lookups = 0;
+  const restoreDns = mockDnsLookup(t, async () => {
+    lookups += 1;
+    return lookups === 1
+      ? [{ address: '93.184.216.34', family: 4 }]
+      : [{ address: '127.0.0.1', family: 4 }];
+  });
+  const originalFetch = globalThis.fetch;
+  let dispatcher: unknown;
+  globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    dispatcher = (init as RequestInit & { dispatcher?: unknown }).dispatcher;
+    return new Response('public body', { status: 200, headers: { 'content-type': 'text/plain' } });
+  }) as typeof fetch;
+  try {
+    const result = await webClient([]).call('fetch_url', { url: 'https://allowed.example/path' });
+    assert.equal(result.ok, true, result.error?.message);
+    assert.equal(lookups, 1, 'fetch 不应再次解析 hostname');
+    assert.ok(dispatcher, 'fetch 必须使用固定 IP 的 dispatcher');
+    assert.deepEqual(await dispatcherPinnedAddress(dispatcher), { address: '93.184.216.34', family: 4 });
+    await assert.rejects(() => assertPublicUrl(new URL('https://allowed.example/path')), /内网地址/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreDns();
+  }
+});
+
+test('fetch_url 对每个重定向重新检查 allowlist，且只访问允许的首跳', async (t) => {
+  const restoreDns = mockDnsLookup(t, async () => [{ address: '93.184.216.34', family: 4 }]);
+  const originalFetch = globalThis.fetch;
+  const requested: string[] = [];
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+    requested.push(String(input));
+    return new Response(null, { status: 302, headers: { location: 'https://outside.example/secret' } });
+  }) as typeof fetch;
+  try {
+    const result = await webClient(['allowed.example']).call('fetch_url', { url: 'https://allowed.example/start' });
+    assert.equal(result.ok, false);
+    assert.equal(result.error?.code, 'MCP_URL_DENIED');
+    assert.deepEqual(requested, ['https://allowed.example/start']);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreDns();
+  }
+});
+
+test('fetch_url 允许的跨子域重定向会逐跳校验并固定新地址', async (t) => {
+  const restoreDns = mockDnsLookup(t, async (host) => [{ address: host === 'a.example.com' ? '93.184.216.34' : '93.184.216.35', family: 4 }]);
+  const originalFetch = globalThis.fetch;
+  const dispatchers: unknown[] = [];
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    dispatchers.push((init as RequestInit & { dispatcher?: unknown }).dispatcher);
+    return String(input).endsWith('/start')
+      ? new Response(null, { status: 307, headers: { location: 'https://b.example.com/final' } })
+      : new Response('final body', { status: 200, headers: { 'content-type': 'text/plain' } });
+  }) as typeof fetch;
+  try {
+    const result = await webClient(['*.example.com']).call('fetch_url', { url: 'https://a.example.com/start' });
+    assert.equal(result.ok, true, result.error?.message);
+    assert.equal((result.data as any).text, 'final body');
+    assert.equal(dispatchers.length, 2);
+    assert.notEqual(dispatchers[0], dispatchers[1]);
+    assert.deepEqual(await dispatcherPinnedAddress(dispatchers[0]), { address: '93.184.216.34', family: 4 });
+    assert.deepEqual(await dispatcherPinnedAddress(dispatchers[1]), { address: '93.184.216.35', family: 4 });
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreDns();
+  }
 });
 
 test('mcp_call 风险：内置读工具免审批，写工具与外部服务器仍需审批', () => {

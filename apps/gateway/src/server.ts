@@ -182,11 +182,21 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
     }
     // G5：记录最近入站时间（任何消息，含应用层 pong）；心跳发现超阈值无入站即判死。
     let lastSeen = Date.now();
+    const turns = new Map<string, string>();
+    const abortOwnedTurns = (): void => {
+      for (const [sessionId, turnId] of turns) host.abort(sessionId, 'disconnected', turnId);
+      turns.clear();
+    };
+    const terminate = (): void => {
+      // terminate 的 close 可能晚于同会话新连接启动，先按代次立即取消。
+      abortOwnedTurns();
+      ws.terminate();
+    };
     const send = (event: unknown) => {
       if (ws.readyState !== 1) return;
       // G5：积压超阈值说明该客户端已不消费，直接丢弃，避免内存无限增长。
       if (ws.bufferedAmount > WS_MAX_BUFFERED_BYTES) {
-        ws.terminate();
+        terminate();
         return;
       }
       ws.send(JSON.stringify(event));
@@ -195,13 +205,16 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
       if (ws.readyState !== 1) return;
       // G5：半开连接（断网/休眠）收不到 TCP FIN，只有应用层心跳能发现；
       // 90s 无 pong/入站消息即 terminate，释放会话与缓冲。
-      if (Date.now() - lastSeen > WS_DEAD_AFTER_MS) {
-        ws.terminate();
+      if (Date.now() - lastSeen >= WS_DEAD_AFTER_MS) {
+        terminate();
         return;
       }
       send({ type: 'ping' });
     }, 30000);
-    ws.on('close', () => clearInterval(heartbeat));
+    ws.on('close', () => {
+      clearInterval(heartbeat);
+      abortOwnedTurns();
+    });
     ws.on('message', async (raw) => {
       lastSeen = Date.now();
       let msg: any;
@@ -216,23 +229,38 @@ export async function createGateway(overrides: Partial<GatewayConfig> = {}): Pro
         return;
       }
       if (msg.type === 'turn') {
+        const sessionId = String(msg.sessionId);
+        const previousTurnId = host.getTurnId(sessionId);
+        let ownedTurnId: string | undefined;
         try {
-          await host.startTurn(
-            String(msg.sessionId),
+          const running = host.startTurn(
+            sessionId,
             {
               text: String(msg.text ?? ''),
               mode: msg.mode as PermissionMode | undefined,
               attachments: Array.isArray(msg.attachments) ? (msg.attachments as string[]) : undefined,
+              images: Array.isArray(msg.images) ? (msg.images as string[]).map(String).slice(0, 4) : undefined,
               connectionId: typeof msg.connectionId === 'string' ? msg.connectionId : undefined,
+              database: typeof msg.database === 'string' ? msg.database : undefined,
               // WebSocket 回合来自移动端/外部设备，本机 MCP（文件系统/网页）不应跨设备暴露。
               disableMcp: true,
             },
             (event: AgentEvent) => send(event),
           );
+          // startTurn 在第一次 await 前注册；若请求因 SESSION_BUSY 被拒绝，
+          // 不能把上一位客户端的回合误登记到本连接名下。
+          const turnId = host.getTurnId(sessionId);
+          if (turnId && turnId !== previousTurnId) {
+            ownedTurnId = turnId;
+            turns.set(sessionId, turnId);
+          }
+          await running;
           send({ type: 'turn_end' });
         } catch (err: any) {
           send({ type: 'error', code: err?.code ?? 'AGENT_ERROR', message: err?.message ?? 'Agent 运行失败' });
           send({ type: 'turn_end' });
+        } finally {
+          if (ownedTurnId && turns.get(sessionId) === ownedTurnId) turns.delete(sessionId);
         }
         return;
       }

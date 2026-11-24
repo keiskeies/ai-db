@@ -1,4 +1,5 @@
-import { createReadStream, createWriteStream, existsSync, readFileSync, statSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import {
@@ -23,6 +24,7 @@ import {
 } from '@aidb/core';
 import type { GatewayConfig } from './config';
 import { DbError, type Driver } from './drivers';
+import { throwIfAborted } from './drivers/timeout';
 import { estimateRowBytes, supportsRowStream } from './drivers/types';
 import { toCsv, toSqlInserts, type ExportFormat } from './exportFormat';
 import type { ConnectionManager } from './manager';
@@ -116,6 +118,9 @@ export interface ImportOptions {
   hasHeader: boolean;
   delimiter?: string;
   mapping?: Array<{ column: string; sourceIndex?: number }>;
+  database?: string;
+  executionId?: string;
+  signal?: AbortSignal;
 }
 
 export function coerceValue(value: unknown, type: string): unknown {
@@ -166,6 +171,8 @@ export interface DocumentImportOptions {
   delimiter?: string;
   idColumn?: string;
   vectorColumn?: string;
+  executionId?: string;
+  signal?: AbortSignal;
 }
 
 function coerceCell(value: string): unknown {
@@ -209,6 +216,7 @@ export async function importDocuments(
   connectionId: string,
   opts: DocumentImportOptions,
 ): Promise<{ imported: number; skipped: number; errors: string[]; collection: string }> {
+  throwIfAborted(opts.signal);
   const conn = store.getConnection(connectionId);
   if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
   if (conn.readonly) throw new DbError('只读连接禁止导入', { code: 'READONLY', status: 403 });
@@ -273,11 +281,19 @@ export async function importDocuments(
   let imported = 0;
   const batchSize = 200;
   for (let start = 0; start < documents.length; start += batchSize) {
+    throwIfAborted(opts.signal);
     const chunk = documents.slice(start, start + batchSize);
     try {
-      const result = await manager.writeDocuments(connectionId, { collection: opts.collection, documents: chunk }, { database: conn.database, actor: 'user' });
+      const result = await manager.writeDocuments(connectionId, { collection: opts.collection, documents: chunk }, {
+        database: conn.database,
+        actor: 'user',
+        executionId: opts.executionId,
+        signal: opts.signal,
+      });
+      throwIfAborted(opts.signal);
       imported += result.upserted;
     } catch (err: any) {
+      if (err?.code === 'ABORTED') throw err;
       errors.push(`第 ${start + 1}-${start + chunk.length} 行：${err?.message ?? '写入失败'}`);
     }
   }
@@ -291,10 +307,11 @@ export async function importCsv(
   connectionId: string,
   opts: ImportOptions,
 ): Promise<ImportResult> {
+  throwIfAborted(opts.signal);
   const conn = store.getConnection(connectionId);
   if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
   if (conn.readonly) throw new DbError('只读连接禁止导入', { code: 'READONLY', status: 403 });
-  const { table } = await manager.findTable(connectionId, conn.database, opts.table);
+  const { table } = await manager.findTable(connectionId, opts.database ?? conn.database, opts.table);
   const content = opts.csv ?? (opts.path ? readFileSync(resolveImportFile(config, opts.path), 'utf8') : '');
   if (!content.trim()) throw new DbError('CSV 内容为空', { code: 'EMPTY_CSV' });
   const delimiter = opts.delimiter === '\\t' ? '\t' : opts.delimiter || ',';
@@ -334,6 +351,7 @@ export async function importCsv(
   const params: unknown[] = [];
   const errors: string[] = [];
   for (const [rowIndex, row] of dataRows.entries()) {
+    throwIfAborted(opts.signal);
     for (const [colIdx, column] of columns.entries()) {
       const raw = row[indexes[colIdx]] ?? '';
       params.push(coerce(raw, typeByColumn.get(column) ?? 'text'));
@@ -343,10 +361,18 @@ export async function importCsv(
   if (errors.length) return { inserted: 0, skipped: dataRows.length, errors, columns };
 
   const sql = buildInsert(conn.engine, table.name, columns, dataRows.length, engineUsesSchema(conn.engine) ? table.schema : undefined);
+  throwIfAborted(opts.signal);
   try {
-    const result = await manager.runParams(connectionId, sql, params, { database: conn.database, actor: 'user' });
+    const result = await manager.runParams(connectionId, sql, params, {
+      database: opts.database ?? conn.database,
+      actor: 'user',
+      executionId: opts.executionId,
+      signal: opts.signal,
+    });
+    throwIfAborted(opts.signal);
     return { inserted: result.affected ?? dataRows.length, skipped: 0, errors: [], columns };
   } catch (err: any) {
+    if (err?.code === 'ABORTED') throw err;
     throw new DbError(`导入失败，已回滚：${err.message}`, { code: 'IMPORT_FAILED', hint: '检查列类型与 CSV 内容是否匹配' });
   }
 }
@@ -428,7 +454,12 @@ export async function writeTableRows(
   table: TableInfo,
   base: string,
   database: string | undefined,
+  signal?: AbortSignal,
+  read?: (sql: string, params: unknown[], database: string | undefined) => Promise<QueryResult>,
 ): Promise<number> {
+  throwIfAborted(signal);
+  const run = read ?? ((sql: string, params: unknown[], db: string | undefined) => driver.run(sql, { database: db, signal }));
+  const runParams = read ?? ((sql: string, params: unknown[], db: string | undefined) => driver.runParams(sql, params, { database: db, signal }));
   const schema = engineUsesSchema(engine) ? table.schema : undefined;
   let names: string[] | undefined;
   let rowCount = 0;
@@ -437,6 +468,7 @@ export async function writeTableRows(
     let start = 0;
     let bytes = 0;
     for (let i = 0; i < rows.length; i += 1) {
+      throwIfAborted(signal);
       bytes += estimateRowBytes(rows[i]);
       if (bytes >= DUMP_BATCH_BYTES || i - start + 1 >= DUMP_CHUNK_ROWS) {
         await write(toSqlInserts(engine, table.name, names, rows.slice(start, i + 1), schema));
@@ -453,30 +485,36 @@ export async function writeTableRows(
   // 流式驱动一条 SELECT 读完整表：单语句快照天然一致，不会像分页那样漏行/重行，
   // 无主键表也不再整表缓冲。批由驱动按字节产出，这里再按同一预算切 INSERT。
   if (supportsRowStream(driver)) {
-    for await (const batch of driver.iterateRows(base, [], { database })) {
+    for await (const batch of driver.iterateRows(base, [], { database, signal })) {
+      throwIfAborted(signal);
       await emitRows(batch.columns, batch.rows);
     }
     return rowCount;
   }
   const plan = dumpReadPlan(engine, table);
   if (plan.mode === 'single') {
-    const result = await driver.run(base, { database });
+    const result = await run(base, [], database);
+    throwIfAborted(signal);
     await emitRows(result.columns, result.rows);
     return rowCount;
   }
   if (plan.mode === 'offset') {
     for (let offset = 0; ; offset += DUMP_CHUNK_ROWS) {
-      const result = await driver.run(dumpPageSql(engine, base, plan.order, DUMP_CHUNK_ROWS, offset), { database });
+      throwIfAborted(signal);
+      const result = await run(dumpPageSql(engine, base, plan.order, DUMP_CHUNK_ROWS, offset), [], database);
+      throwIfAborted(signal);
       await emitRows(result.columns, result.rows);
       if (result.rows.length < DUMP_CHUNK_ROWS) return rowCount;
     }
   }
   let cursor: unknown;
   for (;;) {
+    throwIfAborted(signal);
     const sql = dumpKeysetSql(engine, base, plan.column, DUMP_CHUNK_ROWS, cursor);
     const result = cursor === undefined
-      ? await driver.run(sql, { database })
-      : await driver.runParams(sql, [cursor], { database });
+      ? await run(sql, [], database)
+      : await runParams(sql, [cursor], database);
+    throwIfAborted(signal);
     await emitRows(result.columns, result.rows);
     if (result.rows.length < DUMP_CHUNK_ROWS) return rowCount;
     const index = result.columns.findIndex((column) => column.name.toLowerCase() === plan.column.toLowerCase());
@@ -498,28 +536,38 @@ export function safeDefaultToDump(value: string): string | undefined {
   return undefined;
 }
 
-export async function dumpDatabase(  store: Store,
+export async function dumpDatabase(
+  store: Store,
   manager: ConnectionManager,
   config: GatewayConfig,
   connectionId: string,
   database?: string,
   label?: string,
+  signal?: AbortSignal,
+  executionId?: string,
 ): Promise<{ id: string; createdAt: string; path: string; bytes: number; tables: number; rows: number }> {
+  throwIfAborted(signal);
   const conn = store.getConnection(connectionId);
   if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
-  const schemas = await manager.schema(connectionId, database, true);
+  const schemas = await manager.schema(connectionId, database, true, 30000, { signal, executionId });
+  throwIfAborted(signal);
   const driver = await manager.rawDriver(connectionId);
+  throwIfAborted(signal);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const safeName = (database ?? conn.database ?? conn.name).replace(/[^\w\u4e00-\u9fff-]+/g, '_').slice(0, 40);
-  const path = join(config.backupDir, `${conn.name.replace(/[^\w\u4e00-\u9fff-]+/g, '_')}-${safeName}-${stamp}.sql`);
+  const path = join(config.backupDir, `${conn.name.replace(/[^\w\u4e00-\u9fff-]+/g, '_')}-${safeName}-${stamp}-${randomUUID().slice(0, 8)}.sql`);
   // 边读边写：整库备份不能再把「全部行 + 全部 INSERT 文本 + join 后的巨型字符串」同时留在内存里。
   const stream = createWriteStream(path, { flags: 'w' });
-  const write = (text: string) =>
-    new Promise<void>((resolveWrite, rejectWrite) => {
+  const write = async (text: string) => {
+    throwIfAborted(signal);
+    await new Promise<void>((resolveWrite, rejectWrite) => {
       stream.write(`${text}\n`, (err) => (err ? rejectWrite(err) : resolveWrite()));
     });
+    throwIfAborted(signal);
+  };
   let tableCount = 0;
   let rowCount = 0;
+  let completed = false;
   try {
     await write(`-- AiDB Studio backup`);
     await write(`-- connection: ${conn.name} (${conn.engine})`);
@@ -528,6 +576,7 @@ export async function dumpDatabase(  store: Store,
     await write('');
     for (const schema of schemas) {
       for (const table of schema.tables) {
+        throwIfAborted(signal);
         if (table.type !== 'table') continue;
         const columns = table.columns ?? [];
         if (!columns.length) continue;
@@ -550,17 +599,36 @@ export async function dumpDatabase(  store: Store,
         }
         const target = quoteQualified([engineUsesSchema(conn.engine) ? table.schema : undefined, table.name], conn.engine);
         // 备份的是哪个库就用哪个库读数据；写死 conn.database 会把非默认库的备份读成默认库的表。
-        rowCount += await writeTableRows(write, driver, conn.engine, table, `SELECT * FROM ${target}`, database ?? conn.database);
+        rowCount += await writeTableRows(
+          write,
+          driver,
+          conn.engine,
+          table,
+          `SELECT * FROM ${target}`,
+          database ?? conn.database,
+          signal,
+          async (sql, params, db) => {
+            const options = { database: db, allowMulti: false, autoLimit: false, actor: 'user' as const, executionId, signal };
+            const result = params.length
+              ? await manager.runParams(connectionId, sql, params, options)
+              : (await manager.query(connectionId, sql, options)).sets[0];
+            if (!result) throw new DbError('备份读取没有返回结果', { code: 'BACKUP_READ_EMPTY' });
+            return result;
+          },
+        );
         await write('');
       }
     }
+    completed = true;
   } finally {
     await new Promise<void>((resolveClose, rejectClose) => {
       stream.once('close', () => resolveClose());
       stream.once('error', rejectClose);
       stream.end();
     });
+    if (!completed) rmSync(path, { force: true });
   }
+  throwIfAborted(signal);
   const bytes = statSync(path).size;
   const record = store.addBackup({ connectionId, database, path, format: 'sql', bytes, label });
   return { id: record.id, createdAt: record.createdAt, path, bytes, tables: tableCount, rows: rowCount };
@@ -610,19 +678,32 @@ function lineEndsStatement(text: string): boolean {
  * 逐条读出备份脚本。AiDB 的 dump 一条语句一行（CREATE TABLE 会跨行），
  * 以「引号外的分号」作为边界，多行字符串值不会把语句拆坏；无分号 EOF 时整体flush。
  */
-export async function* readSqlStatements(path: string): AsyncGenerator<string> {
-  const lines = createInterface({ input: createReadStream(path, { encoding: 'utf8' }), crlfDelay: Infinity });
+export async function* readSqlStatements(path: string, signal?: AbortSignal): AsyncGenerator<string> {
+  throwIfAborted(signal);
+  const input = createReadStream(path, { encoding: 'utf8' });
+  const onAbort = () => input.destroy();
+  signal?.addEventListener('abort', onAbort, { once: true });
+  if (signal?.aborted) onAbort();
+  const lines = createInterface({ input, crlfDelay: Infinity });
   let buffer = '';
-  for await (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('--')) continue;
-    buffer = buffer ? `${buffer}\n${line}` : line;
-    if (lineEndsStatement(buffer)) {
-      yield buffer.trim();
-      buffer = '';
+  try {
+    for await (const line of lines) {
+      throwIfAborted(signal);
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('--')) continue;
+      buffer = buffer ? `${buffer}\n${line}` : line;
+      if (lineEndsStatement(buffer)) {
+        yield buffer.trim();
+        buffer = '';
+      }
     }
+    throwIfAborted(signal);
+    if (buffer.trim()) yield buffer.trim();
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+    input.destroy();
+    lines.close();
   }
-  if (buffer.trim()) yield buffer.trim();
 }
 
 export async function restoreBackupFile(
@@ -631,14 +712,16 @@ export async function restoreBackupFile(
   connectionId: string,
   path: string,
   database?: string,
+  options: { signal?: AbortSignal; executionId?: string } = {},
 ): Promise<QueryBatchResult> {
+  throwIfAborted(options.signal);
   const conn = store.getConnection(connectionId);
   if (!conn) throw new DbError('备份对应的连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
   const started = Date.now();
   const timeoutMs = store.getSettings().queryTimeoutMs;
   // 第一遍只留 CREATE 的表头，用来生成 DROP；第二遍才真正回放，避免整库脚本进内存。
   const headers: string[] = [];
-  for await (const statement of readSqlStatements(path)) {
+  for await (const statement of readSqlStatements(path, options.signal)) {
     if (/^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|VIEW)\b/i.test(statement)) headers.push(statement.split('\n', 1)[0]);
   }
   const drops = restoreDropStatements(conn.engine, headers.join('\n'));
@@ -649,19 +732,35 @@ export async function restoreBackupFile(
   let pending = '';
   let statements = 0;
   const flush = async () => {
+    throwIfAborted(options.signal);
     if (!pending.trim()) return;
     const script = pending;
     pending = '';
     if (viaScript) {
       // SQLite / DuckDB 走整段脚本：几十万条 INSERT 逐条执行会阻塞事件循环十几分钟。
-      await manager.execScript(connectionId, `BEGIN;\n${script}\nCOMMIT;`, { database, timeoutMs, actor: 'user' });
+      await manager.execScript(connectionId, `BEGIN;\n${script}\nCOMMIT;`, {
+        database,
+        timeoutMs,
+        actor: 'user',
+        signal: options.signal,
+        executionId: options.executionId,
+      });
     } else {
-      const batch = await manager.query(connectionId, script, { database, allowMulti: true, autoLimit: false, timeoutMs, actor: 'user' });
+      const batch = await manager.query(connectionId, script, {
+        database,
+        allowMulti: true,
+        autoLimit: false,
+        timeoutMs,
+        actor: 'user',
+        signal: options.signal,
+        executionId: options.executionId,
+      });
       sets.push(...batch.sets);
     }
   };
   pending = drops.length ? `${drops.join('\n')}\n` : '';
-  for await (const statement of readSqlStatements(path)) {
+  for await (const statement of readSqlStatements(path, options.signal)) {
+    throwIfAborted(options.signal);
     pending += `${statement}\n`;
     statements += 1;
     if (pending.length >= RESTORE_BATCH_BYTES) await flush();

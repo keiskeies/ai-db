@@ -57,6 +57,8 @@ export interface LiveTool {
 export type { TimelineItem } from './lib/agentTimeline';
 
 export interface LiveTurn {
+  generation: number;
+  turnId?: string;
   userText: string;
   text: string;
   thinking: string;
@@ -231,6 +233,12 @@ interface AppStore {
   /** 首页正在展示的库。与 agentDatabase 解耦，只由侧栏点库 / 首页库下拉写。 */
   homeDatabase: string;
   live?: LiveTurn;
+  agentStarting: boolean;
+  agentStartingGeneration?: number;
+  /** 本地已断流，但服务端是否结束尚未确认；确认前禁止换会话或作用域。 */
+  agentStopUnconfirmed: boolean;
+  /** 新建/加载会话的请求在飞；期间scope 与发送都必须等它原子落地。 */
+  agentSessionSwitching: boolean;
   approval?: ApprovalState;
   /**
    * 当前回合里排在 approval 后面的审批请求。一个回合可以连着要求多次审批
@@ -307,15 +315,16 @@ interface AppStore {
   /** 返回 false 表示被运行态拒绝（已弹提示）。 */
   requestAgentTask: (prompt: string) => Promise<boolean>;
   setSessionsOpen: (open: boolean) => void;
-  newAgentSession: () => Promise<void>;
+  newAgentSession: () => Promise<boolean>;
   /** keepMode=true 时不采用会话里存的权限档位，保留用户当前的选择（自动恢复走这条）。 */
-  loadAgentSession: (id: string, opts?: { keepMode?: boolean }) => Promise<void>;
-  deleteAgentSession: (id: string) => Promise<void>;
+  loadAgentSession: (id: string, opts?: { keepMode?: boolean }) => Promise<boolean>;
+  deleteAgentSession: (id: string) => Promise<boolean>;
   refreshSessions: () => Promise<void>;
   sessionsForScope: (connectionId?: string, database?: string) => AgentSessionMeta[];
   renameAgentSession: (id: string, title: string) => Promise<void>;
-  sendAgent: (text: string, mode?: PermissionMode, images?: string[]) => Promise<void>;
-  abortAgent: () => Promise<void>;
+  sendAgent: (text: string, mode?: PermissionMode, images?: string[], onAccepted?: () => void, signal?: AbortSignal) => Promise<boolean>;
+  /** true 表示已确认服务端结束；false 表示创建中或停止结果仍不确定。 */
+  abortAgent: () => Promise<boolean>;
   resolveApproval: (decision: 'allow' | 'deny', scope: 'once' | 'session' | 'always') => Promise<void>;
   prefillAgent: (text: string) => void;
   clearPrefill: () => void;
@@ -352,11 +361,96 @@ interface AppStore {
  * 所以「手动点会话 → 再次触发恢复」这条路径本就不存在，不需要另设抑制标记。
  */
 let restoreSeq = 0;
+let sessionsRefreshSeq = 0;
+let sessionSwitchSeq = 0;
 
 const WELCOME: Tab = { id: 'welcome', kind: 'welcome', title: tr("欢迎") };
 let tabSeq = 1;
+let turnSeq = 0;
+const TURN_SETTLE_GRACE_MS = 320;
+interface AgentTurn {
+  generation: number;
+  sessionId?: string;
+  controller?: AbortController;
+  phase: 'creating' | 'streaming' | 'settling';
+  cancelled: boolean;
+  abortRequested: boolean;
+  abortConfirmed?: boolean;
+  abortConfirmation?: Promise<void>;
+}
+let currentTurn: AgentTurn | undefined;
 let currentAbort: AbortController | undefined;
 const toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function isCurrentTurn(turn: AgentTurn): boolean {
+  return currentTurn === turn && !turn.cancelled;
+}
+
+function ownsTurnSession(turn: AgentTurn): boolean {
+  return isCurrentTurn(turn) && (!turn.sessionId || useApp.getState().agentSessionId === turn.sessionId);
+}
+
+function ownsLive(turn: AgentTurn): boolean {
+  const state = useApp.getState();
+  return ownsTurnSession(turn) && Boolean(turn.sessionId) && state.agentSessionId === turn.sessionId && state.live?.generation === turn.generation;
+}
+
+function invalidateTurn(turn = currentTurn): void {
+  if (!turn) return;
+  turn.cancelled = true;
+  if (currentTurn === turn) {
+    currentTurn = undefined;
+    useApp.setState({ agentStopUnconfirmed: false });
+    if (useApp.getState().agentStartingGeneration === turn.generation) useApp.setState({ agentStarting: false, agentStartingGeneration: undefined });
+  }
+  if (turn.controller && currentAbort === turn.controller) currentAbort = undefined;
+}
+
+function agentScopeLocked(): boolean {
+  const state = useApp.getState();
+  return state.agentStarting || state.agentSessionSwitching || state.agentStopUnconfirmed || state.live?.status === 'streaming' || state.live?.status === 'awaiting';
+}
+
+/** 所有会改 Agent 作用域的用户入口共用；拒绝时必须有可见提示。 */
+function allowAgentScopeChange(): boolean {
+  if (!agentScopeLocked()) {
+    sessionSwitchSeq += 1;
+    restoreSeq += 1;
+    return true;
+  }
+  useApp.getState().notify('warning', tr("Agent 正在运行，请先停止"), tr("停止确认后才能切换连接或数据库。"));
+  return false;
+}
+
+/** 新建/加载会话前先停旧回合。创建中或 abort 未确认时绝不换走当前会话。 */
+async function prepareAgentSessionSwitch(): Promise<boolean> {
+  const turn = currentTurn;
+  if (!turn) return true;
+  if (turn.phase === 'creating' || useApp.getState().agentStarting) {
+    useApp.getState().notify('warning', tr("Agent 正在创建会话"), tr("请等创建完成或停止后再切换会话。"));
+    return false;
+  }
+  const live = useApp.getState().live;
+  if ((live && (live.status === 'streaming' || live.status === 'awaiting')) || (turn.abortRequested && turn.abortConfirmed !== true)) {
+    const confirmed = await useApp.getState().abortAgent();
+    if (!confirmed || turn.abortConfirmed !== true) return false;
+  }
+  if (turn.abortConfirmed === false) return false;
+  if (currentTurn === turn) invalidateTurn(turn);
+  return true;
+}
+
+function canCommitSessionSwitch(seq: number, scope: { connectionId?: string; database: string }): boolean {
+  const state = useApp.getState();
+  return seq === sessionSwitchSeq
+    && state.activeConnectionId === scope.connectionId
+    && state.agentDatabase === scope.database
+    && !currentTurn
+    && !state.agentStarting
+    && !state.agentStopUnconfirmed
+    && state.live?.status !== 'streaming'
+    && state.live?.status !== 'awaiting';
+}
 
 /**
  * 流式正文/思考 delta 的节流合并器。
@@ -370,11 +464,15 @@ const toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
  * 同步语义（现有时间线单测直接调它并立即断言 stream），真实流式才走这条批量通道。
  */
 const DELTA_FLUSH_MS = 50;
-function createEventBatcher(handle: (event: AgentEvent) => void) {
+function createEventBatcher(handle: (event: AgentEvent) => void, isActive: () => boolean) {
   let text = '';
   let thinking = '';
   let timer: ReturnType<typeof setTimeout> | undefined;
   const flush = () => {
+    if (!isActive()) {
+      text = '';
+      thinking = '';
+    }
     if (timer) {
       clearTimeout(timer);
       timer = undefined;
@@ -395,6 +493,7 @@ function createEventBatcher(handle: (event: AgentEvent) => void) {
   };
   return {
     dispatch(event: AgentEvent) {
+      if (!isActive()) return;
       if (event.type === 'text_delta') {
         text += event.text;
         schedule();
@@ -406,7 +505,7 @@ function createEventBatcher(handle: (event: AgentEvent) => void) {
         return;
       }
       flush();
-      handle(event);
+      if (isActive()) handle(event);
     },
     flush,
     reset() {
@@ -424,9 +523,28 @@ const schemaPending = new Map<string, true>();
 const schemaInFlight = new Set<string>();
 const schemaLastRefresh = new Map<string, number>();
 const schemaThrottle = new Map<string, ReturnType<typeof setTimeout>>();
-// loadSchema 每连接代次序列：连接切换 A→B→A 时，过期的 A 请求回来不能覆盖新状态。
+// loadSchema 按「连接 + 数据库」记代次：同连接的不同库可以并行内省，
+// 各自的 loading 也由自己的请求收尾，不能因为旁边库的请求变成永久转圈。
 const schemaReloadSeq = new Map<string, number>();
+const schemaLoadingOwner = new Map<string, number>();
+let schemaRequestSeq = 0;
 const SCHEMA_THROTTLE_MS = 1000;
+
+function schemaLoadKey(connectionId: string, database?: string): string {
+  return database ? `${connectionId}:${database}` : connectionId;
+}
+
+function invalidateSchemaLoads(connectionId: string): void {
+  for (const key of schemaReloadSeq.keys()) {
+    if (key === connectionId || key.startsWith(`${connectionId}:`)) {
+      schemaReloadSeq.set(key, (schemaReloadSeq.get(key) ?? 0) + 1);
+    }
+  }
+  // 状态清理会删掉 loading 位；这里同时删owner，迟到的 finally 不会把位加回来。
+  for (const key of schemaLoadingOwner.keys()) {
+    if (key === connectionId || key.startsWith(`${connectionId}:`)) schemaLoadingOwner.delete(key);
+  }
+}
 // 手动刷新后这个窗口内到达的事件跳过：用户自己刚刷过，事件是回声。
 const SCHEMA_ECHO_WINDOW_MS = 1500;
 // 事件驱动的重拉不应该给 echo 窗口续期：否则重拉一开始就给自己开了一个
@@ -512,6 +630,9 @@ export const useApp = create<AppStore>((set, get) => ({
   agentWidth: readUiPrefs().agentWidth ?? 384,
   agentMessages: [],
   agentFollowUps: [],
+  agentStarting: false,
+  agentStopUnconfirmed: false,
+  agentSessionSwitching: false,
   approvalQueue: [],
   agentMode: 'ask',
   agentDatabase: '',
@@ -599,19 +720,25 @@ export const useApp = create<AppStore>((set, get) => ({
     // 也算"用户刚刷过"，不该再触发一次。
     // 但事件驱动的重拉不能记：那会让重拉给自己开一个丢事件窗口，
     // 期间到达的真变更被当回声丢掉，而且没有后续事件来纠正。
-    // 每连接单调代次：A→B→A 快速切换时，先发的旧 A 请求回来不能覆盖新状态。
-    const seq = (schemaReloadSeq.get(connectionId) ?? 0) + 1;
-    schemaReloadSeq.set(connectionId, seq);
+    const key = schemaLoadKey(connectionId, database);
+    const seq = (schemaReloadSeq.get(key) ?? 0) + 1;
+    const requestSeq = ++schemaRequestSeq;
+    schemaReloadSeq.set(key, seq);
+    schemaLoadingOwner.set(key, requestSeq);
+    const clearLoading = () => {
+      // 同 key 有更新请求时，旧请求不能把新请求的 loading 位清掉。
+      if (schemaLoadingOwner.get(key) !== requestSeq) return;
+      schemaLoadingOwner.delete(key);
+      set((s) => s.schemaLoading[key] ? { schemaLoading: { ...s.schemaLoading, [key]: false } } : {});
+    };
     if (refresh && !schemaReloadByEvent) schemaLastRefresh.set(connectionId, Date.now());
     const conn = get().connections.find((c) => c.id === connectionId);
     if (database) {
-      const key = `${connectionId}:${database}`;
       set((s) => ({ schemaLoading: { ...s.schemaLoading, [key]: true } }));
       try {
         const { schemas } = await api.getSchema(connectionId, refresh, database);
-        if (schemaReloadSeq.get(connectionId) !== seq) {
-          // 过期的请求：不写结构。最后一个 seq 的请求总会自己清掉 loading，这里不能动，
-          // 否则会把「更新的同 key 请求」的 loading 位误清（A→B→A 快速切换时）。
+        if (schemaReloadSeq.get(key) !== seq) {
+          // 过期的请求不写结构；loading 由 finally 按 key 的安全owner清理。
           return;
         }
         set((s) => {
@@ -626,15 +753,12 @@ export const useApp = create<AppStore>((set, get) => ({
                 : [...list, entry],
             },
             loadedDatabases: { ...s.loadedDatabases, [connectionId]: loaded.includes(entry.name) ? loaded : [...loaded, entry.name] },
-            schemaLoading: { ...s.schemaLoading, [key]: false },
           };
         });
       } catch (err) {
-        if (schemaReloadSeq.get(connectionId) !== seq) {
-          return;
-        }
-        set((s) => ({ schemaLoading: { ...s.schemaLoading, [key]: false } }));
-        get().notify('error', get().t('error'), errorText(err));
+        if (schemaReloadSeq.get(key) === seq) get().notify('error', get().t('error'), errorText(err));
+      } finally {
+        clearLoading();
       }
       return;
     }
@@ -653,7 +777,7 @@ export const useApp = create<AppStore>((set, get) => ({
       }
       if (!engineMeta(resolved.engine).fileBased) {
         const { databases } = await api.databases(connectionId);
-        if (schemaReloadSeq.get(connectionId) !== seq) return;
+        if (schemaReloadSeq.get(key) !== seq) return;
         const previouslyLoaded = (get().loadedDatabases[connectionId] ?? []).filter((name) => databases.includes(name));
         const keep = refresh ? [] : previouslyLoaded;
         const byName = new Map((get().schemas[connectionId] ?? []).map((item) => [item.name, item]));
@@ -677,14 +801,15 @@ export const useApp = create<AppStore>((set, get) => ({
         return;
       }
       const { schemas } = await api.getSchema(connectionId, refresh);
-      if (schemaReloadSeq.get(connectionId) !== seq) return;
+      if (schemaReloadSeq.get(key) !== seq) return;
       set((s) => ({
         schemas: { ...s.schemas, [connectionId]: schemas },
         loadedDatabases: { ...s.loadedDatabases, [connectionId]: schemas.map((item) => item.name) },
       }));
     } catch (err) {
-      if (schemaReloadSeq.get(connectionId) !== seq) return;
-      get().notify('error', get().t('error'), errorText(err));
+      if (schemaReloadSeq.get(key) === seq) get().notify('error', get().t('error'), errorText(err));
+    } finally {
+      clearLoading();
     }
   },
 
@@ -697,6 +822,7 @@ export const useApp = create<AppStore>((set, get) => ({
       if (!get().schemas[id]) void get().loadSchema(id);
       return;
     }
+    if (!allowAgentScopeChange()) return;
     // 换连接时首页库走回落链：该连接上次看的库 → 空（由首页再退到连接默认库/第一个库）
     const rememberedHome = readUiPrefs().homeDatabaseByConnection?.[id] ?? '';
     set({
@@ -721,7 +847,9 @@ export const useApp = create<AppStore>((set, get) => ({
 
   setActiveConnection: (id) => {
     const previous = get().activeConnectionId;
-    set({ activeConnectionId: id, ...(previous === id ? {} : { agentDatabase: rememberedAgentDatabase(id) }) });
+    if (previous === id) return;
+    if (!allowAgentScopeChange()) return;
+    set({ activeConnectionId: id, agentDatabase: rememberedAgentDatabase(id) });
   },
 
   toggleConnection: (id) => {
@@ -730,7 +858,12 @@ export const useApp = create<AppStore>((set, get) => ({
     const eventExpandedConnections = { ...get().eventExpandedConnections };
     delete eventExpandedConnections[id];
     const previous = get().activeConnectionId;
-    set({ expandedConnections, eventExpandedConnections, activeConnectionId: id, ...(previous === id ? {} : { agentDatabase: rememberedAgentDatabase(id) }) });
+    const canSelect = previous === id || allowAgentScopeChange();
+    set({
+      expandedConnections,
+      eventExpandedConnections,
+      ...(canSelect ? { activeConnectionId: id, ...(previous === id ? {} : { agentDatabase: rememberedAgentDatabase(id) }) } : {}),
+    });
     saveUiPrefs({ expandedConnections });
     if (open && !get().schemas[id]) void get().loadSchema(id);
   },
@@ -761,7 +894,7 @@ export const useApp = create<AppStore>((set, get) => ({
         eventExpandedConnections[event.connectionId] = true;
       }
       for (const id of invalidatedIds) {
-        schemaReloadSeq.set(id, (schemaReloadSeq.get(id) ?? 0) + 1);
+        invalidateSchemaLoads(id);
         delete schemas[id];
         delete loadedDatabases[id];
         delete eventExpandedConnections[id];
@@ -802,6 +935,7 @@ export const useApp = create<AppStore>((set, get) => ({
   requestPrint: () => set({ printRequested: true }),
   consumePrint: () => set({ printRequested: false }),
   openData: (connectionId, table, database) => {
+    if (connectionId !== get().activeConnectionId && !allowAgentScopeChange()) return;
     const conn = get().connections.find((c) => c.id === connectionId);
     const model = conn ? engineMeta(conn.engine).model : 'relational';
     if (model === 'document' || model === 'keyvalue' || model === 'graph' || model === 'vector' || model === 'search' || model === 'widecolumn') {
@@ -840,6 +974,7 @@ export const useApp = create<AppStore>((set, get) => ({
       get().openConnectionEditor('new');
       return;
     }
+    if (connId !== get().activeConnectionId && !allowAgentScopeChange()) return;
     const conn = get().connections.find((c) => c.id === connId);
     // 库跟随左侧树选中：当前连接用实时 homeDatabase，其它连接用按连接记忆的首页库，再退到连接默认库
     const selectedDatabase =
@@ -894,6 +1029,7 @@ export const useApp = create<AppStore>((set, get) => ({
       get().openConnectionEditor('new');
       return;
     }
+    if (connId !== get().activeConnectionId && !allowAgentScopeChange()) return;
     const conn = get().connections.find((c) => c.id === connId);
     if (conn && engineMeta(conn.engine).model !== 'relational') {
       get().notify('warning', tr("该引擎没有关系图"), engineMeta(conn.engine).label);
@@ -917,6 +1053,7 @@ export const useApp = create<AppStore>((set, get) => ({
       get().openConnectionEditor('new');
       return;
     }
+    if (connId !== get().activeConnectionId && !allowAgentScopeChange()) return;
     const conn = get().connections.find((c) => c.id === connId);
     if (conn && !engineMeta(conn.engine).languages.includes('sql')) {
       get().notify('warning', tr("该引擎没有仪表板"), tr("{0} 的查询结果不是表格图表，放不进卡片", [engineMeta(conn.engine).label]));
@@ -953,6 +1090,7 @@ export const useApp = create<AppStore>((set, get) => ({
 
   setActiveTab: (id) => {
     const tab = get().tabs.find((t) => t.id === id);
+    if (tab && 'connectionId' in tab && tab.connectionId !== get().activeConnectionId && !allowAgentScopeChange()) return;
     set({ activeTabId: id, ...(tab && 'connectionId' in tab ? { activeConnectionId: tab.connectionId } : {}) });
   },
 
@@ -983,17 +1121,18 @@ export const useApp = create<AppStore>((set, get) => ({
           ? currentConnections.map((item) => item.id === result.connection.id ? result.connection : item)
           : [...currentConnections, result.connection];
       const previousActive = get().activeConnectionId;
+      const canActivate = previousActive === result.connection.id || allowAgentScopeChange();
       const expandedConnections = { ...get().expandedConnections, [result.connection.id]: true };
       const eventExpandedConnections = { ...get().eventExpandedConnections };
       delete eventExpandedConnections[result.connection.id];
       set({
         connections,
         connectionEditor: undefined,
-        activeConnectionId: result.connection.id,
+        ...(canActivate ? { activeConnectionId: result.connection.id } : {}),
         expandedConnections,
         eventExpandedConnections,
         schemas: { ...get().schemas, [result.connection.id]: get().schemas[result.connection.id] ?? [] },
-        ...(previousActive !== result.connection.id ? { agentDatabase: '' } : {}),
+        ...(canActivate && previousActive !== result.connection.id ? { agentDatabase: '' } : {}),
       });
       saveUiPrefs({ expandedConnections });
       get().notify('success', get().t('saved'));
@@ -1067,6 +1206,7 @@ export const useApp = create<AppStore>((set, get) => ({
   setAgentDatabase: async (database) => {
     const previous = get().agentDatabase;
     if (previous === database) return;
+    if (!allowAgentScopeChange()) return;
     set({ agentDatabase: database });
     // 选完就落库：否则重开会话会退回连接默认库，历史对话和实际执行对不上
     const id = get().agentSessionId;
@@ -1081,8 +1221,7 @@ export const useApp = create<AppStore>((set, get) => ({
    * 「目标库变了但会话没换」的半截状态，下一次提问就落到错库上。
    */
   requestAgentTask: async (prompt) => {
-    const live = get().live;
-    if (live && (live.status === 'streaming' || live.status === 'awaiting')) {
+    if (agentScopeLocked()) {
       get().notify('warning', tr("Agent 正在回答，请等这一轮结束再操作"));
       return false;
     }
@@ -1097,39 +1236,63 @@ export const useApp = create<AppStore>((set, get) => ({
 
   /**
    * 把界面切到「当前库最近一条会话」。触发方只有 setAgentDatabase。
-   * 正在回答时不动作：静默换掉会话会让用户看不见自己那一轮跑到哪去了。
+   * 从 refresh 到详情回包都占住 sessionSwitchSeq / agentSessionSwitching，
+   * 发送与其它切换不能插进来；提交前再核对作用域和回合归属。
    */
   restoreSessionForScope: async () => {
-    const live = get().live;
-    if (live && (live.status === 'streaming' || live.status === 'awaiting')) return;
-    const seq = ++restoreSeq;
-    const { activeConnectionId, agentDatabase } = get();
-    await get().refreshSessions();
-    // 期间用户又切了库：这次结果已经过期，丢弃
-    if (seq !== restoreSeq) return;
-    const recent = get().sessionsForScope(activeConnectionId, agentDatabase || undefined)[0];
-    if (recent) {
-      await get().loadAgentSession(recent.id, { keepMode: true });
-      return;
+    if (agentScopeLocked()) return;
+    const seq = ++sessionSwitchSeq;
+    restoreSeq += 1;
+    set({ agentSessionSwitching: true });
+    try {
+      if (!await prepareAgentSessionSwitch() || seq !== sessionSwitchSeq) return;
+      const scope = { connectionId: get().activeConnectionId, database: get().agentDatabase };
+      await get().refreshSessions();
+      if (!canCommitSessionSwitch(seq, scope)) return;
+      const recent = get().sessionsForScope(scope.connectionId, scope.database || undefined)[0];
+      if (recent) {
+        const detail = await api.getSession(recent.id);
+        if (!canCommitSessionSwitch(seq, scope)) return;
+        set({
+          agentSessionId: recent.id,
+          agentSessionMeta: detail.session,
+          agentMessages: detail.messages,
+          agentFollowUps: [],
+          live: undefined,
+          agentStopUnconfirmed: false,
+          ...NO_APPROVAL,
+          agentOpen: true,
+          sessionsOpen: false,
+          agentDatabase: detail.session.database ?? '',
+          activeConnectionId: detail.session.connectionId ?? scope.connectionId,
+        });
+        if (detail.session.connectionId && !get().schemas[detail.session.connectionId]) void get().loadSchema(detail.session.connectionId);
+        return;
+      }
+      // 该库还没有会话：清成空白，但不建后端会话（首条消息时才创建，
+      // 否则切几次库就堆几个空会话）。
+      set({
+        agentSessionId: undefined,
+        agentSessionMeta: undefined,
+        agentMessages: [],
+        agentFollowUps: [],
+        live: undefined,
+        ...NO_APPROVAL,
+        agentDatabase: scope.database,
+      });
+    } catch (err) {
+      if (seq === sessionSwitchSeq) get().notify('error', get().t('error'), errorText(err));
+    } finally {
+      if (seq === sessionSwitchSeq) set({ agentSessionSwitching: false });
     }
-    // 该库还没有会话：清成空白，但不建后端会话（首条消息时才创建，
-    // 否则切几次库就堆几个空会话）
-    set({
-      agentSessionId: undefined,
-      agentSessionMeta: undefined,
-      agentMessages: [],
-      agentFollowUps: [],
-      live: undefined,
-      ...NO_APPROVAL,
-      agentDatabase,
-    });
   },
   setSessionsOpen: (open) => set({ sessionsOpen: open }),
 
   refreshSessions: async () => {
+    const seq = ++sessionsRefreshSeq;
     try {
       const { sessions } = await api.sessions();
-      set({ sessions });
+      if (seq === sessionsRefreshSeq) set({ sessions });
     } catch {
       /* ignore */
     }
@@ -1164,40 +1327,56 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 
   newAgentSession: async () => {
+    const seq = ++sessionSwitchSeq;
+    restoreSeq += 1;
+    set({ agentSessionSwitching: true });
     try {
-      if (get().live && (get().live!.status === 'streaming' || get().live!.status === 'awaiting')) await get().abortAgent();
-      const { session } = await api.createSession({
+      if (!await prepareAgentSessionSwitch() || seq !== sessionSwitchSeq) return false;
+      // abort 确认后才取作用域快照；请求在飞时 scope/发送均被锁住，回包只做一次提交。
+      const snapshot = {
         connectionId: get().activeConnectionId,
         database: get().agentDatabase || undefined,
         permissionMode: get().agentMode,
-      });
+      };
+      const { session } = await api.createSession(snapshot);
+      if (seq !== sessionSwitchSeq) return false;
       set({
         agentSessionId: session.id,
         agentSessionMeta: session,
-        agentDatabase: session.database ?? get().agentDatabase,
+        agentDatabase: session.database ?? snapshot.database ?? '',
         agentMessages: [],
         agentFollowUps: [],
         live: undefined,
+        agentStopUnconfirmed: false,
         ...NO_APPROVAL,
         agentOpen: true,
         sessionsOpen: false,
       });
       await get().refreshSessions();
+      return true;
     } catch (err) {
       get().notify('error', get().t('error'), errorText(err));
+      return false;
+    } finally {
+      if (seq === sessionSwitchSeq) set({ agentSessionSwitching: false });
     }
   },
 
   loadAgentSession: async (id, opts) => {
+    const seq = ++sessionSwitchSeq;
+    restoreSeq += 1;
+    set({ agentSessionSwitching: true });
     try {
-      if (get().live && (get().live!.status === 'streaming' || get().live!.status === 'awaiting')) await get().abortAgent();
+      if (!await prepareAgentSessionSwitch() || seq !== sessionSwitchSeq) return false;
       const detail = await api.getSession(id);
+      if (seq !== sessionSwitchSeq) return false;
       set({
         agentSessionId: id,
         agentSessionMeta: detail.session,
         agentMessages: detail.messages,
         agentFollowUps: [],
         live: undefined,
+        agentStopUnconfirmed: false,
         ...NO_APPROVAL,
         agentOpen: true,
         sessionsOpen: false,
@@ -1209,24 +1388,52 @@ export const useApp = create<AppStore>((set, get) => ({
         activeConnectionId: detail.session.connectionId ?? get().activeConnectionId,
       });
       if (detail.session.connectionId && !get().schemas[detail.session.connectionId]) void get().loadSchema(detail.session.connectionId);
+      return true;
     } catch (err) {
       get().notify('error', get().t('error'), errorText(err));
+      return false;
+    } finally {
+      if (seq === sessionSwitchSeq) set({ agentSessionSwitching: false });
     }
   },
 
   deleteAgentSession: async (id) => {
+    const seq = ++sessionSwitchSeq;
+    restoreSeq += 1;
+    set({ agentSessionSwitching: true });
     try {
+      if (!await prepareAgentSessionSwitch() || seq !== sessionSwitchSeq) return false;
       await api.deleteSession(id);
-      if (get().agentSessionId === id) set({ agentSessionId: undefined, agentSessionMeta: undefined, agentMessages: [], agentFollowUps: [], live: undefined });
+      if (seq !== sessionSwitchSeq) return false;
+      if (get().agentSessionId === id) set({ agentSessionId: undefined, agentSessionMeta: undefined, agentMessages: [], agentFollowUps: [], live: undefined, agentStopUnconfirmed: false, ...NO_APPROVAL });
       await get().refreshSessions();
+      return true;
     } catch (err) {
       get().notify('error', get().t('error'), errorText(err));
+      return false;
+    } finally {
+      if (seq === sessionSwitchSeq) set({ agentSessionSwitching: false });
     }
   },
 
   handleAgentEvent: (event) => {
     set((prev) => {
       if (!prev.live) return {};
+      // done/aborted/error 之后不再接受迟到的事件，避免把已收尾的 live 又改回运行态。
+      // 但 suggestions 是服务端在 done 之后才补发的元数据，不属于回合展示状态，
+      // 必须放行，否则追问建议会被这条守卫静默吞掉。
+      if (
+        (prev.live.status === 'done' || prev.live.status === 'aborted' || prev.live.status === 'error') &&
+        event.type !== 'suggestions'
+      ) {
+        return {};
+      }
+      if (event.type === 'start') {
+        if (event.sessionId !== prev.agentSessionId) return {};
+        if (prev.live.turnId && prev.live.turnId !== event.turnId) return {};
+      } else if ((event.type === 'done' || event.type === 'aborted') && prev.live.turnId && prev.live.turnId !== event.turnId) {
+        return {};
+      }
       // 只浅拷 live 本身；tools/plan/timeline/memories 仅在对应事件真正改动时才换新引用，
       // 没变就沿用旧引用——这样流式期间 memo 化的工具卡/计划卡/历史消息不会被无谓重渲染。
       const live = { ...prev.live };
@@ -1236,6 +1443,7 @@ export const useApp = create<AppStore>((set, get) => ({
       const committedText = () => live.timeline.filter((item) => item.kind === 'text').map((item) => item.text).join('\n\n');
       switch (event.type) {
         case 'start':
+          live.turnId = event.turnId;
           live.status = 'streaming';
           break;
         case 'text_delta':
@@ -1336,12 +1544,12 @@ export const useApp = create<AppStore>((set, get) => ({
           live.status = 'done';
           live.stop = event.stop ?? 'end_turn';
           live.endedAt = Date.now();
-          break;
+          return { live, ...NO_APPROVAL };
         case 'aborted':
           live.status = 'aborted';
           live.abortCause = event.cause ?? 'user';
           live.endedAt = Date.now();
-          break;
+          return { live, ...NO_APPROVAL };
         case 'error':
           live.status = 'error';
           live.error = event.message;
@@ -1358,32 +1566,57 @@ export const useApp = create<AppStore>((set, get) => ({
     if (event.type === 'error') get().notify('error', get().t('agentError'), event.message);
   },
 
-  sendAgent: async (text, mode, images) => {
+  sendAgent: async (text, mode, images, onAccepted, signal) => {
     const trimmed = text.trim();
-    if (!trimmed) return;
-    if (get().live && (get().live!.status === 'streaming' || get().live!.status === 'awaiting')) {
+    if (!trimmed || signal?.aborted) return false;
+    if (agentScopeLocked() || currentTurn?.phase === 'creating' || (currentTurn?.abortRequested && currentTurn.abortConfirmed !== true)) {
       get().notify('warning', tr("Agent 正在运行，请先停止"));
-      return;
+      return false;
+    }
+    const connectionId = get().activeConnectionId;
+    const database = get().agentDatabase || undefined;
+    const controller = new AbortController();
+    const turn: AgentTurn = { generation: ++turnSeq, phase: 'creating', cancelled: false, abortRequested: false, controller };
+    const cancelRequest = () => {
+      controller.abort();
+      if (!isCurrentTurn(turn)) return;
+      if (turn.phase === 'creating') invalidateTurn(turn);
+      else if (!turn.abortRequested) void get().abortAgent();
+    };
+    signal?.addEventListener('abort', cancelRequest, { once: true });
+    currentTurn = turn;
+    currentAbort = controller;
+    if (signal?.aborted) cancelRequest();
+    if (!isCurrentTurn(turn)) {
+      signal?.removeEventListener('abort', cancelRequest);
+      return false;
     }
     let sessionId = get().agentSessionId;
-    const batcher = createEventBatcher((event) => get().handleAgentEvent(event));
+    let accepted = false;
+    const previousLive = get().live;
+    const batcher = createEventBatcher((event) => get().handleAgentEvent(event), () => ownsLive(turn));
+    set({ agentStarting: true, agentStartingGeneration: turn.generation, agentStopUnconfirmed: false });
     try {
       if (!sessionId) {
-        const { session } = await api.createSession({
-          connectionId: get().activeConnectionId,
-          database: get().agentDatabase || undefined,
-          permissionMode: mode ?? get().agentMode,
-        });
+        const { session } = await api.createSession({ connectionId, database, permissionMode: mode ?? get().agentMode }, controller.signal);
+        if (!isCurrentTurn(turn) || get().activeConnectionId !== connectionId || (get().agentDatabase || undefined) !== database) return false;
         sessionId = session.id;
+        turn.sessionId = sessionId;
         set({ agentSessionId: session.id, agentSessionMeta: session, agentMessages: [] });
-        await get().refreshSessions();
+      } else {
+        turn.sessionId = sessionId;
       }
+      if (!isCurrentTurn(turn) || get().agentSessionId !== sessionId) return false;
       const permission = mode ?? get().agentMode;
+      turn.phase = 'streaming';
       set({
         agentMode: permission,
+        agentStarting: false,
+        agentStartingGeneration: undefined,
         ...NO_APPROVAL,
         agentFollowUps: [],
         live: {
+          generation: turn.generation,
           userText: trimmed,
           text: '',
           thinking: '',
@@ -1406,46 +1639,63 @@ export const useApp = create<AppStore>((set, get) => ({
         },
       });
       const attachments = [...new Set([...trimmed.matchAll(/@([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]))];
-      batcher.reset();
-      currentAbort = new AbortController();
       await streamTurn(
         sessionId,
-        { text: trimmed, mode: permission, attachments, ...(images?.length ? { images } : {}), connectionId: get().activeConnectionId, database: get().agentDatabase || undefined },
-        (event) => batcher.dispatch(event),
-        currentAbort.signal,
+        { text: trimmed, mode: permission, attachments, ...(images?.length ? { images } : {}), connectionId, database },
+        (event) => {
+          if (!accepted && event.type !== 'error' && ownsLive(turn)) {
+            accepted = true;
+            onAccepted?.();
+          }
+          batcher.dispatch(event);
+        },
+        controller.signal,
       );
+      if (!accepted && !turn.abortRequested && ownsLive(turn)) set({ live: previousLive });
+      return accepted;
     } catch (err) {
-      if ((err as Error)?.name !== 'AbortError') {
+      if (turn.abortConfirmation) await turn.abortConfirmation;
+      if ((err as Error)?.name !== 'AbortError' && ownsTurnSession(turn)) {
         get().notify('error', get().t('agentError'), errorText(err));
-        // 通道静默到上限（客户端自己断的）与截断同族：事没做完，要给「继续」。
-        // 不认这一条的话，这条路径上只有红色的失败文案，用户照样不知道下一步做什么。
-        const channelIdle = (err as { code?: string })?.code === 'TURN_CHANNEL_IDLE';
-        set((prev) =>
-          prev.live
-            ? { live: { ...prev.live, status: 'error' as const, error: errorText(err), endedAt: Date.now(), ...(channelIdle ? { stop: 'channel_idle' as const } : {}) } }
+        if (accepted && ownsLive(turn)) {
+          const channelIdle = (err as { code?: string })?.code === 'TURN_CHANNEL_IDLE';
+          set((prev) => prev.live && (prev.live.status === 'streaming' || prev.live.status === 'awaiting')
+            ? { live: { ...prev.live, status: 'error', error: errorText(err), endedAt: Date.now(), ...(channelIdle ? { stop: 'channel_idle' as const } : {}) }, ...NO_APPROVAL }
             : {},
-        );
+          );
+        } else if (!accepted && ownsLive(turn)) {
+          set({ live: previousLive });
+        }
       }
+      return accepted;
     } finally {
-      // 把节流窗口里还没落地的最后一段 delta 补进 live，再收尾（拉历史/定稿）。
+      if (turn.abortConfirmation) await turn.abortConfirmation;
+      turn.phase = 'settling';
       batcher.flush();
-      currentAbort = undefined;
-      const startedAt = get().live?.startedAt;
-      const sid = get().agentSessionId;
-      if (sid) {
+      if (turn.controller && currentAbort === turn.controller) currentAbort = undefined;
+      const startedAt = ownsLive(turn) ? get().live?.startedAt : undefined;
+      if (accepted && sessionId && ownsLive(turn) && (!turn.abortRequested || turn.abortConfirmed)) {
         try {
-          const detail = await api.getSession(sid);
-          // 本地模型几十毫秒就结束，状态条会闪一下；至少展示 320ms，避免看不见也看不清。
-          const remaining = startedAt ? Math.max(0, 320 - (Date.now() - startedAt)) : 0;
-          if (remaining) await new Promise((resolve) => setTimeout(resolve, remaining));
-          // 等待期间用户可能已切到新会话/另一条会话，旧回合的收尾结果不能再写回。
-          if (get().agentSessionId === sid) set({ agentSessionMeta: detail.session, agentMessages: detail.messages, live: undefined });
+          let detail = await api.getSession(sessionId, controller.signal);
+          // SSE 干净 EOF 只说明通道关了，不代表服务端回合已结束。第一次详情仍是
+          // running 就保留 live/停止入口，320ms 后重新 GET，绝不用等待前的快照收尾。
+          if (detail.session.status === 'running' && !turn.abortRequested && ownsLive(turn)) {
+            await new Promise((resolve) => setTimeout(resolve, TURN_SETTLE_GRACE_MS));
+            if (!turn.abortRequested && ownsLive(turn)) detail = await api.getSession(sessionId, controller.signal);
+          }
+          // 等待期间用户点了停止但确认失败时，不能拿旧详情把错误态和重试入口清掉。
+          if (ownsLive(turn) && !(turn.abortRequested && turn.abortConfirmed !== true)) {
+            if (detail.session.status === 'running' && !turn.abortRequested) {
+              // 本地流已断而服务端仍明确在跑：继续锁住作用域，并保留重试停止入口。
+              set({ agentStopUnconfirmed: true });
+            } else {
+              const remaining = startedAt ? Math.max(0, TURN_SETTLE_GRACE_MS - (Date.now() - startedAt)) : 0;
+              if (remaining) await new Promise((resolve) => setTimeout(resolve, remaining));
+              if (ownsLive(turn)) set({ agentSessionMeta: detail.session, agentMessages: detail.messages, live: undefined });
+            }
+          }
         } catch {
-          // 拉不回历史时保留 live 是对的，但不能原样保留：status 还停在 streaming，
-          // 界面就会一直转圈且没有任何解释——正是「莫名其妙停了、图标还在转」这一类。
-          // 就地定稿，并把原因写成一条错误，让用户看得见也复制得走。
-          const sidNow = get().agentSessionId;
-          if (sidNow === sid) {
+          if (ownsLive(turn)) {
             const live = get().live;
             if (live && (live.status === 'streaming' || live.status === 'awaiting')) {
               set({
@@ -1460,31 +1710,106 @@ export const useApp = create<AppStore>((set, get) => ({
           }
         }
       }
-      await get().refreshSessions();
-      // 把回合内积攒的结构变更派发出去。注意 flushSchemaChanges 里全是
-      // fire-and-forget 的 loadSchema：这里 await 到的是"派发完成"，不是"拉取完成"。
-      // 结构展示由 schemaLoading 状态驱动，不需要在这一行等它。
-      await get().flushSchemaChanges();
+      if (currentTurn === turn) {
+        const abortUnconfirmed = turn.abortRequested && turn.abortConfirmed !== true;
+        if (!abortUnconfirmed) {
+          currentTurn = undefined;
+          await get().refreshSessions();
+          await get().flushSchemaChanges();
+        }
+        if (get().agentStartingGeneration === turn.generation) set({ agentStarting: false, agentStartingGeneration: undefined });
+      }
+      signal?.removeEventListener('abort', cancelRequest);
     }
   },
 
   abortAgent: async () => {
-    // 先本地断流：后端失联时 POST /abort 会一直挂住，本地 abort 立即停止读取与渲染，
-    // 用户点「停止」马上生效；POST 只是通知后端收尾，失败也静默（本地已经断了）。
-    currentAbort?.abort();
-    const sessionId = get().agentSessionId;
-    if (!sessionId) return;
-    try {
-      await api.abort(sessionId);
-    } catch {
-      /* 本地已断流，POST 失败不再打扰用户 */
+    let turn = currentTurn;
+    if (!turn) {
+      const state = get();
+      if (!state.agentStopUnconfirmed || !state.agentSessionId || !state.live) return true;
+      turn = {
+        generation: state.live.generation,
+        sessionId: state.agentSessionId,
+        phase: 'settling',
+        cancelled: false,
+        abortRequested: true,
+        abortConfirmed: false,
+      };
+      currentTurn = turn;
     }
+    if (turn.phase === 'creating') {
+      invalidateTurn(turn);
+      turn.controller?.abort();
+      return false;
+    }
+    if (!turn.sessionId || !ownsLive(turn)) return false;
+    const retryUnconfirmed = turn.abortRequested && turn.abortConfirmed === false;
+    const live = get().live;
+    if (!retryUnconfirmed && live && (live.status === 'done' || live.status === 'aborted' || live.status === 'error')) {
+      turn.controller?.abort();
+      set({ ...NO_APPROVAL, agentStopUnconfirmed: false });
+      return true;
+    }
+    if (!retryUnconfirmed && turn.abortRequested) {
+      if (turn.abortConfirmation) await turn.abortConfirmation;
+      return turn.abortConfirmed === true;
+    }
+    const sessionId = turn.sessionId;
+    turn.abortRequested = true;
+    turn.abortConfirmation = (async () => {
+      try {
+        await api.abort(sessionId);
+        turn.abortConfirmed = true;
+        const wasUnconfirmed = get().agentStopUnconfirmed;
+        set((prev) => ({
+          agentStopUnconfirmed: false,
+          live: prev.live && (prev.live.status === 'streaming' || prev.live.status === 'awaiting' || wasUnconfirmed)
+            ? { ...prev.live, status: 'aborted', abortCause: 'user', error: undefined, endedAt: Date.now() }
+            : prev.live,
+          ...NO_APPROVAL,
+        }));
+      } catch (err) {
+        const current = get().live;
+        const alreadySettled = ownsLive(turn) && current && (
+          current.status === 'done' || current.status === 'aborted' || (current.status === 'error' && !get().agentStopUnconfirmed)
+        );
+        if (alreadySettled) {
+          turn.abortConfirmed = true;
+          set({ ...NO_APPROVAL, agentStopUnconfirmed: false });
+          return;
+        }
+        turn.abortConfirmed = false;
+        const message = tr("本地连接已停止，但未能确认服务端是否结束；请稍后重试停止。");
+        if (ownsLive(turn)) {
+          set((prev) => ({
+            agentStopUnconfirmed: true,
+            live: prev.live ? { ...prev.live, status: 'error', error: message, endedAt: Date.now() } : prev.live,
+            ...NO_APPROVAL,
+          }));
+        } else {
+          set({ agentStopUnconfirmed: true });
+        }
+        get().notify('error', tr("停止请求未确认"), `${message} ${errorText(err)}`);
+      }
+    })();
+    turn.controller?.abort();
+    await turn.abortConfirmation;
+    const confirmed = turn.abortConfirmed === true;
+    if (confirmed && turn.phase === 'settling') {
+      invalidateTurn(turn);
+      void get().refreshSessions();
+      void get().flushSchemaChanges();
+    }
+    return confirmed;
   },
 
   resolveApproval: async (decision, scope) => {
     const approval = get().approval;
     if (!approval) return;
     const approvalId = approval.approvalId;
+    const generation = get().live?.generation;
+    const sessionId = get().agentSessionId;
     try {
       await api.approve(approvalId, decision, scope);
     } catch (err) {
@@ -1499,6 +1824,7 @@ export const useApp = create<AppStore>((set, get) => ({
     // 并在弹窗显示，无差别清空会把那一个一起抹掉——它会挂到 5 分钟超时被自动拒绝，
     // 表现为「后面的提问弹窗弹不出来」。
     set((prev) => {
+      if (prev.agentSessionId !== sessionId || prev.live?.generation !== generation) return {};
       const settled = settleApproval(prev, approvalId);
       // 槽位里还压着下一条（刚从队列提上来，或本来就是别的 id 挂在屏上）时，
       // 状态仍是「等用户」，不能闪回 streaming —— 与 SSE 的 approval_resolved 同一条规则，

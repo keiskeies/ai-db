@@ -1,5 +1,5 @@
 import type { LlmProvider, ProviderEvent, ProviderMessage, ProviderRequest, ToolCall } from '../types';
-import { isPrivateEndpoint, joinUrl, mapHttpError, normalizeCacheUsage, ProviderError, readSse, resolveStallMs, watchRequestStall } from './common';
+import { isPrivateEndpoint, joinUrl, mapHttpError, normalizeCacheUsage, parseToolArguments, ProviderError, providerStreamError, readResponseText, readSse, resolveStallMs, watchRequestStall } from './common';
 import { DEFAULT_MAX_OUTPUT_TOKENS } from './profile';
 
 /** 从 OpenAI 兼容响应的 usage 里取缓存命中量；各家字段位置不同，这里统一认。 */
@@ -118,24 +118,30 @@ export class OpenAIProvider implements LlmProvider {
         throw new ProviderError(`无法连接模型接口：${err.message}`, { code: 'PROVIDER_NETWORK', retryable: true });
       });
       requestWatch.clear();
-      if (!res.ok || !res.body) throw mapHttpError(res.status, await res.text(), res.headers.get('retry-after'));
+      if (!res.ok) {
+        const body = res.body ? await readResponseText(res.body, { signal: requestWatch.signal, stallMs }) : '';
+        throw mapHttpError(res.status, body, res.headers.get('retry-after'));
+      }
+      if (!res.body) throw providerStreamError('模型接口未返回流式响应');
 
       const calls = new Map<number, { id: string; name: string; args: string }>();
       let tokensIn = 0;
       let tokensOut = 0;
       let cacheHitTokens: number | undefined;
       let cacheMissTokens: number | undefined;
-      let stopReason = 'stop';
+      let stopReason: string | undefined;
+      let terminated = false;
 
-      for await (const frame of readSse(res.body, { stallMs: resolveStallMs(this.cfg.stallMs) })) {
+      for await (const frame of readSse(res.body, { stallMs })) {
         if (!frame.data) continue;
-        if (frame.data === '[DONE]') break;
+        if (frame.data === '[DONE]') { terminated = true; break; }
         let evt: any;
         try {
           evt = JSON.parse(frame.data);
         } catch {
-          continue;
+          throw providerStreamError('模型接口返回了无效的 SSE JSON');
         }
+        if (!evt || typeof evt !== 'object' || Array.isArray(evt)) throw providerStreamError('模型接口返回了无效的 SSE 事件');
         if (evt.usage) {
           tokensIn = evt.usage.prompt_tokens ?? tokensIn;
           tokensOut = evt.usage.completion_tokens ?? tokensOut;
@@ -161,17 +167,19 @@ export class OpenAIProvider implements LlmProvider {
         if (choice.finish_reason) stopReason = choice.finish_reason;
       }
 
+      if (!terminated) throw providerStreamError('模型流意外 EOF，缺少 [DONE] 终止帧');
+
       for (const slot of [...calls.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v)) {
-        if (!slot.name) continue;
+        if (!slot.name) throw providerStreamError('模型返回的工具调用缺少函数名');
         const call: ToolCall = {
           id: slot.id || `call_${Math.random().toString(36).slice(2, 10)}`,
           name: slot.name,
-          args: safeJson(slot.args),
+          args: parseToolArguments(slot.args, 'OpenAI 兼容接口', slot.name),
         };
         yield { type: 'tool_call', call };
       }
       yield { type: 'usage', tokensIn, tokensOut, ...normalizeCacheUsage(tokensIn, cacheHitTokens, cacheMissTokens) };
-      yield { type: 'done', stopReason };
+      yield { type: 'done', stopReason: stopReason ?? (calls.size ? 'tool_calls' : 'stop') };
     } catch (err) {
       // 绝对截止在 body 读取期间触发时，readSse 抛出的只是 AbortError，真因同样在 signal.reason
       const reason = requestWatch.signal?.reason;
@@ -180,15 +188,5 @@ export class OpenAIProvider implements LlmProvider {
     } finally {
       requestWatch.dispose();
     }
-  }
-}
-
-function safeJson(text: string): Record<string, unknown> {
-  if (!text?.trim()) return {};
-  try {
-    const parsed = JSON.parse(text);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
   }
 }

@@ -11,6 +11,7 @@ import {
   type McpServerInfo,
   type ToolResult,
 } from '@aidb/core';
+import { Agent } from 'undici';
 import type { McpTool } from './mcp';
 import { killTree } from './processTree';
 import type { Store } from './store';
@@ -1226,14 +1227,15 @@ function blockedHostName(host: string): boolean {
   );
 }
 
-async function assertPublicUrl(url: URL): Promise<void> {
+/** 校验 URL 并返回本次连接必须使用的已校验地址；域名只解析一次。 */
+export async function assertPublicUrl(url: URL): Promise<string> {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') failure(`只支持 http/https：${url.protocol}`, 'MCP_URL_DENIED');
   if (url.username || url.password) failure('URL 不能携带用户名或密码', 'MCP_URL_DENIED');
   const host = url.hostname.replace(/^\[|\]$/g, '');
   if (blockedHostName(host)) failure(`禁止访问本机/内网地址：${host}`, 'MCP_URL_DENIED');
   if (isIP(host) !== 0) {
     if (isPrivateIp(host)) failure(`禁止访问内网地址：${host}`, 'MCP_URL_DENIED');
-    return;
+    return host;
   }
   let addresses;
   try {
@@ -1241,9 +1243,21 @@ async function assertPublicUrl(url: URL): Promise<void> {
   } catch {
     failure(`域名解析失败：${host}`, 'MCP_DNS_FAILED');
   }
+  if (!addresses.length) failure(`域名解析失败：${host}`, 'MCP_DNS_FAILED');
   for (const address of addresses) {
     if (isPrivateIp(address.address)) failure(`域名解析到内网地址，已拒绝：${host} → ${address.address}`, 'MCP_URL_DENIED');
   }
+  return addresses[0].address;
+}
+
+function pinnedAgent(address: string): Agent {
+  const family = isIP(address);
+  return new Agent({
+    connect: {
+      // 不把 URL 重新交给系统解析。URL/hostname 与 TLS SNI 仍保留原域名，仅 TCP 目标固定为上面的 IP。
+      lookup: (_hostname, _options, callback) => callback(null, address, family),
+    },
+  });
 }
 
 function hostAllowed(url: URL, patterns: string[]): boolean {
@@ -1342,45 +1356,54 @@ async function runWebTool(
     failure(`URL 格式不正确：${raw}`, 'MCP_INVALID_ARGS');
   }
   const patterns = serverArgs.map((value) => normalizeHostPattern(value));
-  if (!hostAllowed(url, patterns)) failure(`域名不在允许列表内：${url.hostname}`, 'MCP_URL_DENIED');
   const maxChars = argInt(input, 'maxChars', 20_000, 500, 200_000);
   let current = url;
   for (let hop = 0; hop <= 5; hop += 1) {
-    await assertPublicUrl(current);
-    let response: Response;
+    // allowlist 与 SSRF 校验必须作用于每一跳，而不是只检查用户给出的首个 URL。
+    if (!hostAllowed(current, patterns)) failure(`域名不在允许列表内：${current.hostname}`, 'MCP_URL_DENIED');
+    const address = await assertPublicUrl(current);
+    const dispatcher = pinnedAgent(address);
     try {
-      response = await fetch(current, {
-        redirect: 'manual',
-        signal: AbortSignal.timeout(20_000),
-        headers: { 'user-agent': 'AiDB-Studio/0.1 (+local)', accept: 'text/html,application/json,text/plain,*/*' },
-      });
-    } catch (err: any) {
-      failure(`请求失败：${err?.message ?? current}`, 'MCP_FETCH_FAILED');
+      let response: Response;
+      try {
+        response = await fetch(current, {
+          redirect: 'manual',
+          signal: AbortSignal.timeout(20_000),
+          headers: { 'user-agent': 'AiDB-Studio/0.1 (+local)', accept: 'text/html,application/json,text/plain,*/*' },
+          // Node fetch 在运行时使用 undici dispatcher；类型断言只补上 @types/node 未声明的字段。
+          dispatcher,
+        } as RequestInit & { dispatcher: Agent });
+      } catch (err: any) {
+        failure(`请求失败：${err?.message ?? current}`, 'MCP_FETCH_FAILED');
+      }
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const location = response.headers.get('location');
+        if (!location) failure(`重定向缺少 Location：HTTP ${response.status}`, 'MCP_FETCH_FAILED');
+        await response.body?.cancel().catch(() => undefined);
+        current = new URL(location, current);
+        continue;
+      }
+      if (!response.ok) failure(`HTTP ${response.status} ${response.statusText}`.trim(), 'MCP_FETCH_STATUS');
+      const contentType = response.headers.get('content-type') ?? '';
+      const body = await readCappedBody(response, MAX_WEB_BYTES);
+      const isHtml = /html|xml/i.test(contentType);
+      const isText = isHtml || /text\/|json|javascript|yaml|csv/i.test(contentType) || !contentType;
+      if (!isText) failure(`不支持的内容类型：${contentType || '未知'}`, 'MCP_FETCH_TYPE');
+      const text = isHtml ? htmlToText(body.text) : body.text;
+      const clipped = text.slice(0, maxChars);
+      return {
+        summary: `抓取 ${current.host} · HTTP ${response.status} · ${clipped.length} 字符${body.truncated || text.length > maxChars ? '（已截断）' : ''}`,
+        data: {
+          url: current.toString(),
+          status: response.status,
+          contentType,
+          text: clipped,
+          truncated: body.truncated || text.length > maxChars,
+        },
+      };
+    } finally {
+      await dispatcher.destroy();
     }
-    if ([301, 302, 303, 307, 308].includes(response.status)) {
-      const location = response.headers.get('location');
-      if (!location) failure(`重定向缺少 Location：HTTP ${response.status}`, 'MCP_FETCH_FAILED');
-      current = new URL(location, current);
-      continue;
-    }
-    if (!response.ok) failure(`HTTP ${response.status} ${response.statusText}`.trim(), 'MCP_FETCH_STATUS');
-    const contentType = response.headers.get('content-type') ?? '';
-    const body = await readCappedBody(response, MAX_WEB_BYTES);
-    const isHtml = /html|xml/i.test(contentType);
-    const isText = isHtml || /text\/|json|javascript|yaml|csv/i.test(contentType) || !contentType;
-    if (!isText) failure(`不支持的内容类型：${contentType || '未知'}`, 'MCP_FETCH_TYPE');
-    const text = isHtml ? htmlToText(body.text) : body.text;
-    const clipped = text.slice(0, maxChars);
-    return {
-      summary: `抓取 ${current.host} · HTTP ${response.status} · ${clipped.length} 字符${body.truncated || text.length > maxChars ? '（已截断）' : ''}`,
-      data: {
-        url: current.toString(),
-        status: response.status,
-        contentType,
-        text: clipped,
-        truncated: body.truncated || text.length > maxChars,
-      },
-    };
   }
   failure('重定向次数过多', 'MCP_FETCH_REDIRECT');
 }

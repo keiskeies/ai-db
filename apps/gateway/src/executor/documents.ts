@@ -25,7 +25,13 @@ export const createCollectionTool = defineTool('create_collection', async (call,
       fields,
       edge: a.edge === true,
     },
-    { database: s.databaseOf(call, conn), timeoutMs: settings.queryTimeoutMs, actor: 'agent' },
+    {
+      database: s.databaseOf(call, conn),
+      timeoutMs: settings.queryTimeoutMs,
+      actor: 'agent',
+      executionId: ctx.executionId,
+      signal: ctx.signal,
+    },
   );
   const kindLabel = result.kind === 'index' ? '索引' : result.kind === 'edge_label' ? '边集合' : '集合';
   return ok(started, `已创建${kindLabel} ${result.name}`, result);
@@ -44,6 +50,8 @@ export const deleteCollectionTool = defineTool('delete_collection', async (call,
     database: s.databaseOf(call, conn),
     timeoutMs: s.getSettings().queryTimeoutMs,
     actor: 'agent',
+    executionId: ctx.executionId,
+    signal: ctx.signal,
   });
   return ok(started, `已删除集合 ${result.name}`, result);
 });
@@ -63,7 +71,13 @@ export const upsertDocumentTool = defineTool('upsert_document', async (call, ctx
   const result = await s.manager.writeDocuments(
     conn.id,
     { collection, documents },
-    { database: s.databaseOf(call, conn), timeoutMs: settings.queryTimeoutMs, actor: 'agent' },
+    {
+      database: s.databaseOf(call, conn),
+      timeoutMs: settings.queryTimeoutMs,
+      actor: 'agent',
+      executionId: ctx.executionId,
+      signal: ctx.signal,
+    },
   );
   return ok(started, `写入 ${result.upserted} 条`, result);
 });
@@ -85,6 +99,8 @@ export const writeLineProtocolTool = defineTool('write_line_protocol', async (ca
     database: s.databaseOf(call, conn),
     timeoutMs: s.getSettings().queryTimeoutMs,
     actor: 'agent',
+    executionId: ctx.executionId,
+    signal: ctx.signal,
   });
   return ok(started, `写入 ${result.written} 行`, result);
 });
@@ -106,6 +122,8 @@ export const importDocumentsTool = defineTool('import_documents', async (call, c
     delimiter: typeof a.delimiter === 'string' ? a.delimiter : undefined,
     idColumn: typeof a.idColumn === 'string' ? a.idColumn : undefined,
     vectorColumn: typeof a.vectorColumn === 'string' ? a.vectorColumn : undefined,
+    executionId: ctx.executionId,
+    signal: ctx.signal,
   });
   return ok(started, `导入 ${result.imported} 条`, result);
 });
@@ -122,7 +140,13 @@ export const deleteDocumentsTool = defineTool('delete_documents', async (call, c
   const result = await s.manager.deleteDocuments(
     conn.id,
     { collection, ids },
-    { database: s.databaseOf(call, conn), timeoutMs: settings.queryTimeoutMs, actor: 'agent' },
+    {
+      database: s.databaseOf(call, conn),
+      timeoutMs: settings.queryTimeoutMs,
+      actor: 'agent',
+      executionId: ctx.executionId,
+      signal: ctx.signal,
+    },
   );
   return ok(started, `删除 ${result.deleted} 条`, result);
 });

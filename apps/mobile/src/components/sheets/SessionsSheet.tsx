@@ -1,15 +1,29 @@
 import type { Dispatch, SetStateAction } from 'react';
 import { Modal, Pressable, ScrollView, View } from 'react-native';
 import { Archive, ArchiveRestore, Pencil, Plus, Search, TerminalSquare, Trash2, X } from 'lucide-react-native';
-import { type AgentMessage, type AgentSessionMeta } from '@aidb/core';
-import type { BridgeClient } from '../../bridge';
+import type { AgentSessionMeta } from '@aidb/core';
 import { colors, modeLabels } from '../../theme';
 import { styles } from '../../styles';
-import { notify, timeAgo } from '../../lib/utils';
+import { timeAgo } from '../../lib/utils';
 import type { PickerKind, RenameTarget, EdgeInsets } from '../../types';
 import { Text, TextInput } from '../../components/base';
 
-export function SessionsSheet({ setPicker, insets, newSession, sessionQuery, setSessionQuery, sessionView, setSessionView, sessions, archivedSessions, sessionId, openSession, client, refreshSessions, refreshArchivedSessions, setSessionId, setSessionMeta, setMessages, setRenameTarget, deleteSession }: { setPicker: Dispatch<SetStateAction<PickerKind>>; insets: EdgeInsets; newSession: () => Promise<void>; sessionQuery: string; setSessionQuery: Dispatch<SetStateAction<string>>; sessionView: 'active' | 'archived'; setSessionView: Dispatch<SetStateAction<'active' | 'archived'>>; sessions: AgentSessionMeta[]; archivedSessions: AgentSessionMeta[]; sessionId: string | undefined; openSession: (id: string) => Promise<void>; client: BridgeClient; refreshSessions: () => Promise<void>; refreshArchivedSessions: () => Promise<void>; setSessionId: Dispatch<SetStateAction<string | undefined>>; setSessionMeta: Dispatch<SetStateAction<AgentSessionMeta | undefined>>; setMessages: Dispatch<SetStateAction<AgentMessage[]>>; setRenameTarget: Dispatch<SetStateAction<RenameTarget | null>>; deleteSession: (id: string) => Promise<void>; }) {
+export function SessionsSheet({ setPicker, insets, newSession, sessionQuery, setSessionQuery, sessionView, setSessionView, sessions, archivedSessions, sessionId, openSession, setRenameTarget, deleteSession, archiveSession }: {
+  setPicker: Dispatch<SetStateAction<PickerKind>>;
+  insets: EdgeInsets;
+  newSession: () => Promise<void>;
+  sessionQuery: string;
+  setSessionQuery: Dispatch<SetStateAction<string>>;
+  sessionView: 'active' | 'archived';
+  setSessionView: Dispatch<SetStateAction<'active' | 'archived'>>;
+  sessions: AgentSessionMeta[];
+  archivedSessions: AgentSessionMeta[];
+  sessionId: string | undefined;
+  openSession: (id: string) => Promise<void>;
+  setRenameTarget: Dispatch<SetStateAction<RenameTarget | null>>;
+  deleteSession: (id: string) => Promise<void>;
+  archiveSession: (id: string, archived: boolean) => Promise<void>;
+}) {
   return (
         <Modal visible transparent animationType="slide" onRequestClose={() => setPicker(null)}>
           <View style={styles.modalBackdrop}>
@@ -56,20 +70,7 @@ export function SessionsSheet({ setPicker, insets, newSession, sessionQuery, set
                         testID={`m-session-archive-${session.id}`}
                         hitSlop={8}
                         style={{ paddingHorizontal: 6 }}
-                        onPress={async () => {
-                          try {
-                            await client.updateSession(session.id, { archived: sessionView === 'active' });
-                            await refreshSessions();
-                            await refreshArchivedSessions();
-                            if (sessionView === 'active' && sessionId === session.id) {
-                              setSessionId(undefined);
-                              setSessionMeta(undefined);
-                              setMessages([]);
-                            }
-                          } catch (err: any) {
-                            notify('操作失败', err?.message ?? '');
-                          }
-                        }}
+                        onPress={() => void archiveSession(session.id, sessionView === 'active')}
                       >
                         {sessionView === 'active' ? <Archive size={13} color={colors.muted} /> : <ArchiveRestore size={13} color={colors.muted} />}
                       </Pressable>

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import {
   PIPELINE_STEP_KINDS,
@@ -16,6 +17,7 @@ import type { Store } from '../store';
 import { runPipeline } from '../pipeline/runner';
 import { checkPython } from '../pipeline/script';
 import { PipelineAbortedError, PipelineError } from '../pipeline/types';
+import { requestExecution } from '../routes/shared';
 
 /**
  * 数据流处理的 REST 层。
@@ -60,6 +62,8 @@ export interface ExecuteOptions {
   uptoIndex?: number;
   onEvent?: (event: PipelineEvent) => void;
   shouldAbort?: () => boolean;
+  signal?: AbortSignal;
+  executionId?: string;
   /** 定时任务用调度时刻作为批次时间，同一批次重跑得到同样的窗口。 */
   batchAt?: string;
   /** 试运行不落历史、不回写断点，也不记写入审计。 */
@@ -70,7 +74,7 @@ export function createPipelinesRouter(deps: PipelinesDeps): Router {
   const { store, manager, config } = deps;
   const router = Router();
   /** 正在运行的流水线：同一条不并发跑，取消靠这里传信号。 */
-  const active = new Map<string, { aborted: boolean }>();
+  const active = new Map<string, { aborted: boolean; controller: AbortController }>();
 
   const requireEnabled = () => {
     if (store.getSettings().features.pipelines !== true) throw badRequest('数据流处理功能已在设置里关闭', 'PIPELINE_FEATURE_DISABLED');
@@ -78,15 +82,20 @@ export function createPipelinesRouter(deps: PipelinesDeps): Router {
 
   const execute = async (pipeline: PipelineInfo, options: ExecuteOptions): Promise<PipelineRunInfo> => {
     if (active.has(pipeline.id)) throw Object.assign(new Error('这条流水线正在运行'), { code: 'PIPELINE_BUSY', status: 409 });
-    const slot = { aborted: false };
+    const slot = { aborted: false, controller: new AbortController() };
     active.set(pipeline.id, slot);
+    const executionId = options.executionId ?? randomUUID();
+    const signal = options.signal ? AbortSignal.any([options.signal, slot.controller.signal]) : slot.controller.signal;
     try {
       return await runPipelineAndRecord(deps, pipeline, {
         ...options,
+        signal,
+        executionId,
         shouldAbort: () => slot.aborted || options.shouldAbort?.() === true,
       });
     } finally {
       active.delete(pipeline.id);
+      manager.releaseExecution(executionId);
     }
   };
 
@@ -193,21 +202,38 @@ export function createPipelinesRouter(deps: PipelinesDeps): Router {
     requireEnabled();
     const pipeline = mustGet(req.params.id);
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const run = await execute(pipeline, {
-      trigger: 'trial',
-      previewOnly: body.execute !== true,
-      uptoIndex: body.index === undefined ? undefined : Math.max(0, Number(body.index) || 0),
-      params: (body.params as Record<string, unknown>) ?? undefined,
-    });
-    res.json({ run });
+    const execution = requestExecution(manager, res);
+    try {
+      const run = await execute(pipeline, {
+        trigger: 'trial',
+        previewOnly: body.execute !== true,
+        uptoIndex: body.index === undefined ? undefined : Math.max(0, Number(body.index) || 0),
+        params: (body.params as Record<string, unknown>) ?? undefined,
+        signal: execution.signal,
+        executionId: execution.executionId,
+      });
+      if (!res.destroyed && !res.writableEnded) res.json({ run });
+    } finally {
+      execution.release();
+    }
   }));
 
   router.post('/:id/run', ah(async (req, res) => {
     requireEnabled();
     const pipeline = mustGet(req.params.id);
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const run = await execute(pipeline, { trigger: 'manual', params: (body.params as Record<string, unknown>) ?? undefined });
-    res.json({ run });
+    const execution = requestExecution(manager, res);
+    try {
+      const run = await execute(pipeline, {
+        trigger: 'manual',
+        params: (body.params as Record<string, unknown>) ?? undefined,
+        signal: execution.signal,
+        executionId: execution.executionId,
+      });
+      if (!res.destroyed && !res.writableEnded) res.json({ run });
+    } finally {
+      execution.release();
+    }
   }));
 
   router.post('/:id/stream', ah(async (req, res) => {
@@ -219,11 +245,15 @@ export function createPipelinesRouter(deps: PipelinesDeps): Router {
     res.flushHeaders?.();
     let closed = false;
     let finished = false;
+    const controller = new AbortController();
     const heartbeat = setInterval(() => {
       if (!finished && !closed && !res.writableEnded) res.write(': ping\n\n');
     }, 15000);
     res.on('close', () => {
-      if (!res.writableEnded) closed = true;
+      if (!res.writableEnded) {
+        closed = true;
+        controller.abort();
+      }
     });
     const send = (event: PipelineEvent) => {
       if (finished || closed || res.writableEnded) return;
@@ -237,6 +267,7 @@ export function createPipelinesRouter(deps: PipelinesDeps): Router {
         params: (body.params as Record<string, unknown>) ?? undefined,
         onEvent: send,
         shouldAbort: () => closed,
+        signal: controller.signal,
       });
       if (!closed && !res.writableEnded) res.end();
     } catch (err: any) {
@@ -253,7 +284,10 @@ export function createPipelinesRouter(deps: PipelinesDeps): Router {
 
   router.post('/:id/cancel', (req, res) => {
     const slot = active.get(req.params.id);
-    if (slot) slot.aborted = true;
+    if (slot) {
+      slot.aborted = true;
+      slot.controller.abort();
+    }
     res.json({ ok: Boolean(slot) });
   });
 
@@ -277,6 +311,8 @@ export async function runPipelineAndRecord(deps: PipelinesDeps, pipeline: Pipeli
     uptoIndex: options.uptoIndex,
     onEvent: options.onEvent,
     shouldAbort: options.shouldAbort,
+    signal: options.signal,
+    executionId: options.executionId,
   });
   const run = outcome.run;
   if (options.record === false || options.trigger === 'trial') return run;

@@ -15,6 +15,8 @@ export interface ToolContext {
   /** 业务上下文禁用的表：全库扫描类工具必须在源头跳过。 */
   disabledTables?: string[];
   signal?: AbortSignal;
+  /** 本次工具调用在连接管理器中的执行追踪 id。 */
+  executionId?: string;
 }
 
 /** execute() 每次调用时绑定的服务面：实例字段 + 绑定的私有辅助方法 + 本次起始时间。

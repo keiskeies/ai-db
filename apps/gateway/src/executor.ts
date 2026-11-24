@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   addField,
   engineMeta,
@@ -171,14 +172,36 @@ export class ToolExecutor {
         };
       }
     }
+    if (ctx.signal?.aborted) {
+      return { ok: false, summary: '工具执行已取消', error: { code: 'ABORTED', message: '工具执行已取消' }, meta: { durationMs: Date.now() - started } };
+    }
+    const executionId = randomUUID();
+    let aborted = false;
+    const onAbort = () => {
+      aborted = true;
+      this.manager.cancelExecution(executionId);
+    };
+    ctx.signal?.addEventListener('abort', onAbort, { once: true });
     let result: ToolResult;
     try {
-      result = await this.dispatch(call, ctx, started);
+      result = await this.dispatch(call, { ...ctx, executionId }, started);
     } catch (err: any) {
       result = {
         ok: false,
         summary: '工具执行失败',
         error: { code: err?.code ?? 'TOOL_ERROR', message: err?.message ?? '未知错误', hint: err?.hint },
+        data: err?.data,
+        meta: { durationMs: Date.now() - started },
+      };
+    } finally {
+      ctx.signal?.removeEventListener('abort', onAbort);
+      this.manager.releaseExecution(executionId);
+    }
+    if (aborted || ctx.signal?.aborted) {
+      result = {
+        ok: false,
+        summary: '工具执行已取消',
+        error: { code: 'ABORTED', message: '工具执行已取消' },
         meta: { durationMs: Date.now() - started },
       };
     }

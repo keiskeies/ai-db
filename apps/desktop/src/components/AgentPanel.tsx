@@ -1336,6 +1336,10 @@ export function AgentPanel() {
   const notify = useApp((s) => s.notify);
 
   const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
+  const sendRequestRef = useRef<AbortController | undefined>(undefined);
+  const sendOperationSeq = useRef(0);
   const [popover, setPopover] = useState<'none' | 'mention' | 'slash'>('none');
   const [slashIndex, setSlashIndex] = useState(0);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -1421,7 +1425,11 @@ export function AgentPanel() {
       .map((item) => ({ key: item.key, label: item.label, kind: 'preset' as const }));
     return [...commands, ...presets];
   }, [input]);
-  const busy = live?.status === 'streaming' || live?.status === 'awaiting';
+  const agentStarting = useApp((s) => s.agentStarting);
+  const agentStopUnconfirmed = useApp((s) => s.agentStopUnconfirmed);
+  const agentSessionSwitching = useApp((s) => s.agentSessionSwitching);
+  const busy = agentStarting || live?.status === 'streaming' || live?.status === 'awaiting';
+  const scopeLocked = busy || agentStopUnconfirmed || agentSessionSwitching;
   const profile = getModelProfile(settings.agent);
   /** 可下发的档位：value 为空的档位（如 off）与 Default 完全等价（都不带推理参数），不再重复列出。 */
   const tierLevels = profile?.reasoning
@@ -1610,14 +1618,6 @@ export function AgentPanel() {
     textarea.style.height = `${Math.min(140, textarea.scrollHeight)}px`;
   }, [input]);
 
-  if (!agentOpen) return null;
-
-  const activeModelLabel =
-    modelOptions.find((item) => item.configId === settings.agent.activeModelId && item.model === settings.agent.model)?.label ??
-    settings.agent.model;
-  /** 未单独选档位时显示 Default：不下发推理参数，用服务商自己的默认。 */
-  const tierLabel = settings.agent.reasoningTier ?? 'Default';
-  const modeLabel = MODE_OPTIONS.find((m) => m.value === agentMode);
   // 先按「当前连接的当前库」收窄，再按搜索词过滤。
   // 未绑定连接/库的历史会话在 sessionsForScope 里一律放行，不会被藏掉。
   const scopedSessions = useMemo(
@@ -1630,17 +1630,64 @@ export function AgentPanel() {
     return scopedSessions.filter((session) => session.title.toLowerCase().includes(query));
   }, [scopedSessions, sessionQuery]);
 
+  if (!agentOpen) return null;
+
+  const activeModelLabel =
+    modelOptions.find((item) => item.configId === settings.agent.activeModelId && item.model === settings.agent.model)?.label ??
+    settings.agent.model;
+  /** 未单独选档位时显示 Default：不下发推理参数，用服务商自己的默认。 */
+  const tierLabel = settings.agent.reasoningTier ?? 'Default';
+  const modeLabel = MODE_OPTIONS.find((m) => m.value === agentMode);
+
+  const stopAgent = () => {
+    // 先中断组件自己的等待与创建 HTTP，再让 store 确认/中止服务端回合。
+    // 即使底层 fetch 适配器不响应 AbortSignal，组件锁也会由 cancelled 分支立即释放。
+    sendRequestRef.current?.abort();
+    void abortAgent();
+  };
+
+  const sendDraft = async (value: string, images: string[], draftValue = value) => {
+    if (!value || busy || sendingRef.current) return;
+    sendingRef.current = true;
+    const operation = ++sendOperationSeq.current;
+    const controller = new AbortController();
+    sendRequestRef.current = controller;
+    let markAccepted!: () => void;
+    const accepted = new Promise<void>((resolve) => { markAccepted = resolve; });
+    const cancelled = new Promise<void>((resolve) => {
+      if (controller.signal.aborted) resolve();
+      else controller.signal.addEventListener('abort', () => resolve(), { once: true });
+    });
+    setSending(true);
+    try {
+      await Promise.race([
+        sendAgent(value, undefined, images, () => {
+          if (operation !== sendOperationSeq.current) return;
+          setInput((current) => (current === draftValue ? '' : current));
+          setPending((current) => current.filter((item) => !images.includes(item.id)));
+          setPopover('none');
+          markAccepted();
+        }, controller.signal),
+        accepted,
+        cancelled,
+      ]);
+    } finally {
+      // 旧操作迟到收尾不能把新操作的发送锁清掉。
+      if (operation === sendOperationSeq.current) {
+        sendRequestRef.current = undefined;
+        sendingRef.current = false;
+        setSending(false);
+      }
+    }
+  };
+
   const send = () => {
     const value = input.trim();
-    if (!value || busy) return;
+    if (!value || busy || sending) return;
     const token = /^\/([a-zA-Z]+)(?:\s+([\s\S]*))?$/.exec(value);
     // /init 直接在当前会话执行；参数是可选的目录/文件路径，不弹命令表单。
     if (token && token[1].toLowerCase() === 'init') {
-      const images = pending.map((item) => item.id);
-      setInput('');
-      setPending([]);
-      setPopover('none');
-      void sendAgent(value, undefined, images);
+      void sendDraft(value, pending.map((item) => item.id), input);
       return;
     }
     const command = token
@@ -1655,11 +1702,7 @@ export function AgentPanel() {
         textareaRef.current?.focus();
         return;
       }
-      const images = pending.map((item) => item.id);
-      setInput('');
-      setPending([]);
-      setPopover('none');
-      void sendAgent(value, undefined, images);
+      void sendDraft(value, pending.map((item) => item.id), input);
       return;
     }
     const preset = token ? SLASH.find((item) => item.key === `/${token[1]}`) : undefined;
@@ -1673,11 +1716,7 @@ export function AgentPanel() {
       const extra = token?.[2]?.trim();
       text = extra ? tr("{0}\n\n补充要求：{1}", [base, extra]) : base;
     }
-    const images = pending.map((item) => item.id);
-    setInput('');
-    setPending([]);
-    setPopover('none');
-    void sendAgent(text, undefined, images);
+    void sendDraft(text, pending.map((item) => item.id), input);
   };
 
   const onInput = (value: string) => {
@@ -1712,9 +1751,11 @@ export function AgentPanel() {
       return;
     }
     if (key === '/clear') {
-      void newAgentSession();
-      setInput('');
+      const draft = input;
       setPopover('none');
+      void newAgentSession().then((switched) => {
+        if (switched) setInput((current) => (current === draft ? '' : current));
+      });
       return;
     }
     if (SLASH.some((item) => item.key === key)) {
@@ -1791,7 +1832,8 @@ export function AgentPanel() {
           className="mode-select"
           value={activeConnectionId ?? ''}
           onChange={(e) => setActiveConnection(e.target.value || undefined)}
-          title={t('connections')}
+          disabled={scopeLocked}
+          title={scopeLocked ? tr("Agent 正在运行，请先停止") : t('connections')}
         >
           <Option value="">{tr("未选择连接")}</Option>
           {connections.map((c) => (
@@ -1802,6 +1844,7 @@ export function AgentPanel() {
           connectionId={activeConnectionId}
           value={agentDatabase}
           onChange={(db) => void setAgentDatabase(db)}
+          disabled={scopeLocked}
           testId="agent-db"
           className="mode-select"
         />
@@ -1814,7 +1857,7 @@ export function AgentPanel() {
       {homeDatabase && agentDatabase && homeDatabase !== agentDatabase ? (
         <div className="agent-scope-mismatch" data-testid="agent-scope-mismatch">
           {tr(" 首页在看 ")}<b>{homeDatabase}</b>{tr("，Agent 瞄准 ")}<b>{agentDatabase}</b>
-          <button className="btn ghost small" onClick={() => void setAgentDatabase(homeDatabase)}>
+          <button className="btn ghost small" disabled={scopeLocked} onClick={() => void setAgentDatabase(homeDatabase)}>
             {tr(" 对齐到 ")}{homeDatabase}
           </button>
         </div>
@@ -1887,6 +1930,12 @@ export function AgentPanel() {
                   <TurnBody view={turnFromLive(live)} fallbackText={live.text} streaming={busy} running={busy} testId="execution-section-live">
                     {!busy ? <TurnStopNotice live={live} onContinue={() => void sendAgent(tr("继续"), undefined)} /> : null}
                     {live.error ? <div className="risk-banner">{live.error}</div> : null}
+                    {agentStopUnconfirmed ? (
+                      <div className="turn-notice" data-testid="agent-stop-retry">
+                        <span className="turn-notice-text">{tr("服务端是否结束尚未确认，请重试停止后再切换会话或作用域。")}</span>
+                        <button className="btn small" onClick={() => void abortAgent()}>{tr("重试停止")}</button>
+                      </div>
+                    ) : null}
                     {!busy && live.text ? <AnswerActions text={live.text} /> : null}
                     {live.memories.length ? (
                       <details className="memory-refs" data-testid="live-memories">
@@ -2115,12 +2164,12 @@ export function AgentPanel() {
               ) : null}
               <ChevronDown size={10} className="pill-caret" />
             </button>
-            {busy ? (
-              <button className="send-btn stop" onClick={() => void abortAgent()} title={t('stop')} data-testid="agent-stop">
+            {busy || agentStopUnconfirmed ? (
+              <button className="send-btn stop" onClick={stopAgent} title={agentStopUnconfirmed ? tr("重试停止") : t('stop')} data-testid="agent-stop">
                 <Square size={12} />
               </button>
             ) : (
-              <button className="send-btn" onClick={send} disabled={!input.trim()} title={t('send')} data-testid="agent-send">
+              <button className="send-btn" onClick={send} disabled={!input.trim() || sending} title={t('send')} data-testid="agent-send">
                 <ArrowUp size={14} />
               </button>
             )}

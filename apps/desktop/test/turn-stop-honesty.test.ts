@@ -40,6 +40,7 @@ const send = (event: AgentEvent) => state().handleAgentEvent(event);
 const startLive = () => {
   useApp.setState({
     live: {
+      generation: 0,
       userText: '给所有表补注释',
       text: '',
       thinking: '',

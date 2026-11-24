@@ -20,6 +20,7 @@ import { compareData } from './compareData';
 import { runTableOp, type TableOp } from './tableOps';
 import { runDatabaseOp, type DatabaseOp } from './databaseOps';
 import { replaceData } from './replace';
+import { requestExecution } from '../routes/shared';
 
 export interface FeatureDeps {
   store: Store;
@@ -254,17 +255,21 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
       const sourceId = String(input.sourceConnectionId);
       const targetId = String(input.targetConnectionId);
       const started = Date.now();
-      const result = await transferData(store, manager, {
-        sourceId,
-        sourceDatabase: input.sourceDatabase as string | undefined,
-        targetId,
-        targetDatabase: input.targetDatabase as string | undefined,
-        tables: input.tables as string[] | undefined,
-        mode: input.mode === 'replace' ? 'replace' : 'append',
-        createMissing: input.createMissing !== false,
-        limit: typeof input.limit === 'number' ? input.limit : undefined,
-      });
-      store.addAudit({
+      const execution = requestExecution(manager, res);
+      try {
+        const result = await transferData(store, manager, {
+          sourceId,
+          sourceDatabase: input.sourceDatabase as string | undefined,
+          targetId,
+          targetDatabase: input.targetDatabase as string | undefined,
+          tables: input.tables as string[] | undefined,
+          mode: input.mode === 'replace' ? 'replace' : 'append',
+          createMissing: input.createMissing !== false,
+          limit: typeof input.limit === 'number' ? input.limit : undefined,
+          executionId: execution.executionId,
+          signal: execution.signal,
+        });
+        store.addAudit({
         actor: 'user',
         connectionId: targetId,
         database: input.targetDatabase as string | undefined,
@@ -275,7 +280,10 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
         durationMs: Date.now() - started,
         meta: { sourceId, tables: result.results.length, rows: result.totalRows },
       });
-      res.json({ result });
+        res.json({ result });
+      } finally {
+        execution.release();
+      }
     }),
   );
 
@@ -304,6 +312,7 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
       });
       let result: TransferResult | undefined;
       let failure: string | undefined;
+      const execution = requestExecution(manager, res);
       try {
         result = await transferData(store, manager, {
           sourceId,
@@ -316,6 +325,8 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
           limit: typeof input.limit === 'number' ? input.limit : undefined,
           onEvent: send,
           shouldAbort: () => closed,
+          executionId: execution.executionId,
+          signal: execution.signal,
         });
       } catch (err: any) {
         failure = String(err?.message ?? '传输失败');
@@ -343,6 +354,7 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
             error: failure,
           },
         });
+        execution.release();
         if (!res.writableEnded) res.end();
       }
     }),
@@ -354,13 +366,17 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
       const input = capabilityBody('generate', req.body);
       const connectionId = String(input.connectionId);
       const started = Date.now();
-      const result = await generateData(store, manager, {
-        connectionId,
-        database: input.database as string | undefined,
-        table: String(input.table ?? ''),
-        rows: Number(input.rows) || 10,
-        dryRun: input.dryRun === true,
-      });
+      const execution = requestExecution(manager, res);
+      try {
+        const result = await generateData(store, manager, {
+          connectionId,
+          database: input.database as string | undefined,
+          table: String(input.table ?? ''),
+          rows: Number(input.rows) || 10,
+          dryRun: input.dryRun === true,
+          executionId: execution.executionId,
+          signal: execution.signal,
+        });
       store.addAudit({
         actor: 'user',
         connectionId,
@@ -373,7 +389,10 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
         durationMs: Date.now() - started,
         meta: { table: result.table, inserted: result.inserted, dryRun: result.dryRun },
       });
-      res.json({ result });
+        res.json({ result });
+      } finally {
+        execution.release();
+      }
     }),
   );
 
@@ -540,20 +559,28 @@ export function createFeatureRouter(deps: FeatureDeps): Router {
       const conn = store.getConnection(backup.connectionId);
       if (!conn) throw Object.assign(new Error('备份对应的连接不存在'), { code: 'CONNECTION_NOT_FOUND', status: 404 });
       const started = Date.now();
-      const batch = await restoreBackupFile(store, manager, backup.connectionId, backup.path, backup.database);
-      store.addAudit({
-        actor: 'user',
-        connectionId: backup.connectionId,
-        database: backup.database,
-        tool: 'backup.restore',
-        sql: `-- restore ${backup.path}`,
-        risk: 'destructive',
-        approval: 'manual',
-        status: 'ok',
-        durationMs: Date.now() - started,
-        meta: { path: backup.path, bytes: backup.bytes },
-      });
-      res.json({ batch });
+      const execution = requestExecution(manager, res);
+      try {
+        const batch = await restoreBackupFile(store, manager, backup.connectionId, backup.path, backup.database, {
+          signal: execution.signal,
+          executionId: execution.executionId,
+        });
+        store.addAudit({
+          actor: 'user',
+          connectionId: backup.connectionId,
+          database: backup.database,
+          tool: 'backup.restore',
+          sql: `-- restore ${backup.path}`,
+          risk: 'destructive',
+          approval: 'manual',
+          status: 'ok',
+          durationMs: Date.now() - started,
+          meta: { path: backup.path, bytes: backup.bytes },
+        });
+        res.json({ batch });
+      } finally {
+        execution.release();
+      }
     }),
   );
 

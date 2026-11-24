@@ -66,3 +66,12 @@ test('响应头都不给：请求阶段同样被超时掐断', async () => {
   );
   assert.ok(Date.now() - started < 4000);
 });
+
+test('调用方取消立即终止挂死的请求，而不是等到超时', async () => {
+  const controller = new AbortController();
+  const started = Date.now();
+  const pending = httpRequest({ url: `${base}/stall-body`, timeoutMs: 30000, signal: controller.signal });
+  setTimeout(() => controller.abort(), 50);
+  await assert.rejects(pending, (err: any) => err.code === 'PIPELINE_ABORTED');
+  assert.ok(Date.now() - started < 2000);
+});

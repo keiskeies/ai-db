@@ -3,6 +3,7 @@ import { buildInsert, buildSelectTable, quoteIdent, type ColumnInfo, type Engine
 import type { ConnectionManager } from '../manager';
 import type { Store } from '../store';
 import { DbError } from '../drivers';
+import { throwIfAborted } from '../drivers/timeout';
 import { sqlLiteral } from '../services';
 import { connectionSchema, tableRef } from './common';
 
@@ -12,6 +13,8 @@ export interface GenerateOptions {
   table: string;
   rows?: number;
   dryRun?: boolean;
+  executionId?: string;
+  signal?: AbortSignal;
 }
 
 export interface GenerateResult {
@@ -69,10 +72,12 @@ function mockValue(column: ColumnInfo, index: number, engine: Engine): unknown {
 }
 
 export async function generateData(store: Store, manager: ConnectionManager, opts: GenerateOptions): Promise<GenerateResult> {
+  throwIfAborted(opts.signal);
   const conn = store.getConnection(opts.connectionId);
   if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
   if (conn.readonly && !opts.dryRun) throw new DbError('只读连接禁止写入', { code: 'READONLY', status: 403 });
   const { table } = await manager.findTable(opts.connectionId, opts.database, opts.table);
+  throwIfAborted(opts.signal);
   const rowCount = Math.min(5000, Math.max(1, opts.rows ?? 10));
   const columns = (table.columns ?? []).filter((column) => !column.autoIncrement);
   if (!columns.length) throw new Error('没有可填充的列');
@@ -80,8 +85,10 @@ export async function generateData(store: Store, manager: ConnectionManager, opt
   // Resolve foreign-key values from referenced tables to keep generated rows referentially valid.
   const fkValues = new Map<string, unknown[]>();
   for (const fk of table.foreignKeys ?? []) {
+    throwIfAborted(opts.signal);
     try {
       const ref = await manager.findTable(opts.connectionId, opts.database, fk.refTable);
+      throwIfAborted(opts.signal);
       const refColumn = fk.refColumns[0];
       if (!refColumn) continue;
       const sql = buildSelectTable(conn.engine, ref.table.name, {
@@ -95,16 +102,21 @@ export async function generateData(store: Store, manager: ConnectionManager, opt
         allowMulti: false,
         autoLimit: false,
         actor: 'user',
+        executionId: opts.executionId,
+        signal: opts.signal,
       });
+      throwIfAborted(opts.signal);
       const values = (batch.sets[0]?.rows ?? []).map((row) => row[0]).filter((value) => value !== null);
       if (values.length) fkValues.set(fk.columns[0].toLowerCase(), values);
-    } catch {
+    } catch (err) {
+      if ((err as { code?: string })?.code === 'ABORTED') throw err;
       /* optional */
     }
   }
 
   const rows: unknown[][] = [];
   for (let index = 1; index <= rowCount; index++) {
+    throwIfAborted(opts.signal);
     rows.push(
       columns.map((column) => {
         const fk = fkValues.get(column.name.toLowerCase());
@@ -128,10 +140,17 @@ export async function generateData(store: Store, manager: ConnectionManager, opt
 
   let inserted = 0;
   for (let offset = 0; offset < rows.length; offset += 200) {
+    throwIfAborted(opts.signal);
     const chunk = rows.slice(offset, offset + 200);
     const params = chunk.flat();
     const sql = buildInsert(conn.engine, table.name, columnNames, chunk.length, connectionSchema(conn, table));
-    await manager.runParams(opts.connectionId, sql, params, { database: opts.database, actor: 'user' });
+    await manager.runParams(opts.connectionId, sql, params, {
+      database: opts.database,
+      actor: 'user',
+      executionId: opts.executionId,
+      signal: opts.signal,
+    });
+    throwIfAborted(opts.signal);
     inserted += chunk.length;
   }
   return { table: table.name, columns: columnNames, rowsPreview: previewRows, sqlPreview: previewSql, inserted, dryRun: false };

@@ -50,6 +50,8 @@ export interface StepContext {
   /** 整个运行共享一个内存 DuckDB，步骤里按需注册 input 视图。 */
   duckdb(): Promise<import('./duckdb').DuckdbSession>;
   shouldAbort(): boolean;
+  signal?: AbortSignal;
+  executionId?: string;
   /** 试运行：目标写入与外发请求只渲染不执行。 */
   previewOnly: boolean;
 }

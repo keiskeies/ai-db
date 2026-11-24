@@ -364,3 +364,33 @@ test('render_chart 散点超 300 截断注记', async () => {
   assert.equal(chart.scatter.length, 300);
   assert.match(chart.note ?? '', /仅展示前 300 个/);
 });
+
+test('图表工具在执行层拒绝写 SQL，静态 read 风险不能绕过', async () => {
+  for (const [index, spec] of [
+    ['render_chart', { type: 'bar' }],
+    ['render_chart', { type: 'heatmap' }],
+    ['analyze_chart', {}],
+    ['forecast_chart', {}],
+  ].entries()) {
+    const [name, extra] = spec as [string, Record<string, unknown>];
+    const table = `chart_write_guard_${index}`;
+    const result = await run(name, {
+      sql: `CREATE TABLE ${table} (id INTEGER PRIMARY KEY)`,
+      ...extra,
+    });
+    assert.equal(result.ok, false, `${name} 不应执行 DDL`);
+    assert.equal(result.error?.code, 'CHART_SQL_NOT_READONLY', `${name} 应在调用驱动前拒绝`);
+    const check = await gateway.manager.query(
+      demo.id,
+      `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = '${table}'`,
+      { actor: 'user', autoLimit: false },
+    );
+    assert.equal(Number(check.sets[0].rows[0][0]), 0, `${name} 不得产生写副作用`);
+  }
+
+  const mixed = await run('render_chart', {
+    sql: 'SELECT 1 AS x, 2 AS y; CREATE TABLE chart_write_guard_mixed (id INTEGER)',
+    type: 'bar',
+  });
+  assert.equal(mixed.error?.code, 'CHART_SQL_NOT_READONLY', '多语句也不能夹带写入');
+});

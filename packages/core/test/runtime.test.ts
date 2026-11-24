@@ -505,9 +505,11 @@ test('时间不再参与中止判定：时钟狂转、步数没跑满的长回�
   const now = () => (clock += 600_000);
   const { provider, runtime } = statsRuntime(grindingScripts(4), events, { now, maxSteps: 4 });
   const outcome = await runtime.run({ ...baseInput, sessionAllowed: new Set(), alwaysAllowed: new Set() });
-  assert.equal(outcome.status, 'done', '跑得完就该跑完，不能被时间掐');
+  assert.equal(outcome.status, 'error', '最后一步工具结果尚未收尾，不能被时间或步数伪装成完成');
+  assert.equal(outcome.stop, 'max_steps');
   assert.equal(outcome.steps, 4);
   assert.ok(!events.some((event) => event.type === 'aborted'), '没有任何人中止，就不该有 aborted 事件');
+  assert.ok(!events.some((event) => event.type === 'done'), '未完成回合不能发 done');
   assert.equal(provider.calls, 4);
 });
 
@@ -829,15 +831,18 @@ test('done 事件分得清「说完了」与「什么都没返回」', async () 
   assert.equal(doneEvent.stop, 'empty_response', '界面靠这个字段决定要不要给「继续」，不能丢');
 });
 
-test('跑满步数上限是 max_steps，不是「已完成」', async () => {
+test('跑满步数上限是 max_steps error，不是「已完成」', async () => {
   const events: AgentEvent[] = [];
-  const { runtime } = statsRuntime(grindingScripts(2), events, { maxSteps: 2 });
+  const { provider, runtime } = statsRuntime(grindingScripts(2), events, { maxSteps: 2 });
   const outcome = await runtime.run({ ...baseInput, sessionAllowed: new Set(), alwaysAllowed: new Set() });
-  assert.equal(outcome.status, 'done');
-  assert.equal(outcome.stop, 'max_steps', '还剩步骤没做，界面不能再写已完成');
-  const doneEvent = events.find((e) => e.type === 'done');
-  assert.ok(doneEvent && doneEvent.type === 'done');
-  assert.equal(doneEvent.stop, 'max_steps');
+  assert.equal(outcome.status, 'error');
+  assert.equal(outcome.stop, 'max_steps', '最后一步工具结果尚未被模型消费');
+  assert.equal(provider.calls, 2, '不能假装已经让模型消费最后一步结果');
+  assert.equal(events.some((event) => event.type === 'done'), false);
+  const errorEvent = events.find((event) => event.type === 'error');
+  assert.ok(errorEvent && errorEvent.type === 'error');
+  assert.equal(errorEvent.code, 'MAX_STEPS');
+  assert.equal(errorEvent.stop, 'max_steps');
 });
 
 test('无步数上限跑完时仍然算 end_turn', async () => {

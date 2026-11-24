@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -11,7 +11,7 @@ import { colors, type ThemeResolved } from './src/theme';
 import type { Locale } from './src/i18n';
 import { styles } from './src/styles';
 import { notify } from './src/lib/utils';
-import type { TabKey, LiveTurn, ApprovalState } from './src/types';
+import type { AgentTurnRef, TabKey, LiveTurn, ApprovalState } from './src/types';
 import { BrandMark } from './src/components/base';
 
 import { BottomTabs } from './src/components/BottomTabs';
@@ -93,15 +93,19 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
   const client = useMemo(() => new BridgeClient(config), [config]);
   const [tab, setTab] = useState<TabKey>('chat');
   const [live, setLive] = useState<LiveTurn | undefined>();
+  const turnRef = useRef<AgentTurnRef['current']>(undefined);
   const [approvalQueue, setApprovalQueue] = useState<ApprovalState[]>([]);
   const approval = approvalQueue[0];
   const [mode, setMode] = useState<PermissionMode>('readonly');
   const [input, setInput] = useState('');
   const [pendingImages, setPendingImages] = useState<Array<{ id: string; mime: string }>>([]);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const uploadingImageRef = useRef(false);
+  const pickingImageRef = useRef(false);
   const [picker, setPicker] = useState<'sessions' | 'databases' | 'connections' | 'tables' | null>(null);
   const [selectedTable, setSelectedTable] = useState<TableInfo | null>(null);
   const [dataPage, setDataPage] = useState<DataPage | null>(null);
+  const tableRequestRef = useRef(0);
   const [dataLoading, setDataLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
@@ -113,49 +117,90 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
 
   const busy = live?.status === 'streaming' || live?.status === 'awaiting';
 
-  const schema = useSchema(client, { setPicker, setSelectedTable, setDataPage });
+  const scopeLockedRef = useRef(false);
+  const sessionMutationLockedRef = useRef(false);
+  const schema = useSchema(client, { setPicker, setSelectedTable, setDataPage, scopeLockedRef, sessionMutationLockedRef });
   const { connections, setConnections, activeConnectionId, setActiveConnectionId, databases, activeDatabase, setActiveDatabase, databaseReadyFor, tables, activeConnection, loadSchema, activeConnectionIdRef, activeDatabaseRef, preferredDatabaseRef, pendingDatabasePickerRef } = schema;
-  const sessionStore = useSessions(client, { activeConnectionId, activeDatabase, databases, setActiveConnectionId, setActiveDatabase, activeConnectionIdRef, preferredDatabaseRef }, { mode, setMode, setLive, setPicker });
-  const { sessions, setSessions, archivedSessions, setArchivedSessions, sessionView, setSessionView, sessionId, setSessionId, sessionMeta, setSessionMeta, messages, setMessages, sessionQuery, setSessionQuery, renameTarget, setRenameTarget, sessionIdRef, refreshSessions, refreshArchivedSessions, refreshSession, openSession, newSession, deleteSession } = sessionStore;
-  const { boot, loading, error, connected, setConnected, bootstrap, saveAgent } = useBootstrap(client, { setConnections, setSessions, setActiveConnectionId, setMode });
-  const { send, stop, resolveApproval } = useAgentSocket(client, { activeConnectionId, activeDatabase, sessionId, mode, input, pendingImages, approval, setSessionId, setSessionMeta, setMessages, setInput, setPendingImages, setLive, setApprovalQueue, setConnected, loadSchema, refreshSession, refreshSessions, sessionIdRef, activeConnectionIdRef, activeDatabaseRef });
+  const notifyScopeLocked = () => notify('Agent 正在处理', '请等当前回合完成或停止后再切换连接、数据库或会话。');
+  const openPicker: Dispatch<SetStateAction<typeof picker>> = (value) => {
+    const next = typeof value === 'function' ? value(picker) : value;
+    if (next && next !== 'tables' && (scopeLockedRef.current || sessionMutationLockedRef.current)) {
+      notifyScopeLocked();
+      return;
+    }
+    setPicker(next);
+  };
+  const changeActiveConnectionId: Dispatch<SetStateAction<string | undefined>> = (value) => {
+    if (scopeLockedRef.current || sessionMutationLockedRef.current) {
+      notifyScopeLocked();
+      return;
+    }
+    setActiveConnectionId(value);
+  };
+  const changeActiveDatabase: Dispatch<SetStateAction<string | undefined>> = (value) => {
+    if (scopeLockedRef.current || sessionMutationLockedRef.current) {
+      notifyScopeLocked();
+      return;
+    }
+    setActiveDatabase(value);
+  };
+  const sessionStore = useSessions(client, { activeConnectionId, activeDatabase, databases, databaseReadyFor, setActiveConnectionId, setActiveDatabase, activeConnectionIdRef, preferredDatabaseRef }, { mode, setMode, live, turnRef, setLive, setApprovalQueue, setPicker, sessionMutationLockedRef, scopeLockedRef });
+  const { sessions, setSessions, archivedSessions, setArchivedSessions, sessionView, setSessionView, sessionId, setSessionId, sessionMeta, setSessionMeta, messages, setMessages, sessionMutating, sessionQuery, setSessionQuery, renameTarget, setRenameTarget, sessionIdRef, refreshSessions, refreshArchivedSessions, refreshSession, openSession, newSession, deleteSession, archiveSession } = sessionStore;
+  const { boot, loading, error, connected, setConnected, bootstrap, saveAgent } = useBootstrap(client, { setConnections, setSessions, setActiveConnectionId, setMode, activeConnectionIdRef, scopeLockedRef, sessionMutationLockedRef });
+  const { send, stop, cancelSend, resolveApproval, sending } = useAgentSocket(client, { live, mode, input, pendingImages, uploadingImageRef, approval, approvalQueue, setSessionId, setSessionMeta, setMessages, setInput, setPendingImages, setLive, setApprovalQueue, setConnected, loadSchema, refreshSession, refreshSessions, sessionIdRef, activeConnectionIdRef, activeDatabaseRef, turnRef, sessionMutationLockedRef, scopeLockedRef });
+  const scopeLocked = busy || sending;
+  scopeLockedRef.current = scopeLocked;
+  const interactionLocked = scopeLocked || sessionMutating;
   const { scrollRef, showJump, onChatScroll, onChatContentSizeChange, jumpToLatest } = useChatScroll({ live, messages, sessionId, busy });
   const { memories, memoryQuery, setMemoryQuery, memoryLoading, memoryDraft, setMemoryDraft, loadMemories } = useMemories(client, { tab, mePage });
 
   const pickImage = async () => {
+    if (pickingImageRef.current || pendingImages.length >= 4) return;
+    pickingImageRef.current = true;
+    const available = Math.max(1, 4 - pendingImages.length);
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         base64: true,
         quality: 0.8,
         allowsMultipleSelection: true,
-        selectionLimit: Math.max(1, 4 - pendingImages.length),
+        selectionLimit: available,
       });
       if (result.canceled || !result.assets?.length) return;
+      const assets = result.assets.slice(0, available);
+      uploadingImageRef.current = true;
       setUploadingImage(true);
-      for (const asset of result.assets) {
+      for (const asset of assets) {
         if (!asset.base64) continue;
         const uploaded = await client.uploadAttachment(asset.base64, asset.mimeType ?? 'image/jpeg');
-        setPendingImages((prev) => (prev.length >= 4 ? prev : [...prev, { id: uploaded.attachment.id, mime: asset.mimeType ?? 'image/jpeg' }]));
+        setPendingImages((prev) => prev.length >= 4 ? prev : [...prev, { id: uploaded.attachment.id, mime: uploaded.attachment.mime }]);
       }
     } catch (err: any) {
       notify('上传失败', err?.message ?? '');
     } finally {
+      pickingImageRef.current = false;
+      uploadingImageRef.current = false;
       setUploadingImage(false);
     }
   };
 
   const openTable = async (table: TableInfo, offset = 0) => {
     if (!activeConnectionId) return;
+    const request = ++tableRequestRef.current;
+    const connectionId = activeConnectionId;
+    const database = activeDatabase;
     setSelectedTable(table);
     setDataLoading(true);
     try {
-      const page = await client.data(activeConnectionId, table.name, 50, offset, activeDatabase);
+      const page = await client.data(connectionId, table.name, 50, offset, database);
+      if (tableRequestRef.current !== request
+        || activeConnectionIdRef.current !== connectionId
+        || activeDatabaseRef.current !== database) return;
       setDataPage(page);
     } catch (err: any) {
-      notify('加载失败', err?.message ?? '');
+      if (tableRequestRef.current === request) notify('加载失败', err?.message ?? '');
     } finally {
-      setDataLoading(false);
+      if (tableRequestRef.current === request) setDataLoading(false);
     }
   };
 
@@ -163,7 +208,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
     setRefreshing(true);
     await bootstrap();
     await refreshSessions();
-    if (activeConnectionId) await loadSchema(activeConnectionId, activeDatabase);
+    if (activeConnectionIdRef.current) await loadSchema(activeConnectionIdRef.current, activeDatabaseRef.current);
     setRefreshing(false);
   };
 
@@ -193,6 +238,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
             <CommandScreen client={client} connections={connections} activeConnection={activeConnection} onBack={() => setChatPage(null)} />
           ) : (
           <ChatScreen
+            client={client}
             sessionMeta={sessionMeta}
             connection={activeConnection}
             connections={connections}
@@ -204,13 +250,16 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
             mode={mode}
             setMode={setMode}
             busy={busy}
+            sending={sending}
+            scopeLocked={interactionLocked}
             connected={connected}
             onSend={() => void send()}
             onStop={() => void stop()}
+            onCancelSend={cancelSend}
             onNew={() => void newSession()}
-            onOpenSessions={() => { setPicker('sessions'); setSessionView('active'); void refreshSessions(); void refreshArchivedSessions(); }}
-            onOpenConnections={() => setPicker('connections')}
-            onOpenTables={() => setPicker('tables')}
+            onOpenSessions={() => { openPicker('sessions'); setSessionView('active'); void refreshSessions(); void refreshArchivedSessions(); }}
+            onOpenConnections={() => openPicker('connections')}
+            onOpenTables={() => openPicker('tables')}
             onOpenCommands={() => setCommandOpen(true)}
             onOpenRecent={(id) => void openSession(id)}
             scrollRef={scrollRef}
@@ -223,7 +272,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
             onSaveAgent={(patch) => void saveAgent(patch)}
             databases={databases}
             database={activeDatabase}
-            onOpenDatabases={() => setPicker('databases')}
+            onOpenDatabases={() => openPicker('databases')}
             pendingImages={pendingImages}
             uploadingImage={uploadingImage}
             onPickImage={() => void pickImage()}
@@ -242,6 +291,8 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
               connection={activeConnection}
               database={activeDatabase}
               onBack={() => {
+                tableRequestRef.current += 1;
+                setDataLoading(false);
                 setSelectedTable(null);
                 setDataPage(null);
               }}
@@ -261,9 +312,10 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
               tables={tables}
               activeConnection={activeConnection}
               activeConnectionId={activeConnectionId}
-              setPicker={setPicker}
+              setPicker={openPicker}
               loadSchema={loadSchema}
               openTable={openTable}
+              scopeLocked={interactionLocked}
             />
           )
         ) : null}
@@ -289,10 +341,11 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
             refreshAll={refreshAll}
             connections={connections}
             activeConnectionId={activeConnectionId}
-            setActiveConnectionId={setActiveConnectionId}
+            setActiveConnectionId={changeActiveConnectionId}
             setTab={setTab}
             activeDatabase={activeDatabase}
             databases={databases}
+            scopeLocked={interactionLocked}
           />
         ) : null}
 
@@ -356,7 +409,8 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
           activeConnection={activeConnection}
           databases={databases}
           activeDatabase={activeDatabase}
-          setActiveDatabase={setActiveDatabase}
+          setActiveDatabase={changeActiveDatabase}
+          disabled={interactionLocked}
         />
       ) : null}
 
@@ -373,14 +427,9 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
           archivedSessions={archivedSessions}
           sessionId={sessionId}
           openSession={openSession}
-          client={client}
-          refreshSessions={refreshSessions}
-          refreshArchivedSessions={refreshArchivedSessions}
-          setSessionId={setSessionId}
-          setSessionMeta={setSessionMeta}
-          setMessages={setMessages}
           setRenameTarget={setRenameTarget}
           deleteSession={deleteSession}
+          archiveSession={archiveSession}
         />
       ) : null}
 
@@ -403,8 +452,9 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
           connections={connections}
           activeConnectionId={activeConnectionId}
           pendingDatabasePickerRef={pendingDatabasePickerRef}
-          setActiveConnectionId={setActiveConnectionId}
+          setActiveConnectionId={changeActiveConnectionId}
           activeDatabase={activeDatabase}
+          disabled={interactionLocked}
         />
       ) : null}
 

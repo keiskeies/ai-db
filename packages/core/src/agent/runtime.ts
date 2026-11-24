@@ -1,5 +1,6 @@
 import type { AgentPlanItem, Risk } from '../types';
 import { describeCall, evaluatePermission, redactToolSecrets, resolveRisk, toolSignature } from './policy';
+import { estimateMessageTokens } from './prompt';
 import { getTool, providerTools } from './tools';
 import { rescueXmlToolCalls } from './xmlTools';
 import { PROVIDER_STALL_CODE } from './providers/common';
@@ -14,7 +15,7 @@ import type {
   ToolCall,
   ToolResult,
 } from './types';
-import { isTruncatedStop } from './types';
+import { isProviderIncompleteStop, isTruncatedStop } from './types';
 
 export interface AgentRunResult {
   text: string;
@@ -37,8 +38,8 @@ export interface AgentRunResult {
   toolCalls: number;
   plan: AgentPlanItem[];
   /**
-   * 回合结束的原因。status 为 'done' 时尤其要看它：截断与跑满步数同样是 done，
-   * 但都不代表模型真的把事做完了。
+   * 回合结束的原因。status 为 'done' 时尤其要看它：空响应不代表模型把事做完了；
+   * 截断、跑满步数与服务商未完成则以 error 收场并保留可继续的 stop。
    */
   stop?: AgentStopReason;
   /** 中止原因；只有 status 为 aborted 时才有值，上次调用方据此决定是否写续跑检查点。 */
@@ -237,15 +238,7 @@ function parseMissingIdentifier(message: string): { kind: 'column' | 'table'; na
  * 若真被引用，模型会再查一次（这正是截断提示想让它做的）。
  */
 function compactMessages(messages: ProviderMessage[], budget: number): ProviderMessage[] {
-  const cjk = (s: string) => (s.match(/[一-鿿]/g) || []).length;
-  const estimate = (m: ProviderMessage): number => {
-    const text = 'content' in m ? String(m.content ?? '') : '';
-    // assistant 的 toolCalls 参数（整段 SQL 等）不在 content 里，不算就会系统性低估。
-    const calls = 'toolCalls' in m && m.toolCalls?.length ? JSON.stringify(m.toolCalls) : '';
-    const body = text + calls;
-    return 20 + Math.max(2, Math.ceil(cjk(body) * 1.3 + (body.length - cjk(body)) / 4)) + ('images' in m ? (m.images?.length ?? 0) * 1000 : 0);
-  };
-  const total = (list: ProviderMessage[]) => list.reduce((sum, m) => sum + estimate(m), 0);
+  const total = (list: ProviderMessage[]) => list.reduce((sum, m) => sum + estimateMessageTokens(m), 0);
   if (total(messages) <= budget) return messages;
 
   const firstUserIdx = messages.findIndex((m) => m.role === 'user');
@@ -260,10 +253,18 @@ function compactMessages(messages: ProviderMessage[], budget: number): ProviderM
     guard++;
     let found = false;
     for (let i = 1; i < out.length - 1; i++) {
-      if (out[i].role === 'tool') {
-        // tool 之前最近的 assistant（成对宿主的另一侧）
+      const message = out[i];
+      if (message.role === 'tool') {
+        const toolCallId = message.toolCallId;
         let host = -1;
-        for (let j = i - 1; j >= 0; j--) if (out[j].role === 'assistant') { host = j; break; }
+        for (let j = i - 1; j >= 0; j--) {
+          const candidate = out[j];
+          if (candidate.role === 'user') break;
+          if (candidate.role === 'assistant') {
+            if (candidate.toolCalls?.some((call) => call.id === toolCallId)) host = j;
+            break;
+          }
+        }
         const start = host >= 0 ? host : i;
         let end = i;
         while (end + 1 < out.length && out[end + 1].role === 'tool') end++;
@@ -288,13 +289,30 @@ function compactMessages(messages: ProviderMessage[], budget: number): ProviderM
     out.splice(firstUserIdx + 1, 0, { role: 'user', content: note });
   }
 
+  const withoutOrphanTools = (list: ProviderMessage[]): ProviderMessage[] => {
+    const valid: ProviderMessage[] = [];
+    let hosts = new Set<string>();
+    for (const message of list) {
+      if (message.role === 'assistant') {
+        hosts = new Set((message.toolCalls ?? []).map((call) => call.id));
+        valid.push(message);
+      } else if (message.role === 'tool') {
+        if (hosts.delete(message.toolCallId)) valid.push(message);
+      } else {
+        hosts.clear();
+        valid.push(message);
+      }
+    }
+    return valid;
+  };
+
   // 极端：单条消息本身超预算（超宽单行）。保头尾 user，中间宁可空。
   if (total(out) > budget) {
-    const tail = out.length > firstUserIdx + 1 ? out.slice(-1) : [];
+    const tail = out.length > firstUserIdx + 1 && out[out.length - 1].role === 'user' ? out.slice(-1) : [];
     const head = firstUserIdx >= 0 ? out.slice(0, firstUserIdx + 1) : [];
-    return [...head, ...tail];
+    return withoutOrphanTools([...head, ...tail]);
   }
-  return out;
+  return withoutOrphanTools(out);
 }
 
 /** 只用于修复提示的轻量编辑距离，候选量很小。 */
@@ -456,6 +474,8 @@ export class AgentRuntime {
     const started = now();
     const turnId = deps.generateId();
     const maxSteps = deps.maxSteps ?? 12;
+    const connection = input.connection ?? input.context.connection;
+    const signatureScope = { connectionId: connection?.id, database: connection?.database };
     let messages: ProviderMessage[] = [
       ...input.history,
       { role: 'user', content: input.userText, ...(input.images?.length ? { images: input.images } : {}) },
@@ -642,6 +662,7 @@ export class AgentRuntime {
       // stepText / stepThinking 是回合层的变量（见 commitStep 注释）：上一步在出口处
       // 已经把它们交付并清空，这里直接复用，不能再声明一次把外层遮掉。
       let providerError: { code: string; message: string } | undefined;
+      let providerRetryable = false;
       /** 服务商给的结束原因；'length'/'max_tokens' 意味着这一步是被拦腰截断的。 */
       let stepStopReason: string | undefined;
 
@@ -653,6 +674,7 @@ export class AgentRuntime {
         const callStarted = now();
         let emittedOutput = false;
         providerError = undefined;
+        providerRetryable = false;
         stepStopReason = undefined;
         calls.length = 0;
         // 失败尝试可能已上报过 usage；重试前快照，重试时回滚，避免把半截用量算两遍
@@ -703,7 +725,8 @@ export class AgentRuntime {
           // 报 error 会让界面显示红色失败并丢掉续跑检查点，而进度其实还在。
           if (err?.code === PROVIDER_STALL_CODE) return aborted('stalled');
           providerError = { code: err?.code ?? 'PROVIDER_ERROR', message: err?.message ?? '模型调用失败' };
-          if (err?.retryable === true && !emittedOutput && attempt < MAX_LLM_RETRIES && !input.signal?.aborted) {
+          providerRetryable = err?.retryable === true;
+          if (providerRetryable && !emittedOutput && attempt < MAX_LLM_RETRIES && !input.signal?.aborted) {
             const backoff = LLM_RETRY_BACKOFF_MS[attempt] ?? 3000;
             const delay = err?.status === 429 && typeof err?.retryAfterMs === 'number'
               ? Math.min(Math.max(err.retryAfterMs, backoff), MAX_RETRY_AFTER_MS)
@@ -732,8 +755,26 @@ export class AgentRuntime {
         // 界面里「这一步说过的话」凭空消失，而 text_delta 已经把它打在屏幕上了。
         commitStep();
         emitTurnUsage();
-        deps.emit({ type: 'error', code: providerError.code, message: providerError.message, retryable: true });
-        return { text: finalText.trim(), status: 'error', usage: usageSummary(), steps, modelCalls, contextTokens, modelDurationMs, toolCalls: toolCount, plan, error: providerError };
+        deps.emit({
+          type: 'error',
+          code: providerError.code,
+          message: providerError.message,
+          retryable: providerRetryable,
+          ...(providerRetryable ? { stop: 'provider_incomplete' as const } : {}),
+        });
+        return {
+          text: finalText.trim(),
+          status: 'error',
+          ...(providerRetryable ? { stop: 'provider_incomplete' as const } : {}),
+          usage: usageSummary(),
+          steps,
+          modelCalls,
+          contextTokens,
+          modelDurationMs,
+          toolCalls: toolCount,
+          plan,
+          error: providerError,
+        };
       }
 
       if (!calls.length && stepText) {
@@ -746,12 +787,31 @@ export class AgentRuntime {
         }
       }
 
+      if (isProviderIncompleteStop(stepStopReason)) {
+        commitStep();
+        const message = `模型返回未完成状态（${stepStopReason}），本轮不能视为正常结束；回复「继续」可以接着处理。`;
+        emitTurnUsage();
+        deps.emit({ type: 'error', code: 'PROVIDER_INCOMPLETE', message, retryable: true, stop: 'provider_incomplete' });
+        return {
+          text: finalText.trim(),
+          status: 'error',
+          stop: 'provider_incomplete',
+          usage: usageSummary(),
+          steps,
+          modelCalls,
+          contextTokens,
+          modelDurationMs,
+          toolCalls: toolCount,
+          plan,
+          error: { code: 'PROVIDER_INCOMPLETE', message },
+        };
+      }
+
       /**
        * 输出被 max_tokens 截断 —— 「莫名其妙就停了」的头号来源。
        *
        * 这一步的 calls 全部**不执行**：截断点通常就在工具参数里，provider 只能把残缺的
-       * JSON 兜成 `{}`（见各 provider 的 safeJson），于是 run_sql 会带着空 sql 跑一趟，
-       * 换来一条看不懂的报错，而模型以为自己已经发起了调用。
+       * JSON 无法安全解析，tool_calls 不能照常执行，否则可能带着残缺参数发起操作。
        * 先自动续一次：把「你被截断了」明确回灌给它，并让它把剩下的拆小。多数情况一次就过。
        * 续一次仍然截断，说明不是「差一口气」而是这个回合的回复本身超限，再猜下去只是原地打转
        * ——这时如实报错，让上层留下可续跑的检查点。
@@ -856,6 +916,7 @@ export class AgentRuntime {
             mode: input.mode,
             connectionReadonly: input.connectionReadonly,
             environment: input.environment,
+            ...signatureScope,
             sessionAllowed: input.sessionAllowed,
             alwaysAllowed: input.alwaysAllowed,
           },
@@ -899,7 +960,7 @@ export class AgentRuntime {
             messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: serializeForModel(res, undefined, resultBudget()) });
             continue;
           }
-          const sig = toolSignature(call);
+          const sig = toolSignature(call, signatureScope);
           if (decision.scope === 'session') input.sessionAllowed?.add(sig);
           if (decision.scope === 'always') input.alwaysAllowed?.add(sig);
         }
@@ -936,14 +997,28 @@ export class AgentRuntime {
     }
 
     if (!finalText) {
-      // maxSteps=0 不会停在这里（循环只有在模型结束/中止时退出），但仍防御性地覆盖：
-      // 若未来某处还在意步数上限，这里不能说出误导的「已达最大步数」。
-      finalText = maxSteps === 0 ? '本回合已结束。' : '已达到本次最大工具步数（' + maxSteps + '），我先停在这里。可以继续提问，我会接着处理。';
+      finalText = maxSteps === 0 ? '本回合已结束。' : '已达到本次最大工具步数（' + maxSteps + '），工具结果尚未由模型收尾。可以回复「继续」接着处理。';
       deps.emit({ type: 'text_delta', text: finalText });
     }
-    // 走到这里是循环自己跑满步数退出的，不是模型说完了。计划没做完也是这个原因，
-    // 界面要能区分「做完了」和「额度用完了」。
-    return finish('done', undefined, maxSteps === 0 ? 'end_turn' : 'max_steps');
+    const error = {
+      code: 'MAX_STEPS',
+      message: `已达到本次最大工具步数（${maxSteps}），最后一步的工具结果尚未由模型消费。`,
+    };
+    emitTurnUsage();
+    deps.emit({ type: 'error', ...error, retryable: false, stop: 'max_steps' });
+    return {
+      text: finalText.trim(),
+      status: 'error',
+      stop: 'max_steps',
+      usage: usageSummary(),
+      steps,
+      modelCalls,
+      contextTokens,
+      modelDurationMs,
+      toolCalls: toolCount,
+      plan,
+      error,
+    };
   }
 }
 

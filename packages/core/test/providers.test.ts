@@ -113,6 +113,174 @@ test('openai compatible provider streams text, tool calls and usage', async () =
   }
 });
 
+// ---------- 流完整性与工具 JSON ----------
+
+const streamRequest = { system: 's', messages: [{ role: 'user' as const, content: 'hi' }], tools: [] };
+
+function openAiFrame(value: unknown): string {
+  return `data: ${typeof value === 'string' ? value : JSON.stringify(value)}\n\n`;
+}
+
+function anthropicFrame(type: string, value: Record<string, unknown> = {}): string {
+  return `event: ${type}\ndata: ${JSON.stringify({ type, ...value })}\n\n`;
+}
+
+async function expectStreamFailure(iterable: AsyncIterable<ProviderEvent>, pattern: RegExp): Promise<void> {
+  const events: ProviderEvent[] = [];
+  await assert.rejects(async () => {
+    for await (const event of iterable) events.push(event);
+  }, (error: unknown) => {
+    assert.ok(error instanceof ProviderError);
+    assert.equal(error.code, 'PROVIDER_STREAM');
+    assert.equal(error.retryable, true);
+    assert.match(error.message, pattern);
+    return true;
+  });
+  assert.equal(events.some((event) => event.type === 'tool_call'), false, '残缺工具参数不能交付执行');
+}
+
+test('OpenAI 严格要求 [DONE]，EOF 与无效 SSE JSON 都是可续跑错误', async () => {
+  const originalFetch = globalThis.fetch;
+  const provider = new OpenAIProvider({ apiKey: 'test', baseUrl: 'http://mock/v1', model: 'gpt-test' });
+  try {
+    globalThis.fetch = (async () => sseResponse(openAiFrame({ choices: [{ delta: { content: 'half' }, finish_reason: 'stop' }] }))) as typeof fetch;
+    await expectStreamFailure(provider.stream(streamRequest), /EOF.*\[DONE\]/);
+    globalThis.fetch = (async () => sseResponse('data: {bad json}\n\ndata: [DONE]\n\n')) as typeof fetch;
+    await expectStreamFailure(provider.stream(streamRequest), /无效的 SSE JSON/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('OpenAI 未闭合、数组或原始值工具 JSON 不会退化成空对象', async () => {
+  const originalFetch = globalThis.fetch;
+  const provider = new OpenAIProvider({ apiKey: 'test', baseUrl: 'http://mock/v1', model: 'gpt-test' });
+  const frame = (args: string) => openAiFrame({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_a', function: { name: 'run_sql', arguments: args } }] } }] });
+  try {
+    for (const args of ['{"sql":', '[]', 'null', '1']) {
+      globalThis.fetch = (async () => sseResponse(frame(args) + openAiFrame('[DONE]'))) as typeof fetch;
+      await expectStreamFailure(provider.stream(streamRequest), /参数/);
+    }
+    globalThis.fetch = (async () => sseResponse(frame('') + openAiFrame('[DONE]'))) as typeof fetch;
+    const events = await collect(provider.stream(streamRequest));
+    const tool = events.find((event) => event.type === 'tool_call');
+    assert.ok(tool && tool.type === 'tool_call');
+    assert.deepEqual(tool.call.args, {});
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('OpenAI 保留 content_filter/pause_turn/上下文超限等未完成原因', async () => {
+  const originalFetch = globalThis.fetch;
+  const provider = new OpenAIProvider({ apiKey: 'test', baseUrl: 'http://mock/v1', model: 'gpt-test' });
+  try {
+    for (const reason of ['content_filter', 'pause_turn', 'model_context_window_exceeded']) {
+      globalThis.fetch = (async () => sseResponse(openAiFrame({ choices: [{ delta: {}, finish_reason: reason }] }) + openAiFrame('[DONE]'))) as typeof fetch;
+      const events = await collect(provider.stream(streamRequest));
+      const last = events.at(-1);
+      assert.equal(last?.type, 'done');
+      assert.equal(last?.type === 'done' ? last.stopReason : undefined, reason);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Anthropic 严格要求 message_stop，未闭合工具块与无效 JSON 均报错', async () => {
+  const originalFetch = globalThis.fetch;
+  const provider = new AnthropicProvider({ apiKey: 'test', baseUrl: 'http://mock', model: 'claude-test' });
+  const start = anthropicFrame('content_block_start', { index: 0, content_block: { type: 'tool_use', id: 'tool_1', name: 'run_sql', input: {} } });
+  const delta = anthropicFrame('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: '{"sql":' } });
+  const messageDelta = anthropicFrame('message_delta', { delta: { stop_reason: 'tool_use' } });
+  try {
+    globalThis.fetch = (async () => sseResponse(messageDelta)) as typeof fetch;
+    await expectStreamFailure(provider.stream(streamRequest), /缺少 message_stop/);
+    globalThis.fetch = (async () => sseResponse(start + delta + messageDelta + anthropicFrame('message_stop'))) as typeof fetch;
+    await expectStreamFailure(provider.stream(streamRequest), /未闭合的工具 JSON/);
+    globalThis.fetch = (async () => sseResponse(start + delta + anthropicFrame('content_block_stop', { index: 0 }) + messageDelta + anthropicFrame('message_stop'))) as typeof fetch;
+    await expectStreamFailure(provider.stream(streamRequest), /参数 JSON/);
+    globalThis.fetch = (async () => sseResponse('event: message_delta\ndata: {bad}\n\n' + messageDelta + anthropicFrame('message_stop'))) as typeof fetch;
+    await expectStreamFailure(provider.stream(streamRequest), /无效的 SSE JSON/);
+    globalThis.fetch = (async () => sseResponse(anthropicFrame('message_stop'))) as typeof fetch;
+    await expectStreamFailure(provider.stream(streamRequest), /stop_reason/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Anthropic 无参数工具块允许 input:{} 且没有 JSON delta', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => sseResponse([
+    anthropicFrame('content_block_start', { index: 0, content_block: { type: 'tool_use', id: 'tool_1', name: 'list_connections', input: {} } }),
+    anthropicFrame('content_block_stop', { index: 0 }),
+    anthropicFrame('message_delta', { delta: { stop_reason: 'tool_use' } }),
+    anthropicFrame('message_stop'),
+  ].join(''))) as typeof fetch;
+  try {
+    const provider = new AnthropicProvider({ apiKey: 'test', baseUrl: 'http://mock', model: 'claude-test' });
+    const events = await collect(provider.stream(streamRequest));
+    const tool = events.find((event) => event.type === 'tool_call');
+    assert.ok(tool && tool.type === 'tool_call');
+    assert.deepEqual(tool.call.args, {});
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('两家 provider 的非成功响应体读取有大小与静默超时上限', async () => {
+  const originalFetch = globalThis.fetch;
+  const providers = [
+    new OpenAIProvider({ apiKey: 'test', baseUrl: 'http://mock/v1', model: 'gpt-test', stallMs: 20 }),
+    new AnthropicProvider({ apiKey: 'test', baseUrl: 'http://mock', model: 'claude-test', stallMs: 20 }),
+  ];
+  try {
+    for (const provider of providers) {
+      globalThis.fetch = (async () => new Response('x'.repeat(70 * 1024), { status: 500 })) as typeof fetch;
+      await assert.rejects(() => collect(provider.stream(streamRequest)), (error: unknown) => {
+        assert.ok(error instanceof ProviderError);
+        assert.equal(error.code, 'PROVIDER_STREAM');
+        assert.match(error.message, /读取上限/);
+        return true;
+      });
+      globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({ pull: () => new Promise<void>(() => undefined) }), { status: 500 })) as typeof fetch;
+      const started = Date.now();
+      await assert.rejects(() => collect(provider.stream(streamRequest)), (error: unknown) => {
+        assert.ok(error instanceof ProviderError);
+        assert.equal(error.code, 'PROVIDER_STALLED');
+        return true;
+      });
+      assert.ok(Date.now() - started < 1000, '非成功响应体不能无限等待');
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('错误响应体读取还有绝对超时，不随持续滴漏无限延长', async () => {
+  const body = new ReadableStream<Uint8Array>({ pull: () => new Promise<void>(() => undefined) });
+  const started = Date.now();
+  await assert.rejects(() => readResponseText(body, { stallMs: 0, timeoutMs: 30 }), (error: unknown) => {
+    assert.ok(error instanceof ProviderError);
+    assert.equal(error.code, 'PROVIDER_STREAM');
+    assert.match(error.message, /超时/);
+    return true;
+  });
+  assert.ok(Date.now() - started < 1000);
+});
+
+test('错误响应超限后不等待底层 cancel 收尾', async () => {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(65 * 1024));
+    },
+    cancel: () => new Promise<void>(() => undefined),
+  });
+  const started = Date.now();
+  await assert.rejects(() => readResponseText(body, { stallMs: 0 }), /读取上限/);
+  assert.ok(Date.now() - started < 1000);
+});
+
 // ---------- 服务商预设与模型列表 ----------
 import { PROVIDER_PRESETS, matchPreset, ollamaOrigin, presetById } from '../src/agent/providers/presets';
 import { listProviderModels } from '../src/agent/providers/models';
@@ -205,7 +373,7 @@ test('openai provider allows keyless local endpoints but not public ones', async
 });
 
 // ---------- 提示词缓存用量：三家服务商的字段都要归一化 ----------
-import { normalizeCacheUsage } from '../src/agent/providers/common';
+import { normalizeCacheUsage, ProviderError, readResponseText } from '../src/agent/providers/common';
 
 test('cache usage normalization covers every provider shape', () => {
   // DeepSeek：命中与未命中都直接给，原样透出
@@ -314,6 +482,7 @@ test('anthropic provider omits cache fields without cache usage', async () => {
     'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":11,"output_tokens":0}}}\n\n',
     'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}\n\n',
     'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}\n\n',
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
   ].join('');
   globalThis.fetch = (async () => sseResponse(frames)) as typeof fetch;
   try {

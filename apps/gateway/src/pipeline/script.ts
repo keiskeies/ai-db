@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { PipelineError } from './types';
+import { PipelineAbortedError, PipelineError } from './types';
 
 /**
  * 脚本步骤：JS / Python 子进程，数据从 stdin 进、stdout 出。
@@ -31,6 +31,7 @@ export interface ScriptInput {
   dir: string;
   timeoutMs: number;
   maxRows: number;
+  signal?: AbortSignal;
 }
 
 export interface ScriptOutput {
@@ -140,6 +141,7 @@ function childEnv(runtime: ScriptRuntime): NodeJS.ProcessEnv {
 }
 
 export async function runScript(input: ScriptInput): Promise<ScriptOutput> {
+  if (input.signal?.aborted) throw new PipelineAbortedError();
   const isWindows = process.platform === 'win32';
   const file = path.join(input.dir, input.runtime === 'node' ? 'transform.mjs' : 'transform.py');
   await mkdir(input.dir, { recursive: true });
@@ -149,9 +151,17 @@ export async function runScript(input: ScriptInput): Promise<ScriptOutput> {
   const args = [file];
   const started = Date.now();
 
-  const { stdout, stderr, code, timedOut } = await new Promise<{ stdout: string; stderr: string; code: number; timedOut: boolean }>((resolve, reject) => {
-    let child: ChildProcess;
+  let child!: ChildProcess;
+  let aborted = false;
+  const onAbort = () => {
+    aborted = true;
+    if (child) killTree(child);
+  };
+  input.signal?.addEventListener('abort', onAbort, { once: true });
+  if (input.signal?.aborted) onAbort();
+  const execution = new Promise<{ stdout: string; stderr: string; code: number; timedOut: boolean }>((resolve, reject) => {
     try {
+      if (aborted || input.signal?.aborted) throw new PipelineAbortedError();
       child = spawn(command, args, {
         cwd: input.dir,
         env: childEnv(input.runtime),
@@ -161,6 +171,10 @@ export async function runScript(input: ScriptInput): Promise<ScriptOutput> {
         detached: !isWindows,
       });
     } catch (err: any) {
+      if (err instanceof PipelineAbortedError) {
+        reject(err);
+        return;
+      }
       reject(new PipelineError(`无法启动 ${input.runtime}：${err?.message ?? err}`, 'PIPELINE_SCRIPT_SPAWN'));
       return;
     }
@@ -199,6 +213,27 @@ export async function runScript(input: ScriptInput): Promise<ScriptOutput> {
       resolve({ stdout, stderr, code: code ?? (timedOut ? 124 : isWindows ? 1 : 0), timedOut });
     });
   });
+  let removeAbortListener: () => void = () => undefined;
+  let outcome: { stdout: string; stderr: string; code: number; timedOut: boolean };
+  try {
+    outcome = input.signal
+      ? await Promise.race([
+          execution,
+          new Promise<never>((_resolve, reject) => {
+            const rejectAbort = () => reject(new PipelineAbortedError());
+            if (aborted) rejectAbort();
+            else {
+              input.signal!.addEventListener('abort', rejectAbort, { once: true });
+              removeAbortListener = () => input.signal!.removeEventListener('abort', rejectAbort);
+            }
+          }),
+        ])
+      : await execution;
+  } finally {
+    removeAbortListener();
+    input.signal?.removeEventListener('abort', onAbort);
+  }
+  const { stdout, stderr, code, timedOut } = outcome;
 
   if (timedOut) {
     throw new PipelineError(`脚本执行超过 ${Math.round(input.timeoutMs / 1000)} 秒已被终止`, 'PIPELINE_SCRIPT_TIMEOUT', '脚本应当只做数据变换；需要更久的计算请拆小批次或提高超时');

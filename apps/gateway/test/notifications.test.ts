@@ -256,6 +256,62 @@ test('飞书 URL 验证与 OneBot inbound 问答', async () => {
 });
 
 
+test('机器人缺失或空白 token 时 fail closed', async () => {
+  const feishu = gateway.store.createNotificationChannel({
+    name: '飞书未配置令牌', type: 'feishu', config: { webhookUrl: `${mockBase}/feishu`, verificationToken: '   ' },
+  });
+  for (const token of [undefined, '   ']) {
+    const response = await fetch(`${base}/api/bots/${feishu.id}/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'url_verification', challenge: 'must-not-pass', token }),
+    });
+    assert.equal(response.status, 503);
+  }
+
+  const onebot = gateway.store.createNotificationChannel({
+    name: 'OneBot 未配置令牌', type: 'qq-onebot', config: { endpoint: mockBase, inbound: true, allowedChats: ['group:123'] },
+  });
+  const blankToken = gateway.store.createNotificationChannel({
+    name: 'OneBot 空白令牌', type: 'qq-onebot', config: { endpoint: mockBase, token: '   ', inbound: true },
+  });
+  for (const channel of [onebot, blankToken]) {
+    const response = await fetch(`${base}/api/bots/${channel.id}/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ post_type: 'message', message_type: 'group', group_id: 123, raw_message: 'hello' }),
+    });
+    assert.equal(response.status, 403);
+  }
+});
+
+test('allowedChats 清洗后为空拒绝所有，首尾空白仍能正确匹配', async () => {
+  const send = async (allowedChats: string[]) => {
+    const channel = gateway.store.createNotificationChannel({
+      name: `OneBot 白名单 ${Math.random()}`,
+      type: 'qq-onebot',
+      config: { endpoint: mockBase, token: 'bot-token', inbound: true, allowedChats },
+    });
+    const before = received.filter((item) => item.path === '/send_group_msg').length;
+    const response = await fetch(`${base}/api/bots/${channel.id}/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer bot-token' },
+      body: JSON.stringify({ post_type: 'message', message_type: 'group', group_id: 123, raw_message: 'hello' }),
+    });
+    assert.equal(response.status, 200);
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      const replies = received.filter((item) => item.path === '/send_group_msg');
+      if (replies.length > before) return String(replies.at(-1)!.body.message);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.fail('OneBot reply not sent');
+  };
+
+  assert.match(await send(['   ', '']), /白名单/);
+  assert.match(await send([' group:123 ']), /还没有绑定数据库连接/);
+});
+
 test('飞书 inbound 消息经只读 Agent 回复', async () => {
   const boot = await api('/bootstrap');
   const demo = boot.body.connections.find((connection: any) => connection.engine === 'sqlite');

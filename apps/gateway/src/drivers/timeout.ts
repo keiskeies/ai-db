@@ -1,5 +1,10 @@
 import { DbError } from './types';
 
+/** 所有可取消的写入/导出链路共用同一错误码，避免被上层 catch 吞成普通失败。 */
+export function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new DbError('工具执行已取消', { code: 'ABORTED' });
+}
+
 /**
  * 给单次查询套上超时。超时后调用 onTimeout 主动断开底层连接，
  * 否则慢命令（如 Redis KEYS、DM 全表扫描）会继续占用连接。

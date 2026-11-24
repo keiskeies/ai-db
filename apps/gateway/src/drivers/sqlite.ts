@@ -4,6 +4,7 @@ import { classifyStatement, type ColumnInfo, type ForeignKeyInfo, type IndexInfo
 import type { Driver, DriverTestResult, RunOptions } from './types';
 import { DbError, estimateValueBytes, MAX_RESULT_BYTES, toRowArray } from './types';
 import { wrapSelectLimit } from './sqlCap';
+import { throwIfAborted } from './timeout';
 
 /**
  * node:sqlite 只接受 null / number / bigint / string / Uint8Array。
@@ -131,11 +132,14 @@ export class SqliteDriver implements Driver {
     return this.runParams(sql, [], opts);
   }
 
-  async execScript(sql: string): Promise<void> {
+  async execScript(sql: string, _database?: string, opts: RunOptions = {}): Promise<void> {
+    throwIfAborted(opts.signal);
     if (this.txSessions.size) throw new DbError('有进行中的事务，无法执行脚本', { code: 'TX_ACTIVE' });
     try {
       this.db.exec(sql);
+      throwIfAborted(opts.signal);
     } catch (err: any) {
+      if (opts.signal?.aborted) throw err;
       try {
         this.db.exec('ROLLBACK');
       } catch {

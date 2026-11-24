@@ -345,3 +345,121 @@ test('单条 ALTER 多列 MODIFY COLUMN 只算一条语句，不会被多语句�
   assert.equal(classification.statements.length, 1);
   assert.equal(classification.risk, 'ddl');
 });
+
+test('批量脚本中途失败仍返回已执行结果，避免模型误判副作用', async () => {
+  const env = setup();
+  try {
+    const result = await env.runSql(env.conn.id, {
+      sql: 'CREATE TABLE partial_batch (id INTEGER PRIMARY KEY); INSERT INTO missing_table VALUES (1); INSERT INTO partial_batch VALUES (1);',
+    });
+    assert.equal(result.ok, false);
+    const data = result.data as { sets?: unknown[]; partial?: boolean; failedStatementIndex?: number; appliedStatements?: number };
+    assert.equal(data.partial, true);
+    assert.equal(data.sets?.length, 1, '已成功的第一条结果必须回传给模型');
+    assert.equal(data.failedStatementIndex, 1);
+    assert.equal(data.appliedStatements, 1);
+    const schema = await env.manager.schema(env.conn.id);
+    assert.ok(schema.flatMap((item) => item.tables).some((table) => table.name === 'partial_batch'), '第一条 DDL 必须真实生效');
+    const check = await env.manager.query(env.conn.id, 'SELECT COUNT(*) AS n FROM partial_batch', { actor: 'agent' });
+    assert.equal(Number(check.sets[0].rows[0][0]), 0, '失败后的第三条不能继续执行');
+  } finally {
+    await env.cleanup();
+  }
+});
+
+test('ToolExecutor 把 abort 接到本次执行追踪，正在等待的工具返回 ABORTED', async () => {
+  const env = setup();
+  const controller = new AbortController();
+  const originalQuery = env.manager.query.bind(env.manager);
+  const originalCancel = env.manager.cancelExecution.bind(env.manager);
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  let observedExecutionId: string | undefined;
+  let cancelledExecutionId: string | undefined;
+  let rejectQuery!: (error: Error) => void;
+  try {
+    env.manager.query = async (_connectionId, _sql, opts) => {
+      observedExecutionId = opts.executionId;
+      markStarted();
+      return new Promise((_resolve, reject) => { rejectQuery = reject; });
+    };
+    env.manager.cancelExecution = (executionId) => {
+      cancelledExecutionId = executionId;
+      rejectQuery(Object.assign(new Error('connection destroyed'), { code: 'CONNECTION_LOST' }));
+      return true;
+    };
+    const pending = env.executor.execute(
+      { id: 'abort-1', name: 'run_sql', args: { connectionId: env.conn.id, sql: 'SELECT 1' } },
+      { sessionId: 'abort-session', connectionId: env.conn.id, signal: controller.signal },
+    );
+    await started;
+    assert.ok(observedExecutionId, 'executionId 必须传到 manager');
+    controller.abort();
+    const result = await pending;
+    assert.equal(result.ok, false);
+    assert.equal(result.error?.code, 'ABORTED');
+    assert.equal(cancelledExecutionId, observedExecutionId, '取消必须命中本次调用，而不是其他执行');
+  } finally {
+    env.manager.query = originalQuery;
+    env.manager.cancelExecution = originalCancel;
+    await env.cleanup();
+  }
+});
+
+test('驱动启动期间取消会保留 abandoned 标记，SQL/参数化/结构化/向量查询均不执行', async () => {
+  const env = setup();
+  const originalDriverFor = (env.manager as any).driverFor.bind(env.manager);
+  let runs = 0;
+  const result = { columns: [], rows: [], rowCount: 0, affected: 0, durationMs: 0, truncated: false } as any;
+  const fakeDriver = {
+    run: async () => { runs++; return result; },
+    runParams: async () => { runs++; return result; },
+    executeQuery: async () => { runs++; return result; },
+    vectorSearch: async () => { runs++; return result; },
+  };
+  try {
+    (env.manager as any).driverFor = async () => fakeDriver;
+    const operations = [
+      (id: string) => env.manager.query(env.conn.id, 'SELECT 1', { actor: 'agent', executionId: id }),
+      (id: string) => env.manager.runParams(env.conn.id, 'SELECT ?', [1], { actor: 'agent', executionId: id }),
+      (id: string) => env.manager.queryStructured(env.conn.id, { language: 'redis', command: 'GET', args: ['k'] }, { actor: 'agent', executionId: id }),
+      (id: string) => env.manager.vectorSearch(env.conn.id, { language: 'vector', collection: 'items', vector: [1], topK: 1 }, { actor: 'agent', executionId: id }),
+    ];
+    for (const [index, operation] of operations.entries()) {
+      const id = `startup-abort-${index}`;
+      const pending = operation(id);
+      assert.equal(env.manager.cancelExecution(id), true, 'driverFor 等待期间也必须命中活动执行');
+      await assert.rejects(pending, (error: any) => error.code === 'ABORTED');
+      assert.equal((env.manager as any).activeExecutions.has(id), false, '取消路径必须清理追踪记录');
+    }
+    assert.equal(runs, 0, 'abandoned 的执行不能驱动启动后继续写库');
+  } finally {
+    (env.manager as any).driverFor = originalDriverFor;
+    await env.cleanup();
+  }
+});
+
+test('批量脚本在执行间隙收到取消后停止后续语句', async () => {
+  const env = setup();
+  const originalDriverFor = (env.manager as any).driverFor.bind(env.manager);
+  let runs = 0;
+  const fakeDriver = {
+    run: async () => {
+      runs++;
+      env.manager.cancelExecution('batch-abort');
+      return { columns: [], rows: [], rowCount: 0, affected: 0, durationMs: 0, truncated: false } as any;
+    },
+  };
+  try {
+    (env.manager as any).driverFor = async () => fakeDriver;
+    await assert.rejects(
+      () => env.manager.query(env.conn.id, 'SELECT 1; SELECT 2; SELECT 3', { actor: 'agent', executionId: 'batch-abort' }),
+      (error: any) => error.code === 'ABORTED',
+    );
+    assert.equal(runs, 1, '取消后不能继续执行第二条及后续语句');
+    assert.equal((env.manager as any).activeExecutions.has('batch-abort'), false);
+  } finally {
+    (env.manager as any).driverFor = originalDriverFor;
+    await env.cleanup();
+  }
+});

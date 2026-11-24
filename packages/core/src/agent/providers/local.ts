@@ -13,7 +13,7 @@ import type { Forbidden } from '../local/business';
 import { forbiddenFromGlossary, forbiddenTableReason, matchSqlExample } from '../local/business';
 import type { LocalLang } from '../local/text';
 import { localLang, localText } from '../local/text';
-import { estimateTokens } from '../prompt';
+import { estimateMessagesTokens, estimateTokens } from '../prompt';
 import { columnLabel, tableLabel } from '../suggest';
 import type {
   AgentContextData,
@@ -1005,7 +1005,7 @@ export class LocalProvider implements LlmProvider {
     // 术语词典先把简称展开成业务全称，「JS 的资产数」才对得上 sys_asset。
     const question = expandTerms(prompt, ctx.glossary);
     const lang = localLang(ctx.locale);
-    const tokensIn = estimateTokens(prompt + req.system);
+    const tokensIn = estimateMessagesTokens(req.messages) + estimateTokens(req.system);
     let out = '';
 
     const finish = async function* (text: string): AsyncGenerator<ProviderEvent> {

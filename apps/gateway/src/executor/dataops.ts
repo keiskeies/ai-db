@@ -28,6 +28,8 @@ export const exportResultTool = defineTool('export_result', async (call, ctx, s)
     allowMulti: false,
     autoLimit: false,
     actor: 'agent',
+    executionId: ctx.executionId,
+    signal: ctx.signal,
     // G2：导出查询与 /export 路由同口径（120s），此前漏传。
     timeoutMs: EXPORT_QUERY_TIMEOUT_MS,
   });
@@ -41,6 +43,7 @@ export const exportResultTool = defineTool('export_result', async (call, ctx, s)
     rows: set.rows,
     tableName,
     engine: conn.engine,
+    signal: ctx.signal,
   });
   return ok(started, `已导出 ${file.rows} 行为 ${format.toUpperCase()}`, { ...file, format, table: tableName });
 });
@@ -55,6 +58,9 @@ export const importCsvTool = defineTool('import_csv', async (call, ctx, s) => {
     hasHeader: a.hasHeader !== false,
     delimiter: typeof a.delimiter === 'string' ? a.delimiter : undefined,
     mapping: Array.isArray(a.mapping) ? (a.mapping as Array<{ column: string; sourceIndex?: number }>) : undefined,
+    database: s.databaseOf(call, conn),
+    executionId: ctx.executionId,
+    signal: ctx.signal,
   });
   s.manager.invalidate(conn.id);
   return ok(started, `已导入 ${result.inserted} 行`, result);
@@ -64,7 +70,16 @@ export const backupDatabaseTool = defineTool('backup_database', async (call, ctx
   const a = call.args;
   const started = s.started;
   const conn = s.requireConnection(call, ctx);
-  const backup = await dumpDatabase(s.store, s.manager, s.config, conn.id, s.databaseOf(call, conn), typeof a.label === 'string' ? a.label : undefined);
+  const backup = await dumpDatabase(
+    s.store,
+    s.manager,
+    s.config,
+    conn.id,
+    s.databaseOf(call, conn),
+    typeof a.label === 'string' ? a.label : undefined,
+    ctx.signal,
+    ctx.executionId,
+  );
   return ok(started, `备份完成：${backup.tables} 张表 / ${backup.rows} 行`, backup, { backupPath: backup.path });
 });
 

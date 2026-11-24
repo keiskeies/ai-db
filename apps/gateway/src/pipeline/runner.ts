@@ -14,7 +14,7 @@ import type { ConnectionManager } from '../manager';
 import type { Store } from '../store';
 import { DuckdbSession } from './duckdb';
 import { executeStep } from './steps';
-import { PipelineError, PipelineAbortedError, emptyOutput, type RunFrame, type StepContext, type StepOutput } from './types';
+import { PipelineError, emptyOutput, type RunFrame, type StepContext, type StepOutput } from './types';
 
 /**
  * 流水线编排器。
@@ -45,6 +45,8 @@ export interface RunPipelineOptions {
   uptoIndex?: number;
   onEvent?: (event: PipelineEvent) => void;
   shouldAbort?: () => boolean;
+  signal?: AbortSignal;
+  executionId?: string;
 }
 
 export interface PipelineRunOutcome {
@@ -165,7 +167,9 @@ export async function runPipeline(deps: PipelineDeps, opts: RunPipelineOptions):
       session ??= new DuckdbSession(workDir);
       return session;
     },
-    shouldAbort: () => opts.shouldAbort?.() === true,
+    shouldAbort: () => opts.shouldAbort?.() === true || opts.signal?.aborted === true,
+    signal: opts.signal,
+    executionId: opts.executionId,
     previewOnly: opts.previewOnly === true,
   };
 
@@ -175,7 +179,14 @@ export async function runPipeline(deps: PipelineDeps, opts: RunPipelineOptions):
     for (let index = 0; index < steps.length; index += 1) {
       const step = steps[index];
       const recorded = run.steps[index];
-      if (ctx.shouldAbort()) throw new PipelineAbortedError();
+      if (ctx.shouldAbort()) {
+        failed = true;
+        run.status = 'error';
+        run.error = '数据流已取消';
+        recorded.status = 'skipped';
+        await emit({ type: 'step-done', stepId: step.id, index, total: steps.length, run: recorded });
+        continue;
+      }
       if (failed) {
         recorded.status = 'skipped';
         await emit({ type: 'step-done', stepId: step.id, index, total: steps.length, run: recorded });

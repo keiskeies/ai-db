@@ -97,6 +97,33 @@ export class BridgeError extends TransportError {
   }
 }
 
+export type RequestOptions = Pick<RequestInit, 'signal'>;
+
+/** 同时支持调用方取消和超时；即使底层 request 未及时响应 AbortSignal，也能释放调用方锁。 */
+export async function requestWithTimeout<T>(
+  request: (signal: AbortSignal) => Promise<T>,
+  timeoutMs = 15_000,
+  timeoutMessage = '请求超时，请重试。',
+  controller = new AbortController(),
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let rejectAbort!: (reason: unknown) => void;
+  const aborted = new Promise<never>((_, reject) => { rejectAbort = reject; });
+  const onAbort = () => rejectAbort(controller.signal.reason ?? new Error(timeoutMessage));
+  controller.signal.addEventListener('abort', onAbort, { once: true });
+  if (controller.signal.aborted) onAbort();
+  timer = setTimeout(() => controller.abort(new Error(timeoutMessage)), timeoutMs);
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => request(controller.signal)),
+      aborted,
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    controller.signal.removeEventListener('abort', onAbort);
+  }
+}
+
 export class BridgeClient {
   constructor(public config: BridgeConfig) {}
 
@@ -135,16 +162,16 @@ export class BridgeClient {
     return this.request<{ session: AgentSessionMeta }>(`/agent/sessions/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) });
   }
 
-  session(id: string) {
-    return this.request<SessionDetail>(`/agent/sessions/${id}`);
+  session(id: string, options?: RequestOptions) {
+    return this.request<SessionDetail>(`/agent/sessions/${id}`, options);
   }
 
-  createSession(body: { connectionId?: string; database?: string; permissionMode?: PermissionMode; title?: string }) {
-    return this.request<{ session: AgentSessionMeta }>('/agent/sessions', { method: 'POST', body: JSON.stringify(body) });
+  createSession(body: { connectionId?: string; database?: string; permissionMode?: PermissionMode; title?: string }, options?: RequestOptions) {
+    return this.request<{ session: AgentSessionMeta }>('/agent/sessions', { ...options, method: 'POST', body: JSON.stringify(body) });
   }
 
-  deleteSession(id: string) {
-    return this.request<void>(`/agent/sessions/${id}`, { method: 'DELETE' });
+  deleteSession(id: string, options?: RequestOptions) {
+    return this.request<void>(`/agent/sessions/${id}`, { ...options, method: 'DELETE' });
   }
 
   databases(connectionId: string) {
@@ -339,8 +366,29 @@ export class BridgeClient {
     return this.request<{ ok: boolean }>(`/agent/approvals/${id}`, { method: 'POST', body: JSON.stringify({ decision, scope }) });
   }
 
-  abort(sessionId: string) {
-    return this.request<{ ok: boolean }>(`/agent/sessions/${sessionId}/abort`, { method: 'POST' });
+  abort(sessionId: string, timeoutMs = 0) {
+    const controller = new AbortController();
+    const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
+    return this.request<{ ok: boolean }>(`/agent/sessions/${sessionId}/abort`, { method: 'POST', signal: controller.signal }).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
+  }
+
+  async attachmentImageSource(id: string): Promise<{ url: string; revoke: () => void }> {
+    const res = await fetch(`${this.config.baseUrl}/api/agent/attachments/${encodeURIComponent(id)}`, {
+      headers: { authorization: `Bearer ${this.config.token}` },
+    });
+    if (!res.ok) throw new BridgeError(`图片读取失败（${res.status}）`, 'ATTACHMENT_ERROR', res.status);
+    if (Platform.OS === 'web') {
+      const url = URL.createObjectURL(await res.blob());
+      return { url, revoke: () => URL.revokeObjectURL(url) };
+    }
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+    }
+    return { url: `data:${res.headers.get('content-type') ?? 'image/jpeg'};base64,${btoa(binary)}`, revoke: () => undefined };
   }
 
   devices() {
@@ -401,8 +449,8 @@ export class BridgeClient {
     return this.request<{ pipeline: PipelineInfo }>(`/pipelines/${encodeURIComponent(id)}/state/reset`, { method: 'POST' });
   }
 
-  updateSession(id: string, patch: { title?: string; archived?: boolean }) {
-    return this.request<{ session: AgentSessionMeta }>(`/agent/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
+  updateSession(id: string, patch: { title?: string; archived?: boolean }, options?: RequestOptions) {
+    return this.request<{ session: AgentSessionMeta }>(`/agent/sessions/${id}`, { ...options, method: 'PATCH', body: JSON.stringify(patch) });
   }
 }
 

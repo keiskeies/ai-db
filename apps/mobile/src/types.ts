@@ -1,4 +1,4 @@
-import type { AgentPlanItem, QueryBatchResult, Risk, ToolResult } from '@aidb/core';
+import type { AgentAbortCause, AgentPlanItem, AgentStopReason, ProviderUsage, QueryBatchResult, QuestionSuggestion, Risk, ToolResult } from '@aidb/core';
 
 export type TabKey = 'chat' | 'data' | 'tools' | 'me';
 
@@ -18,8 +18,12 @@ export type TimelineItem =
   | { kind: 'text'; text: string; step?: number }
   | { kind: 'tool'; callId: string };
 
-export interface LiveTurn {
+export interface LiveTurn extends ProviderUsage {
+  sessionId: string;
+  generation: number;
+  turnId?: string;
   userText: string;
+  userImages?: string[];
   text: string;
   thinking: string;
   tools: LiveTool[];
@@ -29,15 +33,38 @@ export interface LiveTurn {
   streamThinking: string;
   plan: AgentPlanItem[];
   status: 'streaming' | 'awaiting' | 'done' | 'aborted' | 'error';
+  stop?: AgentStopReason;
+  abortCause?: AgentAbortCause;
   /** 中止事由：连接停摆不是用户点的停止，不能一律显示「已中止」。 */
   abortReason?: string;
+  pendingApprovalIds: string[];
+  suggestions: QuestionSuggestion[];
+  steps: number;
+  modelCalls: number;
+  contextTokens: number;
+  modelDurationMs: number;
   error?: string;
   startedAt: number;
+  endedAt?: number;
   memories: Array<{ id: string; title: string; kind: string }>;
+}
+
+export interface AgentTurnContext {
+  sessionId: string;
+  generation: number;
+  turnId?: string;
+  status: LiveTurn['status'];
+}
+
+export interface AgentTurnRef {
+  current?: AgentTurnContext;
 }
 
 export interface ApprovalState {
   approvalId: string;
+  sessionId?: string;
+  turnId?: string;
+  generation?: number;
   tool: string;
   args: unknown;
   risk: Risk;

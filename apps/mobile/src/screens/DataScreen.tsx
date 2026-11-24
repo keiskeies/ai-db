@@ -7,18 +7,18 @@ import { styles } from '../styles';
 import type { PickerKind } from '../types';
 import { Text, EngineLogo, ScreenHeading } from '../components/base';
 
-export function DataScreen({ databases, activeDatabase, tables, activeConnection, activeConnectionId, setPicker, loadSchema, openTable }: { databases: string[]; activeDatabase: string | undefined; tables: TableInfo[]; activeConnection: ConnectionConfig | undefined; activeConnectionId: string | undefined; setPicker: Dispatch<SetStateAction<PickerKind>>; loadSchema: (connectionId?: string, database?: string) => Promise<void>; openTable: (table: TableInfo, offset?: number) => Promise<void>; }) {
+export function DataScreen({ databases, activeDatabase, tables, activeConnection, activeConnectionId, setPicker, loadSchema, openTable, scopeLocked }: { databases: string[]; activeDatabase: string | undefined; tables: TableInfo[]; activeConnection: ConnectionConfig | undefined; activeConnectionId: string | undefined; setPicker: Dispatch<SetStateAction<PickerKind>>; loadSchema: (connectionId?: string, database?: string) => Promise<void>; openTable: (table: TableInfo, offset?: number) => Promise<void>; scopeLocked: boolean; }) {
   return (
             <View style={{ flex: 1 }}>
               <ScreenHeading icon={<Table2 size={16} color={colors.accent} />} title="数据" subtitle={`${databases.length > 1 && activeDatabase ? activeDatabase + ' · ' : ''}${tables.length} 个对象`} />
               <View style={styles.dataToolbar}>
-                <Pressable testID="m-data-connection" style={[styles.dataChip, { flex: 1 }]} onPress={() => setPicker('connections')}>
+                <Pressable testID="m-data-connection" style={[styles.dataChip, { flex: 1 }]} onPress={() => setPicker('connections')} disabled={scopeLocked}>
                   <EngineLogo engine={activeConnection?.engine} size={14} />
                   <Text style={styles.dataChipText} numberOfLines={1}>{activeConnection?.name ?? '选择连接'}</Text>
                   <ChevronDown size={12} color={colors.muted} />
                 </Pressable>
                 {databases.length > 1 ? (
-                  <Pressable testID="m-data-database" style={[styles.dataChip, { flex: 1 }]} onPress={() => setPicker('databases')}>
+                  <Pressable testID="m-data-database" style={[styles.dataChip, { flex: 1 }]} onPress={() => setPicker('databases')} disabled={scopeLocked}>
                     <Database size={12} color={colors.accent} />
                     <Text style={styles.dataChipText} numberOfLines={1}>{activeDatabase ?? '选择库'}</Text>
                     <ChevronDown size={12} color={colors.muted} />

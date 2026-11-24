@@ -72,6 +72,28 @@ test('连续无字节超过阈值时抛 PROVIDER_STALLED', async () => {
   );
 });
 
+test('停摆时底层 cancel 永不返回也不会拖死看门狗', { timeout: 1000 }, async () => {
+  let cancelled = false;
+  const source = new ReadableStream<Uint8Array>({
+    pull() { return new Promise<void>(() => undefined); },
+    cancel() { cancelled = true; return new Promise<void>(() => undefined); },
+  });
+  await assert.rejects(() => drain(source, 20), (err: any) => err?.code === PROVIDER_STALL_CODE);
+  assert.equal(cancelled, true);
+});
+
+test('SSE CRLF 跨块且断在第二个 CR 后仍能识别帧边界', async () => {
+  const encoder = new TextEncoder();
+  const chunks = ['data: {"value":1}\r', '\n\r', '\n', 'data: {"value":2}\r\n\r\n'];
+  const source = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+      controller.close();
+    },
+  });
+  assert.deepEqual(await drain(source, 1000), ['{"value":1}', '{"value":2}']);
+});
+
 test('已经收到的帧不因后续停摆而丢失', async () => {
   const encoder = new TextEncoder();
   const source = new ReadableStream<Uint8Array>({

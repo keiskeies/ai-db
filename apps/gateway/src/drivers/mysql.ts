@@ -1,5 +1,5 @@
 import mysql from 'mysql2/promise';
-import type { Pool, PoolConnection, FieldPacket, ResultSetHeader } from 'mysql2/promise';
+import type { Connection, Pool, PoolConnection, FieldPacket, ResultSetHeader } from 'mysql2/promise';
 import type { Readable } from 'node:stream';
 import { engineMeta } from '@aidb/core';
 import type { ColumnInfo, Engine, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo } from '@aidb/core';
@@ -7,6 +7,7 @@ import type { DriverTestResult, RowBatch, RowStreamDriver, RunOptions } from './
 import { DbError, estimateRowBytes, estimateValueBytes, MAX_RESULT_BYTES } from './types';
 import { injectMaxExecutionTime } from './sqlCap';
 import { nodeTlsOptions } from './ssl';
+import { throwIfAborted } from './timeout';
 
 export interface MysqlOptions {
   host: string;
@@ -468,7 +469,12 @@ export class MysqlDriver implements RowStreamDriver {
    * 空表也 yield 一个带 columns 的空批，调用方据此拿列信息。
    */
   async *iterateRows(sql: string, params: unknown[] = [], opts: RunOptions = {}): AsyncGenerator<RowBatch> {
+    if (opts.signal?.aborted) throw new DbError('工具执行已取消', { code: 'ABORTED' });
     const connection = await this.acquire(this.pool(opts.database));
+    if (opts.signal?.aborted) {
+      connection.destroy();
+      throw new DbError('工具执行已取消', { code: 'ABORTED' });
+    }
     const query = rawConnection(connection).query({ sql, values: params });
     const stream = query.stream({ highWaterMark: 8 });
     let columns: Array<{ name: string; type: string }> = [];
@@ -487,6 +493,8 @@ export class MysqlDriver implements RowStreamDriver {
       }, idleMs);
     };
     armIdle();
+    const onAbort = () => stream.destroy(new DbError('工具执行已取消', { code: 'ABORTED' }));
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
     let batch: unknown[][] = [];
     let batchBytes = 0;
     let rowCount = 0;
@@ -497,6 +505,7 @@ export class MysqlDriver implements RowStreamDriver {
     });
     try {
       for await (const row of stream) {
+        if (opts.signal?.aborted) throw new DbError('工具执行已取消', { code: 'ABORTED' });
         armIdle();
         if (isResultSetHeader(row)) continue;
         if (rowCount >= maxRows) break;
@@ -512,6 +521,7 @@ export class MysqlDriver implements RowStreamDriver {
           batchBytes = 0;
         }
       }
+      if (opts.signal?.aborted) throw new DbError('工具执行已取消', { code: 'ABORTED' });
       if (batch.length || !yielded) {
         yielded = true;
         yield { columns, rows: batch };
@@ -520,6 +530,7 @@ export class MysqlDriver implements RowStreamDriver {
       throw err instanceof DbError ? err : new DbError(err?.message ?? 'MySQL 流式读取失败', { code: err?.code ?? 'MYSQL_ERROR' });
     } finally {
       if (idleTimer) clearTimeout(idleTimer);
+      opts.signal?.removeEventListener('abort', onAbort);
       stream.destroy();
       query.on('error', () => {});
       if (drained) connection.release();
@@ -579,23 +590,32 @@ export class MysqlDriver implements RowStreamDriver {
    * 备份恢复用：一批语句一次往返。
    * 主池固定 multipleStatements:false（普通查询不该被拼接成语句流），脚本走这条一次性连接。
    */
-  async execScript(sql: string, database?: string): Promise<void> {
-    const connection = await mysql.createConnection({
-      host: this.opts.host,
-      port: this.opts.port,
-      user: this.opts.user,
-      password: this.opts.password,
-      database: database || this.opts.database || undefined,
-      ssl: nodeTlsOptions(this.opts),
-      connectTimeout: 10000,
-      multipleStatements: true,
-    });
+  async execScript(sql: string, database?: string, opts: RunOptions = {}): Promise<void> {
+    throwIfAborted(opts.signal);
+    let connection: Connection | undefined;
+    const onAbort = () => connection?.destroy();
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
     try {
-      await connection.query(sql);
+      connection = await mysql.createConnection({
+        host: this.opts.host,
+        port: this.opts.port,
+        user: this.opts.user,
+        password: this.opts.password,
+        database: database || this.opts.database || undefined,
+        ssl: nodeTlsOptions(this.opts),
+        connectTimeout: 10000,
+        multipleStatements: true,
+      });
+      throwIfAborted(opts.signal);
+      const active = connection;
+      await active.query(sql);
+      throwIfAborted(opts.signal);
     } catch (err: any) {
+      if (opts.signal?.aborted) throw new DbError('工具执行已取消', { code: 'ABORTED' });
       throw new DbError(err?.message ?? 'MySQL 脚本执行失败', { code: err?.code ?? 'MYSQL_SCRIPT_ERROR' });
     } finally {
-      await connection.end().catch(() => undefined);
+      opts.signal?.removeEventListener('abort', onAbort);
+      await connection?.end().catch(() => undefined);
     }
   }
 

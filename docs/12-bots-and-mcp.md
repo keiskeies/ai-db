@@ -207,10 +207,9 @@ Agent 审批闸的 `POST /query`、`/connections`、`/settings`，以及 `GET /c
   **设置 → 设备** 会显示「只读 MCP」徽标，可随时吊销，吊销后 token 立即失效。
 - 出站桥仍要求网关已启动；外部 Agent 可让 AiDB 查结构、跑只读 SQL、做统计，
   写库必须回到 AiDB 内走审批。
-- 兼容旧用法：显式设置 `AIDB_URL` + `AIDB_TOKEN` 也能启动 `scripts/aidb-mcp-server.mjs`
-  （现为 `packages/aidb-mcp/bin/server.mjs` 的薄转发），但那是网关主令牌、不受 scope 限制，
-  **不推荐**。
-- token 只从凭据文件或环境变量读取，不写日志、不进 stdout；server 的诊断信息只走 stderr。
+- Server 只接受 `pair` 写入的 `mcp:readonly` 设备凭据，不再回退到 `AIDB_TOKEN` 网关主令牌；
+  `AIDB_URL` 仅用于 `pair` 时填写 Bridge 地址。
+- token 只从凭据文件读取，不写日志、不进 stdout；server 的诊断信息只走 stderr。
 
 ### 4.6 Agent 工具目录（只读）
 

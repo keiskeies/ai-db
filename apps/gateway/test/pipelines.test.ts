@@ -1,6 +1,6 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer, type Server } from 'node:http';
+import { createServer, request as httpRequest, type Server } from 'node:http';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
@@ -52,6 +52,15 @@ async function api<T = any>(path: string, init: RequestInit = {}): Promise<{ sta
   return { status: response.status, body };
 }
 
+async function waitUntil(check: () => Promise<boolean>, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.fail('等待条件超时');
+}
+
 const SOURCE = [
   { id: 1, city: '上海', amt: 10, status: 'paid' },
   { id: 2, city: '上海', amt: 20, status: 'paid' },
@@ -60,6 +69,10 @@ const SOURCE = [
 ];
 
 let pushed: unknown[][] = [];
+let notifySlow!: () => void;
+const slowRequested = new Promise<void>((resolve) => { notifySlow = resolve; });
+let notifySlowDisconnect!: () => void;
+let slowDisconnectRequested = new Promise<void>((resolve) => { notifySlowDisconnect = resolve; });
 
 /** 假上游：支持 page/page_size 翻页、since 增量、以及 /hook 收数据。 */
 const upstream: Server = createServer((req, res) => {
@@ -72,6 +85,14 @@ const upstream: Server = createServer((req, res) => {
     const items = list.slice((page - 1) * size, page * size);
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify({ data: { items, total: list.length }, next_cursor: page * size < list.length ? String(page + 1) : null }));
+    return;
+  }
+  if (url.pathname === '/slow') {
+    notifySlow();
+    return;
+  }
+  if (url.pathname === '/slow-disconnect') {
+    notifySlowDisconnect();
     return;
   }
   if (url.pathname === '/hook' && req.method === 'POST') {
@@ -263,6 +284,73 @@ test('按主键先删后插：同一主键重跑不产生重复', async () => {
   const count = await api('/query', { method: 'POST', body: JSON.stringify({ connectionId: demo.id, sql: 'SELECT COUNT(*) AS c FROM pipeline_merged' }) });
   assert.equal(Number(count.body.batch.sets[0].rows[0][0]), 4, '两次运行后仍是 4 行');
 });
+
+test('取消运行会中断挂死的 HTTP 请求，并阻止后续写库', async () => {
+  const id = await createPipeline('可取消运行', {
+    version: 1,
+    steps: [
+      { id: 'pull', type: 'http.fetch', with: { url: `${upstreamBase}/slow`, extract: '$' } },
+      { id: 'save', type: 'db.write', with: { connectionId: demo.id, table: 'pipeline_after_cancel', createMissing: true } },
+    ],
+  });
+  const started = Date.now();
+  const running = api<{ run: PipelineRunInfo }>(`/pipelines/${id}/run`, { method: 'POST', body: JSON.stringify({}) });
+  await slowRequested;
+  const cancelled = await api(`/pipelines/${id}/cancel`, { method: 'POST' });
+  assert.equal(cancelled.status, 200);
+  const finished = await running;
+  assert.equal(finished.status, 200);
+  assert.equal(finished.body.run.status, 'error');
+  assert.match(finished.body.run.error ?? '', /取消/);
+  assert.ok(Date.now() - started < 3000, '取消应在超时前返回，不等待 30 秒');
+  assert.equal(finished.body.run.steps[1].status, 'skipped', '取消后不能继续执行写库步骤');
+  const tables = await api<{ batch: { sets: Array<{ rows: unknown[][] }> } }>('/query', {
+    method: 'POST',
+    body: JSON.stringify({ connectionId: demo.id, sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pipeline_after_cancel'" }),
+  });
+  assert.equal(tables.body.batch.sets[0].rows.length, 0, '后续写库步骤没有执行');
+});
+
+for (const endpoint of ['run', 'trial'] as const) {
+  test(`JSON /${endpoint} 客户端断连会取消挂死请求并阻止后续写库`, async () => {
+    slowDisconnectRequested = new Promise<void>((resolve) => { notifySlowDisconnect = resolve; });
+    const table = `pipeline_disconnect_${endpoint}`;
+    const id = await createPipeline(`断连取消-${endpoint}`, {
+      version: 1,
+      steps: [
+        { id: 'pull', type: 'http.fetch', with: { url: `${upstreamBase}/slow-disconnect`, extract: '$' } },
+        { id: 'save', type: 'db.write', with: { connectionId: demo.id, table, createMissing: true } },
+      ],
+    });
+    const req = httpRequest(`${base}/api/pipelines/${id}/${endpoint}`, {
+      method: 'POST',
+      headers: { ...headers, 'content-length': Buffer.byteLength(JSON.stringify({ execute: true })) },
+    });
+    req.on('error', () => undefined);
+    req.end(JSON.stringify({ execute: true }));
+    try {
+      await slowDisconnectRequested;
+      req.destroy();
+      await waitUntil(async () => {
+        const state = await api<{ ok: boolean }>(`/pipelines/${id}/cancel`, { method: 'POST', body: JSON.stringify({}) });
+        return state.body.ok === false;
+      });
+      const tables = await api<{ batch: { sets: Array<{ rows: unknown[][] }> } }>('/query', {
+        method: 'POST',
+        body: JSON.stringify({ connectionId: demo.id, sql: `SELECT name FROM sqlite_master WHERE type = 'table' AND name = '${table}'` }),
+      });
+      assert.equal(tables.body.batch.sets[0].rows.length, 0, '断连后不能继续执行写库步骤');
+      if (endpoint === 'run') {
+        const history = await api<{ runs: PipelineRunInfo[] }>(`/pipelines/${id}/runs`);
+        assert.equal(history.body.runs[0]?.status, 'error');
+        assert.match(history.body.runs[0]?.error ?? '', /取消/);
+      }
+    } finally {
+      req.destroy();
+      await api(`/pipelines/${id}/cancel`, { method: 'POST', body: JSON.stringify({}) });
+    }
+  });
+}
 
 test('脚本步骤：未开启时拒绝执行，开启后按契约做纯数据变换', async () => {
   const spec: PipelineSpec = {

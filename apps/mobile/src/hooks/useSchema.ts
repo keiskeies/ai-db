@@ -3,7 +3,7 @@ import type { ConnectionConfig, TableInfo } from '@aidb/core';
 import type { BridgeClient, DataPage } from '../bridge';
 import type { PickerKind } from '../types';
 
-export function useSchema(client: BridgeClient, { setPicker, setSelectedTable, setDataPage }: { setPicker: Dispatch<SetStateAction<PickerKind>>; setSelectedTable: Dispatch<SetStateAction<TableInfo | null>>; setDataPage: Dispatch<SetStateAction<DataPage | null>> }) {
+export function useSchema(client: BridgeClient, { setPicker, setSelectedTable, setDataPage, scopeLockedRef, sessionMutationLockedRef }: { setPicker: Dispatch<SetStateAction<PickerKind>>; setSelectedTable: Dispatch<SetStateAction<TableInfo | null>>; setDataPage: Dispatch<SetStateAction<DataPage | null>>; scopeLockedRef?: { current: boolean }; sessionMutationLockedRef?: { current: boolean } }) {
   const [connections, setConnections] = useState<ConnectionConfig[]>([]);
   const [activeConnectionId, setActiveConnectionId] = useState<string | undefined>();
   const [databases, setDatabases] = useState<string[]>([]);
@@ -13,10 +13,31 @@ export function useSchema(client: BridgeClient, { setPicker, setSelectedTable, s
 
   const activeConnectionIdRef = useRef<string | undefined>(undefined);
   const activeDatabaseRef = useRef<string | undefined>(undefined);
-  const schemaInFlightRef = useRef(false);
+  const databaseReadyForRef = useRef<string | undefined>(undefined);
+  const schemaRequestRef = useRef(0);
   const preferredDatabaseRef = useRef<string | undefined>(undefined);
   const pendingDatabasePickerRef = useRef(false);
-  const schemaPendingRef = useRef(false);
+  const schemaPendingRef = useRef<{ connectionId: string; database?: string } | undefined>(undefined);
+
+  const updateActiveConnectionId: Dispatch<SetStateAction<string | undefined>> = (value) => {
+    schemaRequestRef.current += 1;
+    schemaPendingRef.current = undefined;
+    setActiveConnectionId((prev) => {
+      const next = typeof value === 'function' ? value(prev) : value;
+      activeConnectionIdRef.current = next;
+      return next;
+    });
+  };
+
+  const updateActiveDatabase: Dispatch<SetStateAction<string | undefined>> = (value) => {
+    schemaRequestRef.current += 1;
+    schemaPendingRef.current = undefined;
+    setActiveDatabase((prev) => {
+      const next = typeof value === 'function' ? value(prev) : value;
+      activeDatabaseRef.current = next;
+      return next;
+    });
+  };
 
   const activeConnection = connections.find((c) => c.id === activeConnectionId);
 
@@ -29,58 +50,63 @@ export function useSchema(client: BridgeClient, { setPicker, setSelectedTable, s
   }, [activeDatabase]);
 
   const loadSchema = async (connectionId?: string, database?: string) => {
+    const request = ++schemaRequestRef.current;
     if (!connectionId) {
+      schemaPendingRef.current = undefined;
       setTables([]);
       return;
     }
-    if (schemaInFlightRef.current) {
-      // 在飞请求可能早于 invalidate 发出、回来的是旧结构。丢掉这次事件就永久丢了，
-      // 所以只记账，等它结束后补跑一次。
-      schemaPendingRef.current = true;
-      return;
-    }
-    schemaInFlightRef.current = true;
+    const snapshot = { connectionId, database };
+    schemaPendingRef.current = snapshot;
+    const isLatest = () => schemaRequestRef.current === request
+      && schemaPendingRef.current?.connectionId === connectionId
+      && schemaPendingRef.current?.database === database;
     try {
       const result = await client.schema(connectionId, database);
-      setTables(result.schemas.flatMap((schema) => schema.tables));
+      if (isLatest()) setTables(result.schemas.flatMap((schema) => schema.tables));
     } catch {
-      setTables([]);
+      if (isLatest()) setTables([]);
     } finally {
-      schemaInFlightRef.current = false;
-      if (schemaPendingRef.current) {
-        schemaPendingRef.current = false;
-        void loadSchema(connectionId, database);
-      }
+      if (schemaRequestRef.current === request) schemaPendingRef.current = undefined;
     }
   };
 
+  const scopeBlocked = (scopeLockedRef?.current ?? false) || (sessionMutationLockedRef?.current ?? false);
+
   useEffect(() => {
     if (!activeConnectionId) {
+      databaseReadyForRef.current = undefined;
       setDatabases([]);
-      setActiveDatabase(undefined);
+      updateActiveDatabase(undefined);
       setDatabaseReadyFor(undefined);
       setTables([]);
       return;
     }
+    if (scopeBlocked) return;
     let cancelled = false;
     (async () => {
-      let list: string[] = [];
+      let list: string[];
       try {
         list = (await client.databases(activeConnectionId)).databases ?? [];
       } catch {
-        list = [];
+        // 列表失败时尚未校验 preferredDatabase，保留它供下次加载使用。
+        return;
       }
-      if (cancelled) return;
+      if (cancelled || scopeLockedRef?.current || sessionMutationLockedRef?.current) return;
+      const wasReady = databaseReadyForRef.current === activeConnectionId;
+      const currentDatabase = activeDatabaseRef.current;
       setDatabases(list);
       const conn = connections.find((item) => item.id === activeConnectionId);
       const preferredSession = preferredDatabaseRef.current;
       preferredDatabaseRef.current = undefined;
       const preferred =
         (preferredSession && list.includes(preferredSession) ? preferredSession : undefined) ??
+        (wasReady && currentDatabase && list.includes(currentDatabase) ? currentDatabase : undefined) ??
         (conn?.database && list.includes(conn.database) ? conn.database : undefined) ??
         list[0] ??
         conn?.database;
-      setActiveDatabase(preferred);
+      updateActiveDatabase(preferred);
+      databaseReadyForRef.current = activeConnectionId;
       setDatabaseReadyFor(activeConnectionId);
       if (pendingDatabasePickerRef.current) {
         pendingDatabasePickerRef.current = false;
@@ -91,13 +117,17 @@ export function useSchema(client: BridgeClient, { setPicker, setSelectedTable, s
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeConnectionId, connections]);
+  }, [activeConnectionId, scopeBlocked]);
 
   useEffect(() => {
+    schemaRequestRef.current += 1;
+    schemaPendingRef.current = undefined;
     setSelectedTable(null);
     setDataPage(null);
     setDatabases([]);
+    databaseReadyForRef.current = undefined;
     setDatabaseReadyFor(undefined);
+    setTables([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeConnectionId]);
 
@@ -109,5 +139,5 @@ export function useSchema(client: BridgeClient, { setPicker, setSelectedTable, s
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeConnectionId, activeDatabase, databaseReadyFor]);
 
-  return { connections, setConnections, activeConnectionId, setActiveConnectionId, databases, activeDatabase, setActiveDatabase, databaseReadyFor, tables, activeConnection, loadSchema, activeConnectionIdRef, activeDatabaseRef, preferredDatabaseRef, pendingDatabasePickerRef };
+  return { connections, setConnections, activeConnectionId, setActiveConnectionId: updateActiveConnectionId, databases, activeDatabase, setActiveDatabase: updateActiveDatabase, databaseReadyFor, tables, activeConnection, loadSchema, activeConnectionIdRef, activeDatabaseRef, preferredDatabaseRef, pendingDatabasePickerRef };
 }

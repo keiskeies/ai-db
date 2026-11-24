@@ -91,6 +91,30 @@ async function hangingProvider(planItems: Array<{ text: string; status: string }
   return { baseUrl: `http://127.0.0.1:${port}/v1`, started };
 }
 
+async function incompleteProvider(): Promise<string> {
+  const server = createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '已完成一半' }, finish_reason: null }] })}\n\n`);
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'content_filter' }] })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  stubs.push({
+    server,
+    close: () => new Promise<void>((resolve) => {
+      server.closeAllConnections();
+      server.close(() => resolve());
+    }),
+  });
+  return `http://127.0.0.1:${port}/v1`;
+}
+
 function makeHost(): AgentHost {
   return new AgentHost({
     store: gateway.store,
@@ -404,6 +428,28 @@ test('跑满步数也落检查点：界面说「可继续」时服务端必须�
   assert.match(text, /为每张表补表注释/);
 });
 
+test('服务商未完成状态会保留部分输出、检查点与跨连接 resume', async () => {
+  await useStubProvider(await incompleteProvider());
+  const host = makeHost();
+  const session = gateway.store.createSession({ title: '服务商未完成' });
+  const events: AgentEvent[] = [];
+  await host.startTurn(session.id, { text: '继续处理' }, (event) => events.push(event));
+  assert.ok(events.some((event) => event.type === 'error' && event.stop === 'provider_incomplete'));
+  const assistant = gateway.store.listMessages(session.id).filter((message) => message.role === 'assistant');
+  assert.equal(assistant[0]?.content, '已完成一半');
+  assert.match(assistant.at(-1)?.content ?? '', /模型返回未完成状态/);
+  assert.doesNotMatch(assistant.at(-1)?.content ?? '', /无响应|超出输出上限/);
+  assert.equal(gateway.store.getSession(session.id)?.resume, 'provider_incomplete');
+  assert.equal(gateway.store.getSession(session.id)?.status, 'error');
+});
+
+test('服务商未完成检查点使用独立措辞', () => {
+  const text = buildResumeCheckpoint({ plan: [], steps: 2, toolCalls: 1, elapsedMs: 1000, toolTrace: ['run_sql'], cause: 'provider_incomplete' });
+  assert.match(text, /模型返回未完成状态/);
+  assert.match(text, /内容过滤、暂停或上下文超限/);
+  assert.doesNotMatch(text, /无响应|超出输出上限/);
+});
+
 test('分类那段确实把 max_steps 认成没做完，而不是留成 undefined', () => {
   // 整跑一遍回合要假模型 + 步数上限，而这个分支的错法只有一种：漏一条 stop。
   // 分类那段是 result 与 disconnected 的纯表达式，直接从源码里取出来当真代码跑，
@@ -425,6 +471,7 @@ test('分类那段确实把 max_steps 认成没做完，而不是留成 undefine
   assert.equal(classify(done('max_output_tokens'), false), 'truncated');
   assert.equal(classify(done('empty_response'), false), 'empty');
   assert.equal(classify(done('max_steps'), false), 'max_steps', '界面给「继续」时服务端必须留了东西可续');
+  assert.equal(classify(done('provider_incomplete'), false), 'provider_incomplete');
   // 反向也要钉住：说完了、以及用户自己喊的停，都不该留「可以继续」
   assert.equal(classify(done('end_turn'), false), undefined);
   assert.equal(classify({ status: 'aborted', abortCause: 'user' }, false), undefined);

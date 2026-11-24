@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { runPair, credentialsFromClaim } from '../bin/pair.mjs';
 
 const home = mkdtempSync(join(tmpdir(), 'aidb-mcp-pair-'));
@@ -82,6 +84,25 @@ test('rejects an invalid pairing code', async () => {
   assert.equal(result.ok, false);
   assert.equal(h.writes.length, 0);
   assert.ok(h.logs.some((l) => /6 位数字/.test(l)));
+});
+
+test('server refuses to fall back to the AIDB_TOKEN master credential when pairing is missing', () => {
+  const server = fileURLToPath(new URL('../bin/server.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, [server], {
+    env: {
+      ...process.env,
+      AIDB_MCP_CREDENTIALS: join(home, 'missing-credentials.json'),
+      AIDB_TOKEN: 'master-token-must-not-be-used',
+      AIDB_URL: 'http://127.0.0.1:8787',
+    },
+    encoding: 'utf8',
+    timeout: 5000,
+  });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /未找到 MCP 配对凭据/);
+  assert.match(result.stderr, /aidb-studio pair/);
+  assert.doesNotMatch(result.stderr, /master-token-must-not-be-used/);
 });
 
 test('credentialsFromClaim keeps deviceId and token', () => {

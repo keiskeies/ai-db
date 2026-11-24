@@ -52,6 +52,24 @@ test('readSqlStatements：行注释与空行被跳过', async () => {
   assert.deepEqual(statements, ['SELECT 1;', 'SELECT 2;']);
 });
 
+test('readSqlStatements：读取过程中取消会关闭输入流并立即停止', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bkp-abort-'));
+  const file = join(dir, 'dump.sql');
+  writeFileSync(file, Array.from({ length: 1000 }, (_, i) => `INSERT INTO t (id) VALUES (${i});`).join('\n'));
+  const controller = new AbortController();
+  const statements = readSqlStatements(file, controller.signal);
+  try {
+    const first = await statements.next();
+    assert.equal(first.done, false);
+    controller.abort();
+    await assert.rejects(statements.next(), { code: 'ABORTED' });
+  } finally {
+    controller.abort();
+    await statements.return(undefined);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('restoreDropStatements：oracle/dm/clickhouse 生成 DROP 前置', () => {
   const dump = 'CREATE TABLE "users" (id NUMBER(10) PRIMARY KEY);\nCREATE VIEW "v_active" AS SELECT 1 FROM users;\n';
   const oracle = restoreDropStatements('oracle' as never, dump);

@@ -133,7 +133,7 @@ async function httpFetch(values: Values, _input: StepOutput, ctx: StepContext): 
     } else if (paginate === 'cursor' && cursor !== undefined && cursor !== null && cursor !== '') {
       query[text(values.cursorParam, 'cursor')] = cursor;
     }
-    const response = await httpRequest({ url, method, headers, query, body: bodyValue, timeoutMs, auth });
+    const response = await httpRequest({ url, method, headers, query, body: bodyValue, timeoutMs, auth, signal: ctx.signal });
     pages += 1;
     bytes += response.bytes;
     status = response.status;
@@ -190,6 +190,8 @@ async function dbQuery(values: Values, _input: StepOutput, ctx: StepContext): Pr
     autoLimit: false,
     timeoutMs: ctx.settings.queryTimeoutMs,
     actor: 'user',
+    executionId: ctx.executionId,
+    signal: ctx.signal,
   });
   const set = batch.sets[batch.sets.length - 1];
   if (!set) return emptyOutput();
@@ -246,6 +248,7 @@ async function scriptStep(runtime: 'node' | 'python', values: Values, input: Ste
     payload: { rows: input.rows, columns: input.columns, params: ctx.params, state: ctx.state, run: { ...ctx.run } },
     timeoutMs: toInteger(values.timeoutMs, 30000, 1000, 120000),
     maxRows: toInteger(values.maxRows, 50000, 1, 200000),
+    signal: ctx.signal,
   });
   return output(result.rows, {
     raw: result.rows,
@@ -381,11 +384,13 @@ async function dbWrite(values: Values, input: StepOutput, ctx: StepContext): Pro
     return { rows, columns, raw: rows, preview, meta: { mode, table: tableName, batches: Math.ceil(rows.length / batchRows), dryRun: true } };
   }
 
+  if (ctx.shouldAbort()) throw new PipelineError('数据流已取消', 'PIPELINE_ABORTED');
   if (willCreate) {
-    await ctx.manager.query(conn.id, createDdl, { database, allowMulti: false, autoLimit: false, actor: 'user' });
+    await ctx.manager.query(conn.id, createDdl, { database, allowMulti: false, autoLimit: false, actor: 'user', executionId: ctx.executionId, signal: ctx.signal });
   }
   if (mode === 'replace' && target) {
-    await ctx.manager.query(conn.id, buildTruncate(conn.engine, tableName, schema), { database, allowMulti: false, autoLimit: false, actor: 'user' });
+    if (ctx.shouldAbort()) throw new PipelineError('数据流已取消', 'PIPELINE_ABORTED');
+    await ctx.manager.query(conn.id, buildTruncate(conn.engine, tableName, schema), { database, allowMulti: false, autoLimit: false, actor: 'user', executionId: ctx.executionId, signal: ctx.signal });
   }
 
   let written = 0;
@@ -396,11 +401,12 @@ async function dbWrite(values: Values, input: StepOutput, ctx: StepContext): Pro
     if (mode === 'delete_insert' && keys.length && target) {
       const deleteParams: unknown[] = [];
       for (const row of chunk) for (const key of keys) deleteParams.push(dbValue(row[key] ?? keySource(row, key, mapping)));
-      await ctx.manager.runParams(conn.id, buildDeleteMany(conn.engine, tableName, keys, chunk.length, schema), deleteParams, { database, actor: 'user' });
+      await ctx.manager.runParams(conn.id, buildDeleteMany(conn.engine, tableName, keys, chunk.length, schema), deleteParams, { database, actor: 'user', executionId: ctx.executionId, signal: ctx.signal });
+      if (ctx.shouldAbort()) throw new PipelineError('数据流已取消', 'PIPELINE_ABORTED');
     }
     const params: unknown[] = [];
     for (const row of chunk) for (const column of columns) params.push(dbValue(row[column]));
-    await ctx.manager.runParams(conn.id, buildInsert(conn.engine, tableName, columns, chunk.length, schema), params, { database, actor: 'user' });
+    await ctx.manager.runParams(conn.id, buildInsert(conn.engine, tableName, columns, chunk.length, schema), params, { database, actor: 'user', executionId: ctx.executionId, signal: ctx.signal });
     written += chunk.length;
     batches += 1;
   }
@@ -458,7 +464,7 @@ async function httpPush(values: Values, input: StepOutput, ctx: StepContext): Pr
       if (ctx.shouldAbort()) throw new PipelineError('数据流已取消', 'PIPELINE_ABORTED');
       const batch = batches[index];
       try {
-        const response = await httpRequest({ url, method, headers, body: renderBody(batch), timeoutMs, auth });
+        const response = await httpRequest({ url, method, headers, body: renderBody(batch), timeoutMs, auth, signal: ctx.signal });
         statuses.push(response.status);
         posted += batch.length;
       } catch (err: any) {
@@ -470,6 +476,7 @@ async function httpPush(values: Values, input: StepOutput, ctx: StepContext): Pr
     }
   });
   await Promise.allSettled(workers);
+  if (ctx.shouldAbort()) throw new PipelineError('数据流已取消', 'PIPELINE_ABORTED');
   if (stopOnError && firstError) throw firstError;
 
   return output(input.rows, {

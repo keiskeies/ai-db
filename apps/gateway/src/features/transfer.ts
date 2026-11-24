@@ -2,6 +2,7 @@ import { buildCreateTable, buildInsert, buildSelectTable, buildTruncate, type En
 import type { ConnectionManager } from '../manager';
 import type { Store } from '../store';
 import { supportsRowStream, supportsTransaction, type RowBatch } from '../drivers/types';
+import { throwIfAborted } from '../drivers/timeout';
 import { connectionSchema, q, tableRef } from './common';
 
 /**
@@ -102,22 +103,37 @@ export async function transferData(
     limit?: number;
     onEvent?: (event: TransferEvent) => void;
     shouldAbort?: () => boolean;
+    executionId?: string;
+    signal?: AbortSignal;
   },
 ): Promise<TransferResult> {
+  const checkAbort = () => {
+    if (opts.shouldAbort?.()) throw new TransferAbortedError();
+    throwIfAborted(opts.signal);
+  };
+  const isAbort = (err: unknown) => {
+    if (err instanceof TransferAbortedError || (err as { code?: string })?.code === 'ABORTED') return true;
+    checkAbort();
+    return false;
+  };
+  checkAbort();
   const source = store.getConnection(opts.sourceId);
   const target = store.getConnection(opts.targetId);
   if (!source || !target) throw new Error('连接不存在');
   if (target.readonly) throw new Error('目标连接为只读，无法写入');
   const emit = async (event: TransferEvent) => {
+    checkAbort();
     opts.onEvent?.(event);
     // 同步驱动（SQLite/DuckDB 等）的批次不产生真实 I/O 等待，整段循环会停在微任务里，
     // SSE 要等到传输结束才出站。让出一个宏任务，进度才能逐条到达客户端。
     if (opts.onEvent) await new Promise<void>((resolve) => setImmediate(resolve));
+    checkAbort();
   };
   const [sourceSchemas, targetSchemas] = await Promise.all([
     manager.schema(opts.sourceId, opts.sourceDatabase, true),
     manager.schema(opts.targetId, opts.targetDatabase, true),
   ]);
+  checkAbort();
   const sourceTables = sourceSchemas.flatMap((schema) => schema.tables).filter((table) => table.type === 'table');
   const selected = opts.tables?.length ? sourceTables.filter((table) => opts.tables!.includes(table.name)) : sourceTables;
   if (!selected.length) throw new Error('没有可传输的表');
@@ -128,7 +144,7 @@ export async function transferData(
   await emit({ type: 'start', mode, tables: selected.map((table) => table.name) });
 
   for (let index = 0; index < selected.length; index += 1) {
-    if (opts.shouldAbort?.()) throw new TransferAbortedError();
+    checkAbort();
     const srcTable = selected[index];
     const tableStarted = Date.now();
     let created = false;
@@ -155,7 +171,10 @@ export async function transferData(
           allowMulti: true,
           autoLimit: false,
           actor: 'user',
+          executionId: opts.executionId,
+          signal: opts.signal,
         });
+        checkAbort();
         created = true;
         await emit({
           type: 'phase-done',
@@ -166,6 +185,7 @@ export async function transferData(
           ddl,
         });
         const refreshed = await manager.schema(opts.targetId, opts.targetDatabase, true);
+        checkAbort();
         targetTable = refreshed.flatMap((schema) => schema.tables).find((table) => table.name.toLowerCase() === srcTable.name.toLowerCase());
         if (!targetTable) throw new Error('目标表创建后仍未找到');
       }
@@ -181,7 +201,7 @@ export async function transferData(
       const sourceDriver = await manager.rawDriver(opts.sourceId);
       const streamed = supportsRowStream(sourceDriver);
       const batches: AsyncGenerator<RowBatch> = streamed
-        ? sourceDriver.iterateRows(sourceSql, [], { database: opts.sourceDatabase, maxRows })
+        ? sourceDriver.iterateRows(sourceSql, [], { database: opts.sourceDatabase, maxRows, signal: opts.signal })
         : (async function* (): AsyncGenerator<RowBatch> {
             const sourceBatch = await manager.query(opts.sourceId, sourceSql, {
               database: opts.sourceDatabase,
@@ -189,7 +209,10 @@ export async function transferData(
               allowMulti: false,
               autoLimit: false,
               actor: 'user',
+              executionId: opts.executionId,
+              signal: opts.signal,
             });
+            checkAbort();
             const set = sourceBatch.sets[0];
             if (!set) throw new Error('源表没有返回结果');
             yield { columns: set.columns, rows: set.rows };
@@ -197,6 +220,7 @@ export async function transferData(
       let readFailed = false;
       try {
         const first = await batches.next();
+        checkAbort();
         const firstBatch: RowBatch = first.done ? { columns: [], rows: [] } : first.value;
         const sourceColumns = firstBatch.columns.map((column) => column.name);
         await emit({
@@ -220,6 +244,7 @@ export async function transferData(
         let canTx = false;
         try {
           canTx = supportsTransaction(await manager.rawDriver(opts.targetId));
+          checkAbort();
         } catch {
           // 目标连接不可用会在执行时报错，这里先按不可事务处理。
         }
@@ -228,20 +253,26 @@ export async function transferData(
         const runOpts = (extra: Record<string, unknown> = {}) => ({
           database: opts.targetDatabase,
           actor: 'user' as const,
+          executionId: opts.executionId,
+          signal: opts.signal,
           ...extra,
           ...(useTx ? { sessionId: txId } : {}),
         });
 
         if (useTx) {
+          checkAbort();
           await manager.beginTransaction(txId, opts.targetId, runOpts());
         }
+        let committed = false;
         try {
+          checkAbort();
           if (mode === 'replace' && !created) {
             phase = 'truncate';
             await emit({ type: 'phase-start', table: srcTable.name, phase });
             const truncateStarted = Date.now();
             const truncateSql = buildTruncate(target.engine, targetTable.name, connectionSchema(target, targetTable));
             await manager.query(opts.targetId, truncateSql, runOpts({ allowMulti: false, autoLimit: false }));
+            checkAbort();
             truncated = true;
             await emit({ type: 'phase-done', table: srcTable.name, phase, durationMs: Date.now() - truncateStarted });
           }
@@ -249,7 +280,9 @@ export async function transferData(
           const identityCol = (targetTable.columns ?? []).find((column) => column.autoIncrement);
           const identityOn = target.engine === 'sqlserver' && identityCol && columns.some((column) => column.toLowerCase() === identityCol.name.toLowerCase());
           if (identityOn) {
+            checkAbort();
             await manager.query(opts.targetId, `SET IDENTITY_INSERT ${targetRef} ON`, runOpts());
+            checkAbort();
           }
 
           const indexes = columns.map((column) => sourceColumns.indexOf(column));
@@ -264,9 +297,9 @@ export async function transferData(
           let iteratorDone = first.done;
           let rowOffset = 0;
           for (;;) {
-            if (opts.shouldAbort?.()) throw new TransferAbortedError();
+            checkAbort();
             while (pending.length) {
-              if (opts.shouldAbort?.()) throw new TransferAbortedError();
+              checkAbort();
               const chunk = pending.slice(0, batchSize);
               pending = pending.slice(batchSize);
               const params: unknown[] = [];
@@ -322,7 +355,9 @@ export async function transferData(
           await emit({ type: 'progress', table: srcTable.name, rows: inserted, totalRows: inserted });
 
           if (useTx) {
+            checkAbort();
             await manager.commitTransaction(txId, 'user');
+            committed = true;
           }
           await emit({
             type: 'phase-done',
@@ -345,8 +380,12 @@ export async function transferData(
             limitReached,
           });
         } catch (err: any) {
-          if (err instanceof TransferAbortedError) throw err;
-          if (useTx) {
+          if (isAbort(err)) {
+            if (useTx && !committed) await manager.rollbackTransaction(txId, 'user').catch(() => undefined);
+            if (committed) results.push({ table: srcTable.name, status: 'ok', rows: inserted, created, truncated });
+            throw err instanceof TransferAbortedError ? err : new TransferAbortedError();
+          }
+          if (useTx && !committed) {
             // 中途失败：回滚保住原表，不留下「清空一半」的目标表。
             await manager.rollbackTransaction(txId, 'user').catch(() => undefined);
             truncated = false;
@@ -356,7 +395,7 @@ export async function transferData(
           await emit({ type: 'table-error', table: srcTable.name, error: message, phase, durationMs: Date.now() - tableStarted, rows: inserted });
         }
       } catch (err: any) {
-        if (err instanceof TransferAbortedError) throw err;
+        if (isAbort(err)) throw err instanceof TransferAbortedError ? err : new TransferAbortedError();
         if (streamed && readFailed) {
           store.addHistory({
             connectionId: opts.sourceId,
@@ -375,7 +414,7 @@ export async function transferData(
         await batches.return(undefined).catch(() => undefined);
       }
     } catch (err: any) {
-      if (err instanceof TransferAbortedError) throw err;
+      if (isAbort(err)) throw err instanceof TransferAbortedError ? err : new TransferAbortedError();
       const message = err?.message ?? '传输失败';
       results.push({ table: srcTable.name, status: 'error', rows: inserted, created, truncated, error: message });
       await emit({ type: 'table-error', table: srcTable.name, error: message, phase, durationMs: Date.now() - tableStarted, rows: inserted });
