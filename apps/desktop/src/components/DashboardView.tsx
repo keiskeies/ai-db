@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
-import { ChevronDown, ChevronUp, Eye, FileDown, GripVertical, Heart, LayoutDashboard, Pin, PinOff, Plus, RefreshCw, Sparkles, Trash2, X } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { ChevronDown, ChevronUp, Clock3, Eye, FileDown, GripVertical, Heart, LayoutDashboard, MoreHorizontal, Pin, PinOff, Plus, RefreshCw, Sparkles, Trash2, X } from 'lucide-react';
 import type { DashboardCard, DashboardCardResult, DashboardChartType, DashboardPreview, DashboardScheduleInfo, DashboardTimeRange } from '@aidb/core';
 import { DASHBOARD_CHART_TYPES } from '@aidb/core';
 import { api } from '../lib/api';
 import { deliverExport } from '../lib/exportDelivery';
-import { useApp, type Tab } from '../store';
+import { useApp, type ContextMenuItem, type Tab } from '../store';
 import { ChartView } from './ChartView';
 import { buildChartSpec, numericColumnNames, type ChartDataset } from './buildChartSpec';
 import { DatabaseSelect } from './DatabaseSelect';
-import { Option, Select, Spinner } from './ui';
+import { Modal, Option, Select, Spinner } from './ui';
 import { t as tr } from '../i18n';
 
 type DashboardTab = Extract<Tab, { kind: 'dashboard' }>;
@@ -155,6 +156,7 @@ function DashboardCardView({
   onCardDrop: (event: DragEvent) => void;
   onCardDragEnd: () => void;
 }) {
+  const openContextMenu = useApp((s) => s.openContextMenu);
   const spec = useMemo(
     () =>
       buildCardSpec(
@@ -220,44 +222,56 @@ function DashboardCardView({
           </span>
         ) : null}
         <span className="dash-foot-space" />
-        {columns.length > 1 ? (
-          <Select
-            className="select dash-time"
-            value={card.timeColumn ?? ''}
-            title={tr("时间列：板级时间范围只作用于标了时间列的卡片")}
-            onChange={(event) => onPatch({ timeColumn: event.target.value })}
-            data-testid="dashboard-card-time"
-          >
-            <Option value="">{tr("不参与时间筛选")}</Option>
-            {columns.map((name) => (
-              <Option key={name} value={name}>
-                {tr(" 时间列：")}{name}
-              </Option>
-            ))}
-          </Select>
-        ) : null}
         <button className="icon-btn" title={tr("刷新此卡片")} onClick={onRefresh} disabled={busy} data-testid="dashboard-card-refresh">
           {busy ? <Spinner /> : <RefreshCw size={12} />}
         </button>
         <button
           className="icon-btn"
-          title={card.pinned ? tr("取消固定（可被 AI 草稿替换）") : tr("固定（AI 生成不会覆盖）")}
-          onClick={() => onPatch({ pinned: !card.pinned })}
-          data-testid="dashboard-card-pin"
+          title={tr("更多操作")}
+          aria-label={tr("更多操作")}
+          data-testid="dashboard-card-more"
+          onClick={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect();
+            const items: ContextMenuItem[] = [];
+            if (columns.length > 1) {
+              items.push({
+                label: tr("不参与时间筛选"),
+                disabled: !card.timeColumn,
+                testId: !card.timeColumn ? 'dashboard-card-time' : undefined,
+                onClick: () => onPatch({ timeColumn: undefined }),
+              });
+              columns.forEach((name, index) => {
+                items.push({
+                  label: `${tr(" 时间列：")}${name}`,
+                  disabled: card.timeColumn === name,
+                  testId: card.timeColumn === name ? 'dashboard-card-time' : `dashboard-card-time-${index}`,
+                  onClick: () => onPatch({ timeColumn: name }),
+                });
+              });
+              items.push({ sep: true });
+            }
+            items.push(
+              {
+                label: card.pinned ? tr("取消固定（可被 AI 草稿替换）") : tr("固定（AI 生成不会覆盖）"),
+                icon: card.pinned ? <PinOff size={12} /> : <Pin size={12} />,
+                onClick: () => onPatch({ pinned: !card.pinned }),
+                testId: 'dashboard-card-pin',
+              },
+              {
+                label: card.span === 2 ? tr("变窄") : tr("加宽"),
+                icon: card.span === 2 ? <ChevronUp size={12} /> : <ChevronDown size={12} />,
+                onClick: () => onPatch({ span: card.span === 2 ? 1 : 2 }),
+                testId: 'dashboard-card-span',
+              },
+              { label: tr("前移"), icon: <ChevronUp size={12} />, onClick: () => onMove(-1), disabled: card.position <= 1, testId: 'dashboard-card-back' },
+              { label: tr("后移"), icon: <ChevronDown size={12} />, onClick: () => onMove(1), disabled: card.position >= limit, testId: 'dashboard-card-forward' },
+              { sep: true },
+              { label: tr("从仪表板移除"), icon: <Trash2 size={12} />, danger: true, onClick: onDelete, testId: 'dashboard-card-delete' },
+            );
+            openContextMenu(rect.right, rect.bottom + 4, items);
+          }}
         >
-          {card.pinned ? <PinOff size={12} /> : <Pin size={12} />}
-        </button>
-        <button className="icon-btn" title={card.span === 2 ? tr("变窄") : tr("加宽")} onClick={() => onPatch({ span: card.span === 2 ? 1 : 2 })} data-testid="dashboard-card-span">
-          {card.span === 2 ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-        </button>
-        <button className="icon-btn" title={tr("前移")} onClick={() => onMove(-1)} disabled={card.position <= 1}>
-          <ChevronUp size={12} />
-        </button>
-        <button className="icon-btn" title={tr("后移")} onClick={() => onMove(1)} disabled={card.position >= limit}>
-          <ChevronDown size={12} />
-        </button>
-        <button className="icon-btn danger" title={tr("从仪表板移除")} onClick={onDelete} data-testid="dashboard-card-delete">
-          <Trash2 size={12} />
+          <MoreHorizontal size={13} />
         </button>
       </div>
     </div>
@@ -304,6 +318,7 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
   const notify = useApp((s) => s.notify);
   const rangeByScope = useApp((s) => s.dashboardRange);
   const setDashboardRange = useApp((s) => s.setDashboardRange);
+  const openContextMenu = useApp((s) => s.openContextMenu);
 
   const [cards, setCards] = useState<DashboardCard[]>([]);
   const [limit, setLimit] = useState(12);
@@ -565,13 +580,27 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
     }
   };
 
-  const discardDrafts = async () => {    if (!conn) return;
+  const discardDrafts = async () => {
+    if (!conn) return;
     try {
       const response = await api.dashboardDiscardDrafts({ connectionId: conn.id, database });
       setCards(response.cards);
       notify('success', tr("已丢弃 {0} 张草稿", [response.discarded]));
     } catch (err: any) {
       notify('error', tr("丢弃草稿失败"), err?.message);
+    }
+  };
+
+  const changeSchedule = async (intervalSeconds: number) => {
+    try {
+      const response = await api.dashboardSetSchedule({ connectionId: tab.connectionId, database, intervalSeconds });
+      setSchedule(response.schedule);
+      notify(
+        'success',
+        intervalSeconds ? tr("已开启定时刷新：{0}", [SCHEDULES.find((item) => item.value === intervalSeconds)?.label]) : tr("已关闭定时刷新"),
+      );
+    } catch (err: any) {
+      notify('error', tr("定时刷新设置失败"), err?.message);
     }
   };
 
@@ -695,61 +724,81 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
               ))}
             </Select>
           ) : null}
-          <Select
-            className="select"
-            value={String(schedule?.intervalSeconds ?? 0)}
-            title={
-              schedule?.intervalSeconds
-                ? tr("后台定时刷新已开启{0}", [schedule.lastRunAt ? tr("，上次 {0}{1}", [schedule.lastRunAt, schedule.lastError ? ` · ${schedule.lastError}` : '']) : ''])
-                : tr("定时刷新默认关闭：后台跑查询对生产库是风险，需要逐板显式开启")
-            }
-            onChange={(event) => {
-              const intervalSeconds = Number(event.target.value);
-              void api
-                .dashboardSetSchedule({ connectionId: tab.connectionId, database, intervalSeconds })
-                .then((response) => {
-                  setSchedule(response.schedule);
-                  notify(
-                    'success',
-                    intervalSeconds ? tr("已开启定时刷新：{0}", [SCHEDULES.find((item) => item.value === intervalSeconds)?.label]) : tr("已关闭定时刷新"),
-                  );
-                })
-                .catch((err: any) => notify('error', tr("定时刷新设置失败"), err?.message));
-            }}
-            data-testid="dashboard-schedule"
-          >
-            {SCHEDULES.map((item) => (
-              <Option key={item.value} value={item.value}>
-                {item.label}
-              </Option>
-            ))}
-          </Select>
           <button className="btn small" onClick={() => void refresh()} disabled={refreshing || !cards.length} data-testid="dashboard-refresh">
             {refreshing ? <Spinner /> : <RefreshCw size={12} />}{tr(" 刷新 ")}</button>
-          <button className="btn small" onClick={openFavorites} disabled={!supported} data-testid="dashboard-favorites">
-            <Heart size={12} /> {tr(" 从收藏导入 ")}</button>
           <button className="btn small" onClick={() => setComposerOpen((open) => !open)} disabled={!supported} data-testid="dashboard-add">
             <Plus size={12} /> {tr(" 新建卡片 ")}</button>
           <button className="btn small primary" onClick={generate} disabled={generating || !supported} data-testid="dashboard-generate">
             {generating ? <Spinner /> : <Sparkles size={12} />}{tr(" 让 AI 补一批 ")}</button>
           <button
             className="btn small"
-            onClick={exportReport}
-            disabled={exporting || !cards.length}
-            title={tr("把当前结果整理成可汇报的分页报告（PPTX）")}
-            data-testid="dashboard-export-report"
+            title={tr("更多操作")}
+            aria-label={tr("更多操作")}
+            disabled={!supported}
+            data-testid="dashboard-more"
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              const activeInterval = schedule?.intervalSeconds ?? 0;
+              const items: ContextMenuItem[] = SCHEDULES.map((item) => ({
+                label: item.label,
+                icon: <Clock3 size={12} />,
+                disabled: item.value === activeInterval,
+                testId: item.value === activeInterval ? 'dashboard-schedule' : `dashboard-schedule-${item.value}`,
+                onClick: () => void changeSchedule(item.value),
+              }));
+              items.push(
+                { sep: true },
+                { label: tr(" 从收藏导入 "), icon: <Heart size={12} />, onClick: openFavorites, testId: 'dashboard-favorites' },
+                {
+                  label: tr(" 导出为报告 "),
+                  icon: <FileDown size={12} />,
+                  disabled: exporting || !cards.length,
+                  onClick: exportReport,
+                  testId: 'dashboard-export-report',
+                },
+              );
+              if (drafts) items.push({
+                label: tr("丢弃 {0} 张草稿（固定卡片不动）", [drafts]),
+                icon: <X size={12} />,
+                danger: true,
+                onClick: discardDrafts,
+                testId: 'dashboard-discard',
+              });
+              openContextMenu(rect.right, rect.bottom + 4, items);
+            }}
           >
-            {exporting ? <Spinner /> : <FileDown size={12} />}{tr(" 导出为报告 ")}</button>
-          {drafts ? (
-            <button className="icon-btn" title={tr("丢弃 {0} 张草稿（固定卡片不动）", [drafts])} onClick={discardDrafts} data-testid="dashboard-discard">
-              <X size={13} />
-            </button>
-          ) : null}
+            <MoreHorizontal size={13} />
+          </button>
         </div>
       </header>
 
-      {composerOpen ? (
-        <div className="dash-composer panel" data-testid="dashboard-composer">
+      {composerOpen ? createPortal(
+        <Modal
+          title={tr(" 新建卡片 ")}
+          icon={<Sparkles size={15} className="dash-ai-icon" />}
+          wide
+          className="dash-composer-modal"
+          onClose={() => setComposerOpen(false)}
+          testId="dashboard-composer"
+          footer={
+            <div className="dash-composer-foot">
+              <Select className="select" value={draft.chartType} onChange={(event) => setDraft({ ...draft, chartType: event.target.value as DashboardChartType })} data-testid="dashboard-card-type">
+                {DASHBOARD_CHART_TYPES.map((type) => (
+                  <Option key={type} value={type}>
+                    {CHART_LABELS[type]}
+                  </Option>
+                ))}
+              </Select>
+              <span className="dash-foot-space" />
+              <button className="btn small" onClick={() => void previewCard()} disabled={previewing || !draft.sql.trim()} data-testid="dashboard-card-preview-btn">
+                {previewing ? <Spinner /> : <Eye size={12} />}{tr(" 预览 ")}
+              </button>
+              <button className="btn small primary" onClick={addCard} data-testid="dashboard-card-save">
+                {tr(" 保存到仪表板 ")}
+              </button>
+            </div>
+          }
+        >
           <div className="dash-compose-ai">
             <Sparkles size={13} className="dash-ai-icon" />
             <input
@@ -830,39 +879,24 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
               ) : null}
             </div>
           ) : null}
-          <div className="dash-composer-foot">
-            <Select className="select" value={draft.chartType} onChange={(event) => setDraft({ ...draft, chartType: event.target.value as DashboardChartType })} data-testid="dashboard-card-type">
-              {DASHBOARD_CHART_TYPES.map((type) => (
-                <Option key={type} value={type}>
-                  {CHART_LABELS[type]}
-                </Option>
-              ))}
-            </Select>
-            <span className="dash-foot-space" />
-            <button className="btn small" onClick={() => void previewCard()} disabled={previewing || !draft.sql.trim()} data-testid="dashboard-card-preview-btn">
-              {previewing ? <Spinner /> : <Eye size={12} />}{tr(" 预览 ")}</button>
-            <button className="btn small primary" onClick={addCard} data-testid="dashboard-card-save">
-              {tr(" 保存到仪表板 ")}</button>
-            <button className="icon-btn" title={tr("收起")} onClick={() => setComposerOpen(false)}>
-              <X size={12} />
-            </button>
-          </div>
-        </div>
+        </Modal>,
+        document.body,
       ) : null}
 
-      {favoritesOpen ? (
-        <div className="dash-composer panel" data-testid="dashboard-favorites-dialog">
-          <div className="dash-favorites-head">
-            <strong>{tr("收藏的 SQL")}</strong>
-            <span className="dash-meta">{tr("挑几个钉到看板上——比让 AI 猜你的口径更准。")}</span>
-            <span className="dash-foot-space" />
-            <button className="btn small" onClick={importFavorites} data-testid="dashboard-favorites-import">
+      {favoritesOpen ? createPortal(
+        <Modal
+          title={tr("收藏的 SQL")}
+          icon={<Heart size={15} />}
+          className="dash-favorites-modal"
+          onClose={() => setFavoritesOpen(false)}
+          testId="dashboard-favorites-dialog"
+          footer={
+            <button className="btn small primary" onClick={importFavorites} data-testid="dashboard-favorites-import">
               {tr(" 钉上来 ")}{picked.length ? `(${picked.length})` : ''}
             </button>
-            <button className="icon-btn" title={tr("关闭")} onClick={() => setFavoritesOpen(false)}>
-              <X size={12} />
-            </button>
-          </div>
+          }
+        >
+          <p className="dash-meta" style={{ margin: '0 0 8px' }}>{tr("挑几个钉到看板上——比让 AI 猜你的口径更准。")}</p>
           {favoritesLoading ? (
             <div className="dash-empty">
               <Spinner /> {tr(" 正在读取收藏的查询… ")}</div>
@@ -879,7 +913,8 @@ export function DashboardView({ tab }: { tab: DashboardTab }) {
               <code className="mono">{item.sql.replace(/\s+/g, ' ').slice(0, 140)}</code>
             </label>
           ))}
-        </div>
+        </Modal>,
+        document.body,
       ) : null}
 
       {loading ? (

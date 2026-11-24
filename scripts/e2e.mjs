@@ -3388,6 +3388,7 @@ const draftCharts = await page.locator('[data-testid="dashboard-card"][data-pinn
 check('every draft card passed its trial run before entering the board', draftCharts === draftNodes, `${draftCharts}/${draftNodes}`);
 const boardTotal = await dashList();
 check('board stays within the 12-card limit', boardTotal.length <= 12, `${boardTotal.length} cards`);
+await page.click('[data-testid="dashboard-more"]');
 await page.click('[data-testid="dashboard-discard"]');
 await page.waitForFunction(() => document.querySelectorAll('[data-testid="dashboard-card"][data-pinned="0"]').length === 0, null, { timeout: 20000 });
 check('discard clears drafts and keeps pinned cards', (await page.locator('[data-testid="dashboard-card"]').count()) === pinnedNodes);
@@ -3440,7 +3441,8 @@ await page.waitForFunction((prev) => {
 }, orderBefore, { timeout: 20000 });
 check('刷新后拖拽顺序仍在', true);
 // ±1 按钮保留：把现在的第二张（原第一张）前移，恢复原顺序
-await page.locator('[data-testid="dashboard-card"]').nth(1).locator('button[title="前移"]').click();
+await page.locator('[data-testid="dashboard-card"]').nth(1).locator('[data-testid="dashboard-card-more"]').click();
+await page.locator('[data-testid="dashboard-card-back"]').click();
 await page.waitForFunction((prev) => {
   const ids = [...document.querySelectorAll('[data-testid="dashboard-card"]')].map((el) => el.getAttribute('data-card-id'));
   return ids[0] === prev[0] && ids[1] === prev[1];

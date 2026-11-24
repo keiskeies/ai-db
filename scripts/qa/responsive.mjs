@@ -5,6 +5,7 @@ import { chromium } from 'playwright-core';
 
 const BASE = process.env.QA_BASE ?? 'http://127.0.0.1:8787';
 const TOKEN = process.env.QA_TOKEN ?? 'dev-token';
+const DASHBOARD_ONLY = process.env.QA_DASHBOARD_ONLY === '1';
 const ART = join(process.cwd(), 'docs', 'test-artifacts', 'responsive');
 const SHOTS = join(ART, 'shots');
 mkdirSync(SHOTS, { recursive: true });
@@ -310,7 +311,7 @@ async function openTools(page) {
     await page.locator('[data-testid="agent-toggle"]').click({ force: true }).catch(() => undefined);
     await page.waitForTimeout(250);
   }
-  await page.getByRole('button', { name: '视图' }).click({ force: true, timeout: 8000 });
+  await page.locator('.ribbon-btn[data-tone="violet"]').click({ force: true, timeout: 8000 });
   await page.waitForTimeout(800);
 }
 
@@ -347,6 +348,74 @@ async function dragSplitter(page, testId, deltaX) {
   return { sidebar: sidebar?.width ?? 0, agent: agent?.width ?? 0, workspace: workspace?.width ?? 0 };
 }
 
+async function closeAgentPanel(page) {
+  if ((await page.locator('.agent-panel').count()) > 0) {
+    await page.locator('[data-testid="agent-toggle"]').click({ force: true });
+    await page.waitForTimeout(300);
+  }
+}
+
+async function auditDashboardLayout(page, label, wideCardId) {
+  const geometry = await page.evaluate((wideId) => {
+    const dash = document.querySelector('[data-testid="dashboard-view"]');
+    const grid = document.querySelector('[data-testid="dashboard-grid"]');
+    const actions = document.querySelector('.dash-actions');
+    if (!dash || !grid) return null;
+    const dashStyle = getComputedStyle(dash);
+    const contentWidth = dash.clientWidth - parseFloat(dashStyle.paddingLeft) - parseFloat(dashStyle.paddingRight);
+    const cards = [...grid.querySelectorAll('[data-testid="dashboard-card"]')];
+    const normal = cards.filter((card) => card.getAttribute('data-card-id') !== wideId);
+    const wide = cards.find((card) => card.getAttribute('data-card-id') === wideId);
+    const rect = (el) => {
+      const box = el.getBoundingClientRect();
+      return { left: box.left, width: box.width, right: box.right };
+    };
+    const gridRect = rect(grid);
+    const normalRects = normal.map(rect);
+    const wideRect = wide ? rect(wide) : null;
+    const columns = new Set(normalRects.map((box) => Math.round(box.left))).size;
+    const expectedColumns = contentWidth >= 1044 ? 3 : contentWidth >= 692 ? 2 : 1;
+    const normalWidth = normalRects[0]?.width ?? 0;
+    const expectedWide = columns === 3 ? normalWidth * 2 + 12 : gridRect.width;
+    const overflow = Math.max(
+      0,
+      dash.scrollWidth - dash.clientWidth,
+      grid.scrollWidth - grid.clientWidth,
+      actions ? actions.scrollWidth - actions.clientWidth : 0,
+      ...cards.map((card) => {
+        const foot = card.querySelector('.dash-card-foot');
+        return foot ? foot.scrollWidth - foot.clientWidth : 0;
+      }),
+    );
+    return {
+      contentWidth: Math.round(contentWidth),
+      columns,
+      expectedColumns,
+      cardCount: cards.length,
+      normalWidth: Math.round(normalWidth),
+      wideWidth: Math.round(wideRect?.width ?? 0),
+      expectedWide: Math.round(expectedWide),
+      overflow: Math.round(overflow),
+      svgWidths: [...grid.querySelectorAll('[data-testid="chart-svg"]')].map((svg) => Math.round(svg.getBoundingClientRect().width)),
+      minControlHeight: Math.round(Math.min(...cards.flatMap((card) => [
+        ...card.querySelectorAll('[data-testid="dashboard-card-grip"], [data-testid="dashboard-card-refresh"], [data-testid="dashboard-card-more"]'),
+      ]).map((control) => control.getBoundingClientRect().height))),
+      scrollTop: dash.scrollTop,
+    };
+  }, wideCardId);
+  if (!geometry) {
+    record(`${label} 仪表板网格可测量`, false, 'dashboard grid missing');
+    return null;
+  }
+  const wideOk = Math.abs(geometry.wideWidth - geometry.expectedWide) <= 2;
+  const minWidthOk = geometry.columns === 1 || geometry.normalWidth >= 339;
+  const svgOk = geometry.svgWidths.length > 0 && geometry.svgWidths.every((width) => width >= 250);
+  const controlsOk = geometry.minControlHeight >= 28;
+  const ok = geometry.overflow <= 1 && geometry.columns === geometry.expectedColumns && wideOk && minWidthOk && svgOk && controlsOk;
+  record(`${label} 容器列数与宽卡片跨列正确`, ok, geometry);
+  return geometry;
+}
+
 async function main() {
   const health = await api('GET', '/health');
   if (health.status !== 200) throw new Error('gateway not running');
@@ -376,7 +445,7 @@ async function main() {
       [390, 844],
       [720, 1280],
     ];
-    for (const [width, height] of desktopSizes) {
+    for (const [width, height] of DASHBOARD_ONLY ? [] : desktopSizes) {
       console.log(`viewport ${width}x${height}`);
       const { context, page } = await newDesktop(browser, { width, height });
       try {
@@ -410,9 +479,241 @@ async function main() {
       }
     }
 
+    // ------------------------------------------------ dashboard container layout
+    begin('dashboard-responsive');
+    const boot = (await api('GET', '/bootstrap')).json;
+    const demo = boot?.connections?.find((connection) => connection.engine === 'sqlite');
+    const seededIds = [];
+    if (!demo) {
+      record('dashboard responsive demo connection', false, 'no sqlite demo connection');
+    } else {
+      const existing = (await api('GET', `/dashboards/cards?connectionId=${demo.id}`)).json?.cards ?? [];
+      for (const card of existing.filter((item) => item.title.startsWith('QA 响应式'))) {
+        await api('DELETE', `/dashboards/cards/${card.id}`);
+      }
+      await api('PUT', '/dashboards/schedule', { connectionId: demo.id, intervalSeconds: 0 });
+      try {
+        const rows = [['A', 18], ['B', 32], ['C', 24], ['D', 41]];
+        for (let index = 0; index < 5; index++) {
+          const created = await api('POST', '/dashboards/cards', {
+            connectionId: demo.id,
+            title: `QA 响应式 ${index + 1}`,
+            sql: "SELECT bucket, value FROM (SELECT 'A' AS bucket, 18 AS value UNION ALL SELECT 'B', 32 UNION ALL SELECT 'C', 24 UNION ALL SELECT 'D', 41)",
+            chartType: 'bar',
+            x: 'bucket',
+            y: 'value',
+            timeColumn: 'bucket',
+            span: index === 0 ? 2 : 1,
+            pinned: true,
+            source: 'manual',
+            lastResult: { columns: [{ name: 'bucket' }, { name: 'value' }], rows },
+          });
+          if (created.status !== 200 || !created.json?.card?.id) throw new Error(`seed card failed: ${created.status}`);
+          seededIds.push(created.json.card.id);
+        }
+        const wideCardId = seededIds[0];
+        for (const [width, height] of [[2560, 1440], [1920, 1080], [1440, 900], [1366, 768], [1024, 768], [768, 720], [640, 800], [390, 844]]) {
+          const { context, page } = await newDesktop(browser, { width, height });
+          try {
+            const tag = `dash${width}`;
+            await openDashboard(page);
+            if (width < 1000) await closeAgentPanel(page);
+            await page.waitForSelector('[data-testid="dashboard-grid"] [data-testid="chart-svg"]', { timeout: 30000 });
+            await page.waitForFunction(() => {
+              const button = document.querySelector('[data-testid="dashboard-refresh"]');
+              return button && !button.disabled;
+            }, null, { timeout: 30000 });
+            await auditDashboardLayout(page, tag, wideCardId);
+            await auditPage(page, `${tag}-dashboard`, { screenshot: [1920, 1024, 390].includes(width) });
+          } finally {
+            await context.close();
+          }
+        }
+
+        {
+          const { context, page } = await newDesktop(browser, { width: 1071, height: 800 });
+          try {
+            await openDashboard(page);
+            await closeAgentPanel(page);
+            if (await page.locator('.sidebar').isVisible()) {
+              await page.locator('[data-testid="toggle-sidebar"]').click({ force: true });
+              await page.waitForTimeout(300);
+            }
+            await page.waitForSelector('[data-testid="dashboard-grid"] [data-testid="chart-svg"]', { timeout: 30000 });
+            for (const [width, expected] of [[719, 1], [720, 2], [1071, 2], [1072, 3]]) {
+              await page.setViewportSize({ width, height: 800 });
+              await page.waitForTimeout(350);
+              const geometry = await auditDashboardLayout(page, `boundary-${width}`, wideCardId);
+              record(`boundary-${width} 列数断点`, geometry?.columns === expected, { actual: geometry?.columns, expected, contentWidth: geometry?.contentWidth });
+            }
+          } finally {
+            await context.close();
+          }
+        }
+
+        {
+          const { context, page } = await newDesktop(browser, { width: 1440, height: 900 });
+          try {
+            await openDashboard(page);
+            if ((await page.locator('.agent-panel').count()) === 0) {
+              await page.locator('[data-testid="agent-toggle"]').click({ force: true });
+              await page.waitForTimeout(300);
+            }
+            await page.waitForSelector('[data-testid="dashboard-grid"] [data-testid="chart-svg"]', { timeout: 30000 });
+            await page.waitForFunction(() => !document.querySelector('[data-testid="dashboard-refresh"]')?.disabled, null, { timeout: 30000 });
+            const initial = await auditDashboardLayout(page, 'pane-initial', wideCardId);
+            await dragSplitter(page, 'splitter-sidebar', 400);
+            await dragSplitter(page, 'splitter-agent', -700);
+            const squeezed = await auditDashboardLayout(page, 'pane-squeezed', wideCardId);
+            record('仪表板随分栏拖动即时重排', initial?.columns === 2 && squeezed?.columns === 1, { initial: initial?.columns, squeezed: squeezed?.columns });
+            await dragSplitter(page, 'splitter-sidebar', -600);
+            await dragSplitter(page, 'splitter-agent', 700);
+            const restored = await auditDashboardLayout(page, 'pane-restored', wideCardId);
+            record('仪表板分栏恢复后回到两列', restored?.columns === 2, { columns: restored?.columns });
+
+            const refreshRequests = [];
+            const onResponse = (response) => {
+              if (response.url().includes('/dashboards/refresh')) refreshRequests.push(response.status());
+            };
+            page.on('response', onResponse);
+            const beforeWidth = restored?.svgWidths?.[0] ?? 0;
+            await page.setViewportSize({ width: 1280, height: 800 });
+            await page.waitForTimeout(650);
+            const resized = await auditDashboardLayout(page, 'chart-resized', wideCardId);
+            page.off('response', onResponse);
+            record('图表随容器缩放且不重新查询', Boolean(beforeWidth && resized?.svgWidths?.[0] && resized.svgWidths[0] !== beforeWidth) && refreshRequests.length === 0, {
+              beforeWidth,
+              afterWidth: resized?.svgWidths?.[0],
+              refreshRequests,
+            });
+          } finally {
+            await context.close();
+          }
+        }
+
+        for (const [width, height] of [[1024, 768], [390, 844]]) {
+          const { context, page } = await newDesktop(browser, { width, height });
+          try {
+            await openDashboard(page);
+            if (width < 1000) await closeAgentPanel(page);
+            await page.waitForSelector('[data-testid="dashboard-grid"] [data-testid="chart-svg"]', { timeout: 30000 });
+            const state = () => page.evaluate(() => {
+              const dash = document.querySelector('[data-testid="dashboard-view"]');
+              const grid = document.querySelector('[data-testid="dashboard-grid"]');
+              return {
+                scrollTop: dash?.scrollTop ?? 0,
+                grid: grid ? { x: grid.getBoundingClientRect().x, y: grid.getBoundingClientRect().y, width: grid.getBoundingClientRect().width } : null,
+                cards: [...document.querySelectorAll('[data-testid="dashboard-card"]')].map((card) => {
+                  const box = card.getBoundingClientRect();
+                  return { x: box.x, y: box.y, width: box.width };
+                }),
+              };
+            });
+            const beforeComposer = await state();
+            await page.evaluate(() => document.querySelector('[data-testid="dashboard-add"]')?.click());
+            await page.waitForSelector('[data-testid="dashboard-composer"]', { timeout: 5000 });
+            await auditPage(page, `composer-${width}`, { modal: true, screenshot: width === 1024 });
+            const duringComposer = await state();
+            record(`composer-${width} 不推挤网格`, JSON.stringify(beforeComposer) === JSON.stringify(duringComposer), { before: beforeComposer.grid, during: duringComposer.grid });
+            await page.locator('[data-testid="dashboard-composer"] .modal-head button').click();
+            await page.waitForSelector('[data-testid="dashboard-composer"]', { state: 'detached' });
+
+            const beforeFavorites = await state();
+            await page.evaluate(() => document.querySelector('[data-testid="dashboard-more"]')?.click());
+            await page.locator('[data-testid="dashboard-favorites"]').click();
+            await page.waitForSelector('[data-testid="dashboard-favorites-dialog"]', { timeout: 5000 });
+            await auditPage(page, `favorites-${width}`, { modal: true });
+            const duringFavorites = await state();
+            record(`favorites-${width} 不推挤网格`, JSON.stringify(beforeFavorites) === JSON.stringify(duringFavorites), { before: beforeFavorites.grid, during: duringFavorites.grid });
+            await page.locator('[data-testid="dashboard-favorites-dialog"] .modal-head button').click();
+          } finally {
+            await context.close();
+          }
+        }
+
+        {
+          const { context, page } = await newDesktop(browser, { width: 1440, height: 900 });
+          try {
+            await openDashboard(page);
+            await page.waitForSelector('[data-testid="dashboard-grid"] [data-testid="chart-svg"]', { timeout: 30000 });
+            await page.waitForFunction(() => !document.querySelector('[data-testid="dashboard-refresh"]')?.disabled, null, { timeout: 30000 });
+            const targetId = seededIds[1];
+            const target = page.locator(`[data-testid="dashboard-card"][data-card-id="${targetId}"]`);
+            const openCardMenu = () => target.locator('[data-testid="dashboard-card-more"]').click();
+
+            await openCardMenu();
+            await page.locator('[data-testid="dashboard-card-pin"]').click();
+            await page.waitForFunction((id) => document.querySelector(`[data-card-id="${id}"]`)?.getAttribute('data-pinned') === '0', targetId);
+            await openCardMenu();
+            await page.locator('[data-testid="dashboard-card-pin"]').click();
+            await page.waitForFunction((id) => document.querySelector(`[data-card-id="${id}"]`)?.getAttribute('data-pinned') === '1', targetId);
+            record('卡片更多菜单可切换固定状态', true);
+
+            await openCardMenu();
+            await page.locator('[data-testid="dashboard-card-span"]').click();
+            await page.waitForFunction((id) => document.querySelector(`[data-card-id="${id}"]`)?.classList.contains('wide'), targetId);
+            await openCardMenu();
+            await page.locator('[data-testid="dashboard-card-span"]').click();
+            await page.waitForFunction((id) => !document.querySelector(`[data-card-id="${id}"]`)?.classList.contains('wide'), targetId);
+            record('卡片更多菜单可切换宽窄布局', true);
+
+            await openCardMenu();
+            await page.locator('[data-testid="dashboard-card-time-1"]').click();
+            await page.waitForTimeout(350);
+            const changedTime = (await api('GET', `/dashboards/cards?connectionId=${demo.id}`)).json?.cards?.find((card) => card.id === targetId);
+            record('卡片更多菜单可切换时间列', changedTime?.timeColumn === 'value', { timeColumn: changedTime?.timeColumn });
+            await openCardMenu();
+            await page.locator('[data-testid="dashboard-card-time-0"]').click();
+            await page.waitForTimeout(350);
+            const restoredTime = (await api('GET', `/dashboards/cards?connectionId=${demo.id}`)).json?.cards?.find((card) => card.id === targetId);
+            record('卡片更多菜单可恢复时间列', restoredTime?.timeColumn === 'bucket', { timeColumn: restoredTime?.timeColumn });
+
+            await openCardMenu();
+            await page.locator('[data-testid="dashboard-card-back"]').click();
+            await page.waitForFunction((id) => document.querySelector('[data-testid="dashboard-card"]')?.getAttribute('data-card-id') === id, targetId);
+            await openCardMenu();
+            await page.locator('[data-testid="dashboard-card-forward"]').click();
+            await page.waitForFunction((id) => {
+              const ids = [...document.querySelectorAll('[data-testid="dashboard-card"]')].map((card) => card.getAttribute('data-card-id'));
+              return ids[0] !== id && ids[1] === id;
+            }, targetId);
+            record('卡片更多菜单可前移和后移', true);
+
+            await page.locator('[data-testid="dashboard-more"]').click();
+            const exportEnabled = await page.locator('[data-testid="dashboard-export-report"]').isEnabled();
+            await page.keyboard.press('Escape');
+            record('板头更多菜单保留报告导出入口', exportEnabled);
+            await page.locator('[data-testid="dashboard-more"]').click();
+            await page.locator('[data-testid="dashboard-schedule-300"]').click();
+            await page.waitForTimeout(350);
+            const scheduleOn = (await api('GET', `/dashboards/schedule?connectionId=${demo.id}`)).json?.schedule;
+            record('板头更多菜单可开启定时刷新', scheduleOn?.intervalSeconds === 300, { intervalSeconds: scheduleOn?.intervalSeconds });
+            await page.locator('[data-testid="dashboard-more"]').click();
+            await page.locator('[data-testid="dashboard-schedule-0"]').click();
+            await page.waitForTimeout(350);
+            const scheduleOff = (await api('GET', `/dashboards/schedule?connectionId=${demo.id}`)).json?.schedule;
+            record('板头更多菜单可关闭定时刷新', scheduleOff === null, scheduleOff);
+
+            await openCardMenu();
+            await page.locator('[data-testid="dashboard-card-delete"]').click();
+            await target.waitFor({ state: 'detached', timeout: 10000 });
+            const afterDelete = (await api('GET', `/dashboards/cards?connectionId=${demo.id}`)).json?.cards ?? [];
+            record('卡片更多菜单可移除卡片', !afterDelete.some((card) => card.id === targetId));
+          } finally {
+            await context.close();
+          }
+        }
+      } catch (error) {
+        record('dashboard responsive setup', false, error.message);
+      } finally {
+        for (const id of seededIds) await api('DELETE', `/dashboards/cards/${id}`);
+        await api('PUT', '/dashboards/schedule', { connectionId: demo.id, intervalSeconds: 0 });
+      }
+    }
+
     // ----------------------------------------------------- pane drag extremes
     begin('pane-resize');
-    for (const [width, height] of [
+    for (const [width, height] of DASHBOARD_ONLY ? [] : [
       [1440, 900],
       [1280, 800],
       [1024, 768],
@@ -475,7 +776,7 @@ async function main() {
 
     // ------------------------------------------------------------- mobile web
     begin('mobile-web');
-    for (const [width, height] of [
+    for (const [width, height] of DASHBOARD_ONLY ? [] : [
       [390, 844],
       [360, 640],
       [414, 896],
@@ -511,9 +812,9 @@ async function main() {
     // ------------------------------------------------------------ mobile app
     begin('mobile-app');
     const dist = join(process.cwd(), 'apps', 'mobile', 'dist');
-    if (!existsSync(join(dist, 'index.html'))) {
+    if (!DASHBOARD_ONLY && !existsSync(join(dist, 'index.html'))) {
       record('mobile dist 存在', false, 'apps/mobile/dist/index.html 不存在');
-    } else {
+    } else if (!DASHBOARD_ONLY) {
       const mime = { '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ttf': 'font/ttf', '.woff2': 'font/woff2' };
       const server = createServer((req, res) => {
         const pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://local').pathname);

@@ -27,6 +27,7 @@ export function Modal({
   wide,
   className = '',
   icon,
+  testId,
 }: {
   title: ReactNode;
   children: ReactNode;
@@ -35,10 +36,11 @@ export function Modal({
   wide?: boolean;
   className?: string;
   icon?: ReactNode;
+  testId?: string;
 }) {
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`modal ${wide ? 'wide' : ''} ${className}`} role="dialog" aria-modal="true">
+      <div className={`modal ${wide ? 'wide' : ''} ${className}`} role="dialog" aria-modal="true" data-testid={testId}>
         <div className="modal-head">
           <h2>
             {icon}

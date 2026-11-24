@@ -55,6 +55,7 @@ export function ContextMenuHost() {
             className={`context-item ${item.danger ? 'danger' : ''}`}
             role="menuitem"
             disabled={item.disabled}
+            data-testid={item.testId}
             onClick={() => {
               close();
               item.onClick?.();

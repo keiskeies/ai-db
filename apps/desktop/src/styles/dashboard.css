@@ -83,11 +83,15 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  width: 100%;
   height: 100%;
+  min-width: 0;
   min-height: 0;
   padding: 12px 14px 16px;
   overflow: auto;
+  overscroll-behavior: contain;
   background: var(--bg-app);
+  container: dashboard / inline-size;
 }
 .dash-head {
   display: flex;
@@ -95,43 +99,53 @@
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+  width: 100%;
+  max-width: 1600px;
+  min-width: 0;
+  margin-inline: auto;
 }
-.dash-title { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
-.dash-title svg { color: var(--accent); }
-.dash-actions { display: flex; align-items: center; gap: 6px; }
-.dash-meta { font-size: 9.5px; color: var(--text-muted); }
+.dash-title { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
+.dash-title svg { color: var(--accent); flex: 0 0 auto; }
+.dash-actions { display: flex; align-items: center; justify-content: flex-end; flex: 1 1 360px; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.dash-meta { font-size: 10px; color: var(--text-muted); }
 .dash-loading { display: flex; align-items: center; gap: 8px; padding: 24px 4px; font-size: 11px; color: var(--text-muted); }
 
 .dash-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   align-items: start;
+  width: 100%;
+  max-width: 1600px;
+  min-width: 0;
+  margin-inline: auto;
 }
 .dash-card {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   border: 1px solid var(--border-panel);
   border-radius: var(--radius-lg);
   background: var(--bg-panel);
   overflow: hidden;
   transition: border-color 0.14s ease, box-shadow 0.14s ease;
+  container: card / inline-size;
 }
 .dash-card:hover { border-color: var(--border-strong); box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22); }
 .dash-card.wide { grid-column: 1 / -1; }
-.dash-card-body { padding: 6px 6px 0; }
+.dash-card-body { min-width: 0; padding: 6px 6px 0; }
 /* ChartView 自带卡片外观，套进仪表板时不要出现两层边框 */
 .dash-card.dragging { opacity: 0.45; }
 .dash-card.drop-target { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-.dash-grip { display: inline-flex; align-items: center; padding: 2px; color: var(--text-muted); cursor: grab; border-radius: 4px; }
+.dash-grip { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 28px; height: 28px; padding: 0; color: var(--text-muted); cursor: grab; border-radius: 4px; }
 .dash-grip:hover { color: var(--text-primary); background: var(--bg-hover); }
 .dash-grip:active { cursor: grabbing; }
-.dash-card .chart-card { border: none; box-shadow: none; background: transparent; padding: 0; }
-.dash-card-empty { display: flex; flex-direction: column; gap: 6px; padding: 14px 12px; font-size: 11.5px; color: var(--text-primary); }
+.dash-card .chart-card { min-width: 0; border: none; box-shadow: none; background: transparent; padding: 0; }
+.dash-card-empty { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 14px 12px; font-size: 11.5px; color: var(--text-primary); }
 .dash-card-empty-hint { font-size: 10px; color: var(--text-muted); line-height: 1.5; }
 .dash-card-sql {
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: 10px;
   line-height: 1.5;
   color: var(--text-secondary);
   background: var(--code-bg);
@@ -147,13 +161,16 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
+  min-height: 34px;
   padding: 4px 8px 5px;
   border-top: 1px solid var(--border-subtle);
   background: var(--bg-rail);
 }
-.dash-foot-space { flex: 1; }
+.dash-foot-space { flex: 1; min-width: 0; }
 .dash-tag {
-  font-size: 9px;
+  flex: 0 0 auto;
+  font-size: 10px;
   letter-spacing: 0.3px;
   padding: 2px 6px;
   border-radius: 999px;
@@ -162,30 +179,47 @@
   white-space: nowrap;
 }
 .dash-tag.ai { background: var(--agent-soft); color: var(--agent); }
+.dash-card-foot .dash-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dash-card-foot .icon-btn { flex: 0 0 28px; width: 28px; height: 28px; }
 .dash-card-foot .icon-btn.danger:hover { color: var(--danger); }
+
+@container dashboard (min-width: 692px) {
+  .dash-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dash-card.wide { grid-column: span 2; }
+}
+
+@container dashboard (min-width: 1044px) {
+  .dash-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 
 /* 滚动容器的子项一律不收缩：.panel 的 overflow:hidden 会把「新建卡片」表单压成一条横线 */
 .dash-view > * { flex-shrink: 0; }
 .dash-composer { display: flex; flex-direction: column; gap: 8px; padding: 10px; }
-.dash-composer-foot { display: flex; align-items: center; gap: 8px; }
+.dash-composer-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .dash-sql { font-family: var(--font-mono); font-size: 10.5px; line-height: 1.55; resize: vertical; min-height: 76px; }
-.dash-compose-ai { display: flex; align-items: center; gap: 8px; }
-.dash-compose-ai .input { flex: 1; min-width: 0; }
+.dash-compose-ai { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.dash-compose-ai .input { flex: 1 1 320px; min-width: 0; }
 .dash-ai-icon { color: var(--agent); flex: 0 0 auto; }
-.dash-ai-hint { margin-top: -3px; font-size: 9.5px; color: var(--text-muted); line-height: 1.45; }
+.dash-ai-hint { margin-top: -3px; font-size: 10px; color: var(--text-muted); line-height: 1.45; }
+.dash-composer-modal { height: min(700px, 88vh); }
+.dash-composer-modal .modal-body { display: flex; flex-direction: column; gap: 10px; }
+.dash-composer-modal .modal-foot { flex-wrap: wrap; }
+.dash-favorites-modal .modal-body { min-width: 0; }
+.dash-favorites-modal .dash-meta { white-space: normal; line-height: 1.5; }
 .dash-preview {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
   padding: 8px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--bg-app);
 }
-.dash-preview-head { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 9.5px; color: var(--text-muted); }
+.dash-preview-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; font-size: 10px; color: var(--text-muted); }
 .dash-preview-head .dash-meta { white-space: nowrap; }
-.dash-preview-stale { color: var(--warning); font-size: 9.5px; }
-.dash-preview .chart-card { border: none; box-shadow: none; background: transparent; padding: 0; }
+.dash-preview-stale { color: var(--warning); font-size: 10px; }
+.dash-preview .chart-card { min-width: 0; border: none; box-shadow: none; background: transparent; padding: 0; }
 .dash-preview-error {
   padding: 6px 8px;
   border: 1px solid color-mix(in srgb, var(--danger) 26%, transparent);
@@ -196,14 +230,14 @@
   line-height: 1.55;
   word-break: break-word;
 }
-.dash-preview-note { font-size: 9.5px; line-height: 1.5; color: var(--text-muted); }
+.dash-preview-note { font-size: 10px; line-height: 1.5; color: var(--text-muted); }
 .dash-preview-table-wrap {
   overflow: auto;
   max-height: 220px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
 }
-.dash-preview-table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 9.5px; }
+.dash-preview-table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 10px; }
 .dash-preview-table th {
   position: sticky;
   top: 0;
@@ -226,21 +260,21 @@
 }
 .dash-preview-table tr:last-child td { border-bottom: none; }
 .dash-preview-empty { padding: 10px; font-size: 10px; color: var(--text-muted); }
-.dash-time { max-width: 168px; font-size: 9.5px; padding: 2px 4px; }
+.dash-time { max-width: 168px; font-size: 10px; padding: 2px 4px; }
 .dash-empty p { margin: 6px 0 0; font-size: 10.5px; line-height: 1.65; color: var(--text-muted); }
 .dash-empty-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
-.dash-favorites-head { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-primary); }
+.dash-favorites-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 11.5px; color: var(--text-primary); }
 .dash-favorite {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 5px 6px;
+  padding: 7px 6px;
   border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .dash-favorite:hover { background: var(--bg-hover); }
 .dash-favorite code {
-  font-size: 9.5px;
+  font-size: 10px;
   line-height: 1.5;
   color: var(--text-secondary);
   overflow: hidden;
@@ -250,3 +284,8 @@
   min-width: 0;
 }
 .dash-favorite input { margin-top: 3px; }
+
+@container card (max-width: 420px) {
+  .dash-card-foot { padding-inline: 6px; }
+  .dash-card-foot .dash-meta { display: none; }
+}

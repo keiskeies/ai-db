@@ -130,7 +130,7 @@ export interface ConnectionEditorState {
 
 export type ContextMenuItem =
   | { sep: true; label?: string; icon?: ReactNode; danger?: boolean; disabled?: boolean; onClick?: () => void }
-  | { sep?: false; label: string; icon?: ReactNode; danger?: boolean; disabled?: boolean; onClick?: () => void };
+  | { sep?: false; label: string; icon?: ReactNode; danger?: boolean; disabled?: boolean; onClick?: () => void; testId?: string };
 
 export interface ContextMenuState {
   x: number;

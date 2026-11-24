@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS dashboard_cards (
   chart_type TEXT NOT NULL,             -- ChartType 七种之一
   series_x TEXT, series_y TEXT,         -- 列名提示，缺省时由 buildChartSpec 推断
   time_column TEXT,                     -- 参与板级时间筛选；NULL = 不参与
-  span INTEGER NOT NULL DEFAULT 1,      -- 1 半宽 / 2 整宽
+  span INTEGER NOT NULL DEFAULT 1,      -- 1 单列 / 2 两列
   position INTEGER NOT NULL DEFAULT 0,
   source TEXT NOT NULL CHECK (source IN ('ai','favorite','manual')),
   pinned INTEGER NOT NULL DEFAULT 0,    -- 0 草稿 / 1 用户固定
@@ -94,9 +94,55 @@ CREATE INDEX IF NOT EXISTS idx_dash_cards ON dashboard_cards(scope_key, position
 | `apps/desktop/src/components/QueryView.tsx` | 结果图表面板加「加入仪表板」：把 `chartSpec` 的 SQL / 类型 / X,Y 列原样存成固定卡片。`ChartView` 本身已具备 hover、导出、类型工具栏与 `chartSuitability` 门禁，卡片直接复用 |
 | `apps/desktop/src/components/Sidebar.tsx`、`App.tsx` | 数据库节点右键「打开仪表板」、侧栏底栏 `data-testid="open-dashboard"` 图标、ribbon「仪表板」按钮 |
 | `apps/desktop/src/styles/dashboard.css` | 卡片网格样式，复用已有 `.dash-empty`、`.panel`、`--*` 令牌，明暗自动 |
-| `apps/desktop/src/i18n.ts` | 不新增 `t()` 键：`DashboardView` 与 `ChartView` / `QueryView` / `Sidebar` 一样直接写中文，避免出现「只翻译一半」的第二套约定 |
+| `apps/desktop/src/i18n.ts` | 中文源文案统一经过 `tr()` / `t()`，新增文案进入 `apps/desktop/src/i18n/locales/en.json` 等语言目录；加载失败按英文、中文源文逐级兜底 |
 
-布局：CSS grid 12 轨，卡片 `span 1|2`，两列自适应流式。首屏空态给两个明确动作：「让 AI 生成草稿」「从收藏导入」。
+布局：基于**仪表板内容容器宽度**的 1/2/3 列响应式网格，不依赖窗口视口宽度；卡片 `span=1` 占一列，`span=2` 占两列，单列时自然退化为整行。首屏空态保留「让 AI 生成草稿」「从收藏导入」「新建卡片」三个明确入口。
+
+### 6.1 响应式布局与交互契约
+
+#### 容器模型与断点
+
+外层三栏算法继续由 `apps/desktop/src/lib/layout.ts` 的 `computePaneLayout()` 唯一负责，本特性不另算窗口宽度，也不修改侧栏/Agent 的最小宽度。仪表板只感知自己实际拿到的内容宽度：
+
+- `.dash-view` 建立 `container-type: inline-size`，所有网格断点使用 `@container dashboard`。
+- 网格内容最大宽度 `1600px` 并水平居中，避免超宽屏把卡片拉成长条；超宽部分由背景吸收。
+- 卡片理想最小宽度 `340px`，列间距 `12px`；因此内容宽度达到 `692px` 才切两列，达到 `1044px` 才切三列。
+- `span=2` 在两列占满整行、三列占两列；单列只占一列，不制造横向溢出。它是相对“两列宽度”的语义，不是固定 12 轨。
+- 卡片、图表容器与操作区均设置 `min-width: 0`，内部表格/SVG 在自己的滚动区域内处理，不把宽度压力传回外壳。
+
+| 仪表板内容宽度 | 列数 | 标准卡片宽度（约） | 宽卡片 |
+|---|---:|---:|---|
+| `< 692px` | 1 | 容器全宽 | 整行 |
+| `692–1043px` | 2 | `(宽度 - 12) / 2` | 整行 |
+| `≥ 1044px` | 3 | `(宽度 - 24) / 3`，容器总宽上限 1600 | 两列 |
+
+默认侧栏/Agent 都打开时，1440px 窗口约为两列、1024px 窗口必须安全收为一列；1920px 为三列，2560px 仍不超过三列。拖动侧栏/Agent 时按新的容器宽度即时重排，不重新查询数据库。
+
+#### 信息层级与操作收纳
+
+- **板头常驻**：标题/卡片数、有效时间范围、刷新、新建卡片、AI 补一批、更多操作。主操作保持可见，但 `.dash-actions` 允许换行并设置 `min-width: 0`。
+- **板头「更多操作」**：定时刷新、从收藏导入、导出报告、丢弃草稿；破坏性操作使用危险样式。空态仍直接提供常用入口。
+- **卡片常驻**：拖拽柄、来源/刷新状态、刷新、更多操作。常驻控件目标高度不小于 28px。
+- **卡片「更多操作」**：时间列、固定、加宽/变窄、前移、后移、移除。菜单沿用全局 `ContextMenuHost`，具备视口收边、点击外部关闭、Escape 关闭与焦点可达性。
+- 元数据不得挤掉操作区；空间不足时省略非关键状态文字，保留来源与错误提示。辅助文字最小 10px。
+
+#### 编辑与导入面板
+
+新建卡片与收藏导入改为覆盖层模态框，复用 `Modal`，不再作为流内面板把网格向下推：
+
+- 新建卡片为宽模态（最大 `900px`，高度不超过 `88vh`），保留需求生成、SQL 编辑、预览与保存完整工作流；生成/预览错误留在弹层内。
+- 收藏导入为普通模态（最大 `600px`），列表独立滚动，底部主操作固定可见。
+- 关闭弹层回到原网格与滚动位置；保存成功后关闭并只刷新新增卡片，失败不丢表单。
+- 窄窗口下弹层宽度不超过 `94vw`，输入、预览与页脚可换行；背景遮罩点击可关闭，遮罩自身不参与仪表板尺寸计算。
+
+#### 验收与回归边界
+
+1. 在 390/640/768/1024/1366/1440/1920/2560px 视口以及默认三栏、Agent 覆盖、侧栏抽屉组合下，`.dash-view` 与 `.dash-grid` 不得出现横向溢出。
+2. 直接断言列数、宽卡片跨列和卡片最小宽度，而不只检查页面根节点 `scrollWidth`。
+3. 在断点上下各 1px 验证 1↔2、2↔3 列切换；拖动外壳分栏后按容器宽度切换列数。
+4. 图表缩放只重算 SVG 几何，不触发 `/dashboards/refresh`；卡片 340px 附近坐标轴仍可辨识。
+5. 板头/卡片操作在 1024px 不溢出；所有收纳操作仍可用键盘与 E2E 定位。
+6. 打开新建/收藏面板不改变网格列数、卡片位置或背景滚动位置。
 
 卡片出图规则（`DashboardView` 的 `spec` 计算）：SQL 返回多个度量时尽量都画；但两个量纲相差 10 倍以上不能共用一根轴——只有一列附加度量时自动切成「柱 + 右轴折线」双轴，多列且无法协调时才舍弃附加列。整数度量不出现小数刻度，日期型轴标签（`2025-07`）不截断。
 
@@ -145,7 +191,7 @@ SELECT * FROM ( 原SQL ) dash_t WHERE dash_t.<time_column> >= ? AND dash_t.<time
 
 **默认关闭**：后台默默跑 SQL 对生产库是风险，必须逐板显式开启，并只在只读连接或低风险 SQL 上建议开。
 
-实现落点：`dashboard_schedules(scope_key PRIMARY KEY, interval_seconds, enabled, notify_channels, last_run_at, last_status, last_error)`；`JobScheduler.setDashboardRunner()` 与 `tickDashboards()` 与 artifact 定时同一套节流（60 秒下限 + 同板不并发），跑完把 `n/m 张卡片已刷新` 写进 `last_status/last_error` 并按 `notify_channels`（最多 4 个）逐个 `sendNotification`；UI 在板头一个「不定时刷新 / 每 5 分钟 / 每 30 分钟 / 每 2 小时 / 每天」的下拉里控制，`data-testid="dashboard-schedule"`。
+实现落点：`dashboard_schedules(scope_key PRIMARY KEY, interval_seconds, enabled, notify_channels, last_run_at, last_status, last_error)`；`JobScheduler.setDashboardRunner()` 与 `tickDashboards()` 与 artifact 定时同一套节流（60 秒下限 + 同板不并发），跑完把 `n/m 张卡片已刷新` 写进 `last_status/last_error` 并按 `notify_channels`（最多 4 个）逐个 `sendNotification`；UI 在板头「更多操作 → 不定时刷新 / 每 5 分钟 / 每 30 分钟 / 每 2 小时 / 每天」中控制，当前项保留 `data-testid="dashboard-schedule"`，其余项使用 `dashboard-schedule-{intervalSeconds}`。
 
 ## 10 分阶段落地
 
@@ -156,6 +202,7 @@ SELECT * FROM ( 原SQL ) dash_t WHERE dash_t.<time_column> >= ? AND dash_t.<time
 | P2 | AI 草稿三段式（brief 种子 + 结构化调用 + 试跑准入）+ 规则兜底 | 有 brief 出 ≥4 张可用卡；无 brief 不报错 | 已完成（demo 库无 brief 时生成 7 张可画图草稿，标题与类型由模型定） |
 | P3 | 收藏导入 + 板级时间筛选 + 图表卡「加入仪表板」 | e2e 覆盖端到端 | 已完成 |
 | P4 | 定时刷新 + 通知 + 导出为报告 | 可延后 | 已完成（`dashboard_schedules` + `tickDashboards` + 通知渠道 + `POST /dashboards/report` 出 PPTX） |
+| P5 | 容器响应式网格、板头/卡片操作收纳、新建与收藏覆盖层、响应式回归 | §6.1 与 §11 全部门禁 | 已完成 |
 
 代码落点：`packages/core/src/types.ts`（`DashboardCard` 系列类型）、`apps/gateway/src/store.ts`（`dashboard_cards` 与 CRUD）、`apps/gateway/src/features/dashboards.ts`（只读/禁用表闸门、时间外层包裹、并发刷新）、`apps/gateway/src/features/dashboardGenerate.ts`（草稿生成）、`apps/gateway/src/routes.ts`（`/dashboards/*`）、`apps/desktop/src/components/DashboardView.tsx` 与 `buildChartSpec.ts`、`apps/desktop/src/store.ts`（`openDashboard` / `setDashboardRange`）、`apps/desktop/src/styles/dashboard.css`。
 
@@ -163,7 +210,8 @@ SELECT * FROM ( 原SQL ) dash_t WHERE dash_t.<time_column> >= ? AND dash_t.<time
 
 - 纯函数：`buildChartSpec`、时间包裹 SQL、`setDraftCards` 只动 `pinned=0` —— `npx tsx -e` 断言。
 - 集成：`apps/gateway/test/dashboards.test.ts` 覆盖非只读被拒、禁用表被拒、快照截断、reorder。
-- E2E（`scripts/e2e.mjs` 的 `check()`）：`tab-dashboard` 打开、空态引导存在、生成后卡片 ≥1、`dashboard-refresh` 后 `[data-testid="chart-svg"]` 仍在、时间筛选只影响有 `time_column` 的卡、只读连接可建板。
+- E2E（`scripts/e2e.mjs` 的 `check()`）：`tab-dashboard` 打开、空态引导存在、生成后卡片 ≥1、`dashboard-refresh` 后 `[data-testid="chart-svg"]` 仍在、时间筛选只影响有 `time_column` 的卡、只读连接可建板；操作收纳后的丢弃草稿与前移仍通过更多菜单完成，新建卡片与报告导出流程保持端到端覆盖。
+- 响应式（`scripts/qa/responsive.mjs`）：覆盖 §6.1 的视口矩阵、仪表板内部横向溢出、1/2/3 列与 `span=2`、分栏拖动、断点边界、打开编辑面板不推挤网格，以及图表宽度随容器同步且不产生额外刷新请求；专项模式 `QA_DASHBOARD_ONLY=1` 还验证卡片菜单的固定/宽窄/时间列/移动/删除与板头菜单的定时刷新/导出入口。
 - 文档契约：`npm run verify:docs` 保持全绿。
 
 ## 12 风险
