@@ -195,23 +195,81 @@ function writeReportSlides(pptx: PptxGenJS, spec: ReportSpec): void {
     }
     if (slide.chart) {
       const chart = slide.chart;
-      const series = [{ name: copy.current, labels: chart.points.map((point) => point.label), values: chart.points.map((point) => point.value) }];
+      const labels = chart.points.map((point) => point.label);
+      const primaryName = chart.yLabel || copy.current;
+      const series: Array<{ name: string; labels: string[] | number[]; values: number[] }> = [
+        { name: primaryName, labels, values: chart.points.map((point) => point.value) },
+      ];
       if (chart.points.some((point) => typeof point.baseline === 'number')) {
         series.push({
           name: chart.baselineName || copy.previous,
-          labels: chart.points.map((point) => point.label),
+          labels,
           values: chart.points.map((point) => point.baseline ?? 0),
         });
       }
+      for (const extra of chart.extraSeries ?? []) series.push({ name: extra.name, labels, values: extra.values });
       const chartTop = Math.min(cursorY, 4.2);
       page.addText(chart.title, { x: 0.6, y: Math.max(1.1, chartTop - 0.34), w: 12, h: 0.3, fontSize: 11, color: MUTED });
-      const type = chart.chartType === 'line' ? pptx.ChartType.line : chart.chartType === 'pie' ? pptx.ChartType.pie : pptx.ChartType.bar;
-      page.addChart(type, series as any, {
+      const chartColors = ['0F766E', '93A19E', 'D6B45A', '5B8DEF', 'E0604F'];
+      const baseOptions: any = {
         x: 0.6, y: chartTop, w: 12, h: Math.max(2.2, 6.4 - chartTop),
         showLegend: series.length > 1,
-        showValue: chart.chartType === 'pie',
-        chartColors: ['0F766E', '93A19E', 'D6B45A', '5B8DEF', 'E0604F'],
-      } as any);
+        chartColors,
+        showCatAxisTitle: Boolean(chart.xLabel),
+        showValAxisTitle: Boolean(chart.yLabel),
+        catAxisTitle: chart.xLabel,
+        valAxisTitle: chart.yLabel || primaryName,
+        altText: `${chart.title}. ${chart.xLabel ?? ''} ${chart.yLabel ?? ''}`.trim(),
+      };
+      if (chart.chartType === 'heatmap' && chart.heatmap) {
+        const matrix = chart.heatmap;
+        const rows = [
+          [matrix.valueLabel || chart.title || copy.current, ...matrix.xLabels],
+          ...matrix.yLabels.map((label, rowIndex) => [label, ...matrix.values[rowIndex]!.map((value) => String(value))]),
+        ];
+        page.addTable(rows.map((row) => row.map((cell) => ({ text: String(cell), options: { fontSize: 8 } }))) as any, {
+          x: 0.6, y: chartTop, w: 12, h: Math.max(2.2, 6.4 - chartTop),
+          border: { pt: 0.5, color: 'D1D5DB' }, valign: 'middle', margin: 0.03,
+        });
+      } else if (chart.chartType === 'scatter' && chart.scatter?.length) {
+        const scatterSeries = [{
+          name: primaryName,
+          labels: chart.scatter.map((point) => point.x),
+          values: chart.scatter.map((point) => point.y),
+        }];
+        page.addChart(pptx.ChartType.scatter, scatterSeries as any, { ...baseOptions, showLegend: false } as any);
+        if (chart.scatter.some((point) => point.label)) {
+          page.addText(chart.scatter.map((point) => point.label).filter(Boolean).join(' · '), {
+            x: 0.7, y: 6.35, w: 11.8, h: 0.3, fontSize: 8, color: MUTED,
+          });
+        }
+      } else {
+        const type = chart.chartType === 'line'
+          ? pptx.ChartType.line
+          : chart.chartType === 'pie'
+            ? pptx.ChartType.pie
+            : chart.chartType === 'radar'
+              ? pptx.ChartType.radar
+              : pptx.ChartType.bar;
+        const options = {
+          ...baseOptions,
+          showValue: chart.chartType === 'pie',
+          ...(chart.chartType === 'line' ? { lineDataSymbol: 'circle', lineDataSymbolSize: 5 } : {}),
+          ...(chart.chartType === 'bar' || chart.chartType === 'stacked' ? {
+            barDir: 'bar',
+            barGrouping: chart.chartType === 'stacked' || chart.stacked ? 'stacked' : 'clustered',
+            ...(chart.chartType === 'stacked' || chart.stacked ? { barOverlapPct: 100 } : {}),
+          } : {}),
+        };
+        if (chart.dualAxis && series.length === 2) {
+          page.addChart([
+            { type, data: [series[0]], options },
+            { type: pptx.ChartType.line, data: [series[1]], options: { ...baseOptions, secondaryValAxis: true, lineDataSymbol: 'circle', lineDataSymbolSize: 5 } },
+          ] as any, baseOptions);
+        } else {
+          page.addChart(type, chart.chartType === 'pie' ? [series[0]] : series as any, options as any);
+        }
+      }
       const footnote = chart.overflow ?? chart.note;
       if (footnote) page.addText(footnote, { x: 0.6, y: 6.7, w: 12, h: 0.3, fontSize: 9, color: MUTED });
     }

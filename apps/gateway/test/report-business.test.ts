@@ -33,7 +33,9 @@ shop.exec(`
     (5, 100, '2026-10-05 10:00:00', 0),
     (6, 200, '2026-10-12 10:00:00', 0),
     (7, 300, '2026-10-20 10:00:00', 0),
-    (8, 999, '2026-10-21 10:00:00', 1);
+    (8, 999, '2026-10-21 10:00:00', 1),
+    (9, 80, '2025-10-05 10:00:00', 0),
+    (10, 120, '2025-10-20 10:00:00', 0);
   INSERT INTO refunds (id, amount, created_at) VALUES
     (1, 30, '2026-09-10 10:00:00'),
     (2, 40, '2026-10-10 10:00:00'),
@@ -89,6 +91,19 @@ test('确定性报告输出业务指标、同口径基线与差值', async () =>
   assert.equal(refunds?.value, 2);
   assert.equal(refunds?.baseline, 1);
   assert.equal(refunds?.goodDirection, 'down');
+
+  const yearAgo = orders?.alternativeBaselines?.find((baseline) => baseline.label.includes('同比'));
+  assert.equal(yearAgo?.value, 2);
+  assert.ok(yearAgo?.resultRef);
+  assert.match(spec.meta.evidence?.[yearAgo.resultRef]?.sql ?? '', /2025-10/);
+
+  const brief = spec.meta.brief;
+  const groundedOrders = brief?.grounding.tables.find((table) => table.name === 'orders');
+  assert.ok(groundedOrders?.columns.some((column) => column.name === 'amount' && column.role === 'metric'));
+  assert.ok(groundedOrders?.columns.some((column) => column.name === 'created_at' && column.role === 'time'));
+  const kpiStep = brief?.plan.find((step) => step.id === 'kpis');
+  assert.ok(kpiStep?.tables.some((table) => table.includes('orders')));
+  assert.ok(kpiStep?.columns.some((column) => column.includes('amount') || column.includes('created_at')));
 });
 
 test('确定性报告带管理层摘要、章节结论与时间口径', async () => {

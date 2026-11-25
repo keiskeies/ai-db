@@ -21,7 +21,8 @@ export interface ChartShape {
   xLabel?: string;
   yLabel?: string;
   sql?: string;
-  series?: Array<{ label: string; value: number }>;
+  series?: Array<{ label: string; value: number; baseline?: number }>;
+  baselineName?: string;
   extraSeries?: Array<{ name: string; values: number[] }>;
   stacked?: boolean;
   dualAxis?: boolean;

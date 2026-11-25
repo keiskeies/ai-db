@@ -1,11 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Modal, Pressable, ScrollView, View } from 'react-native';
 import { ChevronLeft, X } from 'lucide-react-native';
+import type { ReportSpec } from '@aidb/core';
+import { isReportSpec } from '@aidb/core';
 import { BridgeClient } from '../bridge';
 import { colors } from '../theme';
 import { styles } from '../styles';
 import { notify, shareBase64, humanBytes, confirmAction } from '../lib/utils';
 import { Text } from '../components/base';
+import { ReportView } from '../components/ReportView';
+
+function reportSpecOf(type: string, result: unknown): ReportSpec | undefined {
+  return (type === 'report' || type === 'compare') && isReportSpec(result) ? result : undefined;
+}
 
 export function ArtifactsScreen({ client, onBack }: { client: BridgeClient; onBack: () => void }) {
   const [items, setItems] = useState<Array<{ id: string; type: string; title: string; status: string; updatedAt: string }>>([]);
@@ -45,6 +52,7 @@ export function ArtifactsScreen({ client, onBack }: { client: BridgeClient; onBa
       setBusy(false);
     }
   };
+  const reportSpec = detail ? reportSpecOf(detail.artifact.type, detail.run?.result) : undefined;
   return (
     <View style={{ flex: 1 }}>
       <View style={styles.tableHead}>
@@ -74,10 +82,16 @@ export function ArtifactsScreen({ client, onBack }: { client: BridgeClient; onBa
               <ScrollView contentContainerStyle={{ padding: 14, gap: 10 }}>
                 <Text style={styles.listMeta}>{detail.artifact.type} · {detail.artifact.status}{detail.run ? ` · 运行 ${detail.run.status}` : ''}</Text>
                 {detail.run?.error ? <Text style={styles.error}>{detail.run.error}</Text> : null}
-                <Text style={styles.sectionLabel}>运行结果</Text>
-                <Text selectable style={styles.sqlSnippet}>{detail.run?.result ? JSON.stringify(detail.run.result, null, 2) : '没有运行结果'}</Text>
-                <Text style={styles.sectionLabel}>规格</Text>
-                <Text selectable style={styles.sqlSnippet}>{JSON.stringify(detail.artifact.spec, null, 2)}</Text>
+                {reportSpec ? (
+                  <ReportView spec={reportSpec} error={detail.run?.error} />
+                ) : (
+                  <>
+                    <Text style={styles.sectionLabel}>运行结果</Text>
+                    <Text selectable style={styles.sqlSnippet}>{detail.run?.result ? JSON.stringify(detail.run.result, null, 2) : '没有运行结果'}</Text>
+                    <Text style={styles.sectionLabel}>规格</Text>
+                    <Text selectable style={styles.sqlSnippet}>{JSON.stringify(detail.artifact.spec, null, 2)}</Text>
+                  </>
+                )}
                 <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
                   <Pressable style={[styles.modeChip, busy && { opacity: 0.5 }]} disabled={busy} onPress={() => void exportArtifact('xlsx')}><Text style={styles.modeChipText}>导出 XLSX</Text></Pressable>
                   <Pressable style={[styles.modeChip, busy && { opacity: 0.5 }]} disabled={busy} onPress={() => void exportArtifact('pptx')}><Text style={styles.modeChipText}>导出 PPTX</Text></Pressable>

@@ -46,15 +46,83 @@ test('报告块必须绑定存在的 resultRef，且数字来自该结果', () =
   assert.equal((comparison as any).delta.absolute, 35);
 });
 
-test('报告图表拒绝热力图/雷达图，而不是静默改成柱状图', () => {
-  const heatmap = normalizeReportBlock(
-    { kind: 'chart', resultRef: 'call_1', chartType: 'heatmap', series: [{ label: 'a', value: 42 }] },
-    new Set([42]),
+test('报告图表支持散点/热力/雷达，并继续校验每个数字的来源', () => {
+  const scatter = normalizeReportBlock(
+    { kind: 'chart', resultRef: 'call_1', chartType: 'scatter', xLabel: '订单数', yLabel: '金额', scatter: [{ x: 42, y: 7, label: 'A' }, { x: 7, y: 42, label: 'B' }] },
+    new Set([42, 7]),
     refs,
     true,
   );
-  assert.ok('error' in heatmap);
-  assert.match(heatmap.error, /不支持 heatmap/);
+  assert.ok(!('error' in scatter));
+  assert.equal((scatter as any).scatter.length, 2);
+
+  const heatmap = normalizeReportBlock(
+    { kind: 'chart', resultRef: 'call_1', chartType: 'heatmap', heatmap: { xLabels: ['周一', '周二'], yLabels: ['白天', '夜晚'], values: [[42, 7], [7, 42]] } },
+    new Set([42, 7]),
+    refs,
+    true,
+  );
+  assert.ok(!('error' in heatmap));
+  assert.equal((heatmap as any).heatmap.values.length, 2);
+
+  const radar = normalizeReportBlock(
+    { kind: 'chart', resultRef: 'call_1', chartType: 'radar', series: [{ label: '速度', value: 42 }, { label: '质量', value: 7 }, { label: '成本', value: 42 }] },
+    new Set([42, 7]),
+    refs,
+    true,
+  );
+  assert.ok(!('error' in radar));
+
+  const wrongScatter = normalizeReportBlock(
+    { kind: 'chart', resultRef: 'call_1', chartType: 'scatter', scatter: [{ x: 99, y: 7 }, { x: 7, y: 42 }] },
+    new Set([99, 42, 7]),
+    refs,
+    true,
+  );
+  assert.ok('error' in wrongScatter);
+  assert.match(wrongScatter.error, /来源/);
+});
+
+test('图表与补充基线保留各自的 resultRef', () => {
+  const localRefs = new Map(refs);
+  localRefs.set('call_2', new Set([7]));
+  const chart = normalizeReportBlock(
+    { kind: 'chart', resultRef: 'call_1', chartType: 'line', series: [{ label: 'A', value: 42, baseline: 7, baselineResultRef: 'call_2' }] },
+    new Set([42, 7]),
+    localRefs,
+    true,
+  );
+  assert.ok(!('error' in chart));
+  assert.equal((chart as any).series[0].baselineResultRef, 'call_2');
+
+  const metric = normalizeReportBlock(
+    { kind: 'metric', resultRef: 'call_1', metrics: [{ label: '订单数', value: 42, alternativeBaselines: [{ label: '上周', value: 7, resultRef: 'call_2' }] }] },
+    new Set([42, 7]),
+    localRefs,
+    true,
+  );
+  assert.ok(!('error' in metric));
+  assert.equal((metric as any).metrics[0].alternativeBaselines[0].resultRef, 'call_2');
+});
+
+test('多系列长度一致且附加值也必须来自 resultRef', () => {
+  const valid = normalizeReportBlock(
+    { kind: 'chart', resultRef: 'call_1', chartType: 'bar', series: [{ label: 'A', value: 42 }, { label: 'B', value: 7 }], extraSeries: [{ name: '上期', values: [7, 42] }] },
+    new Set([42, 7]),
+    refs,
+    true,
+  );
+  assert.ok(!('error' in valid));
+  assert.equal((valid as any).extraSeries[0].name, '上期');
+
+  const wrongLength = normalizeReportBlock(
+    { kind: 'chart', resultRef: 'call_1', chartType: 'bar', series: [{ label: 'A', value: 42 }, { label: 'B', value: 7 }], extraSeries: [{ name: '上期', values: [42] }] },
+    new Set([42, 7]),
+    refs,
+    true,
+  );
+  assert.ok('error' in wrongLength);
+  assert.match(wrongLength.error, /等长/);
 });
 
 test('报告饼图按 3–8 个切片校验，避免把 Top N 伪装成整体', () => {

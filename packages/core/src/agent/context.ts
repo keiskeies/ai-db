@@ -109,10 +109,11 @@ export function expandTerms(prompt: string, glossary?: Memory[]): string {
   if (!glossary?.length || !prompt) return prompt;
   let out = prompt;
   for (const memory of glossary) {
-    const term = memory.title.trim();
-    if (term.length < 1) continue;
-    const boundary = `(^|[^A-Za-z0-9_\\u4e00-\\u9fff])${escapeRegex(term)}(?![A-Za-z0-9_\\u4e00-\\u9fff])`;
-    out = out.replace(new RegExp(boundary, 'gi'), (_match, prefix: string) => `${prefix}${term} ${memory.content.replace(/\s+/g, ' ').slice(0, 120)}`);
+    const terms = [memory.title, ...(memory.synonyms ?? [])].map((term) => term.trim()).filter(Boolean);
+    for (const term of terms) {
+      const boundary = `(^|[^A-Za-z0-9_\\u4e00-\\u9fff])${escapeRegex(term)}(?![A-Za-z0-9_\\u4e00-\\u9fff])`;
+      out = out.replace(new RegExp(boundary, 'gi'), (_match, prefix: string) => `${prefix}${term} ${memory.content.replace(/\s+/g, ' ').slice(0, 120)}`);
+    }
   }
   return out;
 }

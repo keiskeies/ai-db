@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { ReportMetric, ReportSpec } from '../src/commands/report';
+import { isReportSpec } from '../src/commands/report';
 import {
   describeEvidence,
   flattenDeckSlides,
@@ -98,22 +99,65 @@ test('多余的图与表展开成独立页，不静默丢内容', () => {
   });
   const plan = planReportDeck({ ...multi, meta: { ...multi.meta, audience: 'technical' } });
   const flat = flattenDeckSlides(plan.slides);
-  // 首页带主图（月度）与主表（明细 A），其余各占一页。
+  // 主表与主图各自独占一页，其余图、表也各占一页。
   const sectionTitles = flat.filter((slide) => slide.kind === 'section').map((slide) => slide.title);
-  assert.deepEqual(sectionTitles, ['趋势', '趋势 · 渠道', '趋势 · 明细 B']);
-  const head = flat[flat.length - 3]!;
-  assert.equal(head.kind === 'section' ? head.chart?.title : undefined, '月度');
-  assert.equal(head.kind === 'section' ? head.table?.title : undefined, '明细 A');
-  // 独立页只带自己那一份数据，否则同一张图会在两页里重复。
-  const chartPage = flat.find((slide) => slide.title === '趋势 · 渠道')!;
-  assert.equal(chartPage.kind === 'section' ? chartPage.chart?.title : undefined, '渠道');
+  assert.deepEqual(sectionTitles, ['趋势 · 明细 A', '趋势 · 月度', '趋势 · 渠道', '趋势 · 明细 B']);
+  const tablePage = flat.find((slide) => slide.title === '趋势 · 明细 A')!;
+  assert.equal(tablePage.kind === 'section' ? tablePage.table?.title : undefined, '明细 A');
+  assert.equal(tablePage.kind === 'section' ? tablePage.chart : undefined, undefined);
+  const chartPage = flat.find((slide) => slide.title === '趋势 · 月度')!;
+  assert.equal(chartPage.kind === 'section' ? chartPage.chart?.title : undefined, '月度');
   assert.equal(chartPage.kind === 'section' ? chartPage.table : undefined, undefined);
-  // 展开后不留残余：任何一页都不该再挂着待展开的额外数据。
   for (const slide of flat) {
     if (slide.kind !== 'section') continue;
+    assert.ok(!(slide.table && slide.chart), '同一页不能同时放表格和图表');
     assert.deepEqual(slide.extraCharts, []);
     assert.deepEqual(slide.extraTables, []);
   }
+});
+
+test('技术读者的长指标与长表格按页拆开，不超出画布', () => {
+  const long = spec({
+    meta: { intent: '订单', createdAt: '2026-11-01T00:00:00.000Z', audience: 'technical' },
+    sections: [{
+      id: 'long',
+      title: '技术明细',
+      blocks: [
+        { kind: 'metric', metrics: Array.from({ length: 8 }, (_, index) => metric(`指标 ${index + 1}`, index + 1)) },
+        { kind: 'table', title: '十五行', columns: ['序号'], rows: Array.from({ length: 15 }, (_, index) => [index + 1]) },
+      ],
+    }],
+  });
+  const flat = flattenDeckSlides(planReportDeck(long).slides);
+  const metricPages = flat.filter((slide) => slide.kind === 'metrics');
+  assert.deepEqual(metricPages.map((slide) => slide.metrics.length), [6, 2]);
+  const tablePages = flat.filter((slide) => slide.kind === 'section' && slide.table);
+  assert.deepEqual(tablePages.map((slide) => slide.kind === 'section' ? slide.table?.rows.length : 0), [6, 6, 3]);
+  assert.ok(flat.filter((slide) => slide.kind === 'section').every((slide) => !slide.table || !slide.chart));
+});
+
+test('单点柱状和折线图仍然进入 deck，并绘制可见标记', () => {
+  const single = spec({
+    sections: [{
+      id: 'single',
+      title: '单点',
+      blocks: [
+        { kind: 'chart', title: '单点柱状', chartType: 'bar', series: [{ label: 'A', value: 7 }] },
+        { kind: 'chart', title: '单点折线', chartType: 'line', series: [{ label: 'B', value: 9 }] },
+      ],
+    }],
+  });
+  const flat = flattenDeckSlides(planReportDeck(single).slides);
+  assert.equal(flat.filter((slide) => slide.kind === 'section' && slide.chart).length, 2);
+  assert.equal(flat.find((slide) => slide.kind === 'section' && slide.chart?.title === '单点柱状')?.kind, 'section');
+});
+
+test('残缺报告在进入渲染器前被拒绝', () => {
+  assert.equal(isReportSpec(spec()), true);
+  assert.equal(isReportSpec({ ...spec(), sections: [{ id: 'broken', title: ' broken ' }] }), false);
+  assert.equal(isReportSpec({ ...spec(), sources: undefined }), false);
+  assert.equal(isReportSpec({ ...spec(), executive: { headline: 'x' } }), false);
+  assert.equal(isReportSpec({ ...spec(), meta: { ...spec().meta, brief: { objective: 'x' } } }), false);
 });
 
 test('Excel 按结构分 sheet，数字保持数字类型', () => {
@@ -155,4 +199,83 @@ test('英文报告的分页文案跟着 locale 走', () => {
   assert.match(cover.meta, /1 sections/);
   assert.ok(plan.slides.some((slide) => slide.kind === 'metrics'));
   assert.equal(reportCopy('en').executive, 'Executive summary');
+});
+
+test('富图表进入 deck 与 Excel 长表，矩阵裁剪说明与真实尺寸一致', () => {
+  const rich = spec({
+    meta: {
+      intent: '订单', createdAt: '2026-11-01T00:00:00.000Z', audience: 'technical',
+      evidence: {
+        q1: { ref: 'q1', tool: 'run_sql', sql: 'SELECT month, value FROM metrics', ranAt: '2026-11-01T00:00:00.000Z' },
+        q2: { ref: 'q2', tool: 'run_sql', sql: 'SELECT month, baseline FROM targets', ranAt: '2026-11-01T00:00:00.000Z' },
+      },
+    },
+    sections: [{
+      id: 'rich',
+      title: '结构分析',
+      blocks: [
+        {
+          kind: 'chart',
+          title: '本期与目标',
+          resultRef: 'q1',
+          resultRefs: ['q1', 'q2'],
+          chartType: 'line',
+          xLabel: '月份',
+          yLabel: '成交额',
+          baselineName: '目标',
+          series: [{ label: '8月', value: 100, baseline: 90, baselineResultRef: 'q2' }, { label: '9月', value: 120, baseline: 110, baselineResultRef: 'q2' }],
+          extraSeries: [{ name: '去年', values: [80, 95] }],
+        },
+        {
+          kind: 'chart',
+          title: '量价关系',
+          chartType: 'scatter',
+          xLabel: '订单量',
+          yLabel: '金额',
+          scatter: [{ label: 'A', x: 1, y: 2 }, { label: 'B', x: 3, y: 4 }],
+        },
+        {
+          kind: 'chart',
+          title: '渠道矩阵',
+          chartType: 'heatmap',
+          heatmap: {
+            xLabels: Array.from({ length: 13 }, (_, index) => `C${index + 1}`),
+            yLabels: Array.from({ length: 9 }, (_, index) => `R${index + 1}`),
+            values: Array.from({ length: 9 }, (_, row) => Array.from({ length: 13 }, (_, column) => row * 13 + column)),
+            valueLabel: '转化率',
+          },
+        },
+      ],
+    }],
+  });
+  const flat = flattenDeckSlides(planReportDeck(rich).slides);
+  const line = flat.find((slide) => slide.kind === 'section' && slide.chart?.title === '本期与目标')!;
+  assert.equal(line.kind === 'section' ? line.chart?.extraSeries?.[0]?.name : undefined, '去年');
+  assert.equal(line.kind === 'section' ? line.chart?.points[0]?.baseline : undefined, 90);
+  const heatmap = flat.find((slide) => slide.kind === 'section' && slide.chart?.title === '渠道矩阵')!;
+  assert.equal(heatmap.kind === 'section' ? heatmap.chart?.heatmap?.xLabels.length : undefined, 12);
+  assert.equal(heatmap.kind === 'section' ? heatmap.chart?.heatmap?.yLabels.length : undefined, 8);
+  assert.match(heatmap.kind === 'section' ? heatmap.chart?.overflow ?? '' : '', /13×9.*12 列 × 8 行/);
+
+  const chartSheet = reportSheets(rich).find((sheet) => sheet.name === '趋势')!;
+  const rows = chartSheet.rows as unknown[][];
+  const extra = rows.find((row) => row[6] === 'line' && row[7] === '去年' && row[2] === '9月')!;
+  assert.equal(extra[2], '9月');
+  assert.equal(extra[3], 95);
+  const scatter = rows.find((row) => row[6] === 'scatter')!;
+  assert.equal(scatter[8], 1);
+  assert.equal(scatter[9], 2);
+  const heatRows = rows.filter((row) => row[6] === 'heatmap');
+  assert.equal(heatRows.length, 117, 'Excel 保留完整矩阵，裁剪只发生在幻灯片');
+  assert.equal(heatRows[0]?.[10], 'R1|C1');
+  assert.equal(heatRows[0]?.[11], '');
+  assert.equal(heatRows[0]?.[12], '转化率');
+  assert.equal(isReportSpec(rich), true);
+  assert.ok(chartSheet.columns.includes('result_ref'));
+  assert.ok(chartSheet.columns.includes('baseline_result_ref'));
+  const primary = rows.find((row) => row[6] === 'line' && row[7] === '成交额')!;
+  assert.equal(primary[14], 'q1');
+  assert.equal(primary[15], 'q1|q2');
+  assert.equal(primary[16], 'q2');
+  assert.equal(primary[17], 'SELECT month, value FROM metrics');
 });

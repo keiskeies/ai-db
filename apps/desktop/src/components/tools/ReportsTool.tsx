@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Download, FileChartColumn, FileText, Loader2, Play, Presentation, RefreshCw } from 'lucide-react';
 import type { ArtifactInfo, CommandRunEvent, ReportSpec } from '@aidb/core';
+import { isReportSpec } from '@aidb/core';
 import { api, streamCommandRun } from '../../lib/api';
 import { useApp } from '../../store';
 import { DatabaseSelect } from '../DatabaseSelect';
@@ -79,7 +80,8 @@ export function ReportsTool() {
   const openSpec = async (id: string) => {
     try {
       const { runs } = await api.artifactRuns(id, 1);
-      setSpec((runs[0]?.result as ReportSpec) ?? null);
+      const result = runs[0]?.result;
+      setSpec(isReportSpec(result) ? result : null);
     } catch (err: any) {
       setSpec(null);
       notify('error', tr("读取报告失败"), err?.message);
@@ -250,6 +252,7 @@ export function ReportsTool() {
                 {reports.map((artifact) => (
                   <button
                     key={artifact.id}
+                    data-testid={`report-artifact-${artifact.id}`}
                     className="transfer-row"
                     style={{
                       textAlign: 'left',

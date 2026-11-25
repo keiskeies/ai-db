@@ -873,7 +873,9 @@ function AxisBody({ chart, type, maxPoints, zoomed, svgRef, maxHeight, height: t
   const id = useStableId();
   const measured = useElementWidth(svgRef, zoomed ? 720 : 380);
   const history = chart.series.slice(0, maxPoints);
-  const extras = (chart.extraSeries ?? []).filter((extra) => extra.values.length === history.length);
+  const extras = (chart.extraSeries ?? [])
+    .filter((extra) => extra.values.length >= history.length)
+    .map((extra) => ({ ...extra, values: extra.values.slice(0, history.length) }));
   const multi = extras.length > 0;
   const isBar = type === 'bar' || type === 'stacked';
   const stacked = isBar && multi && (type === 'stacked' || chart.stacked === true);

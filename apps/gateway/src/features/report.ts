@@ -1,4 +1,15 @@
-import { buildCount, buildTimeBucketExpr, createProvider, engineMeta, quoteIdent, type ConnectionConfig, type TableInfo } from '@aidb/core';
+import { buildCount, buildTimeBucketExpr, createProvider, engineMeta, quoteIdent, type AgentContextBundle, type ConnectionConfig, type DatabaseSchema, type Memory, type TableInfo } from '@aidb/core';
+import {
+  buildReportBrief,
+  checkReportCoverage,
+  chainWindow,
+  computeMetricDelta,
+  formatPeriodForReader,
+  precedingEqualWindow,
+  resolvePeriod,
+  windowDays,
+  yearAgoWindow,
+} from '@aidb/core';
 import type {
   CommandSourceInput,
   ReportBlock,
@@ -13,7 +24,6 @@ import type {
   ResolvedPeriod,
   TimeWindow,
 } from '@aidb/core';
-import { chainWindow, computeMetricDelta, formatPeriodForReader, precedingEqualWindow, resolvePeriod, windowDays, yearAgoWindow } from '@aidb/core';
 import type { ConnectionManager } from '../manager';
 import type { Store } from '../store';
 import { connectionSchema } from './common';
@@ -133,7 +143,7 @@ interface BusinessFact {
   /** 基线数字来自哪次查询。 */
   baselineRef?: string;
   /** 环比之外的补充基线（同比、本期未结束时的同长切片）。 */
-  alternatives?: Array<{ label: string; value?: number; delta?: ReportDelta }>;
+  alternatives?: Array<{ label: string; value?: number; resultRef?: string; delta?: ReportDelta }>;
   /** 该事实所属的事实表与时间列：归因与异常检测要按它再查一次。 */
   table: string;
   timeColumn: string;
@@ -444,10 +454,10 @@ async function businessFactsOf(
   let attributionDone = false;
   /** 读者填的参照值只贴到名字对得上的指标上；对不上就不贴，绝不硬套到第一个指标。 */
   const withTarget = (
-    list: Array<{ label: string; value?: number; delta?: ReportDelta }>,
+    list: Array<{ label: string; value?: number; resultRef?: string; delta?: ReportDelta }>,
     metricLabel: string,
     currentValue: number,
-  ): Array<{ label: string; value?: number; delta?: ReportDelta }> => {
+  ): Array<{ label: string; value?: number; resultRef?: string; delta?: ReportDelta }> => {
     if (!target) return list;
     if (target.label && !(metricLabel.includes(target.label) || target.label.includes(metricLabel))) return list;
     if (list.some((item) => item.label.includes('目标'))) return list;
@@ -490,8 +500,8 @@ async function businessFactsOf(
       scale: (value: number) => number,
       currentValue: number,
       baselineValue?: number,
-    ): Promise<Array<{ label: string; value?: number; delta?: ReportDelta }>> => {
-      const out: Array<{ label: string; value?: number; delta?: ReportDelta }> = [];
+    ): Promise<Array<{ label: string; value?: number; resultRef?: string; delta?: ReportDelta }>> => {
+      const out: Array<{ label: string; value?: number; resultRef?: string; delta?: ReportDelta }> = [];
       let windowBaselines = 0;
       if (
         previous &&
@@ -526,6 +536,7 @@ async function businessFactsOf(
         out.push({
           label: window.label.split('（')[0]?.trim() ?? '对比',
           value,
+          ...(hit.ref ? { resultRef: hit.ref } : {}),
           delta: computeMetricDelta(currentValue, value),
         });
       }
@@ -806,6 +817,10 @@ export async function generateReport(
   const audience = input.audience ?? 'business';
   const selectedTables = new Set((input.tables ?? []).map((table) => table.toLowerCase()));
   const sources: SourceData[] = [];
+  const databases: DatabaseSchema[] = [];
+  let primaryContext: AgentContextBundle | undefined;
+  let glossary: Memory[] = [];
+  let sqlExamples: Memory[] = [];
   const tracing = newTrace();
   for (const [index, source] of input.sources.entries()) {
     const conn = store.getConnection(source.connectionId);
@@ -817,6 +832,14 @@ export async function generateReport(
       });
     }
     const schemas = await manager.schema(conn.id, source.database, true);
+    databases.push(...schemas);
+    if (index === 0) {
+      const database = source.database ?? conn.database;
+      primaryContext = store.agentContextBundle(conn.id, database);
+      const recall = store.recallForTurn(topic, { connectionId: conn.id, database });
+      glossary = recall.glossary;
+      sqlExamples = recall.sqlExamples;
+    }
     const allTables = schemas.flatMap((schema) => schema.tables).filter((table) => table.type === 'table');
     const candidates = selectedTables.size
       ? allTables.filter((table) => selectedTables.has(table.name.toLowerCase()))
@@ -861,6 +884,16 @@ export async function generateReport(
   }
 
   const layout = layoutFor(sources.length, topic);
+  const reportBrief = buildReportBrief({
+    topic,
+    audience,
+    databases,
+    context: primaryContext,
+    glossary,
+    sqlExamples,
+    focusTables: input.tables,
+    compare: layout === 'comparison',
+  });
   const totalTables = sources.reduce((sum, source) => sum + source.tableCount, 0);
   const totalRows = sources.reduce((sum, source) => sum + source.totalRows, 0);
   const sourceRefs = sources.map((source) => source.ref);
@@ -1022,7 +1055,7 @@ export async function generateReport(
     const target = sections[overviewIndex] ?? sections[0];
     target.blocks.push({ kind: 'narrative', text: narrative.text, title: 'AI 解读' });
   }
-  return {
+  const spec: ReportSpec = {
     version: 1,
     title: `${topic}报告`,
     layout,
@@ -1034,6 +1067,7 @@ export async function generateReport(
       createdAt: new Date().toISOString(),
       period: { from: period.current.from, to: period.current.to, label: period.current.label, grain: period.grain },
       audience,
+      locale: 'zh',
       assumptions: [
         formatPeriodForReader(period),
         ...sources.flatMap((source) => source.calibers),
@@ -1044,6 +1078,11 @@ export async function generateReport(
       ],
       // 确定性路径的证据链：点开指标能看到产生它的 SQL、行数与耗时。
       evidence: tracing.dump(),
+      brief: reportBrief,
     },
   };
+  const coverage = checkReportCoverage(spec, reportBrief);
+  const qualityNotes = [...new Set([...coverage.notes, ...coverage.errors])];
+  if (qualityNotes.length) spec.meta.qualityNotes = qualityNotes;
+  return spec;
 }

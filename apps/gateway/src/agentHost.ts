@@ -3,11 +3,13 @@ import {
   activeReasoningTier,
   AgentRuntime,
   buildSystemPrompt,
+  buildReportBrief,
   builtinMcpServer,
   compactHistory,
   createProvider,
   extractHeuristicMemories,
   formatPeriodForPrompt,
+  formatReportBriefForPrompt,
   getModelProfile,
   getTool,
   historyTokenBudget,
@@ -673,6 +675,16 @@ export class AgentHost {
     const memories = recall.memories;
     const businessContext = conn ? store.agentContextBundle(conn.id, conn.database) : undefined;
     const attachmentTables = (input.attachments ?? []).map(String).slice(0, 12);
+    const reportBrief = intent?.id === 'report'
+      ? buildReportBrief({
+        topic: text,
+        databases: schemas,
+        context: businessContext,
+        glossary: recall.glossary,
+        sqlExamples: recall.sqlExamples,
+        focusTables: attachmentTables,
+      })
+      : undefined;
     const compacted = compactProviderHistory(history, historyTokenBudget(settings.agent, profile));
     if (!this.isCurrentTurn(sessionId, turn) || controller.signal.aborted) return;
 
@@ -800,6 +812,7 @@ export class AgentHost {
           const period = resolvePeriod({ topic: text });
           if (intent.id === 'report') {
             extra.push(formatPeriodForPrompt(period));
+            if (reportBrief) extra.push(formatReportBriefForPrompt(reportBrief));
             extra.push(
               `## Report period rules\nEvery query in this report must stay inside ${period.current.from} ~ ${period.current.to}` +
                 (period.previous ? `; the baseline is ${period.previous.from} ~ ${period.previous.to} (${period.previous.label.split('（')[0]?.trim()}).` : '.') +

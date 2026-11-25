@@ -3464,6 +3464,54 @@ if (reportId) {
 }
 await page.screenshot({ path: join(shots, 'desktop-dashboard.png') }).catch(() => undefined);
 
+let generatedReportId = '';
+await page.click('[data-testid="ribbon"] button[title="视图"]');
+await page.locator('.tools-nav button').filter({ hasText: '报告' }).click();
+await page.waitForSelector('[data-testid="report-create"]', { timeout: 15000 });
+const reportsBefore = new Set(((await api('/artifacts?type=report&limit=50')).body?.artifacts ?? []).map((item) => item.id));
+await page.getByTestId('report-topic').fill('GMV 与渠道成交趋势');
+await page.getByTestId('report-create').click();
+const reportDeadline = Date.now() + 90000;
+while (Date.now() < reportDeadline) {
+  const current = (await api('/artifacts?type=report&limit=50')).body?.artifacts ?? [];
+  generatedReportId = current.find((item) => !reportsBefore.has(item.id))?.id ?? '';
+  if (generatedReportId) break;
+  await page.waitForTimeout(250);
+}
+check('report tool generates a saved report', Boolean(generatedReportId), generatedReportId || 'timeout');
+if (generatedReportId) {
+  const generatedRuns = await api(`/artifacts/${generatedReportId}/runs?limit=1`);
+  const generatedSpec = generatedRuns.body?.runs?.[0]?.result;
+  check('report persists its schema-grounded brief', Boolean(generatedSpec?.meta?.brief?.grounding?.tables?.length && generatedSpec?.meta?.brief?.plan?.length), `${generatedSpec?.meta?.brief?.grounding?.tables?.length ?? 0} tables/${generatedSpec?.meta?.brief?.plan?.length ?? 0} steps`);
+  const generatedBlocks = (generatedSpec?.sections ?? []).flatMap((section) => section.blocks ?? []);
+  const metricCount = generatedBlocks.filter((block) => block.kind === 'metric').flatMap((block) => block.metrics ?? []).length;
+  const chartCount = generatedBlocks.filter((block) => block.kind === 'chart').length;
+  const minimumMetrics = generatedSpec?.meta?.brief?.coverage?.minMetrics ?? 4;
+  const minimumCharts = generatedSpec?.meta?.brief?.coverage?.minCharts ?? 2;
+  check('report content meets schema-grounded coverage minimums', metricCount >= minimumMetrics && chartCount >= minimumCharts, `${metricCount} metrics/${minimumMetrics}, ${chartCount} charts/${minimumCharts}`);
+  const generatedPptx = await api(`/artifacts/${generatedReportId}/export?format=pptx`);
+  const generatedXlsx = await api(`/artifacts/${generatedReportId}/export?format=xlsx`);
+  check('generated report exports real PPTX and XLSX', generatedPptx.status === 200 && generatedXlsx.status === 200 && (generatedPptx.body?.bytes ?? 0) > 1000 && (generatedXlsx.body?.bytes ?? 0) > 1000, `${generatedPptx.body?.bytes ?? 0}B/${generatedXlsx.body?.bytes ?? 0}B`);
+  await page.getByTestId(`report-artifact-${generatedReportId}`).click();
+  await page.waitForSelector('[data-testid="report-view"]', { timeout: 90000 });
+  const desktopReport = page.getByTestId('report-view');
+  const visibleCharts = await desktopReport.getByTestId('chart-svg').count();
+  check('desktop report renders meaningful charts', visibleCharts >= minimumCharts, `${visibleCharts}/${minimumCharts} charts`);
+  const reportOverflow = await desktopReport.evaluate((element) => ({ width: element.clientWidth, scrollWidth: element.scrollWidth }));
+  check('desktop report keeps wide tables inside the panel', reportOverflow.scrollWidth <= reportOverflow.width + 1, `${reportOverflow.scrollWidth}/${reportOverflow.width}px`);
+  const plan = page.getByTestId('report-analysis-plan');
+  check('desktop report exposes schema-grounded analysis plan', await plan.count() === 1);
+  if (await plan.count()) {
+    await plan.locator('summary').click();
+    const planText = await plan.innerText();
+    check('desktop report plan binds business terms to tables and fields', planText.includes('orders') && planText.includes('字段'), planText.slice(0, 160));
+    await plan.locator('summary').click();
+  }
+  await desktopReport.getByTestId('chart-svg').first().scrollIntoViewIfNeeded();
+  await page.screenshot({ path: join(shots, 'desktop-report.png') });
+  await page.locator('.tools-modal .modal-head .icon-btn').click();
+}
+
 // ---------------- Mobile (Expo web build) ----------------
 mobileContext = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
 const mobile = await mobileContext.newPage();
@@ -3626,6 +3674,27 @@ check(
     (await mobile.getByText('常用任务').count()) === 0,
 );
 await mobile.screenshot({ path: join(shots, 'mobile-tools.png') });
+
+if (generatedReportId) {
+  await mobile.getByTestId('m-tool-artifacts').click();
+  await mobile.getByTestId(`m-artifact-${generatedReportId}`).click();
+  await mobile.waitForSelector('[data-testid="m-report-view"]', { timeout: 90000 });
+  const mobileReportText = await mobile.getByTestId('m-report-view').innerText();
+  check('mobile report renders structured content instead of raw JSON', !mobileReportText.includes('"sections"') && !mobileReportText.includes('"resultRefs"'));
+  const mobileChartCount = await mobile.getByTestId('m-report-view').getByTestId('m-agent-chart').count();
+  check('mobile report renders meaningful charts', mobileChartCount >= 2, `${mobileChartCount} charts`);
+  const mobileOverflow = await mobile.evaluate(() => ({ width: window.innerWidth, scrollWidth: document.documentElement.scrollWidth }));
+  check('mobile report contains horizontal tables without page overflow', mobileOverflow.scrollWidth <= mobileOverflow.width + 1, `${mobileOverflow.scrollWidth}/${mobileOverflow.width}px`);
+  await mobile.getByText('分析与计划', { exact: true }).click();
+  await mobile.waitForSelector('[data-testid="m-report-brief"]', { timeout: 5000 });
+  const mobilePlanText = await mobile.getByTestId('m-report-brief').innerText();
+  check('mobile report exposes the same schema-grounded plan', mobilePlanText.includes('orders') && mobilePlanText.includes('字段'), mobilePlanText.slice(0, 160));
+  await mobile.getByText('分析与计划', { exact: true }).click();
+  await mobile.getByTestId('m-report-view').getByTestId('m-agent-chart').first().scrollIntoViewIfNeeded();
+  await mobile.screenshot({ path: join(shots, 'mobile-report.png') });
+  await mobile.getByTestId('m-artifact-close').click();
+  await mobile.getByTestId('m-artifacts-back').click();
+}
 
 await mobile.getByTestId('m-tab-data').click();
 await mobile.waitForSelector('[data-testid="m-table-orders"]', { timeout: 15000 });

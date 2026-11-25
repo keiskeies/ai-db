@@ -1,5 +1,6 @@
 export * from './types';
 export * from './report';
+export * from './reportBrief';
 export * from './reportQuality';
 export * from './reportRender';
 export * from './timeWindow';

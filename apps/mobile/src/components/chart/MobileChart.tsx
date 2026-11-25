@@ -10,7 +10,7 @@ import { Text } from '../base';
 import { ChartInsightContext } from './ChartInsightContext';
 import { CHART_COLORS, CHART_TYPES, normalizeChartType, chartLabelWidth, fitChartLabel, compactNumber, formatMetric, type ChartSelection, type MobileInsightAnalysis, type ChartShape } from './model';
 
-export function MobileChart({ chart: sourceChart, insight }: { chart: ChartShape; insight?: { connectionId: string; database?: string } }) {
+export function MobileChart({ chart: sourceChart, insight, allowTypeSwitch = true }: { chart: ChartShape; insight?: { connectionId: string; database?: string }; allowTypeSwitch?: boolean }) {
   const insightCtx = React.useContext(ChartInsightContext);
   const insightScope = insight ?? (insightCtx?.connectionId ? { connectionId: insightCtx.connectionId, database: insightCtx.database } : undefined);
   const canInsight = Boolean(insightCtx?.client && insightScope?.connectionId && sourceChart.sql);
@@ -67,12 +67,16 @@ export function MobileChart({ chart: sourceChart, insight }: { chart: ChartShape
   };
   const history = (chart.series ?? []).slice(0, 24);
   const valuesOf = (list: Array<{ value: number }>) => list.map((point) => Number(point.value) || 0);
+  const hasBaseline = history.some((point) => typeof point.baseline === 'number');
   const columns = [
     { name: chart.yLabel || '值', values: valuesOf(history), color: palette[0] },
+    ...(hasBaseline
+      ? [{ name: chart.baselineName || translate('上期'), values: history.map((point) => Number(point.baseline) || 0), color: palette[1] }]
+      : []),
     ...(chart.extraSeries ?? [])
       .filter((extra) => Array.isArray(extra.values) && extra.values.length >= history.length && history.length > 0)
       .slice(0, 4)
-      .map((extra, index) => ({ name: extra.name, values: extra.values.slice(0, history.length).map((value) => Number(value) || 0), color: palette[(index + 1) % palette.length] })),
+      .map((extra, index) => ({ name: extra.name, values: extra.values.slice(0, history.length).map((value) => Number(value) || 0), color: palette[(index + (hasBaseline ? 2 : 1)) % palette.length] })),
   ];
   const isBar = type === 'bar' || type === 'stacked';
   const stacked = isBar && columns.length > 1 && (type === 'stacked' || chart.stacked === true);
@@ -571,9 +575,9 @@ export function MobileChart({ chart: sourceChart, insight }: { chart: ChartShape
         <Text style={styles.chartTitle} numberOfLines={2}>{chart.title ?? '图表'}</Text>
         {axisHint ? <Text style={styles.chartAxisHint} numberOfLines={1}>{axisHint}</Text> : null}
       </View>
-      {hasData ? (
+      {hasData && (allowTypeSwitch || canInsight) ? (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 3 }}>
-          {CHART_TYPES.map((item) => {
+          {allowTypeSwitch ? CHART_TYPES.map((item) => {
             const active = item.value === type;
             const blocked = !active && fit[item.value]?.ok === false;
             return (
@@ -594,7 +598,7 @@ export function MobileChart({ chart: sourceChart, insight }: { chart: ChartShape
                 <Text style={[styles.chartTypeText, active && styles.chartTypeTextActive]}>{item.label}</Text>
               </Pressable>
             );
-          })}
+          }) : null}
           {canInsight ? (
             <>
               <Pressable

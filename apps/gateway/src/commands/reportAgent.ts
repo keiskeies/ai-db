@@ -18,6 +18,9 @@ import {
   type ReportActionItem,
   type ReportBlock,
   type ReportChartPoint,
+  type ReportChartExtraSeries,
+  type ReportHeatmap,
+  type ReportScatterPoint,
   type ReportExecutive,
   type ReportLayout,
   type ReportMetric,
@@ -30,6 +33,10 @@ import {
   type ToolResult,
   type ReportEvidence,
   checkReportQuality,
+  checkReportCoverage,
+  buildReportBrief,
+  formatReportBriefForPrompt,
+  type ReportBrief,
 } from '@aidb/core';
 import type { ToolExecutor } from '../executor';
 import type { ConnectionManager } from '../manager';
@@ -96,11 +103,20 @@ const COMPOSE_REPORT: ToolDefinition = {
             title: { type: 'string', description: 'Business wording, no table/column names.' },
             sourceKey: { type: 'string' },
             conclusion: { type: 'string', description: 'One-sentence conclusion for this section, rendered before its data.' },
-            blocks: { type: 'array', items: { type: 'object', additionalProperties: true } },
+            blocks: {
+              type: 'array',
+              description: 'Blocks: narrative/metric/table/chart/comparison/callout/actions. Chart blocks accept chartType bar|line|pie|stacked|scatter|heatmap|radar, series, extraSeries, xLabel, yLabel, stacked, dualAxis, scatter {x,y,label?}[] and heatmap {xLabels,yLabels,values,valueLabel?}. Every numeric payload must come from resultRef/resultRefs.',
+              items: { type: 'object', additionalProperties: true },
+            },
           },
         },
       },
       notes: { type: 'array', items: { type: 'string' } },
+      coverageExceptions: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Concrete reasons a planned analysis cannot be produced, e.g. 缺少时间列 / 维度基数为 1. Never use a generic 数据不足.',
+      },
     },
   },
   summarize: () => '提交报告规格',
@@ -340,7 +356,7 @@ export function normalizeReportBlock(
         const altSet = checkRef(altRef, `指标 ${label} 的补充基线 ${altLabel}`);
         if ('error' in altSet) return altSet;
         if (!hasNumber(altSet, altValue)) return { error: `指标 ${label} 的补充基线 ${altLabel} 没有对应 resultRef 的来源` };
-        alternatives.push({ label: altLabel, value: altValue, ...(altDelta(altValue) ? { delta: altDelta(altValue) } : {}) });
+        alternatives.push({ label: altLabel, value: altValue, resultRef: altRef, ...(altDelta(altValue) ? { delta: altDelta(altValue) } : {}) });
       }
       if (alternatives.length) normalized.alternativeBaselines = alternatives;
       out.push(normalized);
@@ -376,38 +392,99 @@ export function normalizeReportBlock(
   if (kind === 'chart') {
     const refSet = scopeFor(blockRef, '图表');
     if ('error' in refSet) return refSet;
+    const chartType = (() => {
+      const rawType = raw.chartType === undefined || raw.chartType === null || String(raw.chartType).trim() === ''
+        ? 'bar'
+        : String(raw.chartType).trim();
+      if (!['bar', 'line', 'pie', 'stacked', 'scatter', 'heatmap', 'radar'].includes(rawType)) {
+        return { error: `报告图表不支持 ${rawType}；可用 bar/line/pie/stacked/scatter/heatmap/radar` } as const;
+      }
+      return rawType as 'bar' | 'line' | 'pie' | 'stacked' | 'scatter' | 'heatmap' | 'radar';
+    })();
+    if (typeof chartType !== 'string') return chartType;
     const series = Array.isArray(raw.series) ? raw.series : [];
-    if (!series.length) return { error: 'chart 缺少 series' };
+    const needsSeries = chartType !== 'scatter' && chartType !== 'heatmap';
+    if (needsSeries && !series.length) return { error: 'chart 缺少 series' };
     const out: ReportChartPoint[] = [];
     for (const point of series) {
       if (!hasNumber(refSet, point?.value)) return { error: '图表数字没有对应 resultRef 的来源' };
       const value = Number(point?.value);
+      if (!Number.isFinite(value)) return { error: '图表 value 必须是有限数字' };
       const chartPoint: ReportChartPoint = { label: String(point?.label ?? ''), value };
-      // 基线点用于「本期 vs 上期」双折线，同样要能追到工具结果。
       if (point?.baseline !== undefined && point.baseline !== null && point.baseline !== '') {
         const baselineRef = typeof point?.baselineResultRef === 'string' ? point.baselineResultRef : undefined;
         const baselineSet = baselineRef ? checkRef(baselineRef, `图表基线 ${chartPoint.label}`) : refSet;
         if ('error' in baselineSet) return baselineSet;
         if (!hasNumber(baselineSet, point.baseline)) return { error: `图表基线数字没有对应 resultRef 的来源：${chartPoint.label}` };
-        chartPoint.baseline = Number(point.baseline);
+        const baseline = Number(point.baseline);
+        if (!Number.isFinite(baseline)) return { error: '图表 baseline 必须是有限数字' };
+        chartPoint.baseline = baseline;
+        chartPoint.baselineResultRef = baselineRef;
       }
       out.push(chartPoint);
     }
-    const chartType = (() => {
-      const rawType = raw.chartType === undefined || raw.chartType === null || String(raw.chartType).trim() === ''
-        ? 'bar'
-        : String(raw.chartType).trim();
-      if (!['bar', 'line', 'pie', 'stacked'].includes(rawType)) {
-        return { error: `报告图表不支持 ${rawType}；可用 bar/line/pie/stacked，热力图/雷达图/散点图请在对话中用 render_chart 展示` } as const;
-      }
-      return rawType as 'bar' | 'line' | 'pie' | 'stacked';
-    })();
-    if (typeof chartType !== 'string') return chartType;
     if (chartType === 'pie') {
       if (out.length < 3 || out.length > 8) return { error: 'pie 需要 3–8 个切片' };
       if (out.some((point) => point.value < 0)) return { error: 'pie 不支持负值' };
+      if (out.some((point) => point.baseline !== undefined)) return { error: 'pie 不支持基线系列' };
     }
-    if (chartType === 'pie' && out.some((point) => point.baseline !== undefined)) return { error: 'pie 不支持基线系列' };
+    if (chartType === 'radar' && (out.length < 3 || out.length > 8)) return { error: 'radar 需要 3–8 个同单位维度' };
+
+    let scatter: ReportScatterPoint[] | undefined;
+    if (chartType === 'scatter') {
+      const points = Array.isArray(raw.scatter) ? raw.scatter : [];
+      if (points.length < 2) return { error: 'scatter 至少需要 2 个点' };
+      scatter = [];
+      for (const point of points) {
+        if (!hasNumber(refSet, point?.x) || !hasNumber(refSet, point?.y)) return { error: '散点坐标没有对应 resultRef 的来源' };
+        const x = Number(point?.x);
+        const y = Number(point?.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return { error: 'scatter 坐标必须是有限数字' };
+        scatter.push({ x, y, ...(point?.label === undefined ? {} : { label: String(point.label) }) });
+      }
+    }
+
+    let heatmap: ReportHeatmap | undefined;
+    if (chartType === 'heatmap') {
+      const xLabels = Array.isArray(raw.heatmap?.xLabels) ? raw.heatmap.xLabels.map(String) : [];
+      const yLabels = Array.isArray(raw.heatmap?.yLabels) ? raw.heatmap.yLabels.map(String) : [];
+      const values = Array.isArray(raw.heatmap?.values) ? raw.heatmap.values : [];
+      if (xLabels.length < 2 || yLabels.length < 2 || values.length !== yLabels.length) return { error: 'heatmap 需要完整的二维矩阵' };
+      heatmap = { xLabels, yLabels, values: [], ...(typeof raw.heatmap?.valueLabel === 'string' && raw.heatmap.valueLabel.trim() ? { valueLabel: raw.heatmap.valueLabel.trim() } : {}) };
+      for (const row of values) {
+        if (!Array.isArray(row) || row.length !== xLabels.length) return { error: 'heatmap 每一行必须与 xLabels 等长' };
+        const normalized: number[] = [];
+        for (const cell of row) {
+          if (!hasNumber(refSet, cell)) return { error: '热力矩阵数字没有对应 resultRef 的来源' };
+          const value = Number(cell);
+          if (!Number.isFinite(value)) return { error: 'heatmap 数值必须是有限数字' };
+          normalized.push(value);
+        }
+        heatmap.values.push(normalized);
+      }
+    }
+
+    const extraSeries: ReportChartExtraSeries[] = [];
+    if (Array.isArray(raw.extraSeries)) {
+      if (raw.extraSeries.length > 4) return { error: 'extraSeries 最多 4 个附加系列' };
+      for (const item of raw.extraSeries) {
+        const name = String(item?.name ?? '').trim();
+        const values = Array.isArray(item?.values) ? item.values : [];
+        if (!name || values.length !== out.length) return { error: 'extraSeries 必须有名称且与主系列等长' };
+        const normalized: number[] = [];
+        for (const value of values) {
+          if (!hasNumber(refSet, value)) return { error: '附加系列数字没有对应 resultRef 的来源' };
+          const numeric = Number(value);
+          if (!Number.isFinite(numeric)) return { error: 'extraSeries 数值必须是有限数字' };
+          normalized.push(numeric);
+        }
+        extraSeries.push({ name, values: normalized });
+      }
+    }
+    if (chartType === 'pie' && extraSeries.length) return { error: 'pie 不支持附加系列' };
+    if (raw.dualAxis === true && ((chartType !== 'bar' && chartType !== 'line') || extraSeries.length !== 1 || raw.stacked === true || out.some((point) => point.baseline !== undefined))) {
+      return { error: 'dualAxis 仅用于一个附加系列的非堆叠柱状/折线图' };
+    }
     return {
       kind,
       resultRef: blockRef,
@@ -415,7 +492,14 @@ export function normalizeReportBlock(
       title: raw.title === undefined ? undefined : String(raw.title),
       chartType,
       ...(typeof raw.baselineName === 'string' && raw.baselineName.trim() ? { baselineName: raw.baselineName.trim() } : {}),
-      series: out,
+      ...(typeof raw.xLabel === 'string' && raw.xLabel.trim() ? { xLabel: raw.xLabel.trim() } : {}),
+      ...(typeof raw.yLabel === 'string' && raw.yLabel.trim() ? { yLabel: raw.yLabel.trim() } : {}),
+      ...(out.length ? { series: out } : {}),
+      ...(extraSeries.length ? { extraSeries } : {}),
+      ...(raw.stacked === true || chartType === 'stacked' ? { stacked: true } : {}),
+      ...(raw.dualAxis === true ? { dualAxis: true } : {}),
+      ...(scatter ? { scatter } : {}),
+      ...(heatmap ? { heatmap } : {}),
       ...(note ? { note } : {}),
     };
   }
@@ -553,6 +637,17 @@ export async function generateAgentReport(
 
   const period = resolvePeriod({ period: input.period, topic: input.topic });
   const targetNumber = parseTarget(input.target)?.value;
+  const reportBrief: ReportBrief = buildReportBrief({
+    topic: input.topic,
+    audience,
+    databases: schemas.flatMap((item) => item.schemas),
+    context: businessContext,
+    glossary: recall.glossary,
+    sqlExamples: recall.sqlExamples,
+    focusTables: input.tables,
+    compare,
+  });
+  const reportBriefBlock = formatReportBriefForPrompt(reportBrief);
 
   // 供质量闸口判断「正文里是否漏出了表名/列名」。分级在 core 里做：
   // 带下划线的标识符漏出来一定是问题，month/status 这种词形列名只能提示不能拒。
@@ -582,6 +677,8 @@ Reader's target: ${input.target} — attach it as an alternative baseline labell
 
 ${formatPeriodForPrompt(period)}
 
+${reportBriefBlock}
+
 ${REPORT_CRAFT}
 
 ## Connections
@@ -595,12 +692,13 @@ ${memoriesBlock ? `\n${memoriesBlock}\n` : ''}
 
 Rules:
 - Use only read-only tools (inspect_schema, search_objects, run_sql, explain_sql, sample_rows, profile_column, analyze_chart, forecast_chart, render_chart, memory_search, update_plan).
-- For 3+ steps, call update_plan first, then call it again after each finished step: mark the step done and the next step doing. Never leave the plan at 0/N while continuing to run tools. Keep the same plan items across updates and only change their statuses; do not replace the plan with a shorter one unless the task scope itself changed.
+- Treat the Report brief schema objects as candidates. Confirm the business-word → table/column mapping, table grain, filters and units before querying. Reuse aliases, glossary definitions and standard SQL; if the candidate is wrong, correct it explicitly. Never invent join keys or join across sources.
+- For 3+ steps, call update_plan first using the Report brief analysis plan, including the candidate tables/fields in each step, then call it again after each finished step: mark the step done and the next step doing. Never leave the plan at 0/N while continuing to run tools. Keep the same plan items across updates and only change their statuses; do not replace the plan with a shorter one unless the task scope itself changed.
 - Inspect schema before writing SQL when unsure. Keep SQL bounded; use aggregate SQL for summaries.
 - Never calculate totals, deltas, ratios or shares by hand. Use one aggregate SQL or analyze_chart; quote its numbers verbatim. The app computes comparison deltas from the submitted left/right values and the metric baseline you supply.
 - KPI cards need a reference point: for each headline metric, query its baseline in a second aggregate SQL and submit it as \`baseline\` + \`baselineLabel\` (e.g. 环比 上周 / 同比 去年同期 / 目标). One baseline is not enough to tell a trend from a season: for the headline metric also query 同比 去年同期 (or 环比 前一区间 when the main baseline is already 同比) and submit it in \`alternativeBaselines\` as {label, value} — the app computes its delta. Set \`goodDirection\` to "down" for metrics where a rise is bad (refund rate, complaint rate, latency, cost). The app computes the delta; never submit a delta yourself.
 - Numbers must be the exact values returned by a tool. The app abbreviates for display (12,345,678 -> 「1234.57 万」) — never pre-round or re-scale a number yourself, and never write a percentage that was not returned (a 0.1234 ratio stays 0.1234 in the payload).
-- Report chart blocks support bar / line / pie / stacked. Choose line for an ordered time axis, bar for category comparisons, stacked for parts-of-a-total across an ordered axis, and pie only for 3–8 non-negative parts of one whole (never for time series or multi-period comparison). Other render_chart types (scatter/heatmap/radar) are for exploration during the turn, not for compose_report blocks; never force them into a pie just to add a chart. For a trend that should show 本期 vs 上期, submit one line chart whose series points each carry a \`baseline\`.
+- Report chart blocks support bar / line / pie / stacked / scatter / heatmap / radar. Choose line for an ordered time axis, bar for category comparisons, stacked for parts-of-a-total across an ordered axis, pie only for 3–8 non-negative parts of one whole, scatter for two numeric variables (at least 2 points), heatmap for one measure across two categorical dimensions, and radar for 3–8 same-unit dimensions. Use extraSeries for multi-series bar/line/stacked/radar; use scatter or heatmap payloads instead of forcing those shapes into series. A report may mix chart types across sections, but every chart must answer a distinct question.
 - Analysis depth, in this order: (1) the level, (2) the change vs the baseline, (3) where the change came from — decompose the delta by one main dimension with two same-caliber GROUP BY queries (current vs baseline) and put it in a table block whose columns are 维度/本期/上期/变化, (4) whether the period is anomalous, using analyze_chart on a bucketed series; report an outlier as a fact with its window, not as a cause you invent.
 - analyze_chart and forecast_chart are for reading an existing bucketed series (trend direction, volatility, outliers, next-period projection); pass them the series you already queried, and never present a forecast as an observed number — label it 「预测」 in the block note.
 - When the current period is partial or the two windows differ in length, do not read the raw total delta as a trend: compare equal-length windows or per-day averages and say which you used in the block note. Put the caveat in executive.risks.
@@ -669,6 +767,7 @@ Rules:
         const executive: ReportExecutive = { headline, takeaways, ...(risks.length ? { risks } : {}) };
         const rawAssumptions = Array.isArray(args?.assumptions) ? args.assumptions : [];
         const assumptions = rawAssumptions.map((item: unknown) => String(item ?? '').trim()).filter(Boolean);
+        const coverageExceptions = Array.isArray(args?.coverageExceptions) ? args.coverageExceptions.map((item: unknown) => String(item ?? '').trim()).filter(Boolean) : [];
         const sections: ReportSection[] = [];
         for (const [index, rawSection] of args.sections.slice(0, 30).entries()) {
           const blocks: ReportBlock[] = [];
@@ -704,26 +803,31 @@ Rules:
             ...(assumptions.length ? { assumptions } : {}),
             notes: [...(Array.isArray(args.notes) ? args.notes.map(String) : []), compare ? '对比由 Agent 查数，差值由应用计算。' : '报告由 Agent 查数并生成。'],
             ...(evidence.size ? { evidence: Object.fromEntries(evidence) } : {}),
+            brief: reportBrief,
+            ...(coverageExceptions.length ? { coverageExceptions } : {}),
           },
         };
         // 写作质量闸口：硬伤退回重写，软伤记进 meta 让读者知情。
         // 表名/列名从 schema 里取——模型不该在读者看得见的标题与结论里写出它们。
         const quality = checkReportQuality(draft, columnTerms);
-        if (quality.errors.length) {
+        const coverage = checkReportCoverage(draft, reportBrief, coverageExceptions);
+        const qualityErrors = [...new Set([...quality.errors, ...coverage.errors])];
+        const qualityNotes = [...new Set([...quality.notes, ...coverage.notes])];
+        if (qualityErrors.length) {
           rejections += 1;
           // 拒绝要有尽头：否则模型可以反复提交同一份瑕疵稿，把整个预算烧光还什么产物都没有。
           if (rejections >= 3) {
-            captured = { ...draft, meta: { ...draft.meta, qualityNotes: [...quality.errors, ...quality.notes] } };
+            captured = { ...draft, meta: { ...draft.meta, qualityNotes: [...qualityErrors, ...qualityNotes] } };
             return {
               ok: true,
-              summary: `报告规格已提交（有 ${quality.errors.length} 处质量问题未修正）`,
-              data: { title: draft.title, layout, sections: sections.length, quality: quality.errors },
+              summary: `报告规格已提交（有 ${qualityErrors.length} 处质量问题未修正）`,
+              data: { title: draft.title, layout, sections: sections.length, quality: qualityErrors },
               meta: { durationMs: 0 },
             };
           }
-          return invalid(`质量问题：${quality.errors.join('；')}`);
+          return invalid(`质量问题：${qualityErrors.join('；')}`);
         }
-        captured = quality.notes.length ? { ...draft, meta: { ...draft.meta, qualityNotes: quality.notes } } : draft;
+        captured = qualityNotes.length ? { ...draft, meta: { ...draft.meta, qualityNotes } } : draft;
         return {
           ok: true,
           summary: `报告规格已提交：${sections.length} 个章节`,

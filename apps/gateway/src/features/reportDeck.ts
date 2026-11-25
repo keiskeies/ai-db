@@ -1,5 +1,5 @@
 import { flattenDeckSlides, planReportDeck } from '@aidb/core';
-import type { ReportCopy, DeckLine, DeckMetric, DeckPlan, DeckSlide, ReportSpec } from '@aidb/core';
+import type { ReportCopy, DeckChart, DeckLine, DeckMetric, DeckPlan, DeckSlide, ReportSpec } from '@aidb/core';
 
 const W = 1280;
 const H = 720;
@@ -154,12 +154,229 @@ function lineColor(tone: DeckLine['tone'], theme: DeckTheme): string {
   return tone === 'danger' ? theme.danger : tone === 'warning' ? theme.gold : theme.text;
 }
 
+const CHART_COLORS = ['#45C8C3', '#D6B45A', '#8FA8F0', '#E0604F', '#A9C97E'];
+
+function chartSeries(chart: DeckChart, current: string): Array<{ name: string; values: number[]; color: string }> {
+  const out = [{ name: chart.yLabel || current, values: chart.points.map((point) => point.value), color: CHART_COLORS[0] }];
+  if (chart.points.some((point) => typeof point.baseline === 'number')) {
+    out.push({ name: chart.baselineName || '上期', values: chart.points.map((point) => point.baseline ?? 0), color: CHART_COLORS[1] });
+  }
+  for (const [index, series] of (chart.extraSeries ?? []).entries()) {
+    out.push({ name: series.name, values: series.values, color: CHART_COLORS[(index + out.length) % CHART_COLORS.length] });
+  }
+  return out;
+}
+
+function categoryRowStep(chart: DeckChart, current: string): number {
+  if (chart.stacked === true || chart.chartType === 'stacked') return 46;
+  const count = chartSeries(chart, current).length;
+  return count > 1 ? Math.max(58, count * 14 + 8) : 34;
+}
+
+function svgNum(value: number): string {
+  return Number.isFinite(value) ? String(Math.round(value * 100) / 100) : '0';
+}
+
+function chartOverflow(copy: ReportCopy, count: number, shown: number): string {
+  return copy.truncatedPoints.replace('{n}', String(count)).replace('{m}', String(shown));
+}
+
+function legend(chart: DeckChart, y: number, theme: DeckTheme, current: string): string {
+  const series = chartSeries(chart, current);
+  if (series.length < 2) return '';
+  return series.map((entry, index) => `<rect x="${300 + index * 180}" y="${y - 12}" width="12" height="12" rx="2" fill="${entry.color}"/><text x="${320 + index * 180}" y="${y}" font-family="${theme.font}" font-size="16" fill="${theme.muted}">${esc(clip(entry.name, 14))}</text>`).join('');
+}
+
+function axisChart(chart: DeckChart, startY: number, theme: DeckTheme, current: string): string {
+  const series = chartSeries(chart, current);
+  const values = series.flatMap((entry) => entry.values).filter(Number.isFinite);
+  if (!values.length) return '';
+  let min = Math.min(0, ...values);
+  let max = Math.max(0, ...values);
+  if (min === max) {
+    min = -1;
+    max = 1;
+  }
+  const left = 300;
+  const right = 1180;
+  const bottom = 630;
+  const xAt = (index: number, count: number) => count <= 1 ? (left + right) / 2 : left + (index / (count - 1)) * (right - left);
+  const yAt = (value: number) => bottom - ((value - min) / (max - min)) * (bottom - startY);
+  const grid = [0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+    const value = min + (max - min) * ratio;
+    const y = yAt(value);
+    return `<line x1="${left}" y1="${y}" x2="${right}" y2="${y}" stroke="${theme.border}" stroke-width="1"/><text x="${left - 12}" y="${y + 5}" text-anchor="end" font-family="${theme.font}" font-size="14" fill="${theme.muted}">${esc(svgNum(value))}</text>`;
+  }).join('');
+  const zeroY = yAt(0);
+  const zero = min < 0 && max > 0 ? `<line x1="${left}" y1="${zeroY}" x2="${right}" y2="${zeroY}" stroke="${theme.muted}" stroke-width="1.5"/>` : '';
+  const labels = chart.points.map((point, index) => {
+    if (chart.points.length > 8 && index % Math.ceil(chart.points.length / 8) !== 0 && index !== chart.points.length - 1) return '';
+    return `<text x="${xAt(index, chart.points.length)}" y="${bottom + 28}" text-anchor="middle" font-family="${theme.font}" font-size="15" fill="${theme.muted}">${esc(clip(point.label, 12))}</text>`;
+  }).join('');
+  const paths = series.map((entry) => {
+    const points = entry.values.map((value, index) => `${xAt(index, entry.values.length)},${yAt(value)}`).join(' ');
+    const dots = entry.values.map((value, index) => `<circle cx="${xAt(index, entry.values.length)}" cy="${yAt(value)}" r="4" fill="${entry.color}"/>`).join('');
+    return `<polyline points="${points}" fill="none" stroke="${entry.color}" stroke-width="3" stroke-linejoin="round"/>${dots}`;
+  }).join('');
+  return `${grid}${zero}<line x1="${left}" y1="${startY}" x2="${left}" y2="${bottom}" stroke="${theme.border}"/>${paths}${labels}${legend(chart, 656, theme, current)}`;
+}
+
+function categoryChart(chart: DeckChart, startY: number, theme: DeckTheme, current: string): string {
+  const series = chartSeries(chart, current);
+  const stacked = chart.stacked === true || chart.chartType === 'stacked';
+  const rowStep = categoryRowStep(chart, current);
+  const fit = Math.max(1, Math.floor((630 - startY) / rowStep));
+  const drawn = chart.points.slice(0, fit);
+  const sums = drawn.map((_, index) => {
+    let positive = 0;
+    let negative = 0;
+    for (const entry of series) {
+      const value = entry.values[index] ?? 0;
+      if (value >= 0) positive += value;
+      else negative += value;
+    }
+    return { positive, negative };
+  });
+  const values = series.flatMap((entry) => entry.values).filter(Number.isFinite);
+  const min = stacked ? Math.min(0, ...sums.map((sum) => sum.negative)) : Math.min(0, ...values);
+  const max = stacked ? Math.max(0, ...sums.map((sum) => sum.positive)) : Math.max(0, ...values);
+  const domainMin = min === max ? -1 : min;
+  const domainMax = min === max ? 1 : max;
+  const left = 256;
+  const right = 1180;
+  const scale = (right - left) / (domainMax - domainMin);
+  const zeroX = left + (0 - domainMin) * scale;
+  const rows = drawn.map((point, index) => {
+    const y = startY + index * rowStep;
+    const label = `<text x="64" y="${y + 18}" font-family="${theme.font}" font-size="18" fill="${theme.muted}">${esc(clip(point.label, 16))}</text>`;
+    if (stacked) {
+      let positive = 0;
+      let negative = 0;
+      const bars = series.map((entry) => {
+        const value = entry.values[index] ?? 0;
+        const width = value === 0 ? 0 : Math.max(2, Math.round(Math.abs(value) * scale));
+        const x = value >= 0 ? zeroX + positive * scale : zeroX + negative * scale - width;
+        if (value >= 0) positive += value;
+        else negative += value;
+        return `<rect x="${x}" y="${y + 2}" width="${width}" height="22" rx="3" fill="${entry.color}"/>`;
+      }).join('');
+      const net = positive + negative;
+      const labelX = zeroX + (net >= 0 ? positive * scale : negative * scale) + (net >= 0 ? 6 : -6);
+      return `${label}${bars}<text x="${labelX}" y="${y + 19}" text-anchor="${net >= 0 ? 'start' : 'end'}" font-family="${theme.font}" font-size="16" fill="${theme.text}">${esc(svgNum(net))}</text>`;
+    }
+    const bars = series.map((entry, seriesIndex) => {
+      const value = entry.values[index] ?? 0;
+      const width = value === 0 ? 0 : Math.max(2, Math.round(Math.abs(value) * scale));
+      const x = value >= 0 ? zeroX : zeroX - width;
+      const barY = y + seriesIndex * 14;
+      return `<rect x="${x}" y="${barY}" width="${width}" height="10" rx="2" fill="${entry.color}"/><text x="${value >= 0 ? x + width + 6 : x - 6}" y="${barY + 10}" text-anchor="${value >= 0 ? 'start' : 'end'}" font-family="${theme.font}" font-size="13" fill="${theme.text}">${esc(svgNum(value))}</text>`;
+    }).join('');
+    return `${label}${bars}`;
+  }).join('');
+  const zero = `<line x1="${zeroX}" y1="${startY - 6}" x2="${zeroX}" y2="${Math.min(630, startY + drawn.length * rowStep)}" stroke="${theme.muted}" stroke-width="1.5"/>`;
+  return `${zero}${rows}${legend(chart, 656, theme, current)}`;
+}
+
+function pointOnCircle(cx: number, cy: number, radius: number, angle: number): [number, number] {
+  return [cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius];
+}
+
+function pieChart(chart: DeckChart, startY: number, theme: DeckTheme): string {
+  const values = chart.points.map((point) => Math.max(0, point.value));
+  const total = values.reduce((sum, value) => sum + value, 0);
+  if (!total) return `<text x="64" y="${startY + 40}" font-family="${theme.font}" font-size="20" fill="${theme.muted}">—</text>`;
+  const cx = 420;
+  const cy = (startY + 630) / 2;
+  const radius = Math.min(150, (630 - startY) / 2 - 10);
+  let angle = -Math.PI / 2;
+  const slices = values.map((value, index) => {
+    const span = (value / total) * Math.PI * 2;
+    const end = angle + span;
+    const [x1, y1] = pointOnCircle(cx, cy, radius, angle);
+    const [x2, y2] = pointOnCircle(cx, cy, radius, end);
+    const large = span > Math.PI ? 1 : 0;
+    const path = `<path d="M ${cx} ${cy} L ${x1} ${y1} A ${radius} ${radius} 0 ${large} 1 ${x2} ${y2} Z" fill="${CHART_COLORS[index % CHART_COLORS.length]}"/>`;
+    angle = end;
+    return path;
+  }).join('');
+  const labels = chart.points.map((point, index) => `<rect x="720" y="${startY + index * 42}" width="14" height="14" rx="3" fill="${CHART_COLORS[index % CHART_COLORS.length]}"/><text x="748" y="${startY + 12 + index * 42}" font-family="${theme.font}" font-size="18" fill="${theme.text}">${esc(clip(point.label, 18))}</text><text x="1160" y="${startY + 12 + index * 42}" text-anchor="end" font-family="${theme.font}" font-size="18" fill="${theme.muted}">${esc(svgNum(point.value))} · ${(point.value / total * 100).toFixed(1)}%</text>`).join('');
+  return `${slices}${labels}`;
+}
+
+function scatterChart(chart: DeckChart, startY: number, theme: DeckTheme): string {
+  const points = chart.scatter ?? [];
+  if (!points.length) return '';
+  const left = 300;
+  const right = 1180;
+  const bottom = 630;
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+  const spanX = maxX - minX || 1;
+  const spanY = maxY - minY || 1;
+  const xAt = (value: number) => left + ((value - minX) / spanX) * (right - left);
+  const yAt = (value: number) => bottom - ((value - minY) / spanY) * (bottom - startY);
+  const dots = points.map((point, index) => `<circle cx="${xAt(point.x)}" cy="${yAt(point.y)}" r="6" fill="${CHART_COLORS[index % CHART_COLORS.length]}" fill-opacity="0.82"><title>${esc(`${point.label ?? ''} (${point.x}, ${point.y})`)}</title></circle>${point.label ? `<text x="${xAt(point.x) + 10}" y="${yAt(point.y) - 8}" font-family="${theme.font}" font-size="14" fill="${theme.muted}">${esc(clip(point.label, 12))}</text>` : ''}`).join('');
+  return `<line x1="${left}" y1="${bottom}" x2="${right}" y2="${bottom}" stroke="${theme.border}"/><line x1="${left}" y1="${startY}" x2="${left}" y2="${bottom}" stroke="${theme.border}"/><text x="${left}" y="${bottom + 28}" font-family="${theme.font}" font-size="15" fill="${theme.muted}">${esc(svgNum(minX))}</text><text x="${right}" y="${bottom + 28}" text-anchor="end" font-family="${theme.font}" font-size="15" fill="${theme.muted}">${esc(svgNum(maxX))}</text><text x="${left - 12}" y="${startY + 5}" text-anchor="end" font-family="${theme.font}" font-size="15" fill="${theme.muted}">${esc(svgNum(maxY))}</text><text x="${left - 12}" y="${bottom}" text-anchor="end" font-family="${theme.font}" font-size="15" fill="${theme.muted}">${esc(svgNum(minY))}</text>${dots}`;
+}
+
+function radarChart(chart: DeckChart, startY: number, theme: DeckTheme, current: string): string {
+  const count = chart.points.length;
+  const series = chartSeries(chart, current);
+  const max = Math.max(...series.flatMap((entry) => entry.values.map((value) => Math.abs(value))), 1);
+  const cx = 720;
+  const cy = (startY + 630) / 2;
+  const radius = Math.min(170, (630 - startY) / 2 - 12);
+  const at = (index: number, ratio: number) => pointOnCircle(cx, cy, radius * ratio, -Math.PI / 2 + index * Math.PI * 2 / count);
+  const grid = [0.25, 0.5, 0.75, 1].map((ratio) => `<polygon points="${chart.points.map((_, index) => at(index, ratio).join(',')).join(' ')}" fill="none" stroke="${theme.border}"/>`).join('');
+  const labels = chart.points.map((point, index) => {
+    const [x, y] = at(index, 1.18);
+    return `<text x="${x}" y="${y}" text-anchor="middle" font-family="${theme.font}" font-size="16" fill="${theme.muted}">${esc(clip(point.label, 12))}</text>`;
+  }).join('');
+  const shapes = series.map((entry) => `<polygon points="${entry.values.map((value, index) => at(index, Math.max(0, Math.min(1, Math.abs(value) / max))).join(',')).join(' ')}" fill="${entry.color}" fill-opacity="0.12" stroke="${entry.color}" stroke-width="3"/>`).join('');
+  return `${grid}${labels}${shapes}${legend(chart, 656, theme, current)}`;
+}
+
+function heatmapChart(chart: DeckChart, startY: number, theme: DeckTheme): string {
+  const matrix = chart.heatmap;
+  if (!matrix) return '';
+  const rows = matrix.yLabels.length;
+  const columns = matrix.xLabels.length;
+  const cellW = Math.min(88, Math.floor(900 / Math.max(1, columns)));
+  const cellH = Math.min(42, Math.floor(220 / Math.max(1, rows)));
+  const max = Math.max(...matrix.values.flat().map((value) => Math.abs(value)), 1);
+  const headers = matrix.xLabels.map((label, index) => `<text x="${280 + index * cellW + cellW / 2}" y="${startY - 12}" text-anchor="middle" font-family="${theme.font}" font-size="14" fill="${theme.muted}">${esc(clip(label, 8))}</text>`).join('');
+  const cells = matrix.values.map((row, rowIndex) => row.map((value, columnIndex) => {
+    const x = 280 + columnIndex * cellW;
+    const y = startY + rowIndex * cellH;
+    const opacity = 0.12 + Math.abs(value) / max * 0.75;
+    return `<rect x="${x}" y="${y}" width="${cellW - 3}" height="${cellH - 3}" rx="4" fill="${theme.accent}" fill-opacity="${opacity.toFixed(2)}"/><text x="${x + cellW / 2}" y="${y + cellH / 2 + 5}" text-anchor="middle" font-family="${theme.font}" font-size="14" fill="${theme.text}">${esc(svgNum(value))}</text>`;
+  }).join('')).join('');
+  const rowLabels = matrix.yLabels.map((label, index) => `<text x="264" y="${startY + index * cellH + cellH / 2 + 5}" text-anchor="end" font-family="${theme.font}" font-size="15" fill="${theme.muted}">${esc(clip(label, 12))}</text>`).join('');
+  return `${headers}${rowLabels}${cells}`;
+}
+
+function reportChartSvg(chart: DeckChart, startY: number, theme: DeckTheme, copy: ReportCopy): string {
+  const title = `<text x="64" y="${startY - 34}" font-family="${theme.font}" font-size="20" fill="${theme.muted}">${esc(clip(chart.title, 30))}</text>`;
+  const axes = chart.xLabel || chart.yLabel || chart.heatmap?.valueLabel ? `<text x="1216" y="${startY - 34}" text-anchor="end" font-family="${theme.font}" font-size="14" fill="${theme.muted}">${esc(clip([chart.xLabel, chart.heatmap?.valueLabel ?? chart.yLabel].filter(Boolean).join(' / '), 40))}</text>` : '';
+  let body = '';
+  if (chart.chartType === 'pie') body = pieChart(chart, startY, theme);
+  else if (chart.chartType === 'scatter') body = scatterChart(chart, startY, theme);
+  else if (chart.chartType === 'radar') body = radarChart(chart, startY, theme, copy.current);
+  else if (chart.chartType === 'heatmap') body = heatmapChart(chart, startY, theme);
+  else if (chart.chartType === 'line') body = axisChart(chart, startY, theme, copy.current);
+  else body = categoryChart(chart, startY, theme, copy.current);
+  const footnote = chart.overflow ?? chart.note;
+  return `${title}${axes}${body}${footnote ? `<text x="64" y="682" font-family="${theme.font}" font-size="14" fill="${theme.muted}">${esc(clip(footnote, 110))}</text>` : ''}`;
+}
+
 function sectionPage(slide: Extract<DeckSlide, { kind: 'section' }>, pageNo: number, total: number, theme: DeckTheme, copy: ReportCopy): string {
   const { open } = frame(theme, pageNo, total, slide.eyebrow, slide.title);
   const conclusion = slide.conclusion ? wrap(slide.conclusion, 40, 2) : [];
   const hasData = Boolean(slide.table || slide.chart);
   const topY = conclusion.length ? 236 + conclusion.length * 36 + 12 : 236;
-  const bodyLines = slide.lines.slice(0, hasData ? 4 : 9);
+  const bodyLines = slide.lines.slice(0, hasData ? 2 : 9);
   const conclusionSvg = conclusion.length ? textLines(conclusion, 64, 236, 20, theme.accent, 600, 1.7) : '';
   const left = bodyLines.length
     ? bodyLines.map((line, index) => `<text x="64" y="${topY + index * 36}" font-family="${theme.font}" font-size="22" fill="${lineColor(line.tone, theme)}">${esc(clip(line.text, 46))}</text>`).join('')
@@ -182,7 +399,7 @@ function sectionPage(slide: Extract<DeckSlide, { kind: 'section' }>, pageNo: num
   if (slide.table) {
     const columns = slide.table.columns;
     const rows = slide.table.rows;
-    const y = Math.max(400, topY + 120);
+    const y = Math.max(400, topY + 72);
     const columnWidth = columns.length ? Math.floor(1152 / columns.length) : 380;
     dataSvg = `<text x="64" y="${y - 14}" font-family="${theme.font}" font-size="20" fill="${theme.muted}">${esc(clip(slide.table.title ?? slide.title, 24))}</text>`;
     dataSvg += columns
@@ -197,43 +414,18 @@ function sectionPage(slide: Extract<DeckSlide, { kind: 'section' }>, pageNo: num
       })
       .join('');
     if (slide.table.overflow) {
-      dataSvg += `<text x="64" y="${y + 62 + rows.length * 32 + 8}" font-family="${theme.font}" font-size="16" fill="${theme.muted}">${esc(slide.table.overflow)}</text>`;
+      dataSvg += `<text x="64" y="${Math.min(648, y + 50 + rows.length * 32)}" font-family="${theme.font}" font-size="16" fill="${theme.muted}">${esc(slide.table.overflow)}</text>`;
     }
   } else if (slide.chart) {
     const chart = slide.chart;
-    const series = chart.points;
-    const hasBaseline = series.some((point) => typeof point.baseline === 'number');
-    const max = Math.max(...series.map((point) => Math.max(Math.abs(point.value), Math.abs(point.baseline ?? 0))), 1);
-    // 条形区从 y 起、到页脚线（664）之前结束：按可用高度决定能画几根，
-    // 而不是固定步长往下堆——12 个点的月度趋势以前会画到页脚之外。
     const startY = Math.max(400, topY + 90);
-    const rowStep = hasBaseline ? 42 : 30;
-    const fit = Math.max(1, Math.floor((640 - startY) / rowStep));
-    const drawn = series.slice(0, fit);
-    const labelWidth = 300;
-    const barWidth = 1216 - 240 - labelWidth - 90;
-    // 图的标题要画出来：一节里有多张图时，读者得知道这一页画的是哪一张。
-    dataSvg = `<text x="64" y="${startY - 34}" font-family="${theme.font}" font-size="20" fill="${theme.muted}">${esc(clip(chart.title, 24))}</text>`;
-    dataSvg += drawn
-      .map((point, index) => {
-        const y = startY + index * rowStep;
-        const width = Math.max(8, Math.round((Math.abs(point.value) / max) * barWidth));
-        const baseWidth = hasBaseline ? Math.max(0, Math.round((Math.abs(point.baseline ?? 0) / max) * barWidth)) : 0;
-        return `<text x="64" y="${y}" font-family="${theme.font}" font-size="20" fill="${theme.muted}">${esc(clip(point.label, 20))}</text>
-<rect x="240" y="${y - 18}" width="${width}" height="${hasBaseline ? 16 : 18}" rx="4" fill="${theme.accent}"/>
-${hasBaseline ? `<rect x="240" y="${y + 2}" width="${baseWidth}" height="11" rx="3" fill="${theme.muted}" opacity="0.45"/>` : ''}
-<text x="${248 + width}" y="${y}" font-family="${theme.font}" font-size="20" fill="${theme.text}">${esc(point.value)}</text>`;
-      })
-      .join('');
-    if (hasBaseline && drawn.length) {
-      const legendY = startY + (drawn.length - 1) * rowStep + 28;
-      dataSvg += `<rect x="240" y="${legendY}" width="10" height="10" fill="${theme.accent}"/><text x="258" y="${legendY + 10}" font-family="${theme.font}" font-size="16" fill="${theme.muted}">${esc(copy.current)}</text>
-<rect x="330" y="${legendY}" width="10" height="10" fill="${theme.muted}" opacity="0.45"/><text x="348" y="${legendY + 10}" font-family="${theme.font}" font-size="16" fill="${theme.muted}">${esc(chart.baselineName || copy.previous)}</text>`;
-    }
-    const footnote = chart.overflow ?? chart.note;
-    if (footnote && drawn.length) {
-      dataSvg += `<text x="64" y="${startY + drawn.length * rowStep + 10}" font-family="${theme.font}" font-size="16" fill="${theme.muted}">${esc(clip(footnote, 80))}</text>`;
-    }
+    const categoryChart = chart.chartType === 'bar' || chart.chartType === 'stacked';
+    const rowStep = categoryRowStep(chart, copy.current);
+    const fit = Math.max(1, Math.floor((630 - startY) / rowStep));
+    const overflow = categoryChart && chart.points.length > fit
+      ? chart.overflow ?? chartOverflow(copy, chart.points.length, fit)
+      : chart.overflow;
+    dataSvg = reportChartSvg({ ...chart, overflow }, startY, theme, copy);
   }
   return svg(`${open}\n${conclusionSvg}\n${left}\n${metricPanel}\n${dataSvg}`);
 }

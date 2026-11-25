@@ -115,3 +115,88 @@ test('阅读对象决定页数与截断说明', () => {
   assert.match(executive.map((page) => page.svg).join('\n'), /共 6 个章节，此处呈现前 2 个/);
   assert.doesNotMatch(technical.map((page) => page.svg).join('\n'), /共 6 个章节/);
 });
+
+test('同节表格与图表分别成页，SVG 不再只画表格', () => {
+  const pages = buildReportDeck({
+    ...spec,
+    sections: [{
+      id: 'mixed',
+      title: '混合内容',
+      blocks: [
+        { kind: 'table', title: 'Technical detail', columns: ['Month', 'Orders'], rows: [['Aug', 10], ['Sep', 12]] },
+        { kind: 'chart', title: 'Monthly trend', chartType: 'line', series: [{ label: 'Aug', value: 10 }, { label: 'Sep', value: 12 }] },
+      ],
+    }],
+  });
+  const tablePage = pages.find((page) => page.svg.includes('Technical detail'))?.svg ?? '';
+  const chartPage = pages.find((page) => page.svg.includes('Monthly trend'))?.svg ?? '';
+  assert.match(tablePage, /Aug/);
+  assert.doesNotMatch(tablePage, /<polyline/);
+  assert.match(chartPage, /<polyline/);
+  assert.doesNotMatch(chartPage, /Technical detail/);
+});
+
+test('技术读者的八张指标卡和十五行表格分页后完整保留', () => {
+  const pages = buildReportDeck({
+    ...spec,
+    meta: { ...spec.meta, audience: 'technical' },
+    sections: [{
+      id: 'long',
+      title: '技术明细',
+      blocks: [
+        { kind: 'metric', metrics: Array.from({ length: 8 }, (_, index) => ({ label: `指标 ${index + 1}`, value: index + 1 })) },
+        { kind: 'table', title: '十五行', columns: ['序号'], rows: Array.from({ length: 15 }, (_, index) => [`M${index + 1}`]) },
+      ],
+    }],
+  });
+  const all = pages.map((page) => page.svg).join('\n');
+  assert.match(all, /指标 8/);
+  assert.match(all, /M15/);
+  assert.ok(pages.length >= 6);
+});
+
+test('单点折线保留圆点，负值柱状使用零轴和反向标签', () => {
+  const pages = buildReportDeck({
+    ...spec,
+    sections: [{
+      id: 'signed',
+      title: '有符号数据',
+      blocks: [
+        { kind: 'chart', title: '单点折线', chartType: 'line', series: [{ label: 'Only', value: -5 }] },
+        { kind: 'chart', title: '正负柱状', chartType: 'bar', series: [{ label: 'Loss', value: -10 }, { label: 'Profit', value: 20 }] },
+      ],
+    }],
+  });
+  const line = pages.find((page) => page.svg.includes('单点折线'))?.svg ?? '';
+  const bar = pages.find((page) => page.svg.includes('正负柱状'))?.svg ?? '';
+  assert.match(line, /<circle/);
+  assert.match(line, />-5</);
+  assert.match(bar, /text-anchor="end"/);
+  assert.match(bar, />-10</);
+});
+
+test('七类图表在 SVG deck 中保持真实图形而非统一退化成柱状图', () => {
+  const pages = buildReportDeck({
+    ...spec,
+    sections: [{
+      id: 'charts',
+      title: '图表集合',
+      blocks: [
+        { kind: 'chart', title: '折线趋势', chartType: 'line', xLabel: '月份', yLabel: '金额', series: [{ label: '8月', value: 1, baseline: 2 }, { label: '9月', value: 3 }], extraSeries: [{ name: '目标', values: [4, 5] }] },
+        { kind: 'chart', title: '渠道占比', chartType: 'pie', series: [{ label: 'A', value: 1 }, { label: 'B', value: 2 }, { label: 'C', value: 3 }] },
+        { kind: 'chart', title: '堆叠构成', chartType: 'stacked', series: [{ label: 'A', value: 1 }, { label: 'B', value: 2 }], extraSeries: [{ name: '第二部分', values: [2, 3] }] },
+        { kind: 'chart', title: '量价散点', chartType: 'scatter', scatter: [{ label: '甲', x: 1, y: 2 }, { label: '乙', x: 3, y: 4 }] },
+        { kind: 'chart', title: '能力雷达', chartType: 'radar', series: [{ label: '速度', value: 3 }, { label: '质量', value: 4 }, { label: '成本', value: 2 }] },
+        { kind: 'chart', title: '转化热力', chartType: 'heatmap', heatmap: { xLabels: ['A', 'B'], yLabels: ['上午', '下午'], values: [[1, 2], [3, 4]], valueLabel: '转化率' } },
+      ],
+    }],
+  });
+  const page = (title: string) => pages.find((item) => item.svg.includes(title))?.svg ?? '';
+  assert.match(page('折线趋势'), /<polyline/);
+  assert.match(page('折线趋势'), /目标/);
+  assert.match(page('渠道占比'), /<path d="M 420/);
+  assert.match(page('量价散点'), /<circle/);
+  assert.match(page('能力雷达'), /<polygon/);
+  assert.match(page('转化热力'), /fill-opacity=/);
+  assert.match(page('转化热力'), /转化率/);
+});

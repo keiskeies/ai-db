@@ -1,3 +1,5 @@
+import type { ReportBrief } from './reportBrief';
+
 export type ReportLayout = 'sections' | 'comparison' | 'merged' | 'mixed';
 
 export interface ReportSourceRef {
@@ -43,7 +45,7 @@ export interface ReportMetric {
    * 主基线（环比）之外的补充基线，例如同比去年同期、上期日均。
    * 只有一条基线时读者无法判断这是季节波动还是趋势变化。
    */
-  alternativeBaselines?: Array<{ label: string; value?: number; delta?: ReportDelta }>;
+  alternativeBaselines?: Array<{ label: string; value?: number; resultRef?: string; delta?: ReportDelta }>;
 }
 
 export interface ReportChartPoint {
@@ -51,6 +53,28 @@ export interface ReportChartPoint {
   value: number;
   /** 同刻度的基线值（例如上期），用于「本期 vs 上期」双折线。 */
   baseline?: number;
+  /** 基线数字来自哪次工具调用；缺省沿用所在 chart block 的 resultRef。 */
+  baselineResultRef?: string;
+}
+
+export type ReportChartType = 'bar' | 'line' | 'pie' | 'stacked' | 'scatter' | 'heatmap' | 'radar';
+
+export interface ReportChartExtraSeries {
+  name: string;
+  values: number[];
+}
+
+export interface ReportScatterPoint {
+  x: number;
+  y: number;
+  label?: string;
+}
+
+export interface ReportHeatmap {
+  xLabels: string[];
+  yLabels: string[];
+  values: number[][];
+  valueLabel?: string;
 }
 
 export interface ReportActionItem {
@@ -80,10 +104,17 @@ export interface ReportBlock {
   rows?: Array<Array<string | number | null>>;
   /** 哪些列是度量列：导出与渲染按数字处理（千分位、右对齐），而不是当文本。 */
   measureColumns?: string[];
-  chartType?: 'bar' | 'line' | 'pie' | 'stacked';
+  chartType?: ReportChartType;
   /** 折线/柱状的基线系列名，例如「上期」。 */
   baselineName?: string;
+  xLabel?: string;
+  yLabel?: string;
   series?: ReportChartPoint[];
+  extraSeries?: ReportChartExtraSeries[];
+  stacked?: boolean;
+  dualAxis?: boolean;
+  scatter?: ReportScatterPoint[];
+  heatmap?: ReportHeatmap;
   left?: ReportMetric;
   right?: ReportMetric;
   delta?: ReportDelta;
@@ -162,6 +193,10 @@ export interface ReportSpec {
     degraded?: string;
     /** 质量闸口的非阻断提示：结构合法但写作质量有欠缺的地方，如实告诉读者。 */
     qualityNotes?: string[];
+    /** 本轮需求扩写、schema grounding 与分析计划。 */
+    brief?: ReportBrief;
+    /** 数据形状不支持某项分析时的具体说明。 */
+    coverageExceptions?: string[];
   };
 }
 
@@ -205,4 +240,62 @@ export function computeMetricDelta(value: number, baseline: number): ReportDelta
 export function deltaIsGood(delta: number, goodDirection: MetricDirection = 'up'): 'good' | 'bad' | 'neutral' {
   if (delta === 0 || goodDirection === 'neutral') return 'neutral';
   return delta > 0 === (goodDirection === 'up') ? 'good' : 'bad';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function isOptionalStringArray(value: unknown): boolean {
+  return value === undefined || isStringArray(value);
+}
+
+function isReportMetric(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.label !== 'string' || !(['number', 'string'].includes(typeof value.value))) return false;
+  if (value.baseline !== undefined && typeof value.baseline !== 'number') return false;
+  if (value.alternativeBaselines !== undefined && (!Array.isArray(value.alternativeBaselines) || !value.alternativeBaselines.every((item) => isRecord(item) && typeof item.label === 'string'))) return false;
+  return true;
+}
+
+function isReportBlock(value: unknown): boolean {
+  if (!isRecord(value) || !['narrative', 'metric', 'table', 'chart', 'comparison', 'callout', 'actions'].includes(String(value.kind))) return false;
+  if (value.resultRefs !== undefined && !isStringArray(value.resultRefs)) return false;
+  if (value.metrics !== undefined && (!Array.isArray(value.metrics) || !value.metrics.every(isReportMetric))) return false;
+  if (value.columns !== undefined && !isStringArray(value.columns)) return false;
+  if (value.rows !== undefined && (!Array.isArray(value.rows) || !value.rows.every((row) => Array.isArray(row) && row.every((cell) => cell === null || ['string', 'number'].includes(typeof cell))))) return false;
+  if (value.series !== undefined && (!Array.isArray(value.series) || !value.series.every((point) => isRecord(point) && typeof point.label === 'string' && typeof point.value === 'number' && Number.isFinite(point.value)))) return false;
+  if (value.extraSeries !== undefined && (!Array.isArray(value.extraSeries) || !value.extraSeries.every((series) => isRecord(series) && typeof series.name === 'string' && Array.isArray(series.values) && series.values.every((item) => typeof item === 'number' && Number.isFinite(item))))) return false;
+  if (value.scatter !== undefined && (!Array.isArray(value.scatter) || !value.scatter.every((point) => isRecord(point) && typeof point.x === 'number' && typeof point.y === 'number' && Number.isFinite(point.x) && Number.isFinite(point.y)))) return false;
+  if (value.heatmap !== undefined) {
+    if (!isRecord(value.heatmap) || !isStringArray(value.heatmap.xLabels) || !isStringArray(value.heatmap.yLabels)) return false;
+    if (!Array.isArray(value.heatmap.values) || !value.heatmap.values.every((row) => Array.isArray(row) && row.every((cell) => typeof cell === 'number' && Number.isFinite(cell)))) return false;
+  }
+  if (value.left !== undefined && !isReportMetric(value.left)) return false;
+  if (value.right !== undefined && !isReportMetric(value.right)) return false;
+  if (value.actions !== undefined && (!Array.isArray(value.actions) || !value.actions.every((action) => isRecord(action) && typeof action.text === 'string'))) return false;
+  return true;
+}
+
+function isReportBrief(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.objective !== 'string' || !isStringArray(value.questions) || !isStringArray(value.analyses)) return false;
+  if (!isRecord(value.coverage) || !isRecord(value.grounding) || !Array.isArray(value.grounding.tables) || !Array.isArray(value.grounding.joins) || !Array.isArray(value.grounding.businessTerms)) return false;
+  if (!Array.isArray(value.plan) || !value.plan.every((step) => isRecord(step) && typeof step.id === 'string' && typeof step.title === 'string' && isStringArray(step.tables) && isStringArray(step.columns) && typeof step.deliverable === 'string')) return false;
+  return true;
+}
+
+/** 持久化产物可能来自旧版本或损坏写入，渲染前必须确认所有会被遍历的数组存在。 */
+export function isReportSpec(value: unknown): value is ReportSpec {
+  if (!isRecord(value) || value.version !== 1 || typeof value.title !== 'string' || typeof value.layout !== 'string') return false;
+  if (!Array.isArray(value.sources) || !value.sources.every((source) => isRecord(source) && typeof source.label === 'string' && typeof source.engine === 'string')) return false;
+  if (!Array.isArray(value.sections) || !value.sections.every((section) => isRecord(section) && typeof section.id === 'string' && typeof section.title === 'string' && Array.isArray(section.blocks) && section.blocks.every(isReportBlock))) return false;
+  if (!isRecord(value.meta) || typeof value.meta.intent !== 'string' || typeof value.meta.createdAt !== 'string') return false;
+  if (!isOptionalStringArray(value.meta.assumptions) || !isOptionalStringArray(value.meta.notes) || !isOptionalStringArray(value.meta.qualityNotes) || !isOptionalStringArray(value.meta.coverageExceptions)) return false;
+  if (value.meta.period !== undefined && (!isRecord(value.meta.period) || typeof value.meta.period.from !== 'string' || typeof value.meta.period.to !== 'string')) return false;
+  if (value.meta.brief !== undefined && !isReportBrief(value.meta.brief)) return false;
+  if (value.executive !== undefined && (!isRecord(value.executive) || typeof value.executive.headline !== 'string' || !isStringArray(value.executive.takeaways) || !isOptionalStringArray(value.executive.risks))) return false;
+  return true;
 }

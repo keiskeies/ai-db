@@ -1,9 +1,73 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import type { ReportBlock, ReportEvidence, ReportMetric, ReportSpec } from '@aidb/core';
+import type { ReportAnalysis, ReportBlock, ReportEvidence, ReportMetric, ReportSpec } from '@aidb/core';
 import { deltaIsGood, describeEvidence, formatReportNumber, reportDensity } from '@aidb/core';
 import { ChartView } from './ChartView';
 import { t as tr } from '../i18n';
+
+const MODE_LABELS: Record<NonNullable<ReportSpec['meta']['brief']>['mode'], () => string> = {
+  overview: () => tr('经营概览'),
+  diagnosis: () => tr('问题诊断'),
+  target: () => tr('目标差距'),
+  opportunity: () => tr('增长机会'),
+  comparison: () => tr('同口径对比'),
+  technical: () => tr('数据质量'),
+};
+
+const ANALYSIS_LABELS: Record<ReportAnalysis, () => string> = {
+  metrics: () => tr('核心指标'),
+  trend: () => tr('趋势'),
+  composition: () => tr('结构'),
+  comparison: () => tr('对比'),
+  attribution: () => tr('归因'),
+  anomaly: () => tr('异常'),
+  target: () => tr('目标'),
+  forecast: () => tr('预测'),
+  detail: () => tr('明细'),
+  actions: () => tr('行动'),
+};
+
+const AUDIENCE_LABELS: Record<string, () => string> = { executive: () => tr('管理层'), business: () => tr('业务读者'), technical: () => tr('技术读者') };
+
+function AnalysisPlan({ spec }: { spec: ReportSpec }) {
+  const brief = spec.meta.brief;
+  if (!brief) return null;
+  return (
+    <details data-testid="report-analysis-plan" style={{ marginBottom: 10, border: '1px solid var(--border-panel)', borderRadius: 8, background: 'var(--bg-elevated)' }}>
+      <summary style={{ cursor: 'pointer', padding: '9px 12px', fontSize: 11, fontWeight: 600 }}>
+        {tr('分析与计划')}
+        <span className="muted" style={{ fontWeight: 400, marginLeft: 8 }}>{MODE_LABELS[brief.mode]()} · {brief.analyses.length} {tr('项分析')}</span>
+      </summary>
+      <div style={{ padding: '2px 12px 12px', display: 'grid', gap: 9 }}>
+        <div style={{ fontSize: 12, lineHeight: 1.6 }}>{brief.objective}</div>
+        {brief.questions.length ? (
+          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11, lineHeight: 1.7 }}>
+            {brief.questions.map((question, index) => <li key={index}>{question}</li>)}
+          </ul>
+        ) : null}
+        <div className="muted" style={{ fontSize: 10 }}>
+          {tr('阅读对象')}：{AUDIENCE_LABELS[brief.audience]?.() ?? brief.audience} · {tr('指标')} {brief.coverage.minMetrics}–{brief.coverage.maxMetrics} · {tr('图表')} {brief.coverage.minCharts}–{brief.coverage.maxCharts}
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+          {brief.analyses.map((analysis) => <span key={analysis} className="badge" style={{ fontSize: 9 }}>{ANALYSIS_LABELS[analysis]()}</span>)}
+        </div>
+        {brief.grounding.tables.length ? (
+          <div className="muted" style={{ fontSize: 10 }}>{tr('候选对象')}：{brief.grounding.tables.map((table) => `${table.database ? `${table.database}.` : ''}${table.name}`).join('、')}</div>
+        ) : null}
+        <div style={{ display: 'grid', gap: 7 }}>
+          {brief.plan.map((step, index) => (
+            <div key={step.id} style={{ borderLeft: '2px solid var(--accent, #45c8c3)', paddingLeft: 9, display: 'grid', gap: 3 }}>
+              <div style={{ fontSize: 11, fontWeight: 600 }}>{index + 1}. {step.title}</div>
+              <div className="muted" style={{ fontSize: 10.5 }}>{step.deliverable}</div>
+              {step.tables.length ? <div className="mono muted" style={{ fontSize: 9 }}>{tr('表')}：{step.tables.join('、')}</div> : null}
+              {step.columns.length ? <div className="mono muted" style={{ fontSize: 9 }}>{tr('字段')}：{step.columns.join('、')}</div> : null}
+            </div>
+          ))}
+        </div>
+      </div>
+    </details>
+  );
+}
 
 function metricValue(metric: ReportMetric): { text: string; exact?: string } {
   if (typeof metric.value === 'number') {
@@ -224,18 +288,23 @@ function Block({ block, spec }: { block: ReportBlock; spec: ReportSpec }) {
           chart={{
             type: block.chartType ?? 'bar',
             title: block.title ?? '',
-            xLabel: '',
-            yLabel: '',
+            xLabel: block.xLabel ?? '',
+            yLabel: block.yLabel ?? '',
             series: (block.series ?? []).map((point) => ({ label: point.label, value: point.value })),
-            ...(hasBaseline
-              ? {
-                  extraSeries: [
-                    { name: block.baselineName ?? tr("上期"), values: (block.series ?? []).map((point) => point.baseline ?? 0) },
-                  ],
-                }
-              : {}),
+            extraSeries: [
+              ...(hasBaseline
+                ? [{ name: block.baselineName ?? tr("上期"), values: (block.series ?? []).map((point) => point.baseline ?? 0) }]
+                : []),
+              ...(block.extraSeries ?? []),
+            ],
+            stacked: block.stacked || block.chartType === 'stacked',
+            dualAxis: block.dualAxis,
+            scatter: block.scatter,
+            heatmap: block.heatmap,
+            note: block.note,
           }}
-          maxHeight={220}
+          height={260}
+          maxHeight={300}
         />
       </div>
     );
@@ -286,12 +355,13 @@ export function ReportView({ spec }: { spec: ReportSpec }) {
   const hiddenSections = Math.max(0, sections.length - density.sections);
   const visibleSections = showAllSections ? sections : sections.slice(0, density.sections);
   return (
-    <div>
+    <div data-testid="report-view">
       <div style={{ marginBottom: 8 }}>
         <div style={{ fontSize: 15, fontWeight: 600 }}>{spec.title}</div>
         <div className="muted" style={{ fontSize: 10 }}>
           {spec.sources.map((source) => `${source.label} · ${source.engine}`).join(' / ')}
-          {period ? ` · ${period.label ?? `${period.from} ~ ${period.to}`}` : ''} · {new Date(spec.meta.createdAt).toLocaleString()} · {spec.layout}
+          {period ? ` · ${period.label ?? `${period.from} ~ ${period.to}`}` : ''} · {new Date(spec.meta.createdAt).toLocaleString()}
+          {spec.meta.audience ? ` · ${AUDIENCE_LABELS[spec.meta.audience]?.()}` : ''}
         </div>
       </div>
       {spec.meta.degraded ? (
@@ -314,11 +384,12 @@ export function ReportView({ spec }: { spec: ReportSpec }) {
           ))}
         </div>
       ) : null}
-      {visibleSections.map((section) => (
+      <AnalysisPlan spec={spec} />
+      {visibleSections.map((section, index) => (
         <div key={section.id} className="panel" style={{ padding: 10, marginBottom: 8 }}>
-          <div className="panel-head" style={{ paddingLeft: 0 }}>{section.title}</div>
+          <div className="panel-head" style={{ paddingLeft: 0 }}><span className="muted mono" style={{ marginRight: 7 }}>{String(index + 1).padStart(2, '0')}</span>{section.title}</div>
           {section.conclusion ? (
-            <div style={{ fontSize: 12, fontWeight: 600, margin: '2px 0 8px' }}>{section.conclusion}</div>
+            <div style={{ fontSize: 12, lineHeight: 1.6, fontWeight: 600, margin: '2px 0 8px', paddingLeft: 8, borderLeft: '2px solid var(--accent, #45c8c3)' }}>{section.conclusion}</div>
           ) : null}
           {section.blocks.map((block, index) => (
             <div key={index}>

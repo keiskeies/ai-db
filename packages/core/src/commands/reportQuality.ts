@@ -8,6 +8,7 @@
  * 判定必须保守——闸口误报会让整份报告生成失败，比放行一条瑕疵严重得多。
  */
 import type { ReportBlock, ReportSection, ReportSpec } from './report';
+import type { ReportAnalysis, ReportBrief } from './reportBrief';
 
 export interface ReportQualityResult {
   /** 阻断性问题：退回给模型重写。 */
@@ -40,6 +41,9 @@ function blockNumbers(block: ReportBlock): number[] {
       out.push(point.value);
       if (typeof point.baseline === 'number') out.push(point.baseline);
     }
+    for (const series of block.extraSeries ?? []) out.push(...series.values.filter(Number.isFinite));
+    for (const point of block.scatter ?? []) out.push(point.x, point.y);
+    for (const row of block.heatmap?.values ?? []) out.push(...row.filter(Number.isFinite));
   } else if (block.kind === 'comparison') {
     for (const side of [block.left, block.right]) {
       if (side && typeof side.value === 'number') out.push(side.value);
@@ -86,6 +90,69 @@ function isVagueAction(text: string): boolean {
   const hasTarget = /[0-9０-９]|%|万|亿|元|率|量|额|数/.test(cleaned);
   const hasVerb = /(补|加|改|拆|建|下线|上线|清理|补齐|修|扩容|限流|缓存|索引|分区|回访|催收|拦截|召回)/.test(cleaned);
   return !hasTarget && !hasVerb;
+}
+
+function hasException(exceptions: string[], analysis: ReportAnalysis | 'metrics' | 'charts' | 'binding'): boolean {
+  const aliases: Record<string, string[]> = {
+    metrics: ['指标', 'KPI', 'metric'],
+    charts: ['图表', 'chart'],
+    trend: ['趋势', '时间', 'trend'],
+    composition: ['结构', '构成', 'composition'],
+    comparison: ['对比', 'comparison'],
+    attribution: ['归因', '维度', 'attribution'],
+    anomaly: ['异常', '离群', 'anomaly'],
+    target: ['目标', 'target'],
+    forecast: ['预测', 'forecast'],
+    detail: ['明细', 'detail'],
+    actions: ['建议', '行动', 'action'],
+    binding: ['对象', '表', '字段', 'schema', 'binding'],
+  };
+  const terms = aliases[analysis] ?? [];
+  return exceptions.some((exception) => terms.some((term) => exception.toLowerCase().includes(term.toLowerCase())));
+}
+
+export function checkReportCoverage(spec: ReportSpec, brief?: ReportBrief, exceptions: string[] = []): ReportQualityResult {
+  const errors: string[] = [];
+  const notes: string[] = [];
+  if (!brief) return { errors, notes };
+  const blocks = spec.sections.flatMap((section) => section.blocks);
+  const metricCount = blocks.filter((block) => block.kind === 'metric').flatMap((block) => block.metrics ?? []).length;
+  const chartCount = blocks.filter((block) => block.kind === 'chart').length;
+  const hasNumbers = blocks.some((block) => blockNumbers(block).length > 0);
+  if (hasNumbers && metricCount < brief.coverage.minMetrics && !hasException(exceptions, 'metrics')) {
+    errors.push(`核心指标只有 ${metricCount} 个，低于需求计划要求的 ${brief.coverage.minMetrics} 个；数据不足时请给出具体 coverageExceptions`);
+  }
+  if (chartCount < brief.coverage.minCharts && !hasException(exceptions, 'charts')) {
+    notes.push(`只有 ${chartCount} 张图，低于通常需要的 ${brief.coverage.minCharts} 张；如数据形状不支持，请说明原因`);
+  }
+  if (chartCount > brief.coverage.maxCharts) notes.push(`共有 ${chartCount} 张图，超过建议上限 ${brief.coverage.maxCharts} 张；请删除不改变判断的重复图`);
+
+  const covered = (analysis: ReportAnalysis): boolean => {
+    if (analysis === 'metrics') return metricCount > 0;
+    if (analysis === 'trend') return blocks.some((block) => block.kind === 'chart' && (block.chartType === 'line' || block.chartType === 'stacked'));
+    if (analysis === 'composition') return blocks.some((block) => block.kind === 'chart' && (block.chartType === 'pie' || block.chartType === 'bar'));
+    if (analysis === 'comparison') return blocks.some((block) => block.kind === 'comparison');
+    if (analysis === 'attribution') return blocks.some((block) => block.kind === 'table' && (block.columns ?? []).some((column) => /本期|上期|变化|贡献/.test(column)));
+    if (analysis === 'anomaly') return blocks.some((block) => /异常|离群|outlier/i.test(`${block.note ?? ''} ${block.title ?? ''}`));
+    if (analysis === 'target') return blocks.some((block) => block.kind === 'metric' && (block.metrics ?? []).some((metric) => /目标/.test(metric.baselineLabel ?? '') || (metric.alternativeBaselines ?? []).some((baseline) => /目标/.test(baseline.label))));
+    if (analysis === 'forecast') return blocks.some((block) => /预测|forecast/i.test(block.note ?? ''));
+    if (analysis === 'detail') return blocks.some((block) => block.kind === 'table');
+    return blocks.some((block) => block.kind === 'actions');
+  };
+  for (const analysis of brief.analyses) {
+    if (!covered(analysis) && !hasException(exceptions, analysis)) notes.push(`需求计划中的「${analysis}」尚未覆盖；如数据不支持，请写明具体原因`);
+  }
+  if ((brief.coverage.requireAttribution || brief.coverage.requireTarget || brief.coverage.requireAnomaly) && exceptions.length && !brief.analyses.every((analysis) => covered(analysis) || hasException(exceptions, analysis))) {
+    notes.push(`条件分析例外：${exceptions.join('；')}`);
+  }
+
+  const evidence = Object.values(spec.meta.evidence ?? {});
+  if (evidence.length && brief.grounding.tables.length) {
+    const evidenceText = evidence.map((item) => `${item.args?.table ?? ''} ${item.sql ?? ''}`).join('\n').toLowerCase();
+    const used = brief.grounding.tables.some((table) => evidenceText.includes(table.name.toLowerCase()));
+    if (!used && !hasException(exceptions, 'binding')) notes.push('查询证据未命中需求计划中的候选表；请确认业务词到 schema 对象的绑定是否正确');
+  }
+  return { errors, notes };
 }
 
 export function checkReportQuality(spec: ReportSpec, forbidden: string[] = []): ReportQualityResult {
@@ -151,6 +218,16 @@ export function checkReportQuality(spec: ReportSpec, forbidden: string[] = []): 
           if (rawTimestamps >= Math.ceil(points.length / 2)) notes.push(`图「${block.title ?? ''}」的横轴是原始时间戳，按天/周/月分桶后才看得出趋势`);
           else if (bucketed < Math.ceil(points.length * 0.6)) notes.push(`图「${block.title ?? ''}」的横轴标签不像时间分桶，读者可能读不出趋势`);
         }
+      }
+      if (block.kind === 'chart' && (block.extraSeries?.some((series) => series.values.length !== (block.series ?? []).length))) {
+        notes.push(`图「${block.title ?? ''}」的附加系列与主系列长度不一致`);
+      }
+      if (block.kind === 'chart' && block.chartType === 'radar' && ((block.series?.length ?? 0) < 3 || (block.series?.length ?? 0) > 8)) {
+        notes.push(`图「${block.title ?? ''}」的雷达维度应控制在 3–8 个`);
+      }
+      if (block.kind === 'chart' && block.chartType === 'heatmap') {
+        const width = block.heatmap?.xLabels.length ?? 0;
+        if (!width || (block.heatmap?.values.some((row) => row.length !== width) ?? false)) notes.push(`图「${block.title ?? ''}」的热力矩阵不完整`);
       }
     }
   }

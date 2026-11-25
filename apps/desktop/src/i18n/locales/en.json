@@ -3677,5 +3677,21 @@
   "Agent 正在创建会话": "Agent is creating a session",
   "请等创建完成或停止后再切换会话。": "Wait for session creation to finish or stop it before switching sessions.",
   "本地连接已停止，但未能确认服务端是否结束；请稍后重试停止。": "The local connection was stopped, but the server-side turn could not be confirmed as ended. Retry Stop shortly.",
-  "停止请求未确认": "Stop request was not confirmed"
+  "停止请求未确认": "Stop request was not confirmed",
+  "经营概览": "Business overview",
+  "问题诊断": "Issue diagnosis",
+  "目标差距": "Target gap",
+  "增长机会": "Growth opportunities",
+  "同口径对比": "Like-for-like comparison",
+  "核心指标": "Key metrics",
+  "归因": "Attribution",
+  "异常": "Anomalies",
+  "明细": "Details",
+  "行动": "Actions",
+  "业务读者": "Business readers",
+  "技术读者": "Technical readers",
+  "分析与计划": "Analysis & plan",
+  "项分析": "analyses",
+  "指标": "metrics",
+  "候选对象": "Candidate objects"
 }

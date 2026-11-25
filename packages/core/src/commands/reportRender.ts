@@ -6,7 +6,7 @@
  * 所以分页与截断在这里决定一次，后端只负责把同一份结构画成 SVG 或 pptxgenjs 调用。
  */
 import { computeMetricDelta, deltaIsGood, formatReportNumber } from './report';
-import type { ReportBlock, ReportDelta, ReportEvidence, ReportMetric, ReportSpec } from './report';
+import type { ReportBlock, ReportChartExtraSeries, ReportChartType, ReportDelta, ReportEvidence, ReportHeatmap, ReportMetric, ReportScatterPoint, ReportSpec } from './report';
 
 export type ReportLocale = 'zh' | 'en';
 
@@ -32,6 +32,7 @@ export interface ReportCopy {
   truncatedMetrics: string;
   truncatedRows: string;
   truncatedPoints: string;
+  truncatedMatrix: string;
   footer: string;
   generatedBy: string;
   caliber: string;
@@ -64,6 +65,7 @@ const ZH: ReportCopy = {
   truncatedMetrics: '共 {n} 项指标，此处呈现前 {m} 项',
   truncatedRows: '共 {n} 行，此处呈现前 {m} 行',
   truncatedPoints: '共 {n} 个数据点，此处呈现前 {m} 个',
+  truncatedMatrix: '共 {n}×{m} 个矩阵单元，此处呈现前 {c} 列 × {r} 行',
   footer: '数字来自报告查询结果',
   generatedBy: 'AiDB Studio',
   caliber: '口径：',
@@ -96,6 +98,7 @@ const EN: ReportCopy = {
   truncatedMetrics: '{n} metrics in total; the first {m} are shown',
   truncatedRows: '{n} rows in total; the first {m} are shown',
   truncatedPoints: '{n} data points in total; the first {m} are shown',
+  truncatedMatrix: '{n}×{m} matrix cells in total; the first {c} columns × {r} rows are shown',
   footer: 'Figures come from the report queries',
   generatedBy: 'AiDB Studio',
   caliber: 'Definition: ',
@@ -138,9 +141,16 @@ export interface DeckRow {
 
 export interface DeckChart {
   title: string;
-  chartType: 'bar' | 'line' | 'pie' | 'stacked';
+  chartType: ReportChartType;
   points: Array<{ label: string; value: number; baseline?: number }>;
   baselineName?: string;
+  xLabel?: string;
+  yLabel?: string;
+  extraSeries?: ReportChartExtraSeries[];
+  stacked?: boolean;
+  dualAxis?: boolean;
+  scatter?: ReportScatterPoint[];
+  heatmap?: ReportHeatmap;
   note?: string;
   /** 点数被截断时的说明；没有截断则缺省。 */
   overflow?: string;
@@ -204,6 +214,9 @@ export interface ReportDensity {
   columns: number;
   assumptions: boolean;
 }
+
+const MAX_METRICS_PER_SLIDE = 6;
+const MAX_TABLE_ROWS_PER_SLIDE = 6;
 
 const DENSITY: Record<string, ReportDensity> = {
   executive: { sections: 2, metrics: 4, rows: 4, points: 8, narrative: 3, takeaways: 3, risks: 2, columns: 3, assumptions: false },
@@ -366,15 +379,38 @@ export function planReportDeck(spec: ReportSpec): DeckPlan {
           rows: rows.slice(0, density.rows).map((row) => ({ cells: row.slice(0, density.columns).map((cell) => String(cell ?? '—')) })),
           ...(rows.length > density.rows ? { overflow: fill(copy.truncatedRows, { n: rows.length, m: density.rows }) } : {}),
         });
-      } else if (block.kind === 'chart' && (block.series?.length ?? 0) >= 2) {
+      } else if (block.kind === 'chart' && (
+        (block.chartType !== 'scatter' && block.chartType !== 'heatmap' && (block.series?.length ?? 0) >= 1)
+        || (block.chartType === 'scatter' && (block.scatter?.length ?? 0) >= 2)
+        || (block.chartType === 'heatmap' && Boolean(block.heatmap?.values.length))
+      )) {
         const points = block.series ?? [];
+        const chartType = block.chartType ?? 'bar';
+        const heatmap = block.heatmap;
+        const pointCount = chartType === 'scatter' ? block.scatter?.length ?? 0 : chartType === 'heatmap' ? heatmap?.values.flat().length ?? 0 : points.length;
+        const matrixOverflow = chartType === 'heatmap' && heatmap && (heatmap.xLabels.length > 12 || heatmap.yLabels.length > 8)
+          ? fill(copy.truncatedMatrix, { n: heatmap.xLabels.length, m: heatmap.yLabels.length, c: 12, r: 8 })
+          : undefined;
+        const chartOverflow = matrixOverflow ?? (pointCount > density.points ? fill(copy.truncatedPoints, { n: pointCount, m: density.points }) : undefined);
         charts.push({
           title: block.title ?? copy.trend,
-          chartType: block.chartType ?? 'bar',
+          chartType,
           points: points.slice(0, density.points).map((point) => ({ ...point })),
           ...(block.baselineName ? { baselineName: block.baselineName } : {}),
+          ...(block.xLabel ? { xLabel: block.xLabel } : {}),
+          ...(block.yLabel ? { yLabel: block.yLabel } : {}),
+          ...(block.extraSeries?.length ? { extraSeries: block.extraSeries.map((series) => ({ name: series.name, values: series.values.slice(0, density.points) })) } : {}),
+          ...(block.stacked || chartType === 'stacked' ? { stacked: true } : {}),
+          ...(block.dualAxis ? { dualAxis: true } : {}),
+          ...(block.scatter?.length ? { scatter: block.scatter.slice(0, density.points).map((point) => ({ ...point })) } : {}),
+          ...(block.heatmap ? { heatmap: {
+            xLabels: block.heatmap.xLabels.slice(0, 12),
+            yLabels: block.heatmap.yLabels.slice(0, 8),
+            values: block.heatmap.values.slice(0, 8).map((row) => row.slice(0, 12)),
+            ...(block.heatmap.valueLabel ? { valueLabel: block.heatmap.valueLabel } : {}),
+          } } : {}),
           ...(block.note ? { note: block.note } : {}),
-          ...(points.length > density.points ? { overflow: fill(copy.truncatedPoints, { n: points.length, m: density.points }) } : {}),
+          ...(chartOverflow ? { overflow: chartOverflow } : {}),
         });
       }
     }
@@ -419,19 +455,77 @@ export function planReportDeck(spec: ReportSpec): DeckPlan {
  */
 export function flattenDeckSlides(slides: DeckSlide[]): DeckSlide[] {
   const out: DeckSlide[] = [];
+  const tablePages = (slide: Extract<DeckSlide, { kind: 'section' }>, table: DeckTable): DeckSlide[] => {
+    const baseTitle = `${slide.title} · ${table.title ?? slide.title}`.trim();
+    const pages: DeckSlide[] = [];
+    for (let start = 0; start < table.rows.length; start += MAX_TABLE_ROWS_PER_SLIDE) {
+      const end = Math.min(table.rows.length, start + MAX_TABLE_ROWS_PER_SLIDE);
+      const first = start === 0;
+      pages.push({
+        ...slide,
+        title: first ? baseTitle : `${baseTitle} · ${start + 1}–${end}`,
+        conclusion: undefined,
+        lines: [],
+        metrics: [],
+        table: {
+          ...table,
+          rows: table.rows.slice(start, end),
+          overflow: end === table.rows.length ? table.overflow : undefined,
+        },
+        chart: undefined,
+        extraCharts: [],
+        extraTables: [],
+      });
+    }
+    return pages;
+  };
+  const chartPage = (slide: Extract<DeckSlide, { kind: 'section' }>, chart: DeckChart): DeckSlide => ({
+    ...slide,
+    title: `${slide.title} · ${chart.title}`.trim(),
+    conclusion: undefined,
+    lines: [],
+    metrics: [],
+    table: undefined,
+    chart,
+    extraCharts: [],
+    extraTables: [],
+  });
+
   for (const slide of slides) {
+    if (slide.kind === 'metrics') {
+      for (let start = 0; start < slide.metrics.length; start += MAX_METRICS_PER_SLIDE) {
+        const end = Math.min(slide.metrics.length, start + MAX_METRICS_PER_SLIDE);
+        out.push({
+          ...slide,
+          title: start === 0 ? slide.title : `${slide.title} · ${start + 1}–${end}`,
+          metrics: slide.metrics.slice(start, end),
+          overflow: end === slide.metrics.length ? slide.overflow : undefined,
+        });
+      }
+      continue;
+    }
     if (slide.kind !== 'section') {
       out.push(slide);
       continue;
     }
-    // 展开后不再留待办：渲染器拿到的一定是「一页一主题」的干净列表。
-    out.push({ ...slide, extraCharts: [], extraTables: [] });
-    for (const chart of slide.extraCharts) {
-      out.push({ ...slide, title: `${slide.title} · ${chart.title}`, conclusion: undefined, lines: [], metrics: [], table: undefined, chart, extraCharts: [], extraTables: [] });
+    const [headTable, ...restTables] = slide.extraTables.length ? [slide.table, ...slide.extraTables] : [slide.table];
+    const [headChart, ...restCharts] = slide.extraCharts.length ? [slide.chart, ...slide.extraCharts] : [slide.chart];
+    const hasTable = Boolean(headTable?.rows.length);
+    const hasChart = Boolean(headChart);
+    const hasSummary = Boolean(slide.conclusion || slide.lines.length || slide.metrics.length);
+    if ((hasTable || hasChart) && hasSummary) out.push({ ...slide, table: undefined, chart: undefined, extraCharts: [], extraTables: [] });
+    if (hasTable && hasChart) {
+      out.push(...tablePages(slide, headTable!));
+      out.push(chartPage(slide, headChart!));
+    } else if (hasTable) {
+      out.push(...tablePages(slide, headTable!));
+    } else if (hasChart) {
+      out.push(chartPage(slide, headChart!));
+    } else {
+      out.push({ ...slide, table: undefined, chart: undefined, extraCharts: [], extraTables: [] });
     }
-    for (const table of slide.extraTables) {
-      out.push({ ...slide, title: `${slide.title} · ${table.title ?? ''}`.trim(), conclusion: undefined, lines: [], metrics: [], table, chart: undefined, extraCharts: [], extraTables: [] });
-    }
+    for (const chart of restCharts) if (chart) out.push(chartPage(slide, chart));
+    for (const table of restTables) if (table) out.push(...tablePages(slide, table));
   }
   return out;
 }
@@ -505,6 +599,9 @@ export function reportSheets(spec: ReportSpec): ReportSheet[] {
             (metric.alternativeBaselines ?? [])
               .map((item) => `${item.label}${typeof item.value === 'number' ? ` ${item.value}${item.delta ? ` (${deltaText(item.delta, locale)})` : ''}` : ''}`)
               .join(' ; '),
+            metric.resultRef ?? '',
+            metric.baselineResultRef ?? metric.resultRef ?? '',
+            JSON.stringify((metric.alternativeBaselines ?? []).map((item) => item.resultRef ?? '')),
             metric.resultRef ? spec.meta.evidence?.[metric.resultRef]?.sql ?? '' : '',
           ]);
         }
@@ -519,8 +616,24 @@ export function reportSheets(spec: ReportSpec): ReportSheet[] {
           block.delta ? deltaText(block.delta, locale) : '',
         ]);
       } else if (block.kind === 'chart') {
+        const resultRef = block.resultRef ?? '';
+        const resultRefs = (block.resultRefs ?? []).join('|');
+        const sql = resultRef ? spec.meta.evidence?.[resultRef]?.sql ?? '' : '';
         for (const point of block.series ?? []) {
-          chartRows.push([section.title, block.title ?? copy.trend, point.label, point.value, typeof point.baseline === 'number' ? point.baseline : '', block.baselineName ?? '']);
+          chartRows.push([section.title, block.title ?? copy.trend, point.label, point.value, typeof point.baseline === 'number' ? point.baseline : '', block.baselineName ?? '', block.chartType ?? 'bar', block.yLabel || copy.current, '', '', '', block.xLabel ?? '', block.yLabel ?? '', block.note ?? '', resultRef, resultRefs, point.baselineResultRef ?? resultRef, sql]);
+        }
+        for (const series of block.extraSeries ?? []) {
+          for (const [index, value] of series.values.entries()) {
+            chartRows.push([section.title, block.title ?? copy.trend, block.series?.[index]?.label ?? String(index + 1), value, '', '', block.chartType ?? 'bar', series.name, '', '', '', '', block.xLabel ?? '', block.yLabel ?? '', block.note ?? '', resultRef, resultRefs, '', sql]);
+          }
+        }
+        for (const [index, point] of (block.scatter ?? []).entries()) {
+          chartRows.push([section.title, block.title ?? copy.trend, point.label ?? String(index + 1), point.y, '', '', 'scatter', block.yLabel || copy.current, point.x, point.y, '', '', block.xLabel ?? '', block.yLabel ?? '', block.note ?? '', resultRef, resultRefs, '', sql]);
+        }
+        for (const [rowIndex, row] of (block.heatmap?.values ?? []).entries()) {
+          for (const [columnIndex, value] of row.entries()) {
+            chartRows.push([section.title, block.title ?? copy.trend, block.heatmap?.xLabels[columnIndex] ?? String(columnIndex + 1), value, '', '', 'heatmap', block.heatmap?.valueLabel ?? '', '', '', `${block.heatmap?.yLabels[rowIndex] ?? rowIndex + 1}|${block.heatmap?.xLabels[columnIndex] ?? columnIndex + 1}`, block.xLabel ?? '', block.heatmap?.valueLabel ?? block.yLabel ?? '', block.note ?? '', resultRef, resultRefs, '', sql]);
+          }
         }
       } else if (block.kind === 'table') {
         const columns = block.columns ?? [];
@@ -537,9 +650,9 @@ export function reportSheets(spec: ReportSpec): ReportSheet[] {
   for (const note of spec.meta.notes ?? []) narrative.push([copy.assumptions, 'note', note]);
 
   const sheets: ReportSheet[] = [{ name: copy.executive, columns: [copy.section, 'kind', 'text'], rows: narrative }];
-  if (metricRows.length) sheets.push({ name: copy.keyMetrics, columns: [copy.section, 'metric', 'value', 'unit', 'baseline', 'baseline_label', 'delta', 'alternative_baselines', 'sql'], rows: metricRows });
+  if (metricRows.length) sheets.push({ name: copy.keyMetrics, columns: [copy.section, 'metric', 'value', 'unit', 'baseline', 'baseline_label', 'delta', 'alternative_baselines', 'result_ref', 'baseline_result_ref', 'alternative_baseline_refs', 'sql'], rows: metricRows });
   for (const table of tables) if (table.rows.length) sheets.push(table);
-  if (chartRows.length) sheets.push({ name: copy.trend, columns: [copy.section, 'chart', 'point', 'value', 'baseline', 'baseline_label'], rows: chartRows });
+  if (chartRows.length) sheets.push({ name: copy.trend, columns: [copy.section, 'chart', 'point', 'value', 'baseline', 'baseline_label', 'chart_type', 'series_name', 'x', 'y', 'matrix_cell', 'x_label', 'y_label', 'note', 'result_ref', 'result_refs', 'baseline_result_ref', 'sql'], rows: chartRows });
   if (comparisonRows.length) sheets.push({ name: copy.compare, columns: [copy.section, 'title', 'a_label', 'a_value', 'b_label', 'b_value', 'delta'], rows: comparisonRows });
   return sheets;
 }
