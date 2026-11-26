@@ -543,7 +543,9 @@ test('draft release staging requires verified native assets, iOS checksums and t
   assert.match(notesRun, /EAS store-profile IPA signed with a/);
   assert.match(notesRun, /signing\.ios\.productionReady === true/);
   assert.match(notesRun, /\['Apple Distribution', 'iPhone Distribution'\]\.includes\(signing\.ios\.signing\)/);
-  assert.match(notesRun, /notarized and installs only on registered devices/);
+  // 「Ad Hoc/仅注册设备」必须跟着 storeProfile 走，不能写死；证书命名只用于区分商店可行性。
+  assert.match(notesRun, /EAS internal-distribution IPA\$\{iosStoreProfile \? '' : ' \(Ad Hoc, device-limited\)'\}/);
+  assert.match(notesRun, /It is not notarized\$\{iosStoreProfile \? '' : ' and installs only on registered devices'\}/);
   assert.match(notesRun, /IOS_DISTRIBUTION\.txt/);
   assert.doesNotMatch(notesRun, /signature was not independently verified|iOS was skipped/);
   const draft = workflowStep('release', 'Create draft release');

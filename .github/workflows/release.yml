@@ -1268,11 +1268,12 @@ jobs:
           const androidLine = signing.android.productionReady === true
             ? '- Android is an APK signed with the protected production upload key; apksigner verified its certificate SHA-256 against the release secret. It is for sideloading, not a Google Play App Bundle.'
             : '- Android is an APK signed with the repository-tracked standard Android debug key (`apps/mobile/android/app/debug.keystore`), the same key every local checkout reuses; apksigner verified its certificate SHA-256. It is for sideloading and tester updates only, not a Google Play upload, and a future Play upload key cannot upgrade these installs in place.';
+          const iosStoreProfile = signing.ios.storeProfile === true;
           const iosDistributionAuthority = ['Apple Distribution', 'iPhone Distribution'].includes(signing.ios.signing);
           const iosVerifiedLine = 'The downloaded app was independently verified on macOS with `codesign`, embedded provisioning identity and `Info.plist` version checks.';
           const iosLine = signing.ios.productionReady === true
-            ? `- iOS is an EAS store-profile IPA signed with a ${signing.ios.signing} certificate. ${iosVerifiedLine} It is not notarized and has not been submitted to App Store Connect; submission is a separate \`eas submit -p ios\` step.`
-            : `- iOS is an EAS internal-distribution IPA (Ad Hoc, device-limited) signed with a ${signing.ios.signing} certificate. ${iosVerifiedLine} It is not notarized and installs only on registered devices${iosDistributionAuthority ? '; the same certificate can sign a store build, but that needs a separate App Store-profile build (`--profile production`, which requires an App Store Connect API key)' : '; a store release needs a Distribution certificate and an App Store profile'}. See \`IOS_DISTRIBUTION.txt\`.`;
+            ? `- iOS is an EAS store-profile IPA signed with a ${signing.ios.signing} certificate${iosDistributionAuthority ? '' : ' (a development certificate, so it cannot be submitted as-is)'}. ${iosVerifiedLine} It is not notarized and has not been submitted to App Store Connect; submission is a separate \`eas submit -p ios\` step.`
+            : `- iOS is an EAS internal-distribution IPA${iosStoreProfile ? '' : ' (Ad Hoc, device-limited)'} signed with a ${signing.ios.signing} certificate. ${iosVerifiedLine} It is not notarized${iosStoreProfile ? '' : ' and installs only on registered devices'}${iosDistributionAuthority ? '; the same certificate can sign a store build, but that needs a separate App Store-profile build (`--profile production`, which requires an App Store Connect API key)' : '; a store release needs a Distribution certificate and an App Store profile'}. See \`IOS_DISTRIBUTION.txt\`.`;
           const notes = [
             `# AiDB Studio ${tag}`,
             '',
