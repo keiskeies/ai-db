@@ -336,13 +336,18 @@ test('desktop verifies signatures when present and states the unsigned policy wh
   assert.match(String(upload?.with?.path), /SHA256SUMS-\*/);
   assert.match(String(upload?.with?.path), /\*_SIGNING\.txt/);
 
-  // 失败上报：GitHub 每 job 只留约 10 条 annotation，逐行 ::error:: 会把真正的 ⨯ 错误挤出上限
-  // （v0.0.11 mac 就是这么丢的）。必须全量 cat + 单条 max-annotations=1 摘要 + 日志 artifact。
+  // 失败上报：GitHub 每 job 只留约 10 条 annotation，且单条 annotation 截断在 4096 字节。
+  // 逐行 ::error:: 与「整段贴最后 80 行」都被验证过会丢 ⨯ 错误（v0.0.11 mac 两次踩坑），
+  // 所以必须是：全量 cat + 逐行压缩到 160 列、尺寸合规的 annotation + ⨯ 行摘要 + 日志 artifact。
   const report = workflowRun('desktop', 'Report packaging error');
   assert.match(report, /^\s+cat "\$log"$/m);
   assert.match(report, /max-annotations=1/);
+  assert.match(report, /tail -n 24 "\$log" \| compact/);
+  assert.match(report, /grep -a '⨯' "\$log"/);
+  assert.ok(report.includes('cut -c1-160'));
   assert.ok(report.includes('gsub(/%/, "%25")'));
   assert.ok(report.includes('gsub(/\\r/, "%0D")'));
+  assert.doesNotMatch(report, /tail -n 80/);
   assert.doesNotMatch(report, /while IFS= read -r line; do echo "::error::\$line"; done/);
   const logUpload = steps.find((step) => (step.name ?? '') === 'Upload packaging log');
   assert.equal(logUpload?.if, 'failure()');
@@ -381,7 +386,12 @@ test('Android signing stages production credentials or falls back to the tracked
   assert.equal(workflowStep('android', 'Build release APK').run, './gradlew assembleRelease --no-daemon');
   const verifyRun = workflowRun('android', 'Verify and stage APK');
   assert.match(verifyRun, /apksigner" verify --verbose --print-certs/);
-  assert.match(verifyRun, /certificate SHA-256 digest:/);
+  // apksigner 的输出可能走 stderr，且行首前缀不固定：必须合并两路、按子串取指纹，
+  // 否则已签名的 APK 会被解析成「0 个签名者」（v0.0.11 CI 实际踩到）。
+  assert.match(verifyRun, /--print-certs "\$apk" 2>&1 \|\| true/);
+  assert.ok(verifyRun.includes(`awk '/certificate SHA-256 digest:/ { print $NF }' | tr -d '\\r' | sort -u`));
+  assert.doesNotMatch(verifyRun, /\^Signer #\[0-9\]\+/);
+  assert.match(verifyRun, /apksigner output,max-annotations=1/);
   assert.match(verifyRun, /signer_count" -ne 1/);
   assert.match(verifyRun, /\[ "\$actual" != "\$expected" \]/);
   assert.match(verifyRun, /application-debuggable/);
@@ -428,7 +438,10 @@ test('iOS EAS internal-distribution artifacts fail closed and receive independen
   assert.match(verifyRun, /unzip -tq/);
   assert.match(verifyRun, /unsafe path in IPA/);
   assert.match(verifyRun, /codesign --verify --deep --strict/);
-  assert.match(verifyRun, /"Apple Distribution"\|"Apple Development"/);
+  // 2026-11-26 CI 实测：EAS 托管凭据的 authority 是旧命名 iPhone Distribution，
+  // 只接受「Apple Distribution」会拒绝真实签名，所以新旧四种命名都要放行。
+  assert.match(verifyRun, /"Apple Distribution"\|"iPhone Distribution"\) distribution_authority=true/);
+  assert.match(verifyRun, /"Apple Development"\|"iPhone Developer"\)/);
   assert.match(verifyRun, /security cms -D/);
   assert.match(verifyRun, /TeamIdentifier:0/);
   assert.match(verifyRun, /Entitlements:application-identifier/);
@@ -439,7 +452,7 @@ test('iOS EAS internal-distribution artifacts fail closed and receive independen
   assert.match(verifyRun, /signatureVerified: true/);
   assert.match(verifyRun, /provisioningVerified: true/);
   // manifest 必须如实描述分发方式，不写死 productionReady/storeProfile。
-  assert.match(verifyRun, /productionReady: storeProfile && authority === 'Apple Distribution'/);
+  assert.match(verifyRun, /productionReady: storeProfile && distributionAuthority/);
   assert.match(verifyRun, /notarized: false/);
   assert.match(verifyRun, /IOS_DISTRIBUTION\.txt/);
   const upload = ios.steps?.find((step) => step.uses?.startsWith('actions/upload-artifact@'));
@@ -512,7 +525,8 @@ test('draft release staging requires verified native assets, iOS checksums and t
   assert.match(validationRun, /does not state the unsigned release policy/);
   assert.match(validationRun, /unsigned release is missing its signing policy note/);
   assert.match(validationRun, /ios\.signatureVerified !== true/);
-  assert.match(validationRun, /'Apple Distribution', 'Apple Development'/);
+  assert.match(validationRun, /\.\.\.distributionAuthorities, 'Apple Development', 'iPhone Developer'/);
+  assert.match(validationRun, /'Apple Distribution', 'iPhone Distribution'/);
   assert.match(validationRun, /iOS signing manifest claims App Store readiness without a store profile and Distribution certificate/);
   assert.match(validationRun, /ios\.provisioningVerified !== true/);
   assert.match(validationRun, /requires both Android APK and iOS IPA artifacts/);
@@ -526,9 +540,10 @@ test('draft release staging requires verified native assets, iOS checksums and t
   assert.match(notesRun, /protected production upload key/);
   assert.match(notesRun, /debug\.keystore/);
   assert.match(notesRun, /independently verified on macOS/);
-  assert.match(notesRun, /EAS production\/store IPA/);
+  assert.match(notesRun, /EAS store-profile IPA signed with a/);
   assert.match(notesRun, /signing\.ios\.productionReady === true/);
-  assert.match(notesRun, /notarized and not App Store-ready/);
+  assert.match(notesRun, /\['Apple Distribution', 'iPhone Distribution'\]\.includes\(signing\.ios\.signing\)/);
+  assert.match(notesRun, /notarized and installs only on registered devices/);
   assert.match(notesRun, /IOS_DISTRIBUTION\.txt/);
   assert.doesNotMatch(notesRun, /signature was not independently verified|iOS was skipped/);
   const draft = workflowStep('release', 'Create draft release');

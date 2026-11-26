@@ -557,21 +557,27 @@ jobs:
         run: |
           set -uo pipefail
           log=apps/desktop/electron-builder.log
+          # 单条 annotation 会被 GitHub 截断在 4096 字节（保留头部），每个 job 又只保留
+          # 约 10 条 annotation。v0.0.11 mac 两次踩坑：逐行 ::error:: 被条数上限挤出；
+          # 整段贴最后 80 行时，"duplicate dependency references" 单行 INFO 约 3.9 KB
+          # 吃满预算，⨯ 错误照样不可见。所以：全量 cat 进日志 + 两条「尺寸合规」的
+          # annotation —— 24 行 × 160 列（≈3.9 KB，完整放下），外加所有 ⨯ 错误行。
+          compact() { cut -c1-160 | awk 'BEGIN{ORS=""} { gsub(/%/, "%25"); gsub(/\r/, "%0D"); print sep $0; sep="%0A" }'; }
           if [ -f "$log" ]; then
-            # 全量日志直接打进 job 输出，原始日志里始终能找到真实错误。
             cat "$log"
-            # GitHub 每个 job 只保留约 10 条 annotation，旧的逐行 ::error:: 会把真正的
-            # ⨯ 错误行挤出上限（v0.0.11 mac 就是这么丢的）。这里转义 %/\r/换行后，
-            # 用 max-annotations=1 的单条 annotation 承载最后 80 行。
-            msg=$(tail -n 80 "$log" | awk 'BEGIN{ORS=""} { gsub(/%/, "%25"); gsub(/\r/, "%0D"); print sep $0; sep="%0A" }')
-            echo "::error title=electron-builder log (last 80 lines),max-annotations=1::${msg}"
+            echo "::error title=electron-builder log (last 24 lines),max-annotations=1::$(tail -n 24 "$log" | compact)"
+            errors=$(grep -a '⨯' "$log" | tail -n 20 | compact)
+            if [ -n "$errors" ]; then
+              echo "::error title=electron-builder error lines,max-annotations=1::${errors}"
+            else
+              echo "::warning title=no ⨯ line in electron-builder.log::the process failed without printing an electron-builder error line"
+            fi
           else
             echo "::error::electron-builder.log was not created"
           fi
-          out="$RUNNER_TEMP/rpmbuild.out"
+          out="${RUNNER_TEMP:-}/rpmbuild.out"
           if [ -f "$out" ]; then
-            msg=$(tail -n 60 "$out" | awk 'BEGIN{ORS=""} { gsub(/%/, "%25"); gsub(/\r/, "%0D"); print sep $0; sep="%0A" }')
-            echo "::error title=rpmbuild log,max-annotations=1::${msg}"
+            echo "::error title=rpmbuild log,max-annotations=1::$(tail -n 24 "$out" | compact)"
           fi
 
       - name: Upload packaging log
@@ -731,11 +737,20 @@ jobs:
             *"application-debuggable"*) echo "::error::Android release APK is debuggable"; exit 1 ;;
           esac
           apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)
-          certs=$("$apksigner" verify --verbose --print-certs "$apk")
+          # 不同 build-tools 的 apksigner 会把证书信息写到 stderr，行首前缀也不保证顶格
+          # （v0.0.11 的 CI 就是这么把已签名的 APK 读成「0 个签名者」的）。两路输出合并，
+          # 按子串取指纹，并在失败时把 apksigner 原文压成一条 annotation 贴出来。
+          compact() { cut -c1-200 | awk 'BEGIN{ORS=""} { gsub(/%/, "%25"); gsub(/\r/, "%0D"); print sep $0; sep="%0A" }'; }
+          # 未签名时 apksigner 以非 0 退出并打印 DOES NOT VERIFY：先收下输出，交给下面的
+          # signer_count 分支报错，保证原文进 annotation 而不是被 set -e 直接吞掉。
+          certs=$("$apksigner" verify --verbose --print-certs "$apk" 2>&1 || true)
           printf '%s\n' "$certs"
-          fingerprints=$(printf '%s\n' "$certs" | awk '/^Signer #[0-9]+ certificate SHA-256 digest: / { print $NF }')
+          # 按子串取指纹并去重：同一签名者在 V2/V3/V4 各 scheme 下会重复打印指纹，
+          # 去重后仍要求「恰好一个签名者」。
+          fingerprints=$(printf '%s\n' "$certs" | awk '/certificate SHA-256 digest:/ { print $NF }' | tr -d '\r' | sort -u)
           signer_count=$(printf '%s\n' "$fingerprints" | awk 'NF { count++ } END { print count + 0 }')
           if [ "$signer_count" -ne 1 ]; then
+            echo "::error title=apksigner output,max-annotations=1::$(printf '%s\n' "$certs" | compact)"
             echo "::error::expected exactly one APK signer certificate, got $signer_count"
             exit 1
           fi
@@ -882,12 +897,13 @@ jobs:
           '
 
       - name: Trigger EAS iOS build (internal distribution)
-        # release 环境里没有 Apple Distribution 发布证书：EAS 在非交互模式下不会
-        # 使用未经校验的 Distribution Certificate，所以 --profile production 一定
-        # 拿不到凭据。这里用 preview（distribution internal，Apple Development +
-        # Ad Hoc 描述文件，EAS 托管凭据可直接签发）。将来接入 Distribution 证书与
-        # App Store Connect API key 后，把 profile 换回 production，并同步放开
-        # 下面 IPA 校验与 Stage 任务里对 App Store 描述文件的断言。
+        # EAS 在非交互模式下不会使用「未经校验」的 Distribution 证书，所以
+        # --profile production（distribution: store）在 CI 里拿不到凭据；preview
+        # （distribution: internal）可以直接签发。2026-11-26 实测：EAS 托管凭据
+        # 签出的 IPA authority 是 iPhone Distribution + Ad Hoc 描述文件，因此
+        # 下面的校验接受新旧四种证书命名（Apple/iPhone × Distribution/Developer）。
+        # 接入 App Store Connect API key 后，把 profile 换回 production，并同步放开
+        # IPA 校验与 Stage 任务里对 App Store 描述文件的断言。
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
@@ -963,12 +979,14 @@ jobs:
           fi
           codesign --verify --deep --strict --verbose=2 "$app"
           details=$(codesign -dv --verbose=4 "$app" 2>&1)
-          # 当前 EAS 托管的是 Apple Development 凭据（没有 Distribution 证书），
-          # internal 分发的 IPA 由 Development 证书 + Ad Hoc 描述文件签名。
-          # 断言「真实签名 + 团队一致」，不再伪装 App Store 分发。
+          # EAS 托管的 Distribution 证书有两种命名：2026-11-26 的实测签名是旧版
+          # 「iPhone Distribution」，新版叫「Apple Distribution」；Development 同样有
+          # 「iPhone Developer」旧名。四种都要接受，只拒绝「没有 Apple 证书签名」。
           authority=$(printf '%s\n' "$details" | awk -F= '/^Authority=/{ print substr($2, 1, index($2, ":") - 1); exit }')
+          distribution_authority=false
           case "$authority" in
-            "Apple Distribution"|"Apple Development") ;;
+            "Apple Distribution"|"iPhone Distribution") distribution_authority=true ;;
+            "Apple Development"|"iPhone Developer") ;;
             *) echo "::error::IPA app is not signed by an Apple certificate (authority: ${authority:-none})"; exit 1 ;;
           esac
           signed_identifier=$(printf '%s\n' "$details" | awk -F= '/^Identifier=/{ print $2; exit }')
@@ -1003,37 +1021,39 @@ jobs:
             exit 1
           fi
 
-          BUNDLE_ID="$bundle_id" AUTHORITY="$authority" TEAM="$signed_team" STORE_PROFILE="$store_profile" node <<'NODE'
+          BUNDLE_ID="$bundle_id" AUTHORITY="$authority" DISTRIBUTION_AUTHORITY="$distribution_authority" TEAM="$signed_team" STORE_PROFILE="$store_profile" node <<'NODE'
           const fs = require('fs');
           const storeProfile = process.env.STORE_PROFILE === 'true';
+          const distribution = process.env.DISTRIBUTION_AUTHORITY === 'true';
           fs.writeFileSync('../../dist-mobile/IOS_DISTRIBUTION.txt', [
             `iOS distribution policy for ${process.env.BUNDLE_ID}`,
             '================================================',
             `This IPA is signed with EAS-managed Apple credentials (authority: ${process.env.AUTHORITY},`,
             `team ${process.env.TEAM}) and verified with codesign --verify --deep --strict.`,
-            `Provisioning profile type: ${storeProfile ? 'App Store' : 'Ad Hoc (device-limited, ProvisionedDevices present)'}.`,
-            'It is NOT notarized and NOT App Store-ready: the release environment has no',
-            'Apple Distribution certificate, so EAS signs internal (Ad Hoc) builds with an',
-            'Apple Development certificate. Install it on registered devices or via an',
-            'MDM/test distribution service. Publishing to the App Store requires a',
-            'Distribution certificate plus an App Store Connect API key in EAS, after which',
-            'this note and signing-ios.json must be regenerated from the real profile.',
+            `Provisioning profile: ${storeProfile ? 'App Store (no ProvisionedDevices)' : 'Ad Hoc (device-limited, ProvisionedDevices present)'}.`,
+            `Signing certificate: ${distribution ? 'Distribution (Apple/iPhone Distribution)' : 'Development'}; built with the EAS "preview" profile and NOT notarized.`,
+            storeProfile
+              ? 'Submit to App Store Connect with "eas submit -p ios" instead of installing directly.'
+              : `Install on registered devices or via an MDM/test distribution service.${distribution ? ' The same Distribution certificate plus an App Store profile can sign a store build ("eas submit -p ios").' : ' A store release needs a Distribution certificate plus an App Store profile.'}`,
           ].join('\n') + '\n');
           NODE
 
-          TEAM_IDENTIFIER="$profile_team" BUNDLE_IDENTIFIER="$bundle_id" APP_VERSION="$version" BUILD_NUMBER="$actual_build" CONFIGURED_BUILD_NUMBER="$build_number" SIGNING_AUTHORITY="$authority" STORE_PROFILE="$store_profile" node <<'NODE'
+          TEAM_IDENTIFIER="$profile_team" BUNDLE_IDENTIFIER="$bundle_id" APP_VERSION="$version" BUILD_NUMBER="$actual_build" CONFIGURED_BUILD_NUMBER="$build_number" SIGNING_AUTHORITY="$authority" DISTRIBUTION_AUTHORITY="$distribution_authority" STORE_PROFILE="$store_profile" node <<'NODE'
           const fs = require('fs');
           const path = require('path');
           const crypto = require('crypto');
           const dir = '../../dist-mobile';
           const authority = process.env.SIGNING_AUTHORITY;
+          const distributionAuthority = process.env.DISTRIBUTION_AUTHORITY === 'true';
           const storeProfile = process.env.STORE_PROFILE === 'true';
           fs.writeFileSync(path.join(dir, 'signing-ios.json'), JSON.stringify({
             platform: 'ios',
             signed: true,
             signatureVerified: true,
             signing: authority,
-            productionReady: storeProfile && authority === 'Apple Distribution',
+            // 「可提交商店」= Distribution 证书 + 无设备白名单的 profile；与新旧
+            // 命名（Apple/iPhone Distribution）无关，公证仍为 false。
+            productionReady: storeProfile && distributionAuthority,
             distribution: storeProfile ? 'app-store' : 'internal-adhoc',
             provisioningVerified: true,
             storeProfile,
@@ -1157,12 +1177,14 @@ jobs:
           }
 
           const ios = readJson('signing-ios.json');
-          if (ios.signed !== true || ios.signatureVerified !== true || !['Apple Distribution', 'Apple Development'].includes(ios.signing)) {
+          const distributionAuthorities = ['Apple Distribution', 'iPhone Distribution'];
+          const appleAuthorities = [...distributionAuthorities, 'Apple Development', 'iPhone Developer'];
+          if (ios.signed !== true || ios.signatureVerified !== true || !appleAuthorities.includes(ios.signing)) {
             throw new Error('iOS release signature was not independently verified');
           }
-          // release 环境没有 Distribution 证书时走 EAS preview（Ad Hoc）内部分发：
-          // manifest 必须如实标出 distribution 与 productionReady，不得伪装 App Store 就绪。
-          if (ios.productionReady === true && (ios.storeProfile !== true || ios.signing !== 'Apple Distribution')) {
+          // manifest 必须如实标出 distribution 与 productionReady：只有 Distribution
+          // 证书 + 无设备白名单的 profile 才算「可提交商店」，且永不声称已公证。
+          if (ios.productionReady === true && (ios.storeProfile !== true || !distributionAuthorities.includes(ios.signing))) {
             throw new Error('iOS signing manifest claims App Store readiness without a store profile and Distribution certificate');
           }
           if (ios.provisioningVerified !== true || ios.notarized === true) {
@@ -1246,9 +1268,11 @@ jobs:
           const androidLine = signing.android.productionReady === true
             ? '- Android is an APK signed with the protected production upload key; apksigner verified its certificate SHA-256 against the release secret. It is for sideloading, not a Google Play App Bundle.'
             : '- Android is an APK signed with the repository-tracked standard Android debug key (`apps/mobile/android/app/debug.keystore`), the same key every local checkout reuses; apksigner verified its certificate SHA-256. It is for sideloading and tester updates only, not a Google Play upload, and a future Play upload key cannot upgrade these installs in place.';
+          const iosDistributionAuthority = ['Apple Distribution', 'iPhone Distribution'].includes(signing.ios.signing);
+          const iosVerifiedLine = 'The downloaded app was independently verified on macOS with `codesign`, embedded provisioning identity and `Info.plist` version checks.';
           const iosLine = signing.ios.productionReady === true
-            ? '- iOS is an EAS production/store IPA. The downloaded app was independently verified on macOS with `codesign`, embedded provisioning identity and `Info.plist` version checks; it has not been submitted to App Store Connect.'
-            : `- iOS is an EAS internal-distribution IPA signed with an ${signing.ios.signing} certificate${signing.ios.distribution === 'internal-adhoc' ? ' and an Ad Hoc (device-limited) provisioning profile' : ''}. The downloaded app was independently verified on macOS with \`codesign\`, embedded provisioning identity and \`Info.plist\` version checks. It is not notarized and not App Store-ready; install it on registered devices or via MDM/test distribution. See \`IOS_DISTRIBUTION.txt\`.`;
+            ? `- iOS is an EAS store-profile IPA signed with a ${signing.ios.signing} certificate. ${iosVerifiedLine} It is not notarized and has not been submitted to App Store Connect; submission is a separate \`eas submit -p ios\` step.`
+            : `- iOS is an EAS internal-distribution IPA (Ad Hoc, device-limited) signed with a ${signing.ios.signing} certificate. ${iosVerifiedLine} It is not notarized and installs only on registered devices${iosDistributionAuthority ? '; the same certificate can sign a store build, but that needs a separate App Store-profile build (`--profile production`, which requires an App Store Connect API key)' : '; a store release needs a Distribution certificate and an App Store profile'}. See \`IOS_DISTRIBUTION.txt\`.`;
           const notes = [
             `# AiDB Studio ${tag}`,
             '',
