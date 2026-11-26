@@ -354,6 +354,37 @@ test('desktop verifies signatures when present and states the unsigned policy wh
   assert.match(String(logUpload?.with?.path), /electron-builder\.log/);
   assert.match(workflowRun('desktop', 'Package installers'), /if ! npx electron-builder/);
 
+  // mac 在 2026-11-26 还挂在第二件事：缺证书时 secrets 展开成空串，而 app-builder-lib 26
+  // 只有 Windows 分支判了空串（windowsSignToolManager.js），mac 分支只判 null
+  // （macPackager.js），于是空 CSC_LINK 被当作已配置的相对路径解析成 projectDir 本身，
+  // 抛 `apps/desktop not a file`。所以签名变量只能由 declare 步骤按取值写进 GITHUB_ENV，
+  // 打包步骤的 step-level env 会覆盖 GITHUB_ENV，一律不许再出现 secrets.*。
+  const packaging = steps.find((step) => (step.name ?? '') === 'Package installers');
+  assert.deepEqual(Object.keys(packaging?.env ?? {}), ['CSC_IDENTITY_AUTO_DISCOVERY']);
+  assert.doesNotMatch(JSON.stringify(packaging?.env ?? {}), /secrets\./);
+  const policy = workflowRun('desktop', 'Declare desktop signing policy');
+  assert.match(policy, /export_if_set\(\) \{/);
+  assert.match(policy, /\[ -n "\$value" \]/);
+  assert.match(policy, /echo "\$name<<__AIDB_CSC_EOF"/);
+  for (const name of [
+    'WIN_CSC_LINK',
+    'WIN_CSC_KEY_PASSWORD',
+    'CSC_LINK',
+    'CSC_KEY_PASSWORD',
+    'CSC_NAME',
+    'APPLE_ID',
+    'APPLE_APP_SPECIFIC_PASSWORD',
+    'APPLE_TEAM_ID',
+  ]) {
+    assert.ok(policy.includes(`export_if_set ${name} "$${name}"`), `${name} must be staged only when set`);
+  }
+  // macOS runner 的 /bin/bash 停在 3.2，不支持 bash 的间接展开语法（注释里会提到它，所以只查代码行）。
+  const policyCode = policy
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('#'))
+    .join('\n');
+  assert.doesNotMatch(policyCode, /\$\{!/);
+
   // mac 出包在 2026-11-26 挂在依赖提升：根 overrides 把 @xmldom/xmldom 强制到 0.9.12，
   // 而 plist 走的是 parseFromString(xml) 单参调用，0.9.x 判定 mimeType 非法直接抛 TypeError。
   // 只有 darwin 打包会解析 plist，Windows/Linux 全绿也拦不住，所以预检必须在三个平台都跑。

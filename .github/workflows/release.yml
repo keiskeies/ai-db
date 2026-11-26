@@ -212,7 +212,13 @@ jobs:
         shell: bash
         env:
           WIN_CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK_BASE64 }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
           CSC_LINK: ${{ secrets.APPLE_CSC_LINK_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
+          CSC_NAME: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           # 桌面包当前一律未签名：仓库没有 Authenticode / Developer ID 证书。
@@ -221,12 +227,35 @@ jobs:
           #   Windows — WINDOWS_CSC_LINK_BASE64 + WINDOWS_CSC_KEY_PASSWORD
           #   macOS   — APPLE_CSC_LINK_BASE64 + APPLE_CSC_KEY_PASSWORD + APPLE_SIGNING_IDENTITY
           #             以及 APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID（公证）
-          # 未注入时对应的 secret 是空串，electron-builder 会跳过签名。
+          #
+          # 缺证书时不能把这些变量以空串导出给后续步骤：app-builder-lib 26 的
+          # Windows 分支判了 `cscLink == null || cscLink === ''`（windowsSignToolManager.js），
+          # 而 mac 分支只判 `cscLink == null`（macPackager.js），于是空串会被当成
+          # 「已配置的相对路径」，解析成 projectDir 自身后抛 `apps/desktop not a file`
+          # ——v0.0.11 的 mac 就是这么挂的（同期 Windows/Linux 全绿）。
+          # 只有真正取到值的变量才写进 GITHUB_ENV；多行安全写法用 heredoc 分隔符。
+          # 不用 `${!name}` 间接展开：macOS runner 的 /bin/bash 仍是 3.2。
+          export_if_set() {
+            name="$1"
+            value="$2"
+            if [ -n "$value" ]; then
+              {
+                echo "$name<<__AIDB_CSC_EOF"
+                printf '%s\n' "$value"
+                echo '__AIDB_CSC_EOF'
+              } >> "$GITHUB_ENV"
+              echo "$name: staged for code signing"
+            else
+              echo "$name: not configured; left unset so electron-builder skips signing"
+            fi
+          }
           case "$RUNNER_OS" in
             Windows)
               if [ -n "${WIN_CSC_LINK:-}" ]; then
                 echo "Windows Authenticode certificate staged; installers will be signed"
                 echo 'DESKTOP_SIGNING=signed' >> "$GITHUB_ENV"
+                export_if_set WIN_CSC_LINK "$WIN_CSC_LINK"
+                export_if_set WIN_CSC_KEY_PASSWORD "$WIN_CSC_KEY_PASSWORD"
               else
                 echo "Windows policy: unsigned installers; publish checksums and GitHub provenance."
                 echo 'DESKTOP_SIGNING=unsigned' >> "$GITHUB_ENV"
@@ -236,6 +265,12 @@ jobs:
               if [ -n "${CSC_LINK:-}" ]; then
                 echo "macOS Developer ID certificate staged; apps will be signed and notarized"
                 echo 'DESKTOP_SIGNING=signed' >> "$GITHUB_ENV"
+                export_if_set CSC_LINK "$CSC_LINK"
+                export_if_set CSC_KEY_PASSWORD "$CSC_KEY_PASSWORD"
+                export_if_set CSC_NAME "$CSC_NAME"
+                export_if_set APPLE_ID "$APPLE_ID"
+                export_if_set APPLE_APP_SPECIFIC_PASSWORD "$APPLE_APP_SPECIFIC_PASSWORD"
+                export_if_set APPLE_TEAM_ID "$APPLE_TEAM_ID"
               else
                 echo "macOS policy: unsigned and notarization-free; publish checksums and GitHub provenance."
                 echo 'DESKTOP_SIGNING=unsigned' >> "$GITHUB_ENV"
@@ -285,14 +320,9 @@ jobs:
         working-directory: apps/desktop
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-          WIN_CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK_BASE64 }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
-          CSC_LINK: ${{ secrets.APPLE_CSC_LINK_BASE64 }}
-          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
-          CSC_NAME: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # 签名相关变量一律由「Declare desktop signing policy」按实际取值写入 GITHUB_ENV。
+          # 这里不能再写 `${{ secrets.* }}`：step-level env 会覆盖 GITHUB_ENV，缺证书时
+          # 注入的空串会让 mac 把 CSC_LINK 当成相对路径去解析（见上方注释）。
         run: |
           set -o pipefail
           : > electron-builder.log
