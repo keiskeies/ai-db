@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { resolve } from 'node:path';
 import type { ColumnInfo, ConnectionConfig, DatabaseSchema, TableInfo } from '@aidb/core';
 import {
   briefDrift,
@@ -256,8 +257,10 @@ test('brief fingerprint changes with columns and indexes', () => {
 });
 
 test('custom folder wins over the stored path; stored path is used otherwise', async () => {
-  const custom = await composeDatabaseBrief(input({ requestedPath: 'D:\\notes\\AI_DB.md' }));
-  assert.equal(custom.path, 'D:\\notes\\AI_DB.md');
+  // 绝对路径按当前平台构造：Linux 上 resolve('D:\\...') 会被当成相对路径。
+  const requested = process.platform === 'win32' ? 'D:\\notes\\AI_DB.md' : '/notes/AI_DB.md';
+  const custom = await composeDatabaseBrief(input({ requestedPath: requested }));
+  assert.equal(custom.path, resolve(requested));
   const stored = await composeDatabaseBrief(input({ requestedPath: undefined, storedPath: 'D:\\saved\\shop.md' }));
   assert.equal(stored.path, 'D:\\saved\\shop.md');
 });
