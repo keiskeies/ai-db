@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Security fixes target the latest published `0.0.x` release line. At this policy baseline, the root application and MCP package are `0.0.10`. Before 1.0 there is no LTS or guaranteed backport policy; upgrade to the latest release and report whether an older version is affected.
+Security fixes target the latest published `0.0.x` release line. At this policy baseline, the root application and MCP package are `0.0.11`. Before 1.0 there is no LTS or guaranteed backport policy; upgrade to the latest release and report whether an older version is affected.
 
 ## Report a vulnerability privately
 

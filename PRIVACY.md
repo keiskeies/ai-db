@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Policy baseline:** AiDB Studio `0.0.10`. This policy describes the current repository’s data paths; it does not claim certifications, an independent audit, or a guaranteed service level.
+**Policy baseline:** AiDB Studio `0.0.11`. This policy describes the current repository’s data paths; it does not claim certifications, an independent audit, or a guaranteed service level.
 
 ## Local-first boundary
 

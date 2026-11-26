@@ -2,7 +2,7 @@
 
 ## Versions and runtime
 
-- **Supported release line:** the latest published `0.0.x` release only. The current root application and MCP package baseline is `0.0.10`. Pre-1.0 releases do not have LTS or guaranteed backports.
+- **Supported release line:** the latest published `0.0.x` release only. The current root application and MCP package baseline is `0.0.11`. Pre-1.0 releases do not have LTS or guaranteed backports.
 - **Node.js:** `>=22.13` for the application, standalone Bridge, and MCP package. The minimum is tied to the stable `node:sqlite` API used by the gateway. CI and release builds use Node.js 24; other Node lines are not implied to be tested.
 - **Desktop:** released Windows, macOS, and Linux installers use the bundled application runtime. A separately deployed Bridge requires the Node.js minimum above. Engine-specific prerequisites are documented in [docs/09-multi-engine.md](./docs/09-multi-engine.md).
 - **Mobile:** Android and iOS support follows the current manifests and release workflow under `apps/mobile`. Mobile/Expo versions are intentionally maintained there rather than duplicated in this policy.

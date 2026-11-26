@@ -21,7 +21,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SecretBox } from './crypto';
 
-export const VERSION = '0.0.10';
+export const VERSION = '0.0.11';
 const MIN_MASTER_SECRET_LENGTH = 32;
 const MAX_SECRET_FILE_BYTES = 64 * 1024;
 

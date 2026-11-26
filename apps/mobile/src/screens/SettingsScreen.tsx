@@ -79,7 +79,7 @@ export function SettingsScreen({
               <View style={[styles.statusDot, { backgroundColor: connected ? colors.success : colors.warning }]} />
               <Text style={styles.listMeta}>{connected ? 'WebSocket 已连接' : '正在重连'}</Text>
             </View>
-            <Text style={styles.listMeta}>v{boot?.version ?? '0.0.10'}</Text>
+            <Text style={styles.listMeta}>v{boot?.version ?? '0.0.11'}</Text>
           </View>
         </View>
 
@@ -230,7 +230,7 @@ export function SettingsScreen({
           <Text style={[styles.secondaryButtonText, { color: colors.danger }]}>解除配对</Text>
         </Pressable>
 
-        <Text style={[styles.hint, { textAlign: 'center', marginTop: 6 }]}>AiDB Studio v{boot?.version ?? '0.0.10'} · Android / iOS / Web</Text>
+        <Text style={[styles.hint, { textAlign: 'center', marginTop: 6 }]}>AiDB Studio v{boot?.version ?? '0.0.11'} · Android / iOS / Web</Text>
       </ScrollView>
     </View>
   );

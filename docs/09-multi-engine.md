@@ -1,6 +1,6 @@
 # AiDB Studio — 多引擎架构与接入矩阵
 
-> 版本基线：0.0.10 · Node.js ≥ 22.13 · 关联：[产品总览](./00-product-overview.md) · [功能规格](./02-feature-spec.md) · [Agent](./04-ai-agent-design.md) · [支持策略](../SUPPORT.md)
+> 版本基线：0.0.11 · Node.js ≥ 22.13 · 关联：[产品总览](./00-product-overview.md) · [功能规格](./02-feature-spec.md) · [Agent](./04-ai-agent-design.md) · [支持策略](../SUPPORT.md)
 
 ## 1. 目标
 

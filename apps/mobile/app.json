@@ -2,7 +2,7 @@
   "expo": {
     "name": "AiDB Studio",
     "slug": "aidb-studio",
-    "version": "0.0.10",
+    "version": "0.0.11",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "aidb",
@@ -19,7 +19,7 @@
     ],
     "android": {
       "package": "top.keiskei.aidb",
-      "versionCode": 10,
+      "versionCode": 11,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0B0E0D"
