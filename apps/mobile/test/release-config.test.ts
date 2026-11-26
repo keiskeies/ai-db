@@ -353,6 +353,16 @@ test('desktop verifies signatures when present and states the unsigned policy wh
   assert.equal(logUpload?.if, 'failure()');
   assert.match(String(logUpload?.with?.path), /electron-builder\.log/);
   assert.match(workflowRun('desktop', 'Package installers'), /if ! npx electron-builder/);
+
+  // mac 出包在 2026-11-26 挂在依赖提升：根 overrides 把 @xmldom/xmldom 强制到 0.9.12，
+  // 而 plist 走的是 parseFromString(xml) 单参调用，0.9.x 判定 mimeType 非法直接抛 TypeError。
+  // 只有 darwin 打包会解析 plist，Windows/Linux 全绿也拦不住，所以预检必须在三个平台都跑。
+  const toolchain = workflowRun('desktop', 'Verify locked packaging toolchain');
+  assert.ok(toolchain.includes("const requesters = ['plist', '@expo/plist'];"));
+  assert.match(toolchain, /semver\.satisfies\(resolved, wanted\)/);
+  assert.match(toolchain, /the override must stay inside every requester range/);
+  assert.match(toolchain, /require\('.\/node_modules\/app-builder-lib\/out\/util\/plist\.js'\)/);
+  assert.match(toolchain, /entitlements\.mac\.plist/);
 });
 
 test('Android signing stages production credentials or falls back to the tracked debug key', () => {

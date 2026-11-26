@@ -127,6 +127,49 @@ jobs:
             if (installed !== locked) throw new Error(`${name} installed ${installed} != locked ${locked}`);
             console.log(`${name} ${locked} verified from the npm lockfile`);
           }
+
+          // Only macOS parses a plist during packaging, so a hoist that breaks
+          // plist cannot surface on the Windows or Linux jobs. @xmldom/xmldom 0.9
+          // throws `the provided mimeType "undefined" is not valid` for the
+          // single-argument parseFromString(xml) call plist still makes, which
+          // failed the darwin build on 2026-11-26. Assert the resolved version
+          // satisfies every requester, then call the very helper that crashed.
+          const semver = require('semver');
+          const requesters = ['plist', '@expo/plist'];
+          const xmldomKey = 'node_modules/@xmldom/xmldom';
+          const resolved = lock.packages[xmldomKey]?.version;
+          if (!resolved) throw new Error(`${xmldomKey} is missing from the lockfile`);
+          for (const name of requesters) {
+            const wanted = lock.packages[`node_modules/${name}`]?.dependencies?.['@xmldom/xmldom'];
+            if (!wanted) throw new Error(`${name} no longer declares @xmldom/xmldom; update this check`);
+            if (!semver.satisfies(resolved, wanted)) {
+              throw new Error(
+                `@xmldom/xmldom resolves ${resolved} but ${name} requires ${wanted}; ` +
+                  'the override must stay inside every requester range',
+              );
+            }
+          }
+          const installedXmlDom = require('./node_modules/@xmldom/xmldom/package.json').version;
+          if (installedXmlDom !== resolved) {
+            throw new Error(`@xmldom/xmldom installed ${installedXmlDom} != locked ${resolved}`);
+          }
+          console.log(`@xmldom/xmldom ${resolved} satisfies ${requesters.join(', ')}`);
+
+          const { parsePlistFile } = require('./node_modules/app-builder-lib/out/util/plist.js');
+          (async () => {
+            for (const file of [
+              'apps/desktop/build/entitlements.mac.plist',
+              'apps/desktop/build/entitlements.mac.inherit.plist',
+            ]) {
+              const parsed = await parsePlistFile(file);
+              const count = Object.keys(parsed ?? {}).length;
+              if (count === 0) throw new Error(`${file} parsed to an empty plist`);
+              console.log(`${file} parsed with ${count} top-level keys`);
+            }
+          })().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
           NODE
 
       - name: Install cross-arch DuckDB optional dependencies
