@@ -310,7 +310,7 @@ test('secret-consuming native jobs use protected environments without write perm
   assert.deepEqual(ciWorkflow.jobs.quality?.permissions, { contents: 'read' });
 });
 
-test('desktop keeps native signature and Linux policy checks but does not attest in the build job', () => {
+test('desktop verifies signatures when present and states the unsigned policy when not', () => {
   const steps = releaseJobs.desktop?.steps ?? [];
   assert.ok(!steps.some((step) => step.uses?.startsWith('actions/attest-build-provenance@')));
   assert.ok(!steps.some((step) => /attestation subjects/i.test(step.name ?? '')));
@@ -323,20 +323,29 @@ test('desktop keeps native signature and Linux policy checks but does not attest
   assert.match(desktopText, /Linux artifacts are intentionally not platform-code-signed/);
   assert.match(desktopText, /signing-\$\{platform\}\.json/);
   assert.match(desktopText, /SHA256SUMS-\$\{platform\}/);
+  // 未签名回退：状态由 declare 步骤写进 env，校验与 manifest 都按它走，不许伪装签名。
+  assert.match(desktopText, /echo 'DESKTOP_SIGNING=unsigned' >> "\$GITHUB_ENV"/);
+  assert.match(desktopText, /echo 'DESKTOP_SIGNING=signed' >> "\$GITHUB_ENV"/);
+  assert.match(desktopText, /\$DESKTOP_SIGNING" = "signed"/);
+  assert.match(desktopText, /Status -ne "NotSigned"/);
+  assert.match(desktopText, /no signing certificate is configured in the release environment/);
+  assert.match(desktopText, /`\$\{platform\.toUpperCase\(\)\}_SIGNING\.txt`/);
   const upload = steps.find((step) => step.uses?.startsWith('actions/upload-artifact@'));
   assert.equal(upload?.with?.['if-no-files-found'], 'error');
   assert.match(String(upload?.with?.path), /signing-\*\.json/);
   assert.match(String(upload?.with?.path), /SHA256SUMS-\*/);
+  assert.match(String(upload?.with?.path), /\*_SIGNING\.txt/);
 });
 
-test('Android release credentials fail closed and the staged APK fingerprint is verified', () => {
-  const guard = workflowStep('android', 'Require and stage Android signing credentials');
+test('Android signing stages production credentials or falls back to the tracked debug key', () => {
+  const stepName = 'Stage Android signing credentials';
+  const guard = workflowStep('android', stepName);
   const secrets = ['ANDROID_KEYSTORE_BASE64', 'ANDROID_KEYSTORE_PASSWORD', 'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD', 'ANDROID_CERT_SHA256'];
   for (const name of secrets) {
     assert.equal(guard.env?.[name], '${{ secrets.' + name + ' }}');
-    assert.ok(workflowRun('android', 'Require and stage Android signing credentials').includes(`: "\${${name}:?${name} secret is required}"`));
   }
-  const guardRun = guard.run ?? '';
+  const guardRun = workflowRun('android', stepName);
+  assert.match(guardRun, /got \$provided of 5/);
   assert.match(guardRun, /base64 --decode > "\$keystore"/);
   assert.match(guardRun, /chmod 600 "\$keystore"/);
   assert.match(guardRun, /MYAPP_UPLOAD_STORE_FILE=\$keystore/);
@@ -347,6 +356,12 @@ test('Android release credentials fail closed and the staged APK fingerprint is 
   assert.match(guardRun, />> "\$GITHUB_ENV"/);
   assert.match(guardRun, /tr -d '\[:space:\]:'/);
   assert.match(guardRun, /ANDROID_KEY_ALIAS" = "androiddebugkey"/);
+  assert.match(guardRun, /ANDROID_SIGNING_MODE=production/);
+  // debug 回退只允许仓库里那份标准密钥，且必须显式声明模式。
+  assert.match(guardRun, /ANDROID_SIGNING_MODE=debug/);
+  assert.match(guardRun, /apps\/mobile\/android\/app\/debug\.keystore/);
+  assert.match(guardRun, /MYAPP_UPLOAD_KEY_ALIAS=androiddebugkey/);
+  assert.match(guardRun, /AIDB_ALLOW_DEBUG_RELEASE_SIGNING=true/);
   assert.doesNotMatch(guardRun, /set\s+-x/);
   assert.doesNotMatch(guardRun, /\becho\b[^\n]*(?:PASSWORD|KEYSTORE_BASE64)/i);
 
@@ -357,10 +372,11 @@ test('Android release credentials fail closed and the staged APK fingerprint is 
   assert.match(verifyRun, /signer_count" -ne 1/);
   assert.match(verifyRun, /\[ "\$actual" != "\$expected" \]/);
   assert.match(verifyRun, /application-debuggable/);
+  assert.match(verifyRun, /production signing mode produced an APK signed with the debug key/);
+  assert.match(verifyRun, /debug signing mode produced an APK signed by another certificate/);
   assert.match(verifyRun, /certificateSha256/);
   assert.match(verifyRun, /signatureVerified: true/);
-  assert.match(verifyRun, /productionReady: true/);
-  assert.doesNotMatch(verifyRun, /signing: 'debug'|productionReady: false/);
+  assert.match(verifyRun, /productionReady: production/);
   const upload = releaseJobs.android?.steps?.find((step) => step.uses?.startsWith('actions/upload-artifact@'));
   assert.equal(upload?.with?.name, 'aidb-android');
   assert.equal(upload?.if, undefined);
@@ -474,9 +490,11 @@ test('draft release staging requires verified native assets, iOS checksums and t
   assert.deepEqual(new Set(needsOf(release)), new Set(['quality', 'desktop', 'android', 'ios', 'attest']));
   const validationRun = workflowRun('release', 'Verify SBOM, signing manifests and checksums');
   assert.match(validationRun, /android\.signatureVerified !== true/);
-  assert.match(validationRun, /android\.productionReady !== true/);
+  assert.match(validationRun, /Android signing manifest claims production readiness for a debug-signed APK/);
   assert.match(validationRun, /certificateSha256/);
   assert.match(validationRun, /\^\[0-9A-F\]\{64\}\$/);
+  assert.match(validationRun, /does not state the unsigned release policy/);
+  assert.match(validationRun, /unsigned release is missing its signing policy note/);
   assert.match(validationRun, /ios\.signatureVerified !== true/);
   assert.match(validationRun, /ios\.signing !== 'Apple Distribution'/);
   assert.match(validationRun, /ios\.provisioningVerified !== true/);
@@ -484,11 +502,15 @@ test('draft release staging requires verified native assets, iOS checksums and t
   assert.match(validationRun, /for platform in windows macos linux android ios;/);
   assert.doesNotMatch(validationRun, /if \[ -f dist-release\/SHA256SUMS-ios/);
 
+  // 签名说明按 manifest 生成，不允许在工作流里写死「已签名」这种话。
   const notesRun = workflowRun('release', 'Generate release notes');
+  assert.match(notesRun, /signing\.windows\.signed && signing\.macos\.signed/);
+  assert.match(notesRun, /signing\.android\.productionReady === true/);
   assert.match(notesRun, /protected production upload key/);
+  assert.match(notesRun, /debug\.keystore/);
   assert.match(notesRun, /independently verified on macOS/);
   assert.match(notesRun, /EAS production\/store IPA/);
-  assert.doesNotMatch(notesRun, /debug-signed|signature was not independently verified|iOS was skipped/);
+  assert.doesNotMatch(notesRun, /signature was not independently verified|iOS was skipped/);
   const draft = workflowStep('release', 'Create draft release');
   assert.equal(draft.with?.draft, true);
   assert.equal(draft.with?.target_commitish, '${{ needs.quality.outputs.sha }}');

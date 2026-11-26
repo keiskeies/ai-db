@@ -50,9 +50,10 @@ npmRebuild: false
 # 跨架构构建时另一架构的 duckdb.node 会各多出约 60 MB）。
 afterPack: build/afterPack.cjs
 win:
-  # 发布构建强制 Authenticode 签名；CI 只从 secrets 注入 WIN_CSC_LINK /
-  # WIN_CSC_KEY_PASSWORD（base64 PFX + 密码），仓库不保存证书或私钥。
-  forceCodeSigning: true
+  # 当前 release 环境没有 Authenticode 证书，桌面包一律未签名发布（与 Linux 同策）。
+  # CI 注入 WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD 时 electron-builder 会自动签名；
+  # 购入证书后再把 forceCodeSigning 打开，让缺签名变成构建失败而不是静默出包。
+  forceCodeSigning: false
   signtoolOptions:
     signingHashAlgorithms:
       - sha256
@@ -67,12 +68,12 @@ win:
 mac:
   # 未指定 arch 时 electron-builder 回落到宿主架构（process.arch），只会出一个包。
   # 同时出 Apple Silicon 与 Intel 由 CI 传入 `--mac --x64 --arm64`。
-  # 发布构建强制 Developer ID Application 签名与 notarization；CI 从 secrets
-  # 注入 CSC_LINK / CSC_KEY_PASSWORD / CSC_NAME，以及 APPLE_ID /
-  # APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID。无密钥时构建必须失败。
-  forceCodeSigning: true
+  # 当前没有 Apple Developer 证书：桌面包以未签名、未公证发布，用户需按 README
+  # 的 Gatekeeper 说明放行。CI 注入 CSC_LINK / CSC_NAME 与 APPLE_ID 系列变量后会
+  # 自动签名 + 公证；购入证书后再把 forceCodeSigning 打开，让缺签名变成构建失败。
+  forceCodeSigning: false
   hardenedRuntime: true
-  notarize: true
+  notarize: false
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.inherit.plist

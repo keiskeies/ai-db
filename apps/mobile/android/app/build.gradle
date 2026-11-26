@@ -80,6 +80,9 @@ def releaseStorePassword = releaseCredential('MYAPP_UPLOAD_STORE_PASSWORD')
 def releaseKeyAlias = releaseCredential('MYAPP_UPLOAD_KEY_ALIAS')
 def releaseKeyPassword = releaseCredential('MYAPP_UPLOAD_KEY_PASSWORD')
 def releaseCertSha256 = releaseCredential('MYAPP_UPLOAD_CERT_SHA256')
+// CI 没有 upload keystore 时显式放行仓库内的标准 debug 密钥（见 release.yml 的
+// Stage Android signing credentials）。本地产物不带这个开关，仍然一律拒绝 debug 签名。
+def allowDebugReleaseSigning = (releaseCredential('AIDB_ALLOW_DEBUG_RELEASE_SIGNING') ?: 'false').toString().toBoolean()
 def localReleaseCredentials = releaseStoreFileValue != null || releaseStorePassword != null || releaseKeyAlias != null || releaseKeyPassword != null
 def releaseStoreFile = releaseStoreFileValue == null
     ? null
@@ -181,17 +184,23 @@ tasks.register("validateReleaseSigning") {
                 "Check MYAPP_UPLOAD_STORE_FILE; the path and secret values are not logged."
             )
         }
-        if (signing.keyAlias == "androiddebugkey") {
+        def trackingDebugKeystore = allowDebugReleaseSigning
+            && signing.storeFile.canonicalFile == file("debug.keystore").canonicalFile
+            && signing.keyAlias == "androiddebugkey"
+        if (!trackingDebugKeystore && signing.keyAlias == "androiddebugkey") {
             throw new GradleException(
                 "Android release signing refuses the debug key alias. " +
                 "Configure a production upload key through EAS or the MYAPP_UPLOAD_* properties."
             )
         }
-        if (signing.storeFile.canonicalFile == file("debug.keystore").canonicalFile) {
+        if (!trackingDebugKeystore && signing.storeFile.canonicalFile == file("debug.keystore").canonicalFile) {
             throw new GradleException(
                 "Android release signing refuses debug.keystore. " +
                 "Configure a production upload key through EAS or the MYAPP_UPLOAD_* properties."
             )
+        }
+        if (trackingDebugKeystore) {
+            logger.warn("Android release APK is signed with the tracked debug key: sideload only, not a Play upload key.")
         }
         if (releaseCertSha256) {
             def expected = releaseCertSha256.replace(":", "").toUpperCase()

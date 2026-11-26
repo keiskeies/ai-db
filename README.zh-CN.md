@@ -612,13 +612,13 @@ release 页按「系统 + 架构」出包，六个桌面组合：
 - Windows on ARM 也能直接跑 x64 安装包（系统模拟），而那份保留 Oracle 驱动。
 - Linux 的文件名按发行版惯例带架构后缀（x64 是 `amd64` / `x86_64`，arm64 是 `aarch64`）。deb / rpm 走发行版包管理器；AppImage 免安装但需要 FUSE 2，没有就 `--appimage-extract-and-run`。两者都需要图形会话，WSL2 需要 WSLg。
 - 每个安装包只带自身架构的原生绑定（DuckDB、node-oracledb），CI 在发布前逐个断言；两个例外见上文引擎说明。
-- 发布工作流要求并校验 Windows Authenticode，以及 macOS Developer ID 签名、hardened runtime、公证和 stapling。Linux 包不做平台代码签名；release 提供校验和与构建来源证明，发行版仓库维护者需为 deb/rpm 重新签名。
-- Android 以通用 `AiDB-Studio-<版本>-android.apk` 随 release 发布：CI 用 `apps/mobile/android` 里的原生工程跑 Gradle 构建。受保护的 `release` 环境必须提供 `ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 和 `ANDROID_CERT_SHA256`；CI 拒绝 debug 密钥别名，要求 APK 不可调试，并校验唯一签名证书指纹。
+- 桌面安装包目前不代码签名：release 环境里没有 Authenticode 与 Developer ID 证书，工作流会如实标注，不会伪装签名成功。`WINDOWS_SIGNING.txt` / `MACOS_SIGNING.txt` 写明 SmartScreen（「更多信息」→「仍要运行」）与 Gatekeeper（右键 → 打开，或 `xattr -dr com.apple.quarantine`）的放行步骤，`signing-<平台>.json` 记录策略，每次发布都附 `SHA256SUMS-<平台>` 与构建来源证明。Linux 包一律不做平台代码签名，发行版仓库维护者需为 deb/rpm 重新签名。注入 `WINDOWS_CSC_LINK_BASE64` / `APPLE_CSC_LINK_BASE64`（以及配套的密码、Apple ID 与公证变量）后 electron-builder 会自动恢复签名，那时要同步把 `forceCodeSigning` 打开。
+- Android 以通用 `AiDB-Studio-<版本>-android.apk` 随 release 发布：CI 用 `apps/mobile/android` 里的原生工程跑 Gradle 构建。五个 `ANDROID_*` secret 要么全给、要么全不给：全部缺失时 CI 用仓库里入库的标准 debug 密钥（`apps/mobile/android/app/debug.keystore`）签名，只适合侧载与测试机升级，Google Play 不收，将来换上正式上传密钥后老包必须卸载重装。配齐 secret 时 CI 拒绝 debug 别名，要求 APK 不可调试，并校验唯一签名证书指纹。
 - iOS 通过 EAS `production` profile 构建；CI 校验 bundle/版本、Developer ID 签名、描述文件、hardened runtime 与 entitlements 后才附上 IPA。缺少 `EXPO_TOKEN` 或签名无效会直接阻断发布，不再静默跳过。
 
 ### 移动端构建
 
-- **Android**：CI 用已入库的原生工程执行 `./gradlew assembleRelease`，Gradle 作业本身不需要 Expo 账号。APK 是通用包（四个 ABI），使用受保护的生产上传密钥；上传后由 Google Play 按已配置的应用签名密钥重新签名。版本号取自 `apps/mobile/app.json`：`versionName` 就是它的 `version`。本地生成同样配置的 Play bundle 可运行 `npm --workspace apps/mobile run build:android:release`（需要 Android SDK、JDK 17 与签名属性）。
+- **Android**：CI 用已入库的原生工程执行 `./gradlew assembleRelease`，Gradle 作业本身不需要 Expo 账号。APK 是通用包（四个 ABI）。release 签名取自五个 `ANDROID_*` secret；它们缺失期间，release 用入库的标准 debug 密钥签名，只能侧载。Gradle 的 `validateReleaseSigning` 对本地构建仍然失败关闭：没有凭据就不允许产出 release 产物。上传后由 Google Play 按已配置的应用签名密钥重新签名。版本号取自 `apps/mobile/app.json`：`versionName` 就是它的 `version`。本地生成同样配置的 Play bundle 可运行 `npm --workspace apps/mobile run build:android:release`（需要 Android SDK、JDK 17 与签名属性）。
 - **iOS**：使用 EAS 远程凭据和 `production` profile（`distribution: store`、production 更新通道、Release 配置）。一次性准备包括安装 `eas-cli`、登录、确认 EAS 项目与 Apple team，并由 EAS 创建分发证书和描述文件。将 access token 配成受保护的 `EXPO_TOKEN` secret；发布 tag 时 CI 执行 `eas build -p ios --profile production`，独立检查 IPA 后发布。提交商店是单独的 `eas submit -p ios --profile production` 步骤。
 - 本地运行：`npm --workspace apps/mobile run android`（`run ios` 需要 macOS + Xcode）。
 

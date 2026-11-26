@@ -138,6 +138,9 @@ try {
     assert.match(androidGradle, /refuses the debug key alias/);
     assert.match(androidGradle, /refuses debug\.keystore/);
     assert.match(androidGradle, /certificate fingerprint mismatch/);
+    // 唯一的 debug 出口：CI 显式开关 + 仓库内那份标准密钥 + 别名三者同时成立。
+    assert.match(androidGradle, /AIDB_ALLOW_DEBUG_RELEASE_SIGNING/);
+    assert.match(androidGradle, /def trackingDebugKeystore = allowDebugReleaseSigning/);
   });
 
   check('iOS Release uses distribution signing without a committed team', () => {

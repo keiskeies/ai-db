@@ -165,33 +165,42 @@ jobs:
           done
           ls -d node_modules/@duckdb/node-bindings-* | xargs -n1 basename
 
-      - name: Require release signing credentials
-        if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+      - name: Declare desktop signing policy
         shell: bash
         env:
           WIN_CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK_BASE64 }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
           CSC_LINK: ${{ secrets.APPLE_CSC_LINK_BASE64 }}
-          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
+          # 桌面包当前一律未签名：仓库没有 Authenticode / Developer ID 证书。
+          # 注入下列 secrets 后 electron-builder 会自动接管签名，届时要同步把
+          # electron-builder.yml 的 forceCodeSigning 打开并恢复这里的强制校验：
+          #   Windows — WINDOWS_CSC_LINK_BASE64 + WINDOWS_CSC_KEY_PASSWORD
+          #   macOS   — APPLE_CSC_LINK_BASE64 + APPLE_CSC_KEY_PASSWORD + APPLE_SIGNING_IDENTITY
+          #             以及 APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID（公证）
+          # 未注入时对应的 secret 是空串，electron-builder 会跳过签名。
           case "$RUNNER_OS" in
             Windows)
-              : "${WIN_CSC_LINK:?WINDOWS_CSC_LINK_BASE64 secret is required}"
-              : "${WIN_CSC_KEY_PASSWORD:?WINDOWS_CSC_KEY_PASSWORD secret is required}"
+              if [ -n "${WIN_CSC_LINK:-}" ]; then
+                echo "Windows Authenticode certificate staged; installers will be signed"
+                echo 'DESKTOP_SIGNING=signed' >> "$GITHUB_ENV"
+              else
+                echo "Windows policy: unsigned installers; publish checksums and GitHub provenance."
+                echo 'DESKTOP_SIGNING=unsigned' >> "$GITHUB_ENV"
+              fi
               ;;
             macOS)
-              : "${CSC_LINK:?APPLE_CSC_LINK_BASE64 secret is required}"
-              : "${CSC_KEY_PASSWORD:?APPLE_CSC_KEY_PASSWORD secret is required}"
-              : "${APPLE_ID:?APPLE_ID secret is required}"
-              : "${APPLE_APP_SPECIFIC_PASSWORD:?APPLE_APP_SPECIFIC_PASSWORD secret is required}"
-              : "${APPLE_TEAM_ID:?APPLE_TEAM_ID secret is required}"
+              if [ -n "${CSC_LINK:-}" ]; then
+                echo "macOS Developer ID certificate staged; apps will be signed and notarized"
+                echo 'DESKTOP_SIGNING=signed' >> "$GITHUB_ENV"
+              else
+                echo "macOS policy: unsigned and notarization-free; publish checksums and GitHub provenance."
+                echo 'DESKTOP_SIGNING=unsigned' >> "$GITHUB_ENV"
+              fi
               ;;
             Linux)
               echo "Linux policy: no platform signature; publish checksums and GitHub provenance."
+              echo 'DESKTOP_SIGNING=unsigned' >> "$GITHUB_ENV"
               ;;
           esac
 
@@ -253,7 +262,7 @@ jobs:
             npx electron-builder ${{ matrix.target }} --${arch} ${extra} --publish never 2>&1 | tee -a electron-builder.log
           done
 
-      - name: Verify mac architectures and signatures
+      - name: Verify mac architectures and signing state
         if: runner.os == 'macOS'
         shell: bash
         working-directory: apps/desktop
@@ -314,11 +323,18 @@ jobs:
               echo "::warning::Intel package has no upstream darwin-x64 node-oracledb binding"
             fi
 
-            codesign --verify --deep --strict --verbose=2 "$app"
-            details=$(codesign -dv --verbose=4 "$app" 2>&1)
-            printf '%s\n' "$details" | grep -q 'Authority=Developer ID Application:' || { echo "::error::$app is not Developer ID signed"; exit 1; }
-            printf '%s\n' "$details" | grep -q 'flags=0x10000(runtime)' || { echo "::error::$app lacks hardened runtime"; exit 1; }
-            xcrun stapler validate "$app"
+            if [ "$DESKTOP_SIGNING" = "signed" ]; then
+              codesign --verify --deep --strict --verbose=2 "$app"
+              details=$(codesign -dv --verbose=4 "$app" 2>&1)
+              printf '%s\n' "$details" | grep -q 'Authority=Developer ID Application:' || { echo "::error::$app is not Developer ID signed"; exit 1; }
+              printf '%s\n' "$details" | grep -q 'flags=0x10000(runtime)' || { echo "::error::$app lacks hardened runtime"; exit 1; }
+              xcrun stapler validate "$app"
+            elif [ -d "$app/Contents/_CodeSignature" ]; then
+              echo "::error::$app is signed by a key that is not declared by the release environment"
+              exit 1
+            else
+              echo "$app is unsigned (no Developer ID certificate is configured)"
+            fi
           }
 
           check release/mac x64 x86_64 arm64
@@ -394,7 +410,7 @@ jobs:
           ].join('\n') + '\n');
           NODE
 
-      - name: Verify Windows artifacts and Authenticode signatures
+      - name: Verify Windows artifacts and signing state
         if: runner.os == 'Windows'
         shell: bash
         working-directory: apps/desktop
@@ -444,13 +460,19 @@ jobs:
 
           powershell.exe -NoProfile -NonInteractive -Command '
             $ErrorActionPreference = "Stop"
-            $files = Get-ChildItem release/*.exe
-            foreach ($file in $files) {
+            $signed = $env:DESKTOP_SIGNING -eq "signed"
+            foreach ($file in Get-ChildItem release/*.exe) {
               $signature = Get-AuthenticodeSignature $file.FullName
-              if ($signature.Status -ne "Valid") {
-                throw "Authenticode verification failed for $($file.Name): $($signature.Status)"
+              if ($signed) {
+                if ($signature.Status -ne "Valid") {
+                  throw "Authenticode verification failed for $($file.Name): $($signature.Status)"
+                }
+                Write-Output "$($file.Name): $($signature.Status) ($($signature.SignerCertificate.Subject))"
+              } elseif ($signature.Status -ne "NotSigned") {
+                throw "$($file.Name) carries a signature the release environment does not declare ($($signature.Status))"
+              } else {
+                Write-Output "$($file.Name): NotSigned (unsigned release policy)"
               }
-              Write-Output "$($file.Name): $($signature.Status) ($($signature.SignerCertificate.Subject))"
             }
           '
 
@@ -492,19 +514,31 @@ jobs:
           const path = require('path');
           const crypto = require('crypto');
           const platform = process.env.RUNNER_OS.toLowerCase();
-          const signed = platform !== 'linux';
+          const signed = process.env.DESKTOP_SIGNING === 'signed';
           const manifest = {
             platform,
             signed,
-            notarized: platform === 'macos',
-            hardenedRuntime: platform === 'macos',
-            verification: platform === 'windows'
-              ? 'Get-AuthenticodeSignature: Valid'
-              : platform === 'macos'
-                ? 'codesign --verify --deep --strict; Developer ID; hardened runtime; stapler validate'
-                : 'Not platform-signed; see LINUX_SIGNING.txt',
+            notarized: platform === 'macos' && signed,
+            hardenedRuntime: platform === 'macos' && signed,
+            verification: platform === 'linux'
+              ? 'Not platform-signed; see LINUX_SIGNING.txt'
+              : signed
+                ? platform === 'windows'
+                  ? 'Get-AuthenticodeSignature: Valid'
+                  : 'codesign --verify --deep --strict; Developer ID; hardened runtime; stapler validate'
+                : 'Unsigned: no signing certificate is configured in the release environment; verify SHA256SUMS and GitHub build provenance',
           };
           fs.writeFileSync(path.join('release', `signing-${platform}.json`), JSON.stringify(manifest, null, 2) + '\n');
+          if (!signed && platform !== 'linux') {
+            fs.writeFileSync(path.join('release', `${platform.toUpperCase()}_SIGNING.txt`), [
+              `${platform} artifacts are intentionally not platform-code-signed by this workflow.`,
+              'The release environment holds no Authenticode / Developer ID certificate.',
+              'Verify SHA256SUMS and the GitHub build-provenance attestations before use.',
+              platform === 'macos'
+                ? 'Gatekeeper blocks unsigned apps: right-click > Open, or run `xattr -dr com.apple.quarantine "/Applications/AiDB Studio.app"`.'
+                : 'Windows SmartScreen warns on unsigned installers; choose "More info" > "Run anyway".',
+            ].join('\n') + '\n');
+          }
           const files = fs.readdirSync('release', { withFileTypes: true })
             .filter((entry) => entry.isFile() && entry.name !== `SHA256SUMS-${platform}`)
             .map((entry) => entry.name)
@@ -543,7 +577,7 @@ jobs:
             apps/desktop/release/*.blockmap
             apps/desktop/release/signing-*.json
             apps/desktop/release/SHA256SUMS-*
-            apps/desktop/release/LINUX_SIGNING.txt
+            apps/desktop/release/*_SIGNING.txt
           if-no-files-found: error
           retention-days: 7
 
@@ -576,7 +610,7 @@ jobs:
       - name: Install dependencies
         run: npm ci --include=optional --registry=https://registry.npmjs.org --replace-registry-host=always
 
-      - name: Require and stage Android signing credentials
+      - name: Stage Android signing credentials
         shell: bash
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -586,13 +620,12 @@ jobs:
           ANDROID_CERT_SHA256: ${{ secrets.ANDROID_CERT_SHA256 }}
         run: |
           set -euo pipefail
-          : "${ANDROID_KEYSTORE_BASE64:?ANDROID_KEYSTORE_BASE64 secret is required}"
-          : "${ANDROID_KEYSTORE_PASSWORD:?ANDROID_KEYSTORE_PASSWORD secret is required}"
-          : "${ANDROID_KEY_ALIAS:?ANDROID_KEY_ALIAS secret is required}"
-          : "${ANDROID_KEY_PASSWORD:?ANDROID_KEY_PASSWORD secret is required}"
-          : "${ANDROID_CERT_SHA256:?ANDROID_CERT_SHA256 secret is required}"
-          if [ "$ANDROID_KEY_ALIAS" = "androiddebugkey" ]; then
-            echo "::error::Android release signing refuses the debug key alias"
+          provided=0
+          for value in "$ANDROID_KEYSTORE_BASE64" "$ANDROID_KEYSTORE_PASSWORD" "$ANDROID_KEY_ALIAS" "$ANDROID_KEY_PASSWORD" "$ANDROID_CERT_SHA256"; do
+            [ -n "$value" ] && provided=$((provided + 1))
+          done
+          if [ "$provided" -ne 0 ] && [ "$provided" -ne 5 ]; then
+            echo "::error::Android production signing needs all five secrets or none (got $provided of 5)"
             exit 1
           fi
           for value in "$ANDROID_KEYSTORE_PASSWORD" "$ANDROID_KEY_ALIAS" "$ANDROID_KEY_PASSWORD" "$ANDROID_CERT_SHA256"; do
@@ -600,24 +633,53 @@ jobs:
               *$'\n'*|*$'\r'*) echo "::error::Android signing values must be single-line"; exit 1 ;;
             esac
           done
-          cert=$(printf '%s' "$ANDROID_CERT_SHA256" | tr -d '[:space:]:' | tr '[:lower:]' '[:upper:]')
-          if [[ ! "$cert" =~ ^[0-9A-F]{64}$ ]]; then
-            echo "::error::ANDROID_CERT_SHA256 must be a SHA-256 fingerprint"
-            exit 1
+
+          if [ "$provided" -eq 5 ]; then
+            if [ "$ANDROID_KEY_ALIAS" = "androiddebugkey" ]; then
+              echo "::error::Android release signing refuses the debug key alias"
+              exit 1
+            fi
+            cert=$(printf '%s' "$ANDROID_CERT_SHA256" | tr -d '[:space:]:' | tr '[:lower:]' '[:upper:]')
+            if [[ ! "$cert" =~ ^[0-9A-F]{64}$ ]]; then
+              echo "::error::ANDROID_CERT_SHA256 must be a SHA-256 fingerprint"
+              exit 1
+            fi
+            umask 077
+            keystore="$RUNNER_TEMP/aidb-upload.keystore"
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+            chmod 600 "$keystore"
+            test -s "$keystore" || { echo "::error::decoded Android keystore is empty"; exit 1; }
+            {
+              printf '%s\n' "MYAPP_UPLOAD_STORE_FILE=$keystore"
+              printf '%s\n' "MYAPP_UPLOAD_STORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD"
+              printf '%s\n' "MYAPP_UPLOAD_KEY_ALIAS=$ANDROID_KEY_ALIAS"
+              printf '%s\n' "MYAPP_UPLOAD_KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
+              printf '%s\n' "MYAPP_UPLOAD_CERT_SHA256=$cert"
+            } >> "$GITHUB_ENV"
+            echo 'ANDROID_SIGNING_MODE=production' >> "$GITHUB_ENV"
+            echo "Android production signing credentials staged without logging secret values"
+            exit 0
           fi
-          umask 077
-          keystore="$RUNNER_TEMP/aidb-upload.keystore"
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
-          chmod 600 "$keystore"
-          test -s "$keystore" || { echo "::error::decoded Android keystore is empty"; exit 1; }
+
+          # 没有 upload keystore：用仓库里那份标准 Android debug 密钥出可安装的 APK。
+          # 它是 AOSP 公开的调试密钥（非机密，本机开发同款），跨版本保持稳定，测试机
+          # 能直接覆盖安装；但 Google Play 不收，且换正式 key 后老包必须卸载重装。
+          debug_keystore="$GITHUB_WORKSPACE/apps/mobile/android/app/debug.keystore"
+          test -f "$debug_keystore" || { echo "::error::tracked debug.keystore is missing"; exit 1; }
+          keytool_bin=$(command -v keytool || echo "$JAVA_HOME/bin/keytool")
+          cert=$("$keytool_bin" -exportcert -keystore "$debug_keystore" -storepass android \
+            -alias androiddebugkey 2>/dev/null | openssl dgst -sha256 -r | cut -d' ' -f1 | tr '[:lower:]' '[:upper:]')
+          [[ "$cert" =~ ^[0-9A-F]{64}$ ]] || { echo "::error::cannot read the debug certificate fingerprint"; exit 1; }
           {
-            printf '%s\n' "MYAPP_UPLOAD_STORE_FILE=$keystore"
-            printf '%s\n' "MYAPP_UPLOAD_STORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD"
-            printf '%s\n' "MYAPP_UPLOAD_KEY_ALIAS=$ANDROID_KEY_ALIAS"
-            printf '%s\n' "MYAPP_UPLOAD_KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
+            printf '%s\n' "MYAPP_UPLOAD_STORE_FILE=$debug_keystore"
+            printf '%s\n' "MYAPP_UPLOAD_STORE_PASSWORD=android"
+            printf '%s\n' "MYAPP_UPLOAD_KEY_ALIAS=androiddebugkey"
+            printf '%s\n' "MYAPP_UPLOAD_KEY_PASSWORD=android"
             printf '%s\n' "MYAPP_UPLOAD_CERT_SHA256=$cert"
+            printf '%s\n' "AIDB_ALLOW_DEBUG_RELEASE_SIGNING=true"
           } >> "$GITHUB_ENV"
-          echo "Android production signing credentials staged without logging secret values"
+          echo 'ANDROID_SIGNING_MODE=debug' >> "$GITHUB_ENV"
+          echo "::warning::No Android upload keystore in the release environment; the APK is signed with the tracked debug key (sideload only, not Play-compatible)"
 
       - name: Build release APK
         working-directory: apps/mobile/android
@@ -659,9 +721,25 @@ jobs:
           actual=$(printf '%s' "$fingerprints" | tr -d '[:space:]:' | tr '[:lower:]' '[:upper:]')
           expected=$(printf '%s' "$MYAPP_UPLOAD_CERT_SHA256" | tr -d '[:space:]:' | tr '[:lower:]' '[:upper:]')
           if [ "$actual" != "$expected" ]; then
-            echo "::error::APK signer certificate SHA-256 does not match ANDROID_CERT_SHA256"
+            echo "::error::APK signer certificate SHA-256 does not match the staged signing credential"
             exit 1
           fi
+          keytool_bin=$(command -v keytool || echo "$JAVA_HOME/bin/keytool")
+          debug_cert=$("$keytool_bin" -exportcert -keystore apps/mobile/android/app/debug.keystore -storepass android \
+            -alias androiddebugkey 2>/dev/null | openssl dgst -sha256 -r | cut -d' ' -f1 | tr '[:lower:]' '[:upper:]')
+          debug_signer=0
+          if [ "$actual" = "$debug_cert" ]; then
+            debug_signer=1
+            if [ "${ANDROID_SIGNING_MODE:-}" != "debug" ]; then
+              echo "::error::production signing mode produced an APK signed with the debug key"
+              exit 1
+            fi
+            echo "::warning::APK is signed with the tracked Android debug key (sideload only, not Play-compatible)"
+          elif [ "${ANDROID_SIGNING_MODE:-}" = "debug" ]; then
+            echo "::error::debug signing mode produced an APK signed by another certificate"
+            exit 1
+          fi
+          printf '%s\n' "$debug_signer" > "$RUNNER_TEMP/apk-debug-signer"
           case "$badging" in
             *"package: name='$app_id'"*"versionName='$version'"*) ;;
             *) echo "::error::APK identity mismatch, expected $app_id $version"; exit 1 ;;
@@ -677,15 +755,28 @@ jobs:
           const dir = 'dist-mobile';
           const certificateSha256 = process.env.MYAPP_UPLOAD_CERT_SHA256;
           if (!/^[0-9A-F]{64}$/.test(certificateSha256)) throw new Error('normalized Android certificate fingerprint is missing');
+          const debugSigner = fs.readFileSync(process.env.RUNNER_TEMP + '/apk-debug-signer', 'utf8').trim() === '1';
+          const production = !debugSigner;
           fs.writeFileSync(path.join(dir, 'signing-android.json'), JSON.stringify({
             platform: 'android',
             signed: true,
             signatureVerified: true,
-            signing: 'production upload key',
+            signing: production ? 'production upload key' : 'debug',
             certificateSha256,
-            productionReady: true,
-            verification: 'apksigner certificate SHA-256 matches ANDROID_CERT_SHA256; debug signing rejected',
+            productionReady: production,
+            verification: production
+              ? 'apksigner certificate SHA-256 matches the staged upload credential; debug signing rejected'
+              : 'apksigner certificate SHA-256 matches the repository-tracked debug key; sideload only, not a Play upload key',
           }, null, 2) + '\n');
+          if (!production) {
+            fs.writeFileSync(path.join(dir, 'ANDROID_SIGNING.txt'), [
+              'This APK is signed with the standard Android debug key that is tracked in the repository',
+              '(apps/mobile/android/app/debug.keystore). It is the AOSP public debug key, not a secret,',
+              'and every local checkout builds with the same key.',
+              'Use it for sideloading and tester updates only. Google Play will not accept it, and once a',
+              'production upload key is introduced existing installs must be uninstalled and reinstalled.',
+            ].join('\n') + '\n');
+          }
           const files = fs.readdirSync(dir, { withFileTypes: true })
             .filter((entry) => entry.isFile() && entry.name !== 'SHA256SUMS-android')
             .map((entry) => entry.name)
@@ -701,6 +792,7 @@ jobs:
             dist-mobile/*.apk
             dist-mobile/SHA256SUMS-android
             dist-mobile/signing-android.json
+            dist-mobile/ANDROID_SIGNING.txt
           if-no-files-found: error
           retention-days: 7
 
@@ -970,25 +1062,37 @@ jobs:
           if (sbom.bomFormat !== 'CycloneDX' || !Array.isArray(sbom.components) || sbom.components.length === 0) {
             throw new Error('invalid or empty CycloneDX SBOM');
           }
+          const unsignedPolicy = 'no signing certificate is configured in the release environment';
           for (const platform of ['windows', 'macos']) {
             const manifest = readJson(`signing-${platform}.json`);
-            if (manifest.signed !== true) throw new Error(`${platform} release is not signed`);
-            if (platform === 'macos' && (manifest.notarized !== true || manifest.hardenedRuntime !== true)) {
-              throw new Error('macOS release is not notarized with hardened runtime');
+            if (manifest.signed === true) {
+              if (platform === 'macos' && (manifest.notarized !== true || manifest.hardenedRuntime !== true)) {
+                throw new Error('macOS release claims signing without notarization and hardened runtime');
+              }
+            } else if (manifest.signed !== false || !String(manifest.verification ?? '').includes(unsignedPolicy)) {
+              throw new Error(`${platform} signing manifest does not state the unsigned release policy`);
             }
           }
           const linux = readJson('signing-linux.json');
           if (linux.signed !== false || !fs.existsSync(path.join(dir, 'LINUX_SIGNING.txt'))) {
             throw new Error('Linux signing policy is missing or inconsistent');
           }
+          for (const platform of ['windows', 'macos']) {
+            if (readJson(`signing-${platform}.json`).signed === false && !fs.existsSync(path.join(dir, `${platform.toUpperCase()}_SIGNING.txt`))) {
+              throw new Error(`${platform} unsigned release is missing its signing policy note`);
+            }
+          }
 
           const android = readJson('signing-android.json');
           const certificateSha256 = String(android.certificateSha256 ?? '').replace(/[:\s]/g, '').toUpperCase();
-          if (android.signed !== true || android.signatureVerified !== true || android.productionReady !== true || android.signing === 'debug') {
-            throw new Error('Android release signing manifest is not production-ready');
+          if (android.signed !== true || android.signatureVerified !== true) {
+            throw new Error('Android APK signature was not verified by apksigner');
           }
           if (!/^[0-9A-F]{64}$/.test(certificateSha256)) {
             throw new Error('Android signing manifest has no valid certificate SHA-256 fingerprint');
+          }
+          if (android.productionReady === true && android.signing === 'debug') {
+            throw new Error('Android signing manifest claims production readiness for a debug-signed APK');
           }
 
           const ios = readJson('signing-ios.json');
@@ -1064,7 +1168,15 @@ jobs:
           const dir = 'dist-release';
           const tag = process.env.RELEASE_TAG;
           const sha = process.env.TESTED_SHA;
+          const read = (name) => JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+          const signing = Object.fromEntries(['windows', 'macos', 'linux', 'android', 'ios'].map((platform) => [platform, read(`signing-${platform}.json`)]));
           const assets = fs.readdirSync(dir).filter((name) => name !== 'RELEASE_NOTES.md').sort();
+          const desktopLine = signing.windows.signed && signing.macos.signed
+            ? '- Windows installers are Authenticode signed; macOS apps are Developer ID signed, notarized and use hardened runtime.'
+            : '- Windows and macOS installers are **not code-signed**: the release environment holds no Authenticode / Developer ID certificate. `WINDOWS_SIGNING.txt` and `MACOS_SIGNING.txt` state the Gatekeeper and SmartScreen steps; `signing-windows.json` and `signing-macos.json` record the policy.';
+          const androidLine = signing.android.productionReady === true
+            ? '- Android is an APK signed with the protected production upload key; apksigner verified its certificate SHA-256 against the release secret. It is for sideloading, not a Google Play App Bundle.'
+            : '- Android is an APK signed with the repository-tracked standard Android debug key (`apps/mobile/android/app/debug.keystore`), the same key every local checkout reuses; apksigner verified its certificate SHA-256. It is for sideloading and tester updates only, not a Google Play upload, and a future Play upload key cannot upgrade these installs in place.';
           const notes = [
             `# AiDB Studio ${tag}`,
             '',
@@ -1074,12 +1186,12 @@ jobs:
             '',
             '## Verification and supply chain',
             '- Quality gate passed: install, typecheck, all workspace/MCP/Electron CJS tests, build, docs/controls/i18n, production npm audit and CycloneDX validation.',
-            '- Windows installers are Authenticode signed; macOS apps are Developer ID signed, notarized and use hardened runtime.',
+            desktopLine,
             '- Linux artifacts are intentionally not platform-code-signed. Verify `SHA256SUMS-linux`, `LINUX_SIGNING.txt` and GitHub provenance; repository maintainers must re-sign deb/rpm packages.',
             '- `sbom.cdx.json` is the CycloneDX SBOM. Build provenance attestations are attached to the release assets in GitHub.',
             '',
             '## Distribution notes',
-            '- Android is an APK signed with the protected production upload key; apksigner verified its certificate SHA-256 against `ANDROID_CERT_SHA256`. It is for sideloading, not a Google Play App Bundle.',
+            androidLine,
             '- iOS is an EAS production/store IPA. The downloaded app was independently verified on macOS with `codesign` (Apple Distribution and hardened runtime), embedded provisioning identity and `Info.plist` version checks; it has not been submitted to App Store Connect.',
             '- Oracle has no upstream prebuilt binding for macOS Intel or Windows ARM64; Oracle is unavailable in those packages.',
             '',
@@ -1117,6 +1229,6 @@ jobs:
             dist-release/sbom.cdx.json
             dist-release/signing-*.json
             dist-release/SHA256SUMS-*
-            dist-release/LINUX_SIGNING.txt
+            dist-release/*_SIGNING.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
