@@ -109,28 +109,25 @@ jobs:
           npm --workspace apps/gateway run build
           npm --workspace apps/desktop run build
 
-      - name: Verify locked app-builder binaries
-        # app-builder-bin ships every platform binary in its npm tarball. npm ci
-        # verifies the lockfile SHA-512 integrity, so no curl/replacement step is needed.
+      - name: Verify locked packaging toolchain
+        # electron-builder 26 no longer vendors app-builder-bin: it downloads the
+        # app-builder binary per build and verifies it against a pinned checksum
+        # (app-builder-lib/out/binDownload.js). What the lockfile does pin is the
+        # toolchain version itself, so assert installed == locked here.
         shell: bash
         run: |
           set -euo pipefail
-          installed=$(node -p "require('./node_modules/app-builder-bin/package.json').version")
-          locked=$(node -p "require('./package-lock.json').packages['node_modules/app-builder-bin'].version")
-          if [ "$installed" != "$locked" ]; then
-            echo "::error::app-builder-bin $installed does not match locked $locked"
-            exit 1
-          fi
-          case "$RUNNER_OS" in
-            macOS) binaries=(node_modules/app-builder-bin/mac/app-builder_amd64 node_modules/app-builder-bin/mac/app-builder_arm64) ;;
-            Linux) binaries=(node_modules/app-builder-bin/linux/x64/app-builder node_modules/app-builder-bin/linux/arm64/app-builder) ;;
-            Windows) binaries=(node_modules/app-builder-bin/win/x64/app-builder.exe node_modules/app-builder-bin/win/arm64/app-builder.exe) ;;
-            *) echo "::error::unsupported runner $RUNNER_OS"; exit 1 ;;
-          esac
-          for binary in "${binaries[@]}"; do
-            test -f "$binary" || { echo "::error::missing locked binary $binary"; exit 1; }
-          done
-          echo "app-builder-bin $locked verified from the npm lockfile"
+          node <<'NODE'
+          const lock = require('./package-lock.json');
+          for (const name of ['electron-builder', 'app-builder-lib']) {
+            const key = `node_modules/${name}`;
+            const installed = require(`./node_modules/${name}/package.json`).version;
+            const locked = lock.packages[key]?.version;
+            if (!locked) throw new Error(`${name} is missing from the lockfile`);
+            if (installed !== locked) throw new Error(`${name} installed ${installed} != locked ${locked}`);
+            console.log(`${name} ${locked} verified from the npm lockfile`);
+          }
+          NODE
 
       - name: Install cross-arch DuckDB optional dependencies
         # @duckdb/node-api declares these as platform optionalDependencies. npm's
@@ -751,19 +748,24 @@ jobs:
         run: |
           node -e '
             const fs = require("fs");
-            const version = require("./apps/mobile/app.json").expo.version;
-            const plist = fs.readFileSync("apps/mobile/ios/AiDBStudio/Info.plist", "utf8");
+            const app = require("./apps/mobile/app.json").expo;
+            const version = app.version;
             const xcode = fs.readFileSync("apps/mobile/ios/AiDBStudio.xcodeproj/project.pbxproj", "utf8");
-            const marker = "<key>CFBundleShortVersionString</key>";
-            const tail = plist.slice(plist.indexOf(marker) + marker.length);
-            const short = tail.slice(tail.indexOf("<string>") + 8, tail.indexOf("</string>"));
+            // Info.plist references $(MARKETING_VERSION)/$(CURRENT_PROJECT_VERSION),
+            // so the pbxproj entries are the single source of truth.
             const marketing = xcode.split("MARKETING_VERSION = ").slice(1).map((part) => part.slice(0, part.indexOf(";")));
-            const wrong = marketing.filter((v) => v !== version);
-            if (short !== version || marketing.length === 0 || wrong.length > 0) {
-              console.error("::error::iOS version drift: app.json " + version + ", Info.plist " + short + ", wrong MARKETING_VERSION entries " + wrong.length);
+            const build = xcode.split("CURRENT_PROJECT_VERSION = ").slice(1).map((part) => part.slice(0, part.indexOf(";")));
+            const wrongMarketing = marketing.filter((v) => v !== version);
+            const wrongBuild = build.filter((v) => v !== String(app.ios.buildNumber));
+            if (marketing.length === 0 || wrongMarketing.length > 0) {
+              console.error("::error::iOS version drift: app.json " + version + ", wrong MARKETING_VERSION entries " + wrongMarketing.length);
               process.exit(1);
             }
-            console.log("iOS native version synced: " + version);
+            if (build.length === 0 || wrongBuild.length > 0) {
+              console.error("::error::iOS build-number drift: app.json " + app.ios.buildNumber + ", wrong CURRENT_PROJECT_VERSION entries " + wrongBuild.length);
+              process.exit(1);
+            }
+            console.log("iOS native version synced: " + version + " (" + app.ios.buildNumber + ")");
           '
 
       - name: Trigger EAS production build
