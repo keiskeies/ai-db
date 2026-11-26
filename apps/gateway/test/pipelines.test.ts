@@ -559,10 +559,12 @@ test('v8 老库升级：重建 jobs 后旧任务保留，且能存 pipeline 类�
   } finally {
     store.close();
     const check = new DatabaseSync(dbPath, { readOnly: true } as unknown as ConstructorParameters<typeof DatabaseSync>[1]);
-    const version = check.prepare('PRAGMA user_version') as ReturnType<DatabaseSync['prepare']> & { close(): void };
-    assert.equal(Number((version.get() as { user_version: number }).user_version), 11, '迁移把版本推到 11');
-    version.close();
-    check.close();
+    try {
+      const version = check.prepare('PRAGMA user_version').get() as { user_version: number };
+      assert.equal(Number(version.user_version), 11, '迁移把版本推到 11');
+    } finally {
+      check.close();
+    }
     rmSync(dir, { recursive: true, force: true });
   }
 });

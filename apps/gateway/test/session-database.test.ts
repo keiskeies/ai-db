@@ -60,13 +60,14 @@ test('v3 老库升级后补出 database 列，旧会话不受影响', () => {
     store.close();
 
     const check = new DatabaseSync(dbPath, { readOnly: true } as unknown as ConstructorParameters<typeof DatabaseSync>[1]);
-    const version = check.prepare('PRAGMA user_version') as ReturnType<DatabaseSync['prepare']> & { close(): void };
-    assert.equal((version.get() as { user_version: number }).user_version, 11);
-    version.close();
-    const columns = check.prepare('PRAGMA table_info(agent_sessions)') as ReturnType<DatabaseSync['prepare']> & { close(): void };
-    assert.ok(columns.all().some((c) => (c as { name: string }).name === 'database'));
-    columns.close();
-    check.close();
+    try {
+      const version = check.prepare('PRAGMA user_version').get() as { user_version: number };
+      assert.equal(version.user_version, 11);
+      const columns = check.prepare('PRAGMA table_info(agent_sessions)').all() as Array<{ name: string }>;
+      assert.ok(columns.some((c) => c.name === 'database'));
+    } finally {
+      check.close();
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
