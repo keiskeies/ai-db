@@ -235,6 +235,9 @@ jobs:
           # ——v0.0.11 的 mac 就是这么挂的（同期 Windows/Linux 全绿）。
           # 只有真正取到值的变量才写进 GITHUB_ENV；多行安全写法用 heredoc 分隔符。
           # 不用 `${!name}` 间接展开：macOS runner 的 /bin/bash 仍是 3.2。
+          # CSC_IDENTITY_AUTO_DISCOVERY 也在这里决定：它若写在打包步骤的 env 上会盖掉
+          # GITHUB_ENV，将来真塞进证书时 macCodeSign.findIdentity 会直接返回 null，
+          # 于是密钥串导入了却找不到身份 —— 签名静默跳过，DESKTOP_SIGNING 却写着 signed。
           export_if_set() {
             name="$1"
             value="$2"
@@ -265,6 +268,7 @@ jobs:
               if [ -n "${CSC_LINK:-}" ]; then
                 echo "macOS Developer ID certificate staged; apps will be signed and notarized"
                 echo 'DESKTOP_SIGNING=signed' >> "$GITHUB_ENV"
+                echo 'CSC_IDENTITY_AUTO_DISCOVERY=true' >> "$GITHUB_ENV"
                 export_if_set CSC_LINK "$CSC_LINK"
                 export_if_set CSC_KEY_PASSWORD "$CSC_KEY_PASSWORD"
                 export_if_set CSC_NAME "$CSC_NAME"
@@ -274,6 +278,7 @@ jobs:
               else
                 echo "macOS policy: unsigned and notarization-free; publish checksums and GitHub provenance."
                 echo 'DESKTOP_SIGNING=unsigned' >> "$GITHUB_ENV"
+                echo 'CSC_IDENTITY_AUTO_DISCOVERY=false' >> "$GITHUB_ENV"
               fi
               ;;
             Linux)
@@ -314,15 +319,13 @@ jobs:
           echo "REAL_RPMBUILD=$real" >> "$GITHUB_ENV"
           echo "$RUNNER_TEMP/rpmbin" >> "$GITHUB_PATH"
 
+      # 这里不声明任何环境变量：step-level env 会覆盖 GITHUB_ENV，缺证书时把 secrets
+      # 展开成空串注入进来，会让 mac 把 CSC_LINK 当成相对路径去解析（见上方注释）；
+      # CSC_IDENTITY_AUTO_DISCOVERY 也由签名策略按平台与取值决定。
       - name: Package installers
         # Separate architecture runs avoid NSIS's redundant combined installer.
         shell: bash
         working-directory: apps/desktop
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-          # 签名相关变量一律由「Declare desktop signing policy」按实际取值写入 GITHUB_ENV。
-          # 这里不能再写 `${{ secrets.* }}`：step-level env 会覆盖 GITHUB_ENV，缺证书时
-          # 注入的空串会让 mac 把 CSC_LINK 当成相对路径去解析（见上方注释）。
         run: |
           set -o pipefail
           : > electron-builder.log

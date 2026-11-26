@@ -360,12 +360,15 @@ test('desktop verifies signatures when present and states the unsigned policy wh
   // 抛 `apps/desktop not a file`。所以签名变量只能由 declare 步骤按取值写进 GITHUB_ENV，
   // 打包步骤的 step-level env 会覆盖 GITHUB_ENV，一律不许再出现 secrets.*。
   const packaging = steps.find((step) => (step.name ?? '') === 'Package installers');
-  assert.deepEqual(Object.keys(packaging?.env ?? {}), ['CSC_IDENTITY_AUTO_DISCOVERY']);
-  assert.doesNotMatch(JSON.stringify(packaging?.env ?? {}), /secrets\./);
+  assert.equal(packaging?.env, undefined, 'packaging must not shadow GITHUB_ENV signing vars');
   const policy = workflowRun('desktop', 'Declare desktop signing policy');
   assert.match(policy, /export_if_set\(\) \{/);
   assert.match(policy, /\[ -n "\$value" \]/);
   assert.match(policy, /echo "\$name<<__AIDB_CSC_EOF"/);
+  // 证书到位时 macOS 分支必须打开身份自动发现，否则导入密钥串后 findIdentity 仍返回 null，
+  // 签名静默跳过而 DESKTOP_SIGNING 已写 signed；缺证书时才关闭发现。
+  assert.match(policy, /echo 'CSC_IDENTITY_AUTO_DISCOVERY=true' >> "\$GITHUB_ENV"/);
+  assert.match(policy, /echo 'CSC_IDENTITY_AUTO_DISCOVERY=false' >> "\$GITHUB_ENV"/);
   for (const name of [
     'WIN_CSC_LINK',
     'WIN_CSC_KEY_PASSWORD',
