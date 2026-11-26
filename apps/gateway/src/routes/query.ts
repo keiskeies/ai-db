@@ -65,7 +65,8 @@ export function createQueryRouter(deps: ApiDeps): Router {
           database: str(body.database),
           maxRows: num(body.limit, settings.defaultLimit, 1, 10000),
           timeoutMs: settings.queryTimeoutMs,
-          allowMulti: body.allowMulti === undefined ? settings.allowMultiStatement : Boolean(body.allowMulti),
+          // 服务端开关是硬上限：客户端只能关闭批量，不能靠 allowMulti:true 提权。
+          allowMulti: settings.allowMultiStatement && (body.allowMulti === undefined || body.allowMulti === true),
           autoLimit: settings.autoLimit,
           actor: 'user',
           sessionId: str(body.sessionId),

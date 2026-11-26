@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto';
 import type { ArtifactInfo, NotificationChannelType } from '@aidb/core';
 import type { Store } from './store';
+import { EgressError, safeFetch } from './egress';
 
 export type NotificationConfig =
   | { webhookUrl: string; secret?: string }
@@ -64,27 +65,37 @@ export function channelSummary(type: NotificationChannelType, config: Record<str
 }
 
 async function postJson(url: string, body: unknown, headers: Record<string, string> = {}): Promise<any> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
+  const response = await safeFetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  }, { timeoutMs: 10_000, maxBytes: 1024 * 1024 });
+  const text = await response.text();
+  let payload: any = null;
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...headers },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    const text = await response.text();
-    let payload: any = null;
-    try {
-      payload = text ? JSON.parse(text) : null;
-    } catch {
-      payload = text;
-    }
-    if (!response.ok) throw new Error(`HTTP ${response.status}: ${typeof payload === 'string' ? payload.slice(0, 200) : JSON.stringify(payload).slice(0, 200)}`);
-    return payload;
-  } finally {
-    clearTimeout(timer);
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = null;
   }
+  if (!response.ok) {
+    throw Object.assign(new Error(`通知服务返回 HTTP ${response.status}`), { code: 'NOTIFICATION_HTTP_ERROR' });
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw Object.assign(new Error('通知服务返回了无效响应'), { code: 'NOTIFICATION_INVALID_RESPONSE' });
+  }
+  return payload;
+}
+
+function notificationErrorMessage(err: unknown): string {
+  if (err instanceof EgressError) {
+    if (err.code === 'EGRESS_TIMEOUT') return '通知服务请求超时';
+    if (err.code === 'EGRESS_RESPONSE_TOO_LARGE') return '通知服务响应超过大小上限';
+    if (err.code === 'EGRESS_ABORTED') return '通知发送已取消';
+    if (err.code === 'EGRESS_NETWORK') return '通知服务网络连接失败';
+    return '通知地址未通过出站安全校验';
+  }
+  if (err instanceof Error && 'code' in err && String(err.code).startsWith('NOTIFICATION_')) return err.message;
+  return '通知发送失败';
 }
 
 function feishuPayload(config: { webhookUrl: string; secret?: string }, text: string): { url: string; body: Record<string, unknown> } {
@@ -159,19 +170,19 @@ export async function sendNotification(
       const { url, body } = feishuPayload(config as any, text);
       const payload = await postJson(url, body);
       if (payload && typeof payload === 'object' && payload.code !== undefined && Number(payload.code) !== 0) {
-        throw new Error(`飞书返回 code=${payload.code} ${payload.msg ?? ''}`);
+        throw Object.assign(new Error(`飞书返回 code=${String(payload.code).slice(0, 32)}`), { code: 'NOTIFICATION_PROVIDER_ERROR' });
       }
     } else if (channel.type === 'wecom') {
       const { url, body } = wecomPayload(config as any, text);
       const payload = await postJson(url, body);
       if (payload && typeof payload === 'object' && payload.errcode !== undefined && Number(payload.errcode) !== 0) {
-        throw new Error(`企业微信返回 errcode=${payload.errcode} ${payload.errmsg ?? ''}`);
+        throw Object.assign(new Error(`企业微信返回 errcode=${String(payload.errcode).slice(0, 32)}`), { code: 'NOTIFICATION_PROVIDER_ERROR' });
       }
     } else if (channel.type === 'dingtalk') {
       const { url, body } = dingtalkPayload(config as any, text);
       const payload = await postJson(url, body);
       if (payload && typeof payload === 'object' && payload.errcode !== undefined && Number(payload.errcode) !== 0) {
-        throw new Error(`钉钉返回 errcode=${payload.errcode} ${payload.errmsg ?? ''}`);
+        throw Object.assign(new Error(`钉钉返回 errcode=${String(payload.errcode).slice(0, 32)}`), { code: 'NOTIFICATION_PROVIDER_ERROR' });
       }
     } else if (channel.type === 'slack') {
       const { url, body } = slackPayload(config as any, text);
@@ -183,18 +194,18 @@ export async function sendNotification(
       const { url, body } = telegramPayload(config as any, text);
       const payload = await postJson(url, body);
       if (payload && typeof payload === 'object' && payload.ok === false) {
-        throw new Error(`Telegram 返回失败：${payload.description ?? 'unknown'}`);
+        throw Object.assign(new Error(`Telegram 返回 error_code=${String(payload.error_code ?? 'unknown').slice(0, 32)}`), { code: 'NOTIFICATION_PROVIDER_ERROR' });
       }
     } else {
       const { url, body, headers } = oneBotPayload(config as any, text);
       const payload = await postJson(url, body, headers);
       if (payload && typeof payload === 'object' && payload.status === 'failed') {
-        throw new Error(`OneBot 返回失败：${JSON.stringify(payload).slice(0, 200)}`);
+        throw Object.assign(new Error(`OneBot 返回 retcode=${String(payload.retcode ?? 'unknown').slice(0, 32)}`), { code: 'NOTIFICATION_PROVIDER_ERROR' });
       }
     }
     return { channelId, name: channel.name, ok: true, message: '已发送' };
   } catch (err: any) {
-    return { channelId, name: channel.name, ok: false, message: err?.message ?? '发送失败' };
+    return { channelId, name: channel.name, ok: false, message: notificationErrorMessage(err) };
   }
 }
 
@@ -241,7 +252,7 @@ export async function notifyArtifact(
     try {
       results.push(await sendNotification(store, channelId, message));
     } catch (err: any) {
-      results.push({ channelId, name: channelId, ok: false, message: err?.message ?? '发送失败' });
+      results.push({ channelId, name: channelId, ok: false, message: notificationErrorMessage(err) });
     }
     store.addAudit({
       actor: 'user',

@@ -14,3 +14,12 @@ local.properties
 
 # Bundle artifacts
 *.jsbundle
+
+# Production signing material (the tracked standard debug.keystore is unaffected)
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.mobileprovision
+credentials.json
+secrets/

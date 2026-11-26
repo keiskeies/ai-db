@@ -73,7 +73,7 @@ test('MCP code can only be claimed at the MCP endpoint and always yields mcp:rea
   assert.equal(again.status, 401);
 });
 
-test('mobile code cannot be claimed at the MCP endpoint and /pair/claim always yields full', async () => {
+test('mobile code cannot be claimed at the MCP endpoint and /pair/claim always yields device', async () => {
   const started = await g.api('/pair/start', { method: 'POST', headers: { 'x-forwarded-for': '10.40.2.1' } });
   const code = started.body.code as string;
 
@@ -88,10 +88,15 @@ test('mobile code cannot be claimed at the MCP endpoint and /pair/claim always y
     body: JSON.stringify({ code, deviceName: 'phone', platform: 'ios', scope: 'mcp:readonly' }),
   });
   assert.equal(claimed.status, 200, JSON.stringify(claimed.body));
-  assert.equal(claimed.body.device?.scope, 'full');
-  // full 凭据仍可访问整个 API
+  assert.equal(claimed.body.device?.scope, 'device');
+  assert.deepEqual(claimed.body.device?.connectionIds, []);
+  // 默认拒绝：未授权连接时列表为空，管理接口仍返回 403。
   const conns = await g.api('/connections', {}, claimed.body.token as string);
   assert.equal(conns.status, 200);
+  assert.deepEqual(conns.body.connections, []);
+  const settings = await g.api('/settings', {}, claimed.body.token as string);
+  assert.equal(settings.status, 403);
+  assert.equal(settings.body.error?.code, 'SCOPE_DENIED');
 });
 
 test('features.mcp=false disables both MCP pairing endpoints', async () => {

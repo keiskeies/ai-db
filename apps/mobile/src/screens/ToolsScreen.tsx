@@ -10,11 +10,13 @@ export function ToolsScreen({
   connection,
   database,
   tables,
+  canManageHost,
   onOpen,
 }: {
   connection?: ConnectionConfig;
   database?: string;
   tables: TableInfo[];
+  canManageHost: boolean;
   onOpen: (page: 'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'pipelines' | 'dictionary' | 'monitor' | 'search' | 'history' | 'audit' | 'artifacts' | 'users') => void;
 }) {
   return (
@@ -46,7 +48,7 @@ export function ToolsScreen({
           { page: 'audit' as const, label: '审计日志', desc: '谁在什么时候改了什么', icon: <ShieldAlert size={15} color={colors.accent} /> },
           { page: 'artifacts' as const, label: '报告与产物', desc: '报告/对比结果与导出', icon: <FileCode2 size={15} color={colors.accent} /> },
           { page: 'users' as const, label: '用户与权限', desc: '账户列表、创建、授权与删除', icon: <Users size={15} color={colors.accent} /> },
-        ].map((entry) => (
+        ].filter((entry) => canManageHost || ['query', 'table', 'artifacts'].includes(entry.page)).map((entry) => (
           <Pressable key={entry.page} testID={`m-tool-${entry.page}`} style={styles.listRow} onPress={() => onOpen(entry.page)}>
             {entry.icon}
             <View style={{ flex: 1 }}>

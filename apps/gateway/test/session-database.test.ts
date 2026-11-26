@@ -59,9 +59,13 @@ test('v3 老库升级后补出 database 列，旧会话不受影响', () => {
     assert.equal(fresh.database, 'nextcloud');
     store.close();
 
-    const check = new DatabaseSync(dbPath, { readOnly: true });
-    assert.equal(check.prepare('PRAGMA user_version').get()!.user_version, 9);
-    assert.ok(check.prepare('PRAGMA table_info(agent_sessions)').all().some((c) => (c as { name: string }).name === 'database'));
+    const check = new DatabaseSync(dbPath, { readOnly: true } as unknown as ConstructorParameters<typeof DatabaseSync>[1]);
+    const version = check.prepare('PRAGMA user_version') as ReturnType<DatabaseSync['prepare']> & { close(): void };
+    assert.equal((version.get() as { user_version: number }).user_version, 11);
+    version.close();
+    const columns = check.prepare('PRAGMA table_info(agent_sessions)') as ReturnType<DatabaseSync['prepare']> & { close(): void };
+    assert.ok(columns.all().some((c) => (c as { name: string }).name === 'database'));
+    columns.close();
     check.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });

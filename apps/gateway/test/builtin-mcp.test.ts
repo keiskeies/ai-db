@@ -1,8 +1,8 @@
 import test, { after, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import fs, { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { devNull, tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import dnsPromises from 'node:dns/promises';
 import { syncBuiltinESMExports } from 'node:module';
@@ -92,6 +92,16 @@ function webClient(args: string[]): BuiltinMcpClient {
   return new BuiltinMcpClient({ id: 'builtin-web', name: 'web', command: 'builtin:web', args, enabled: true, createdAt: now, updatedAt: now });
 }
 
+function filesystemClient(root: string): BuiltinMcpClient {
+  const now = new Date().toISOString();
+  return new BuiltinMcpClient({ id: 'builtin-filesystem', name: 'filesystem', command: 'builtin:filesystem', args: [root], enabled: true, createdAt: now, updatedAt: now });
+}
+
+function gitClient(repo: string): BuiltinMcpClient {
+  const now = new Date().toISOString();
+  return new BuiltinMcpClient({ id: 'builtin-git', name: 'git', command: 'builtin:git', args: [repo], enabled: true, createdAt: now, updatedAt: now });
+}
+
 async function dispatcherPinnedAddress(dispatcher: unknown): Promise<{ address: string; family: number }> {
   // 直接调用连接器的 lookup，证明 fetch 没有把 hostname 再交给系统 DNS。
   const optionsKey = Reflect.ownKeys(dispatcher as object).find((key) => String(key) === 'Symbol(options)');
@@ -148,6 +158,7 @@ test('filesystem 只在授权目录内读写，并拦截路径逃逸', async () 
   assert.ok(names.includes('move_file'));
   assert.ok(names.includes('delete_file'));
   assert.equal((discovered.data as any).tools.find((tool: any) => tool.name === 'read_file').risk, 'read');
+  assert.equal((discovered.data as any).tools.find((tool: any) => tool.name === 'move_file').risk, 'destructive');
   assert.equal((discovered.data as any).tools.find((tool: any) => tool.name === 'delete_file').risk, 'destructive');
 
   const read = await run('mcp_call', { server: fsId, tool: 'read_file', arguments: { path: 'OrderService.java' } });
@@ -349,32 +360,152 @@ test('filesystem 只在授权目录内读写，并拦截路径逃逸', async () 
   assert.equal(gone.ok, false);
 });
 
-test('git 只读工具可读取状态与历史', async (t) => {
-  if (spawnSync('git', ['--version'], { encoding: 'utf8' }).status !== 0) {
-    t.skip('git is not installed');
-    return;
+test('move_file 覆盖先保留同目录备份，成功后才删除旧目标', async () => {
+  const root = join(home, 'move-overwrite');
+  mkdirSync(root, { recursive: true });
+  const source = join(root, 'source.txt');
+  const destination = join(root, 'destination.txt');
+  writeFileSync(source, 'new content\n');
+  writeFileSync(destination, 'old content\n');
+
+  const result = await filesystemClient(root).call('move_file', { source, destination, overwrite: true });
+  assert.equal(result.ok, true, result.error?.message);
+  assert.equal(existsSync(source), false);
+  assert.equal(readFileSync(destination, 'utf8'), 'new content\n');
+  assert.deepEqual(readdirSync(root).sort(), ['destination.txt']);
+});
+
+test('move_file 在 EXDEV、权限失败或取消时回滚旧目标与源文件', async (t) => {
+  const originalRename = fs.renameSync;
+  let scenario: 'EACCES' | 'EXDEV' | 'backup-denied' | 'abort' | 'abort-after-source' | undefined;
+  let activeSource = '';
+  let activeDestination = '';
+  let controller: AbortController | undefined;
+  const mocked = t.mock.method(fs, 'renameSync', (from: fs.PathLike, to: fs.PathLike) => {
+    if ((scenario === 'abort' && String(from) === activeDestination) ||
+        (scenario === 'abort-after-source' && String(from) === activeSource && String(to) === activeDestination)) {
+      originalRename(from, to);
+      controller!.abort();
+      return;
+    }
+    if (scenario === 'backup-denied' && String(from) === activeDestination) {
+      throw Object.assign(new Error('injected backup EACCES'), { code: 'EACCES' });
+    }
+    if ((scenario === 'EACCES' || scenario === 'EXDEV') && String(from) === activeSource && String(to) === activeDestination) {
+      throw Object.assign(new Error(`injected ${scenario}`), { code: scenario });
+    }
+    originalRename(from, to);
+  });
+  syncBuiltinESMExports();
+  try {
+    for (const current of ['EACCES', 'EXDEV', 'backup-denied', 'abort', 'abort-after-source'] as const) {
+      const root = join(home, `move-rollback-${current}`);
+      mkdirSync(root, { recursive: true });
+      const source = join(root, 'source.txt');
+      const destination = join(root, 'destination.txt');
+      writeFileSync(source, 'new content\n');
+      writeFileSync(destination, 'old content\n');
+      scenario = current;
+      activeSource = source;
+      activeDestination = destination;
+      controller = new AbortController();
+
+      const result = await filesystemClient(root).call(
+        'move_file',
+        { source, destination, overwrite: true },
+        { signal: controller.signal },
+      );
+      assert.equal(result.ok, false, result.error?.message);
+      assert.equal(result.error?.code, current === 'abort' || current === 'abort-after-source' ? 'MCP_ABORTED' : current === 'EXDEV' ? 'MCP_MOVE_CROSS_DEVICE' : 'MCP_MOVE_FAILED');
+      assert.equal(readFileSync(source, 'utf8'), 'new content\n');
+      assert.equal(readFileSync(destination, 'utf8'), 'old content\n');
+      assert.deepEqual(readdirSync(root).sort(), ['destination.txt', 'source.txt']);
+    }
+  } finally {
+    scenario = undefined;
+    mocked.mock.restore();
+    syncBuiltinESMExports();
   }
-  const repo = join(home, 'repo');
-  mkdirSync(repo, { recursive: true });
-  writeFileSync(join(repo, 'README.md'), 'hello\n');
-  const git = (args: string[]) => spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8' });
-  assert.equal(git(['init']).status, 0);
-  assert.equal(git(['config', 'user.email', 'test@example.com']).status, 0);
-  assert.equal(git(['config', 'user.name', 'AiDB Test']).status, 0);
-  assert.equal(git(['add', '.']).status, 0);
-  assert.equal(git(['commit', '-m', 'init']).status, 0);
+});
 
-  const gitId = await serverId('git');
-  const updated = await api(`/mcp/servers/${gitId}`, { method: 'PUT', body: JSON.stringify({ args: [repo] }) });
-  assert.equal(updated.status, 200, JSON.stringify(updated.body));
+test('move_file 拒绝通过符号链接或 junction 访问 granted root 外的路径', async (t) => {
+  const root = join(home, 'move-links');
+  const outside = join(home, 'move-outside');
+  mkdirSync(root, { recursive: true });
+  mkdirSync(outside, { recursive: true });
+  const source = join(root, 'source.txt');
+  const outsideFile = join(outside, 'victim.txt');
+  const linkedRoot = join(root, 'linked');
+  writeFileSync(source, 'source content\n');
+  writeFileSync(outsideFile, 'outside content\n');
+  try {
+    symlinkSync(outside, linkedRoot, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (err: any) {
+    if (err?.code === 'EPERM') {
+      t.skip('symlink/junction creation is not permitted');
+      return;
+    }
+    throw err;
+  }
 
-  const status = await run('mcp_call', { server: gitId, tool: 'git_status', arguments: {} });
-  assert.equal(status.ok, true, status.error?.message);
-  assert.match((status.data as any).output, /##/);
+  const client = filesystemClient(root);
+  const escapedDestination = await client.call('move_file', { source, destination: join(linkedRoot, 'victim.txt'), overwrite: true });
+  assert.equal(escapedDestination.ok, false);
+  assert.equal(escapedDestination.error?.code, 'MCP_PATH_DENIED');
+  assert.equal(readFileSync(source, 'utf8'), 'source content\n');
+  assert.equal(readFileSync(outsideFile, 'utf8'), 'outside content\n');
 
-  const log = await run('mcp_call', { server: gitId, tool: 'git_log', arguments: { maxCount: 5 } });
-  assert.equal(log.ok, true, log.error?.message);
-  assert.match((log.data as any).output, /init/);
+  const escapedSource = await client.call('move_file', { source: join(linkedRoot, 'victim.txt'), destination: join(root, 'stolen.txt') });
+  assert.equal(escapedSource.ok, false);
+  assert.equal(escapedSource.error?.code, 'MCP_PATH_DENIED');
+  assert.equal(readFileSync(outsideFile, 'utf8'), 'outside content\n');
+  assert.equal(existsSync(join(root, 'stolen.txt')), false);
+});
+
+test('git 只读工具可读取状态与历史', async (t) => {
+  const previousNoSystem = process.env.GIT_CONFIG_NOSYSTEM;
+  const previousGlobal = process.env.GIT_CONFIG_GLOBAL;
+  process.env.GIT_CONFIG_NOSYSTEM = '1';
+  process.env.GIT_CONFIG_GLOBAL = process.platform === 'win32' ? 'NUL' : devNull;
+  const env = { ...process.env, GIT_PAGER: 'cat', GIT_TERMINAL_PROMPT: '0' };
+  try {
+    if (spawnSync('git', ['--version'], { encoding: 'utf8', env }).status !== 0) {
+      t.skip('git is not installed');
+      return;
+    }
+    const repo = join(home, 'repo');
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(join(repo, 'README.md'), 'hello\n');
+    const git = (args: string[]) => {
+      const result = spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8', env });
+      assert.equal(result.status, 0, result.stderr || result.error?.message || 'git fixture failed');
+      return result;
+    };
+    git(['init', '--quiet', '--template=']);
+    git(['config', 'user.email', 'test@example.com']);
+    git(['config', 'user.name', 'AiDB Test']);
+    const emptyHooks = join(repo, '.git', 'empty-hooks');
+    mkdirSync(emptyHooks, { recursive: true });
+    git(['config', 'core.hooksPath', emptyHooks]);
+    git(['add', '.']);
+    git(['commit', '--no-gpg-sign', '-m', 'init']);
+
+    // Exercise the in-process client directly. The previous gateway API round trips added
+    // loopback fetch lifecycles to a test that otherwise needs only a local git fixture.
+    const client = gitClient(repo);
+    const status = await client.call('git_status', {});
+    assert.equal(status.ok, true, status.error?.message);
+    assert.match((status.data as any).output, /##/);
+
+    const log = await client.call('git_log', { maxCount: 5 });
+    assert.equal(log.ok, true, log.error?.message);
+    assert.match((log.data as any).output, /init/);
+  } finally {
+    if (previousNoSystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM;
+    else process.env.GIT_CONFIG_NOSYSTEM = previousNoSystem;
+    if (previousGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+    else process.env.GIT_CONFIG_GLOBAL = previousGlobal;
+  }
 });
 
 test('web 拒绝内网地址，且默认关闭', async () => {
@@ -474,12 +605,69 @@ test('fetch_url 允许的跨子域重定向会逐跳校验并固定新地址', a
   }
 });
 
+test('fetch_url 拒绝重定向到私网，且不会发出第二跳', async (t) => {
+  const restoreDns = mockDnsLookup(t, async () => [{ address: '93.184.216.34', family: 4 }]);
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    return new Response(null, { status: 302, headers: { location: 'http://127.0.0.1/private' } });
+  }) as typeof fetch;
+  try {
+    const result = await webClient([]).call('fetch_url', { url: 'https://allowed.example/start' });
+    assert.equal(result.ok, false);
+    assert.equal(result.error?.code, 'MCP_URL_DENIED');
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreDns();
+  }
+});
+
+test('fetch_url 的总超时覆盖重定向后的响应体', async (t) => {
+  const restoreDns = mockDnsLookup(t, async () => [{ address: '93.184.216.34', family: 4 }]);
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    if (calls === 1) return new Response(null, { status: 302, headers: { location: '/stalled' } });
+    return new Response(new ReadableStream<Uint8Array>({ start() {} }), { status: 200, headers: { 'content-type': 'text/plain' } });
+  }) as typeof fetch;
+  try {
+    const result = await webClient([]).call('fetch_url', { url: 'https://allowed.example/start' }, { timeoutMs: 30 });
+    assert.equal(result.ok, false);
+    assert.equal(result.error?.code, 'MCP_FETCH_TIMEOUT');
+    assert.equal(calls, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreDns();
+  }
+});
+
+test('fetch_url 对超过字节上限的响应返回明确错误', async (t) => {
+  const restoreDns = mockDnsLookup(t, async () => [{ address: '93.184.216.34', family: 4 }]);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response('small', {
+    status: 200,
+    headers: { 'content-type': 'text/plain', 'content-length': String(1024 * 1024 + 1) },
+  })) as typeof fetch;
+  try {
+    const result = await webClient([]).call('fetch_url', { url: 'https://allowed.example/large' });
+    assert.equal(result.ok, false);
+    assert.equal(result.error?.code, 'MCP_FETCH_TOO_LARGE');
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreDns();
+  }
+});
+
 test('mcp_call 风险：内置读工具免审批，写工具与外部服务器仍需审批', () => {
   const tool = getTool('mcp_call')!;
   assert.equal(tool.risk, 'dynamic');
   assert.equal(resolveRisk({ id: '1', name: 'mcp_call', args: { server: 'builtin-filesystem', tool: 'read_file' } }, tool), 'read');
   assert.equal(resolveRisk({ id: '2', name: 'mcp_call', args: { server: 'builtin-filesystem', tool: 'write_file' } }, tool), 'write');
   assert.equal(resolveRisk({ id: '2b', name: 'mcp_call', args: { server: 'builtin-filesystem', tool: 'delete_file' } }, tool), 'destructive');
+  assert.equal(resolveRisk({ id: '2c', name: 'mcp_call', args: { server: 'builtin-filesystem', tool: 'move_file', arguments: { source: '/a', destination: '/b', overwrite: true } } }, tool), 'destructive');
   assert.equal(resolveRisk({ id: '3', name: 'mcp_call', args: { server: 'builtin-web', tool: 'fetch_url' } }, tool), 'read');
   assert.equal(resolveRisk({ id: '4', name: 'mcp_call', args: { server: 'filesystem', tool: 'read_file' } }, tool), 'read');
   assert.equal(resolveRisk({ id: '5', name: 'mcp_call', args: { server: 'external', tool: 'read_file' } }, tool), 'write');

@@ -76,6 +76,12 @@ export type DbObjectKind = 'table' | 'view' | 'collection' | 'key' | 'node_label
 
 export type Environment = 'dev' | 'staging' | 'prod';
 export type PermissionMode = 'readonly' | 'ask' | 'auto' | 'full';
+/** 设备 Agent 允许使用的最高权限模式；auto/full 仍保留给本机管理员。 */
+export type DevicePermissionMode = Extract<PermissionMode, 'readonly' | 'ask'>;
+export const DEVICE_PERMISSION_MODES: readonly DevicePermissionMode[] = ['readonly', 'ask'];
+export function isDevicePermissionMode(mode: PermissionMode): mode is DevicePermissionMode {
+  return mode === 'readonly' || mode === 'ask';
+}
 export type Risk = 'read' | 'write' | 'ddl' | 'destructive';
 export type ConnectionColor = 'blue' | 'green' | 'orange' | 'red' | 'purple' | 'cyan' | 'gray';
 
@@ -773,7 +779,7 @@ export interface AgentPlanItem {
  * 'stalled' 与 'disconnected' 也必须分开：前者是模型端不回话，后者是界面那侧断开，
  * 排查方向完全相反。
  */
-export type AgentResumeCause = 'stalled' | 'truncated' | 'empty' | 'disconnected' | 'max_steps' | 'provider_incomplete';
+export type AgentResumeCause = 'stalled' | 'truncated' | 'empty' | 'disconnected' | 'deadline' | 'interrupted' | 'max_steps' | 'provider_incomplete';
 
 export interface AgentSessionMeta {
   id: string;
@@ -871,6 +877,14 @@ export interface BackupInfo {
   createdAt: string;
 }
 
+export type DeviceScope = 'admin' | 'device' | 'mcp:readonly';
+
+export interface DeviceConnectionPermission {
+  deviceId: string;
+  connectionId: string;
+  grantedAt: string;
+}
+
 export interface DeviceInfo {
   id: string;
   name: string;
@@ -878,6 +892,8 @@ export interface DeviceInfo {
   pairedAt: string;
   lastSeenAt?: string;
   revoked: boolean;
-  /** 'full' = mobile/full API access (default for legacy rows); 'mcp:readonly' = outbound MCP bridge only. */
-  scope: 'full' | 'mcp:readonly';
+  /** admin = 本机管理员；device = 仅显式授权的连接；mcp:readonly = 出站只读桥。 */
+  scope: DeviceScope;
+  /** device scope 的持久化连接 ACL；admin 与 mcp:readonly 不消费该列表。 */
+  connectionIds: string[];
 }

@@ -1,3 +1,4 @@
+import { EgressError, safeFetch } from '../egress';
 import { PipelineAbortedError, PipelineError, type PipelineCredentialSecret } from './types';
 
 /**
@@ -84,53 +85,38 @@ export async function httpRequest(input: HttpRequestInput): Promise<HttpResponse
   }
   const url = withQuery(input.url, input.query ?? {});
   const timeoutMs = Math.min(Math.max(input.timeoutMs ?? DEFAULT_TIMEOUT, 1000), 120000);
-  // 单个信号覆盖「请求 + body 读取」全程：拿到响应头就停表的话，服务端headers 回得快、
-  // body 却一直不吐完的场景会无限挂起（与 search.ts 曾有的 bug 同模式）。
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const signal = input.signal ? AbortSignal.any([input.signal, timeoutSignal]) : timeoutSignal;
+  // safeFetch 的单个总超时信号覆盖请求、逐跳重定向和完整响应体读取。
   if (input.signal?.aborted) throw new PipelineAbortedError();
   const started = Date.now();
   const networkError = (err: any): PipelineError => {
     if (input.signal?.aborted) return new PipelineAbortedError();
-    const timedOut = err?.name === 'AbortError' || err?.name === 'TimeoutError';
-    const reason = timedOut ? `超过 ${Math.round(timeoutMs / 1000)} 秒未完成（含响应体读取）` : (err?.cause?.message ?? err?.message ?? '连接失败');
+    if (err instanceof EgressError) {
+      if (err.code === 'EGRESS_ABORTED') return new PipelineAbortedError();
+      if (err.code === 'EGRESS_TIMEOUT') {
+        return new PipelineError(`接口请求失败：超过 ${Math.round(timeoutMs / 1000)} 秒未完成（含响应体读取）`, 'PIPELINE_HTTP_NETWORK');
+      }
+      if (err.code === 'EGRESS_RESPONSE_TOO_LARGE') {
+        return new PipelineError('接口响应体超过大小上限', 'PIPELINE_HTTP_TOO_LARGE', '缩小步骤的 maxBytes 或减少服务端返回的数据量');
+      }
+      if (err.code === 'EGRESS_URL_DENIED' || err.code === 'EGRESS_DNS_FAILED' || err.code === 'EGRESS_REDIRECT_DENIED' || err.code === 'EGRESS_REDIRECT_LIMIT') {
+        return new PipelineError('接口地址未通过出站安全校验', 'PIPELINE_HTTP_DENIED', '仅允许 HTTP(S) 公网地址；如需访问内网服务，请由管理员显式配置允许的 origin');
+      }
+    }
+    const reason = err?.cause?.message ?? err?.message ?? '连接失败';
     return new PipelineError(`接口请求失败：${reason}`, 'PIPELINE_HTTP_NETWORK', `检查 ${new URL(url, 'http://localhost').host} 是否可达`);
   };
   let response: Response;
   try {
-    response = await fetch(url, { method, headers, body, signal, redirect: 'follow' });
+    response = await safeFetch(url, { method, headers, body, signal: input.signal }, { timeoutMs, maxBytes: input.maxBytes ?? DEFAULT_MAX_BYTES });
   } catch (err: any) {
     throw networkError(err);
   }
 
   const contentType = response.headers.get('content-type') ?? '';
-  const maxBytes = input.maxBytes ?? DEFAULT_MAX_BYTES;
-  const reader = response.body?.getReader();
-  const chunks: Uint8Array[] = [];
-  let bytes = 0;
-  let truncated = false;
-  if (reader) {
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (!value) continue;
-        bytes += value.byteLength;
-        if (bytes > maxBytes) {
-          truncated = true;
-          void reader.cancel();
-          break;
-        }
-        chunks.push(value);
-      }
-    } catch (err: any) {
-      // body 读取期间超时：信号 abort 会让 reader.read()  reject，同样按网络/超时错误报
-      throw networkError(err);
-    }
-  }
-  const textBody = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), bytes).toString('utf8');
+  const textBody = await response.text();
+  const bytes = Buffer.byteLength(textBody, 'utf8');
   let json: unknown = undefined;
-  if (!truncated && textBody.trim()) {
+  if (textBody.trim()) {
     const looksJson = contentType.includes('json') || /^[[{]/.test(textBody.trim());
     if (looksJson) {
       try {

@@ -1,8 +1,5 @@
-import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { ProxyAgent, fetch as undiciFetch } from 'undici';
 import type {
   SearchBackendHealth,
   SearchBackendId,
@@ -12,9 +9,36 @@ import type {
   SearchSettings,
 } from '@aidb/core';
 import type { Store } from './store';
+import { EgressError, safeFetch } from './egress';
 
+const SEARCH_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const SEARCH_KEYS = ['brave', 'tavily', 'serper', 'mojeek', 'deepseek', 'anthropic', 'openai', 'searxng'] as const;
 type SearchKeyId = (typeof SEARCH_KEYS)[number];
+
+/** Diagnostics never need URL userinfo, query values or fragments; keep host:port and parameter names only. */
+function redactUrlDiagnostics(value: string): string {
+  const withoutUserInfo = value.replace(/\b([a-z][a-z\d+.-]*:\/\/)[^\s/?#]+@/gi, '$1');
+  return withoutUserInfo.replace(/\b[a-z][a-z\d+.-]*:\/\/[^\s<>"']+/gi, (raw) => {
+    try {
+      const parsed = new URL(raw);
+      parsed.username = '';
+      parsed.password = '';
+      parsed.hash = '';
+      for (const key of new Set(parsed.searchParams.keys())) parsed.searchParams.set(key, '***');
+      return parsed.toString();
+    } catch {
+      // Invalid URLs (for example an out-of-range port) cannot be normalized. Retain only
+      // scheme + authority so a malformed credential/query still cannot reach logs.
+      const authorityStart = raw.indexOf('://') + 3;
+      const suffixStart = raw.slice(authorityStart).search(/[/?#]/);
+      return suffixStart < 0 ? raw : raw.slice(0, authorityStart + suffixStart);
+    }
+  });
+}
+
+function redactSearchErrorMessage(message: string): string {
+  return redactUrlDiagnostics(message);
+}
 
 export const SEARCH_BACKENDS: Array<{ id: SearchBackendId; label: string; needsKey: boolean; group: 'free' | 'key' }> = [
   { id: 'exa', label: 'Exa (MCP, 免费)', needsKey: false, group: 'free' },
@@ -35,7 +59,7 @@ const health = new Map<SearchBackendId, SearchBackendHealth>();
 
 export class SearchError extends Error {
   constructor(message: string, readonly code = 'SEARCH_ERROR') {
-    super(message);
+    super(redactSearchErrorMessage(message));
     this.name = 'SearchError';
   }
 }
@@ -80,18 +104,14 @@ function markFailure(id: SearchBackendId, ms: number, error: string): void {
   entry.status = 'error';
   entry.lastMs = ms;
   entry.lastAt = new Date().toISOString();
-  entry.lastError = error.slice(0, 300);
+  entry.lastError = redactSearchErrorMessage(error).slice(0, 300);
   entry.failures += 1;
 }
 
 /* --------------------------------------------------------------- transport */
 
-/**
- * 搜索是网关里唯一需要按设置走代理的出站流量。
- * Node 的全局 fetch 只在进程启动时读取 *_PROXY，改设置不重启就没有任何效果，
- * 所以这里用 undici 的 ProxyAgent 按请求注入 dispatcher。
- */
-let activeProxy: { url: string; agent: ProxyAgent } | undefined;
+/** Search proxy settings are applied per request through safeFetch's proxy-aware pinned transport. */
+let activeProxy: string | undefined;
 
 function resolveProxy(proxyUrl: string | undefined): void {
   const value = (proxyUrl ?? '').trim();
@@ -103,40 +123,44 @@ function resolveProxy(proxyUrl: string | undefined): void {
   try {
     parsed = new URL(value);
   } catch {
-    console.warn(`[search] 忽略非法代理地址：${value}`);
+    console.warn(`[search] 忽略非法代理地址：${redactUrlDiagnostics(value)}`);
     activeProxy = undefined;
     return;
   }
   if (!['http:', 'https:'].includes(parsed.protocol)) {
-    console.warn(`[search] 忽略 ${parsed.protocol} 代理：仅支持 http/https，SOCKS 请换成同工具的 HTTP 端口`);
+    console.warn(`[search] 忽略 ${redactUrlDiagnostics(value)}：仅支持 http/https，SOCKS 请换成同工具的 HTTP 端口`);
     activeProxy = undefined;
     return;
   }
-  const url = parsed.toString();
-  if (!activeProxy || activeProxy.url !== url) {
-    activeProxy?.agent.close().catch(() => undefined);
-    activeProxy = { url, agent: new ProxyAgent(url) };
-  }
+  activeProxy = parsed.toString();
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
-  // G3：单个 AbortSignal.timeout 覆盖「请求 + body 读取」全程。旧实现在收到响应头
-  // 时就 clearTimeout，服务端只发头不发 body 时 response.text() 会永久挂起。
-  // 这里把 body 读完才返回（signal 全程计时），调用方拿到的是已缓冲的响应，
-  // 后续 .text() 不再触网；超时错误（含 body 阶段）统一归为 SEARCH_TIMEOUT。
-  const signal = AbortSignal.timeout(timeoutMs);
-  const dispatcher = activeProxy?.agent;
+interface SearchFetchOptions {
+  /** Only an explicitly configured SearXNG origin may use private/loopback destinations. */
+  trustedOrigin?: string;
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number, options: SearchFetchOptions = {}): Promise<Response> {
   try {
-    const response = dispatcher
-      ? await undiciFetch(url, { ...init, signal, dispatcher })
-      : await fetch(url, { ...init, signal });
-    const body = await response.text();
-    // 204/205/304 不允许携带 body，用 null 重建以保留状态与头语义。
-    const nullBody = response.status === 204 || response.status === 205 || response.status === 304;
-    return new Response(nullBody ? null : body, { status: response.status, statusText: response.statusText, headers: response.headers });
-  } catch (err: any) {
-    // AbortSignal.timeout 触发的是 TimeoutError；兼容 AbortError 命名。
-    if (err?.name === 'AbortError' || err?.name === 'TimeoutError') fail(`请求超时（${timeoutMs}ms）：${safeHost(url)}`, 'SEARCH_TIMEOUT');
+    // safeFetch keeps one deadline across DNS, redirects, headers and the capped response body.
+    return await safeFetch(url, init, {
+      timeoutMs,
+      maxBytes: SEARCH_MAX_RESPONSE_BYTES,
+      allowPrivateOrigins: options.trustedOrigin ? [options.trustedOrigin] : [],
+      allowedProtocols: options.trustedOrigin ? ['http:', 'https:'] : ['https:'],
+      proxyUrl: activeProxy,
+    });
+  } catch (err) {
+    if (err instanceof EgressError) {
+      if (err.code === 'EGRESS_TIMEOUT' || err.code === 'EGRESS_ABORTED') {
+        fail(`请求超时（${timeoutMs}ms）：${safeHost(url)}`, 'SEARCH_TIMEOUT');
+      }
+      if (err.code === 'EGRESS_URL_DENIED') fail(err.message, 'SEARCH_URL_DENIED');
+      if (err.code === 'EGRESS_DNS_FAILED') fail(err.message, 'SEARCH_DNS_FAILED');
+      if (err.code === 'EGRESS_REDIRECT_DENIED') fail(err.message, 'SEARCH_REDIRECT_DENIED');
+      if (err.code === 'EGRESS_REDIRECT_LIMIT') fail(err.message, 'SEARCH_REDIRECT_LIMIT');
+      if (err.code === 'EGRESS_RESPONSE_TOO_LARGE') fail(err.message, 'SEARCH_RESPONSE_TOO_LARGE');
+    }
     fail(describeFetchFailure(url, err), 'SEARCH_REQUEST_FAILED');
   }
 }
@@ -145,17 +169,19 @@ function safeHost(url: string): string {
   try {
     return new URL(url).host;
   } catch {
-    return url.slice(0, 60);
+    return redactUrlDiagnostics(url).slice(0, 60);
   }
 }
 
-/** fetch 只报 "fetch failed"，真正原因在 err.cause；把它翻译成可行动的一句话。 */
+/** fetch often reports only "fetch failed"; retain the actionable Undici cause from EgressError. */
 function describeFetchFailure(url: string, err: any): string {
   const host = safeHost(url);
-  const via = activeProxy ? `经代理 ${activeProxy.url}：` : '';
-  const cause = err?.cause;
-  const code: string = cause?.code ?? cause?.name ?? '';
-  const address = cause?.errors?.[0]?.address ?? cause?.address ?? '';
+  const via = activeProxy ? `经代理 ${redactUrlDiagnostics(activeProxy)}：` : '';
+  let cause = err instanceof EgressError ? err.cause : err;
+  for (let depth = 0; depth < 3 && cause?.cause; depth += 1) cause = cause.cause;
+  const nested = cause?.errors?.[0];
+  const code: string = cause?.code ?? cause?.name ?? nested?.code ?? nested?.name ?? '';
+  const address = nested?.address ?? cause?.address ?? '';
   const suffix = address ? `，目标 ${address}` : '';
   if (activeProxy && /ECONNREFUSED/.test(code)) return `${via}连接被拒绝：${host}${suffix}（代理端口没在监听？Clash 的 HTTP 端口通常是 7890/10809，SOCKS 端口不能直接用）`;
   if (/ENOTFOUND|EAI_AGAIN|EAI_FAIL/.test(code)) return `${via}域名解析失败：${host}（本机 DNS 无法解析，可能被污染或需要代理）`;
@@ -183,46 +209,6 @@ async function readJson(response: Response): Promise<any> {
     );
   }
 }
-
-function isPrivateIp(ip: string): boolean {
-  const value = ip.trim().toLowerCase().replace(/^\[|\]$/g, '').split('%')[0];
-  if (isIP(value) === 4) {
-    const [a, b] = value.split('.').map(Number);
-    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a >= 224;
-  }
-  if (isIP(value) === 6) return value === '::1' || value === '::' || /^f[cd]/.test(value) || /^fe[89ab]/.test(value);
-  return true;
-}
-
-async function assertPublicHost(url: URL): Promise<void> {
-  const host = url.hostname.replace(/^\[|\]$/g, '');
-  if (/(^|\.)(localhost|local|internal)$/i.test(host)) fail(`内网地址不可搜索：${host}`, 'SEARCH_URL_DENIED');
-  if (isIP(host)) {
-    if (isPrivateIp(host)) fail(`内网地址不可搜索：${host}`, 'SEARCH_URL_DENIED');
-    return;
-  }
-  let addresses;
-  try {
-    addresses = await lookup(host, { all: true, verbatim: true });
-  } catch {
-    fail(`域名解析失败：${host}`, 'SEARCH_DNS_FAILED');
-  }
-  for (const address of addresses) if (isPrivateIp(address.address)) fail(`域名解析到内网地址：${host}`, 'SEARCH_URL_DENIED');
-}
-
-/**
- * SearXNG 实例由用户自建并显式配置地址（searxngBaseUrl）。这类实例常部署在
- * 局域网 / 同机,因此信任用户配置、允许内网与回环地址,不再强制公网校验。
- * SSRF 防护仍作用于其它走公开 API 的后端。
- */
-async function assertSearchEndpoint(url: URL, trustUserInstance: boolean): Promise<void> {
-  if (trustUserInstance) {
-    const host = url.hostname.replace(/^\[|\]$/g, '');
-    if (!host) fail('SearXNG 实例地址缺少 host', 'SEARCH_URL_MISSING');
-    return;
-  }
-  await assertPublicHost(url);
-  }
 
 /* --------------------------------------------------------------- remote MCP */
 
@@ -458,27 +444,32 @@ function decodeHtml(value: string): string {
 async function searchSearxng(query: string, settings: SearchSettings, store: Store): Promise<SearchResult[]> {
   const base = (settings.searxngBaseUrl ?? '').trim().replace(/\/+$/, '');
   if (!base) fail('未配置 SearXNG 实例：公共实例（含 searx.be）一律禁用 format=json，需要自建，例如 docker run -d -p 8080:8080 searxng/searxng 并在 settings.yml 里启用 search.formats: [json]', 'SEARCH_URL_MISSING');
+  let trustedOrigin: string;
+  try {
+    trustedOrigin = new URL(base).origin;
+  } catch {
+    fail('SearXNG 实例地址格式不正确', 'SEARCH_URL_MISSING');
+  }
   const url = new URL(`${base}/search`);
   url.searchParams.set('q', query);
   url.searchParams.set('format', 'json');
   if (settings.language) url.searchParams.set('language', settings.language);
   if (settings.timeRange !== 'any') url.searchParams.set('time_range', settings.timeRange);
   url.searchParams.set('safesearch', settings.safeSearch ? '1' : '0');
-  // SearXNG 是用户自建实例(填了 searxngBaseUrl),信任其地址,放行内网/回环
-  await assertSearchEndpoint(url, true);
+  // Trust only this exact configured origin for private/loopback access; every redirect is still revalidated.
   const key = getSearchKey(store, 'searxng');
   const headers = { accept: 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) };
-  const found = await searxRequest(url, headers, settings);
+  const found = await searxRequest(url, headers, settings, trustedOrigin);
   // 自建实例往往只剩不支持 time_range 的引擎可用，带上该参数会直接 0 条；去掉重试一次，让这个源仍有产出。
   if (!found.length && url.searchParams.has('time_range')) {
     url.searchParams.delete('time_range');
-    return searxRequest(url, headers, settings);
+    return searxRequest(url, headers, settings, trustedOrigin);
   }
   return found;
 }
 
-async function searxRequest(url: URL, headers: Record<string, string>, settings: SearchSettings): Promise<SearchResult[]> {
-  const response = await fetchWithTimeout(url.toString(), { headers }, settings.timeoutMs);
+async function searxRequest(url: URL, headers: Record<string, string>, settings: SearchSettings, trustedOrigin: string): Promise<SearchResult[]> {
+  const response = await fetchWithTimeout(url.toString(), { headers }, settings.timeoutMs, { trustedOrigin });
   const body = await readJson(response);
   // 参数不合法时 SearXNG 回的是 HTTP 200 + {"error": "..."}，不读出来就只表现为「0 条」。
   if (body?.error) fail(`SearXNG：${typeof body.error === 'string' ? body.error : JSON.stringify(body.error)}`, 'SEARCH_SEARX_ERROR');
@@ -696,7 +687,7 @@ export async function runSearch(query: string, store: Store, overrides: Partial<
         results.push(...found);
       } catch (err: any) {
         const ms = Date.now() - started;
-        const message = err?.message ?? String(err);
+        const message = redactSearchErrorMessage(err?.message ?? String(err));
         if (settings.healthTelemetry) markFailure(id, ms, message);
         reports.push({ id, ok: false, count: 0, ms, error: message });
       }

@@ -287,6 +287,7 @@ export async function writeExportFile(input: ExportInput): Promise<{ path: strin
     throwIfAborted(input.signal);
     return { path: filePath, bytes: stat.size, rows: rowCount };
   } finally {
-    if (!published) await fsp.rm(tempPath, { force: true });
+    if (!published || input.signal?.aborted) await fsp.rm(tempPath, { force: true });
+    if (published && input.signal?.aborted) await fsp.rm(filePath, { force: true });
   }
 }

@@ -842,7 +842,9 @@ async function main() {
             await page.goto(mobileBase, { waitUntil: 'networkidle' });
             await page.waitForTimeout(1600);
             await auditPage(page, `${tag}-pairing`, { screenshot: width === 390, skipControls: true });
-            const pair = await api('POST', '/pair/start');
+            const mobileBoot = (await api('GET', '/bootstrap')).json;
+            const mobileConnectionIds = (mobileBoot?.connections ?? []).map((connection) => connection.id);
+            const pair = await api('POST', '/pair/start', { connectionIds: mobileConnectionIds });
             const code = pair.json?.code;
             if (!code) {
               record(`${tag} 配对码`, false, pair.json);

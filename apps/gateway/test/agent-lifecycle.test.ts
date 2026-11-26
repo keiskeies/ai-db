@@ -111,6 +111,154 @@ test('旧回合 finally 与带代次的 abort 不会清掉或中止新回合', a
   }
 });
 
+test('AgentHost 重新加载设备状态与 ACL，撤销、到期或降级后拒绝 turn/abort/approval', async () => {
+  const host = makeHost();
+  const allowed = gateway.store.createConnection({ name: 'Host ACL allowed', engine: 'sqlite', database: ':memory:' });
+  for (const state of ['revoked', 'expired', 'downgraded'] as const) {
+    const token = `host-acl-${state}`;
+    const device = gateway.store.createDevice({
+      name: state, platform: 'ios', tokenHash: `hash-${state}`, scope: 'device', connectionIds: [allowed.id],
+    });
+    const session = gateway.store.createSession({ title: state, connectionId: allowed.id, permissionMode: 'readonly' });
+    const access = { scope: 'device' as const, deviceId: device.id, connectionIds: [allowed.id] };
+
+    const before = (host as any).beginTurn(session.id) as { id: string; controller: AbortController; finish: () => void };
+    assert.equal(host.abort(session.id, 'user', before.id, access), true, `${state}: 初始 ACL 应允许`);
+    before.finish();
+
+    if (state === 'revoked') gateway.store.revokeDevice(device.id);
+    if (state === 'expired') gateway.store.db.prepare("UPDATE devices SET expires_at = '2000-01-01T00:00:00.000Z' WHERE id = ?").run(device.id);
+    if (state === 'downgraded') gateway.store.db.prepare("UPDATE devices SET scope = 'mcp:readonly' WHERE id = ?").run(device.id);
+
+    await assert.rejects(
+      host.startTurn(session.id, { text: '失效设备回合', mode: 'readonly' }, () => undefined, access),
+      (error: any) => error?.code === 'CONNECTION_FORBIDDEN' && error?.status === 403,
+      state,
+    );
+    const turn = (host as any).beginTurn(session.id) as { id: string; controller: AbortController; finish: () => void };
+    try {
+      assert.equal(host.abort(session.id, 'user', turn.id, access), false, state);
+      assert.equal(turn.controller.signal.aborted, false, state);
+      const payload = {
+        id: `approval-${state}`,
+        call: { id: `call-${state}`, name: 'run_sql', args: { sql: 'SELECT 1', connectionId: allowed.id } },
+        risk: 'read' as const,
+        summary: state,
+        sql: 'SELECT 1',
+        expiresAt: Date.now() + 60_000,
+      };
+      const decision = (host as any).waitApproval(payload, session.id, turn) as Promise<any>;
+      assert.equal(host.resolveApproval(payload.id, 'allow', 'once', access), false, state);
+      assert.equal((host as any).approvals.has(payload.id), true, state);
+      turn.controller.abort();
+      assert.deepEqual(await decision, { decision: 'deny', scope: 'once' });
+    } finally {
+      turn.finish();
+    }
+  }
+});
+
+test('device approval rechecks the persisted ACL of the tool target, not only its session', async () => {
+  const host = makeHost();
+  const allowed = gateway.store.createConnection({ name: 'approval session', engine: 'sqlite', database: ':memory:' });
+  const denied = gateway.store.createConnection({ name: 'approval target', engine: 'sqlite', database: ':memory:' });
+  const device = gateway.store.createDevice({
+    name: 'approval ACL', platform: 'ios', tokenHash: 'hash-approval-target', scope: 'device', connectionIds: [allowed.id],
+  });
+  const session = gateway.store.createSession({ title: 'approval target ACL', connectionId: allowed.id, permissionMode: 'ask' });
+  const access = { scope: 'device' as const, deviceId: device.id, connectionIds: [allowed.id] };
+  const turn = (host as any).beginTurn(session.id) as { controller: AbortController; finish: () => void };
+  try {
+    const payload = {
+      id: 'approval-cross-target',
+      call: { id: 'call-cross-target', name: 'run_sql', args: { sql: 'DELETE FROM items', connectionId: denied.id } },
+      risk: 'destructive' as const,
+      summary: '跨连接审批',
+      sql: 'DELETE FROM items',
+      expiresAt: Date.now() + 60_000,
+    };
+    const decision = (host as any).waitApproval(payload, session.id, turn) as Promise<any>;
+    assert.equal(host.resolveApproval(payload.id, 'allow', 'once', access), false);
+    assert.equal((host as any).approvals.has(payload.id), true);
+    turn.controller.abort();
+    assert.deepEqual(await decision, { decision: 'deny', scope: 'once' });
+  } finally {
+    turn.finish();
+  }
+});
+
+test('SSE 迟到 close 只取消本请求捕获的代次，不中止同会话替代回合', async (t) => {
+  const host = gateway.host;
+  const session = gateway.store.createSession({ title: 'SSE 迟到关闭' });
+  const oldGate = deferred<void>();
+  const newGate = deferred<void>();
+  const oldStarted = deferred<void>();
+  const newStarted = deferred<void>();
+  const closeCaptured = deferred<void>();
+  const aborts: Array<{ sessionId: string; turnId?: string }> = [];
+  let currentTurnId: string | undefined;
+  let starts = 0;
+  let releaseClose: (() => void) | undefined;
+  t.mock.method(host, 'startTurn', (async () => {
+    starts += 1;
+    currentTurnId = starts === 1 ? 'sse-old-turn' : 'sse-new-turn';
+    if (starts === 1) {
+      oldStarted.resolve();
+      await oldGate.promise;
+    } else {
+      newStarted.resolve();
+      await newGate.promise;
+    }
+  }) as AgentHost['startTurn']);
+  t.mock.method(host, 'getTurnId', () => currentTurnId);
+  t.mock.method(host, 'abort', ((sessionId: string, _cause: 'user' | 'disconnected', turnId?: string) => {
+    aborts.push({ sessionId, turnId });
+    return true;
+  }) as AgentHost['abort']);
+
+  // 截住第一个 SSE 响应的 close 事件，模拟它在替代回合启动后才迟到。
+  const onRequest = (req: any, res: any) => {
+    if (!String(req.url).includes('/turns') || releaseClose) return;
+    const emit = res.emit.bind(res);
+    res.emit = (event: string, ...args: any[]) => {
+      if (event !== 'close') return emit(event, ...args);
+      releaseClose = () => emit('close', ...args);
+      closeCaptured.resolve();
+      return true;
+    };
+  };
+  gateway.server.on('request', onRequest);
+  const oldController = new AbortController();
+  const newController = new AbortController();
+  try {
+    const oldResponse = api(`/agent/sessions/${session.id}/turns`, {
+      method: 'POST', body: JSON.stringify({ text: '旧回合' }), signal: oldController.signal,
+    }).catch(() => undefined);
+    await oldStarted.promise;
+    oldController.abort();
+    await closeCaptured.promise;
+
+    const newResponse = api(`/agent/sessions/${session.id}/turns`, {
+      method: 'POST', body: JSON.stringify({ text: '替代回合' }), signal: newController.signal,
+    });
+    await newStarted.promise;
+    releaseClose?.();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(aborts, [{ sessionId: session.id, turnId: 'sse-old-turn' }]);
+    assert.equal(currentTurnId, 'sse-new-turn');
+
+    newGate.resolve();
+    await newResponse;
+  } finally {
+    releaseClose?.();
+    oldGate.resolve();
+    newGate.resolve();
+    oldController.abort();
+    newController.abort();
+    gateway.server.off('request', onRequest);
+  }
+});
+
 test('历史重建保留 tool_call 参数与配对的 tool_result，并丢弃未完成调用', async () => {
   const session = gateway.store.createSession({ title: '工具历史' });
   gateway.store.appendMessage({ sessionId: session.id, role: 'user', content: '统计订单' });
@@ -171,7 +319,8 @@ test('审批审计失败时保留 pending，可重试且 Promise 最终结算', 
     sql: 'DELETE FROM orders',
     expiresAt: Date.now() + 60_000,
   };
-  const decision = (host as any).waitApproval(payload, session.id) as Promise<any>;
+  const turn = (host as any).beginTurn(session.id) as { finish: () => void };
+  const decision = (host as any).waitApproval(payload, session.id, turn) as Promise<any>;
   const originalAudit = gateway.store.addAudit.bind(gateway.store);
   let fail = true;
   gateway.store.addAudit = ((entry: any) => {
@@ -193,6 +342,7 @@ test('审批审计失败时保留 pending，可重试且 Promise 最终结算', 
       pending.resolve({ decision: 'deny', scope: 'once' });
     }
     gateway.store.addAudit = originalAudit;
+    turn.finish();
   }
 });
 
@@ -222,6 +372,76 @@ test('/init 中止后不会遗留失效标记，下一回合仍可启动', async
     assert.equal(host.isRunning(session.id), false);
   } finally {
     gateway.manager.schema = originalSchema;
+  }
+});
+
+test('普通回合与 /init 的 schema 读取都受绝对deadline取消', async () => {
+  const connection = gateway.store.listConnections()[0];
+  assert.ok(connection);
+  const host = new AgentHost({
+    store: gateway.store,
+    manager: gateway.manager,
+    executor,
+    config: { ...gateway.config, agentTurnMs: 500 },
+  });
+  const originalSchema = gateway.manager.schema.bind(gateway.manager);
+  let schemaStarted!: () => void;
+  let options: any;
+  gateway.manager.schema = (async (_id: string, _db: string, _refresh: boolean, _ttl: number, opts: any) => {
+    options = opts;
+    schemaStarted();
+    return new Promise<any[]>((_, reject) => {
+      const abort = () => reject(Object.assign(new Error('schema aborted'), { code: 'ABORTED' }));
+      if (opts.signal.aborted) abort();
+      else opts.signal.addEventListener('abort', abort, { once: true });
+    });
+  }) as typeof gateway.manager.schema;
+  try {
+    for (const text of ['普通回合结构读取', '/init']) {
+      const started = new Promise<void>((resolve) => { schemaStarted = resolve; });
+      options = undefined;
+      const session = gateway.store.createSession({ title: `deadline ${text}`, connectionId: connection.id });
+      const emitted: any[] = [];
+      const pending = host.startTurn(session.id, { text }, (event) => emitted.push(event));
+      await started;
+      const turnId = host.getTurnId(session.id);
+      assert.ok(turnId);
+      assert.ok(gateway.store.getTurn(turnId)?.deadlineAt, '持久化 claim 必须保留绝对deadline');
+      assert.equal(options.signal.aborted, false);
+      assert.ok(options.timeoutMs > 0 && options.timeoutMs <= 500, 'schema 必须拿到回合剩余预算');
+      assert.equal(options.executionId, turnId);
+      if (text === '/init') {
+        await pending;
+        assert.ok(emitted.some((event) => event.type === 'error' && event.code === 'TURN_DEADLINE'));
+      } else {
+        await assert.rejects(pending, (error: any) => error?.code === 'TURN_DEADLINE');
+      }
+      assert.equal(options.signal.aborted, true);
+      assert.equal(host.isRunning(session.id), false);
+    }
+  } finally {
+    gateway.manager.schema = originalSchema;
+  }
+});
+
+test('AIDB_AGENT_TURN_MS=0 的显式关闭不会给 schema 注入超时', async () => {
+  const session = gateway.store.createSession({ title: 'deadline opt-out' });
+  let options: any;
+  const manager = {
+    schema: async (_id: string, _db: string, _refresh: boolean, _ttl: number, opts: any) => {
+      options = opts;
+      return [];
+    },
+  } as any;
+  const host = new AgentHost({ store: gateway.store, manager, executor, config: { ...gateway.config, agentTurnMs: 0 } });
+  const turn = (host as any).beginTurn(session.id) as { signal: AbortSignal; finish: () => void };
+  try {
+    await (host as any).schemaForTurn(turn, 'connection');
+    assert.equal(options.signal, turn.signal);
+    assert.equal(options.timeoutMs, undefined);
+    assert.equal('timeoutMs' in options, false);
+  } finally {
+    turn.finish();
   }
 });
 

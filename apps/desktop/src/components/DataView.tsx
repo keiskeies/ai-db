@@ -151,7 +151,7 @@ export function DataView({ tab }: { tab: DataTab }) {
   // 快速切排序/翻页/过滤时旧响应可能后到，seq 守卫保证只有最新一次 load 能写结果。
   const loadSeq = useRef(0);
   const [exporting, setExporting] = useState(false);
-  const exportAbortRef = useRef<AbortController | undefined>();
+  const exportAbortRef = useRef<AbortController | null>(null);
 
   const load = useCallback(async () => {
     const seq = ++loadSeq.current;
@@ -573,7 +573,7 @@ export function DataView({ tab }: { tab: DataTab }) {
       else notify('error', t('error'), err?.message);
     } finally {
       setExporting(false);
-      exportAbortRef.current = undefined;
+      exportAbortRef.current = null;
     }
   };
 

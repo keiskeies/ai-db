@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { once } from 'node:events';
 import { mkdtempSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -34,19 +35,33 @@ let gwStderr = '';
 gw.stderr.on('data', (c) => { gwStderr += c; });
 gw.stdout.on('data', () => {});
 
+async function stopGateway() {
+  if (gw.exitCode !== null || gw.signalCode !== null) return;
+  const closed = once(gw, 'close');
+  let timer;
+  gw.kill();
+  await Promise.race([closed, new Promise((resolve) => { timer = setTimeout(resolve, 10_000); })]);
+  clearTimeout(timer);
+  if (gw.exitCode === null && gw.signalCode === null) {
+    gw.kill('SIGKILL');
+    await Promise.race([closed, new Promise((resolve) => { timer = setTimeout(resolve, 5_000); })]);
+    clearTimeout(timer);
+  }
+}
+
 async function waitForPort() {
-  for (let i = 0; i < 100; i += 1) {
+  for (let i = 0; i < 600; i += 1) {
     try { return Number(readFileSync(portFile, 'utf8').trim()); } catch { /* not yet */ }
-    if (gw.exitCode !== null) throw new Error('gateway exited: ' + gwStderr);
+    if (gw.exitCode !== null || gw.signalCode !== null) throw new Error('gateway exited: ' + gwStderr);
     await new Promise((r) => setTimeout(r, 100));
   }
+  await stopGateway();
   throw new Error('gateway did not start: ' + gwStderr);
 }
 const port = await waitForPort();
 
 test.after(async () => {
-  gw.kill();
-  await new Promise((r) => setTimeout(r, 100));
+  await stopGateway();
   rmSync(home, { recursive: true, force: true });
 });
 

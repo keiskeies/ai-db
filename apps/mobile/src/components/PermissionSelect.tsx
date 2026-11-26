@@ -14,7 +14,7 @@ const modeDescriptions: Record<PermissionMode, string> = {
   full: '在审批策略允许的范围内全部自动执行',
 };
 
-export function PermissionSelect({ mode, onChange, testID = 'm-mode-select' }: { mode: PermissionMode; onChange: (mode: PermissionMode) => void; testID?: string }) {
+export function PermissionSelect({ mode, onChange, testID = 'm-mode-select', modes = MODES }: { mode: PermissionMode; onChange: (mode: PermissionMode) => void; testID?: string; modes?: PermissionMode[] }) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -32,7 +32,7 @@ export function PermissionSelect({ mode, onChange, testID = 'm-mode-select' }: {
                 <X size={16} color={colors.text} />
               </Pressable>
             </View>
-            {MODES.map((value) => (
+            {modes.map((value) => (
               <Pressable
                 key={value}
                 testID={`m-mode-${value}`}

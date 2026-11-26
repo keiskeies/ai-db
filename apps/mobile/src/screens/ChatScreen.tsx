@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, ScrollView, View, type NativeScrollEvent, type NativeSyntheticEvent, type ScrollViewInstance } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ArrowDown, AtSign, Brain, Check, ChevronDown, Database, History, ImagePlus, Loader2, MessageSquarePlus, RefreshCw, Send, Sparkles, Square, TerminalSquare, X } from 'lucide-react-native';
 import { normalizeSuggestionPrompt, suggestionLabel, type AgentSettings, type AgentMessage, type AgentSessionMeta, type QuestionSuggestion, type ConnectionConfig, type PermissionMode, type TableInfo } from '@aidb/core';
@@ -50,6 +50,7 @@ export function ChatScreen({
   tables,
   agentSettings,
   onSaveAgent,
+  canManageHost,
   databases,
   database,
   onOpenDatabases,
@@ -82,7 +83,7 @@ export function ChatScreen({
   onOpenTables: () => void;
   onOpenCommands: () => void;
   onOpenRecent: (id: string) => void;
-  scrollRef: React.RefObject<ScrollView>;
+  scrollRef: React.RefObject<ScrollViewInstance | null>;
   onScroll: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
   onContentSizeChange: () => void;
   showJump: boolean;
@@ -90,6 +91,7 @@ export function ChatScreen({
   tables: TableInfo[];
   agentSettings?: AgentSettings;
   onSaveAgent: (patch: Record<string, unknown>) => void;
+  canManageHost: boolean;
   databases: string[];
   database?: string;
   onOpenDatabases: () => void;
@@ -338,7 +340,9 @@ export function ChatScreen({
                 <Text style={[styles.hint, { color: colors.warning }]}>
                   {live.status === 'aborted' && live.abortCause === 'stalled'
                     ? live.abortReason ?? '模型连接无响应，本回合已停止。'
-                    : live.stop === 'max_steps'
+                    : live.status === 'aborted' && live.abortCause === 'deadline'
+                      ? live.abortReason ?? '回合已到达绝对时间预算，尚未完成。'
+                      : live.stop === 'max_steps'
                       ? '已达到本次工具步数上限，剩下的步骤还没做。'
                       : live.stop === 'max_output_tokens'
                         ? '模型输出被截断，本回合尚未完成。'
@@ -378,12 +382,19 @@ export function ChatScreen({
 
       <View style={styles.composer}>
         <View style={styles.composerTop}>
-          <Pressable testID="m-model-select" style={styles.modelPill} onPress={() => setModelSheet(true)}>
-            <Sparkles size={10} color={colors.agent} />
-            <Text style={styles.modelPillText} numberOfLines={1}>{modelLabel} · {tierLabel}</Text>
-            <ChevronDown size={10} color={colors.muted} />
-          </Pressable>
-          <PermissionSelect mode={mode} onChange={setMode} />
+          {canManageHost ? (
+            <Pressable testID="m-model-select" style={styles.modelPill} onPress={() => setModelSheet(true)}>
+              <Sparkles size={10} color={colors.agent} />
+              <Text style={styles.modelPillText} numberOfLines={1}>{modelLabel} · {tierLabel}</Text>
+              <ChevronDown size={10} color={colors.muted} />
+            </Pressable>
+          ) : (
+            <View testID="m-model-readonly" style={styles.modelPill}>
+              <Sparkles size={10} color={colors.agent} />
+              <Text style={styles.modelPillText} numberOfLines={1}>{modelLabel}</Text>
+            </View>
+          )}
+          <PermissionSelect mode={mode} onChange={setMode} modes={canManageHost ? undefined : ['readonly', 'ask']} />
           <View style={styles.modeHint}>
             <Text style={styles.listMeta}>{connected ? 'Bridge 在线' : '重连中…'}</Text>
           </View>
@@ -433,7 +444,7 @@ export function ChatScreen({
         </View>
         <Text style={styles.composerHint}>{translate(modeLabels[mode])}{translate('模式 · @ 引用表 · 图片随消息发送')}</Text>
       </View>
-      <Modal visible={modelSheet} transparent animationType="slide" onRequestClose={() => setModelSheet(false)}>
+      <Modal visible={canManageHost && modelSheet} transparent animationType="slide" onRequestClose={() => setModelSheet(false)}>
         <View style={styles.modalBackdrop}>
           <View style={[styles.sheet, { paddingBottom: insets.bottom + 14, maxHeight: '80%' }]}>
             <View style={styles.sheetHead}>

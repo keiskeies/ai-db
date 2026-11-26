@@ -550,7 +550,8 @@ test('迁移：replace + 事务目标，中途失败回滚整表而不是清空�
   assert.equal(h.tx.rollback, 1);
   assert.equal(h.tx.commit, 0);
   assert.equal(result.results[0].truncated, false);
-  assert.ok(h.queries.some((sql) => /TRUNCATE/i.test(sql)));
+  assert.ok(h.queries.some((sql) => /^DELETE\s+FROM\b/i.test(sql.trim())));
+  assert.ok(h.queries.every((sql) => !/\bTRUNCATE\b/i.test(sql)), '事务替换不能使用会隐式提交的 TRUNCATE');
 });
 
 test('迁移：replace + 事务目标，成功时提交且标记已清空', async () => {

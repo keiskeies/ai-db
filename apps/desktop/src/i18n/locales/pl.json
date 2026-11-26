@@ -730,7 +730,7 @@
   "openDemo": "Otwórz bazę demo",
   "page": "Strona",
   "pairCode": "Kod parowania",
-  "pairHint": "Wpisz adres i kod Bridge na urządzeniu mobilnym. Ważne przez 5 minut.",
+  "pairHint": "Wpisz adres i kod Bridge na urządzeniu mobilnym. Ważne przez 1 minutę.",
   "pairing": "Parowanie mobilne",
   "password": "Hasło",
   "payload 字段": "Pole ładunku",

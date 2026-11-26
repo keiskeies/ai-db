@@ -730,7 +730,7 @@
   "openDemo": "Apri il database demo",
   "page": "Pagina",
   "pairCode": "Codice di accoppiamento",
-  "pairHint": "Inserisci l'indirizzo e il codice Bridge sul cellulare. Valido per 5 minuti.",
+  "pairHint": "Inserisci l'indirizzo e il codice Bridge sul cellulare. Valido per 1 minuto.",
   "pairing": "Accoppiamento mobile",
   "password": "Password",
   "payload 字段": "Campo payload",

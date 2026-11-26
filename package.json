@@ -20,7 +20,8 @@
     "seed": "node --import tsx scripts/seed-demo.ts",
     "seed:business": "node --import tsx scripts/seed-business.ts",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm --workspace @aidb/core run test && npm --workspace @aidb/client run test && npm --workspace @aidb/gateway run test && npm --workspace @aidb/desktop run test && npm --workspace @aidb/mobile run test",
+    "test": "npm --workspace @aidb/core run test && npm --workspace @aidb/client run test && npm --workspace @aidb/gateway run test && npm --workspace @aidb/desktop run test && npm --workspace @aidb/mobile run test && npm --workspace @aidb-studio/aidb-studio run test && node --test \"apps/desktop/electron/*.test.cjs\"",
+    "test:workflows": "node --test scripts/workflows.test.mjs",
     "build:core": "npm --workspace @aidb/core run build",
     "build": "npm run build:core && npm --workspace apps/gateway run build && npm --workspace apps/desktop run build && npm run build:mobile",
     "build:desktop": "npm run build:core && npm --workspace apps/desktop run package",
@@ -30,17 +31,45 @@
     "verify:controls": "node scripts/audit-form-controls.mjs",
     "verify:docs": "node scripts/verify-docs.mjs",
     "verify": "npm run verify:docs && npm run verify:controls && npm run verify:i18n && npm run typecheck && npm test && npm run build && npm run e2e",
+    "verify:ci": "npm run test:workflows && npm run verify:docs && npm run verify:controls && npm run verify:i18n && npm run typecheck && npm test && npm run build",
+    "audit:all": "npm audit --audit-level=low --registry=https://registry.npmjs.org",
+    "audit:prod": "npm audit --omit=dev --audit-level=low --registry=https://registry.npmjs.org",
+    "sbom": "node -e \"require('fs').mkdirSync('dist',{recursive:true})\" && cyclonedx-npm --package-lock-only --output-reproducible --spec-version 1.6 --output-file dist/sbom.cdx.json --validate",
     "i18n:extract": "node scripts/i18n/extract.mjs",
     "i18n:translate": "node scripts/i18n/translate.mjs --all",
     "verify:i18n": "node scripts/i18n/extract.mjs && node scripts/i18n/scan-unwrapped.mjs --strict"
   },
   "devDependencies": {
-    "@types/node": "^22.10.5",
+    "@cyclonedx/cyclonedx-npm": "7.0.1",
+    "@types/node": "24.19.2",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "ajv-formats-draft2019": "1.6.1",
     "concurrently": "^9.1.2",
     "playwright-core": "^1.49.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "wait-on": "^8.0.2"
+  },
+  "overrides": {
+    "@expo/fingerprint": {
+      "minimatch": "11.0.9"
+    },
+    "@azure/identity": "4.14.1",
+    "@xmldom/xmldom": "0.9.12",
+    "glob@^10.0.0": "14.0.6",
+    "minimatch@>=9.0.0 <11.0.1": "11.0.9",
+    "metro": {
+      "image-size": "0.6.2"
+    },
+    "node-forge": "1.4.4",
+    "pptxgenjs": {
+      "image-size": "2.1.0"
+    },
+    "postcss": "8.5.33",
+    "react-native": "0.88.1",
+    "tar": "7.5.23",
+    "uuid": "11.1.1"
   },
   "homepage": "https://github.com/keiskeies/ai-db",
   "license": "MIT"

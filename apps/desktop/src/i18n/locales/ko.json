@@ -730,7 +730,7 @@
   "openDemo": "데모 데이터베이스 열기",
   "page": "페이지",
   "pairCode": "페어링 코드",
-  "pairHint": "모바일에서 Bridge 주소와 코드를 입력하세요. 5분간 유효합니다.",
+  "pairHint": "모바일에서 Bridge 주소와 코드를 입력하세요. 1분간 유효합니다.",
   "pairing": "모바일 페어링",
   "password": "비밀번호",
   "payload 字段": "페이로드 필드",

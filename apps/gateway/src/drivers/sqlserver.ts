@@ -76,16 +76,35 @@ export class SqlServerDriver implements Driver {
 
   async describe(database?: string): Promise<TableInfo[]> {
     const pool = await this.pool(database);
+    return this.describeWithQuery((sql) => pool.request().query(sql));
+  }
+
+  /** 备份快照专用：每条 catalog 都由同一个 mssql.Transaction 构造 Request。 */
+  async describeInTransaction(sessionId: string, _database?: string, opts: RunOptions = {}): Promise<TableInfo[]> {
+    if (!this.txTransactions.has(sessionId)) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
+    throwIfAborted(opts.signal);
+    return this.describeWithQuery(async (sql) => {
+      throwIfAborted(opts.signal);
+      const result = await this.runInTransaction(sessionId, sql, [], opts);
+      throwIfAborted(opts.signal);
+      if (result.truncated) throw new DbError('SQL Server 事务内结构元数据不完整', { code: 'MSSQL_METADATA_TRUNCATED' });
+      return {
+        recordset: result.rows.map((row) => Object.fromEntries(result.columns.map((column, index) => [column.name, row[index]]))),
+      };
+    });
+  }
+
+  private async describeWithQuery(query: (sql: string) => Promise<{ recordset?: Array<Record<string, any>> }>): Promise<TableInfo[]> {
     try {
-      const tablesRes = await pool.request().query(`
+      const tablesRes = await query(`
         SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES
         WHERE TABLE_TYPE IN ('BASE TABLE','VIEW') ORDER BY TABLE_SCHEMA, TABLE_NAME`);
-      const columnsRes = await pool.request().query(`
+      const columnsRes = await query(`
         SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT,
                CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE,
                COLUMNPROPERTY(OBJECT_ID(QUOTENAME(TABLE_SCHEMA) + '.' + QUOTENAME(TABLE_NAME)), COLUMN_NAME, 'IsIdentity') AS IS_IDENTITY
         FROM INFORMATION_SCHEMA.COLUMNS ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION`);
-      const indexesRes = await pool.request().query(`
+      const indexesRes = await query(`
         SELECT s.name AS schema_name, t.name AS table_name, i.name AS index_name, i.is_unique, i.is_primary_key,
                c.name AS column_name, ic.key_ordinal
         FROM sys.indexes i
@@ -94,7 +113,7 @@ export class SqlServerDriver implements Driver {
         JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
         JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
         WHERE i.name IS NOT NULL ORDER BY t.name, i.name, ic.key_ordinal`);
-      const fkRes = await pool.request().query(`
+      const fkRes = await query(`
         SELECT fk.name AS constraint_name, sch.name AS schema_name, t.name AS table_name, c.name AS column_name,
                rt.name AS ref_table, rc.name AS ref_column
         FROM sys.foreign_keys fk
@@ -105,7 +124,7 @@ export class SqlServerDriver implements Driver {
         JOIN sys.tables rt ON rt.object_id = fkc.referenced_object_id
         JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id
         ORDER BY t.name, fk.name, fkc.constraint_column_id`);
-      const estRes = await pool.request().query(`
+      const estRes = await query(`
         SELECT s.name AS schema_name, t.name AS table_name, SUM(p.rows) AS row_count
         FROM sys.tables t
         JOIN sys.schemas s ON s.schema_id = t.schema_id
@@ -178,6 +197,7 @@ export class SqlServerDriver implements Driver {
       }
       return [...aggregates.values()].flatMap((map) => [...map.values()]);
     } catch (err: any) {
+      if (err instanceof DbError) throw err;
       throw new DbError(err.message, { code: 'MSSQL_METADATA_ERROR' });
     }
   }
@@ -253,15 +273,24 @@ export class SqlServerDriver implements Driver {
   async runInTransaction(sessionId: string, sql: string, params: unknown[], opts: RunOptions = {}): Promise<QueryResult> {
     const transaction = this.txTransactions.get(sessionId);
     if (!transaction) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
+    throwIfAborted(opts.signal);
     const started = Date.now();
+    const request = new mssql.Request(transaction);
+    if (opts.timeoutMs && opts.timeoutMs > 0) (request as unknown as { requestTimeout: number }).requestTimeout = opts.timeoutMs;
+    this.bindParams(request, params);
+    const onAbort = () => {
+      try { request.cancel(); } catch { /* 查询已结束时无需再取消 */ }
+    };
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
     try {
-      const request = new mssql.Request(transaction);
-      if (opts.timeoutMs && opts.timeoutMs > 0) (request as unknown as { requestTimeout: number }).requestTimeout = opts.timeoutMs;
-      this.bindParams(request, params);
       const result = await request.query(sql);
+      throwIfAborted(opts.signal);
       return this.toResult(result, started, sql, opts.maxRows);
     } catch (err: any) {
+      if (opts.signal?.aborted) throw new DbError('工具执行已取消', { code: 'ABORTED' });
       throw new DbError(err.message ?? 'SQL Server 事务执行失败', { code: err.code ?? 'MSSQL_ERROR' });
+    } finally {
+      opts.signal?.removeEventListener('abort', onAbort);
     }
   }
 

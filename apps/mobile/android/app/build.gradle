@@ -11,8 +11,10 @@ def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 react {
     entryFile = file(["node", "-e", "require('expo/scripts/resolveAppEntry')", projectRoot, "android", "absolute"].execute(null, rootDir).text.trim())
     reactNativeDir = new File(["node", "--print", "require.resolve('react-native/package.json')"].execute(null, rootDir).text.trim()).getParentFile().getAbsoluteFile()
-    hermesCommand = new File(["node", "--print", "require.resolve('react-native/package.json')"].execute(null, rootDir).text.trim()).getParentFile().getAbsolutePath() + "/sdks/hermesc/%OS-BIN%/hermesc"
+    hermesCommand = new File(["node", "--print", "require.resolve('hermes-compiler/package.json', { paths: [require.resolve('react-native/package.json')] })"].execute(null, rootDir).text.trim()).getParentFile().getAbsolutePath() + "/hermesc/%OS-BIN%/hermesc"
     codegenDir = new File(["node", "--print", "require.resolve('@react-native/codegen/package.json', { paths: [require.resolve('react-native/package.json')] })"].execute(null, rootDir).text.trim()).getParentFile().getAbsoluteFile()
+
+    enableBundleCompression = (findProperty('android.enableBundleCompression') ?: false).toBoolean()
 
     // Use Expo CLI to bundle the app, this ensures the Metro config
     // works correctly with Expo projects.
@@ -63,9 +65,27 @@ react {
 }
 
 /**
- * Set this to true to Run Proguard on Release builds to minify the Java bytecode.
+ * Set this to true in release builds to optimize the app using [R8](https://developer.android.com/topic/performance/app-optimization/enable-app-optimization).
  */
-def enableProguardInReleaseBuilds = (findProperty('android.enableProguardInReleaseBuilds') ?: false).toBoolean()
+def enableMinifyInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBuilds') ?: false).toBoolean()
+
+// Production credentials come from Gradle properties or environment variables.
+// EAS Build injects its remote credentials into signingConfigs.release separately.
+def releaseCredential = { String name ->
+    def value = findProperty(name) ?: System.getenv(name)
+    return value == null || value.toString().isEmpty() ? null : value.toString()
+}
+def releaseStoreFileValue = releaseCredential('MYAPP_UPLOAD_STORE_FILE')
+def releaseStorePassword = releaseCredential('MYAPP_UPLOAD_STORE_PASSWORD')
+def releaseKeyAlias = releaseCredential('MYAPP_UPLOAD_KEY_ALIAS')
+def releaseKeyPassword = releaseCredential('MYAPP_UPLOAD_KEY_PASSWORD')
+def releaseCertSha256 = releaseCredential('MYAPP_UPLOAD_CERT_SHA256')
+def localReleaseCredentials = releaseStoreFileValue != null || releaseStorePassword != null || releaseKeyAlias != null || releaseKeyPassword != null
+def releaseStoreFile = releaseStoreFileValue == null
+    ? null
+    : (new File(releaseStoreFileValue).isAbsolute()
+        ? new File(releaseStoreFileValue)
+        : rootProject.file(releaseStoreFileValue))
 
 /**
  * The preferred build flavor of JavaScriptCore (JSC)
@@ -78,7 +98,7 @@ def enableProguardInReleaseBuilds = (findProperty('android.enableProguardInRelea
  * give correct results when using with locales other than en-US. Note that
  * this variant is about 6MiB larger per architecture than default.
  */
-def jscFlavor = 'org.webkit:android-jsc:+'
+def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
 android {
     ndkVersion rootProject.ext.ndkVersion
@@ -91,9 +111,11 @@ android {
         applicationId 'top.keiskei.aidb'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        def appVersion = new groovy.json.JsonSlurper().parse(file('../../app.json')).expo.version
-        versionCode appVersion.tokenize('.').inject(0) { code, part -> code * 100 + (part as int) }
-        versionName appVersion
+        // Native values seed EAS remote version management; keep app.json in sync.
+        versionCode 10
+        versionName "0.0.10"
+
+        buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
     signingConfigs {
         debug {
@@ -102,18 +124,25 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        release {
+            // Leave missing values unset so debug/configuration tasks still work.
+            // Release artifact tasks fail in validateReleaseSigning below.
+            if (releaseStoreFile != null) storeFile releaseStoreFile
+            if (releaseStorePassword != null) storePassword releaseStorePassword
+            if (releaseKeyAlias != null) keyAlias releaseKeyAlias
+            if (releaseKeyPassword != null) keyPassword releaseKeyPassword
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            // Never fall back to the debug keystore for a production artifact.
+            signingConfig signingConfigs.release
             shrinkResources (findProperty('android.enableShrinkResourcesInReleaseBuilds')?.toBoolean() ?: false)
-            minifyEnabled enableProguardInReleaseBuilds
-            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+            minifyEnabled enableMinifyInReleaseBuilds
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
             crunchPngs (findProperty('android.enablePngCrunchInReleaseBuilds')?.toBoolean() ?: true)
         }
     }
@@ -124,6 +153,70 @@ android {
     }
     androidResources {
         ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
+    }
+}
+
+tasks.register("validateReleaseSigning") {
+    group = "verification"
+    description = "Fails release artifact builds unless production signing is explicitly configured."
+
+    doLast {
+        def signing = android.signingConfigs.findByName("release")
+        def missing = []
+        if (signing?.storeFile == null) missing << "MYAPP_UPLOAD_STORE_FILE"
+        if (!signing?.storePassword) missing << "MYAPP_UPLOAD_STORE_PASSWORD"
+        if (!signing?.keyAlias) missing << "MYAPP_UPLOAD_KEY_ALIAS"
+        if (!signing?.keyPassword) missing << "MYAPP_UPLOAD_KEY_PASSWORD"
+        if (localReleaseCredentials && !releaseCertSha256) missing << "MYAPP_UPLOAD_CERT_SHA256"
+        if (!missing.isEmpty()) {
+            throw new GradleException(
+                "Android release signing is not configured. Missing: ${missing.join(', ')}. " +
+                "Set these through Gradle properties/environment variables or use EAS remote credentials. " +
+                "Secret values are never logged."
+            )
+        }
+        if (!signing.storeFile.isFile() || !signing.storeFile.canRead()) {
+            throw new GradleException(
+                "Android release keystore is missing or unreadable. " +
+                "Check MYAPP_UPLOAD_STORE_FILE; the path and secret values are not logged."
+            )
+        }
+        if (signing.keyAlias == "androiddebugkey") {
+            throw new GradleException(
+                "Android release signing refuses the debug key alias. " +
+                "Configure a production upload key through EAS or the MYAPP_UPLOAD_* properties."
+            )
+        }
+        if (signing.storeFile.canonicalFile == file("debug.keystore").canonicalFile) {
+            throw new GradleException(
+                "Android release signing refuses debug.keystore. " +
+                "Configure a production upload key through EAS or the MYAPP_UPLOAD_* properties."
+            )
+        }
+        if (releaseCertSha256) {
+            def expected = releaseCertSha256.replace(":", "").toUpperCase()
+            if (!(expected ==~ /[0-9A-F]{64}/)) {
+                throw new GradleException("MYAPP_UPLOAD_CERT_SHA256 must be a SHA-256 fingerprint.")
+            }
+            def keyStore = java.security.KeyStore.getInstance(signing.storeFile)
+            keyStore.load(signing.storeFile, signing.storePassword.toCharArray())
+            def certificate = keyStore.getCertificate(signing.keyAlias)
+            if (certificate == null) {
+                throw new GradleException("Android release signing alias has no certificate.")
+            }
+            def actual = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(certificate.encoded).encodeHex().toString().toUpperCase()
+            if (actual != expected) {
+                throw new GradleException("Android release signing certificate fingerprint mismatch.")
+            }
+        }
+    }
+}
+
+def releaseArtifactTasks = ["assembleRelease", "bundleRelease", "packageRelease"] as Set
+tasks.configureEach { task ->
+    if (releaseArtifactTasks.contains(task.name)) {
+        task.dependsOn("validateReleaseSigning")
     }
 }
 
@@ -157,15 +250,15 @@ dependencies {
 
     if (isGifEnabled) {
         // For animated gif support
-        implementation("com.facebook.fresco:animated-gif:${reactAndroidLibs.versions.fresco.get()}")
+        implementation("com.facebook.fresco:animated-gif:${expoLibs.versions.fresco.get()}")
     }
 
     if (isWebpEnabled) {
         // For webp support
-        implementation("com.facebook.fresco:webpsupport:${reactAndroidLibs.versions.fresco.get()}")
+        implementation("com.facebook.fresco:webpsupport:${expoLibs.versions.fresco.get()}")
         if (isWebpAnimatedEnabled) {
             // Animated webp support
-            implementation("com.facebook.fresco:animated-webp:${reactAndroidLibs.versions.fresco.get()}")
+            implementation("com.facebook.fresco:animated-webp:${expoLibs.versions.fresco.get()}")
         }
     }
 

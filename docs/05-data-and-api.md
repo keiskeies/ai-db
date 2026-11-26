@@ -259,7 +259,8 @@ export interface QueryResult {
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/health` | `{ok, version, platform, demoReady}` |
+| GET | `/health` | 公开轻量存活检查：`{ok, status:'alive', version, platform, demoReady}`；不探测磁盘写入 |
+| GET | `/health/ready` | 需鉴权的就绪检查：真实探测 SQLite 写入、备份目录可写性与容量，失败返回 503 |
 | GET | `/bootstrap` | 一次性初始化：connections、settings(脱敏)、sessions、models、demo 状态 |
 | GET/POST | `/connections` | 列表 / 新建 |
 | PUT/DELETE | `/connections/:id` | 更新 / 删除 |
@@ -275,7 +276,7 @@ export interface QueryResult {
 | GET | `/objects` | 触发器 / 函数 / 序列 / 事件 |
 | POST | `/schema/compare` | 两连接结构 diff |
 | POST | `/schema/sync` | 执行结构同步语句 |
-| POST | `/data/compare` | 行数 + 主键指纹对比 |
+| POST | `/data/compare` | 要求匹配主键与列集合，按主键逐行比较全部字段；检测值漂移与行数漂移 |
 | POST | `/transfer` | 跨连接复制表结构与数据 |
 | POST | `/transfer/stream` | **SSE** 同一传输，实时推送逐表阶段、写入行数与耗时；客户端断开即停止后续批次 |
 | POST | `/generate` | 生成测试数据（dryRun 预览） |
@@ -354,8 +355,8 @@ export interface QueryResult {
 | GET | `/search/backends` | 11 个搜索后端目录 + 健康遥测 + `keyStatus`（只返回是否已配置） |
 | POST | `/search/query` | `{query, numResults?}` → 聚合结果（并发 fan-out、URL 去重、逐后端报告） |
 | POST | `/search/backends/:id/probe` | 用固定查询探测单个后端，返回最新健康状态 |
-| POST | `/pair/start` | 桌面发起**移动端**配对：`{code, expiresIn=60, qrPayload}`；需主令牌 |
-| POST | `/pair/claim` | 移动端兑换：`{code, deviceName, platform}` → `{token, device, bridge}`；`scope` 服务端硬编码 `full`，忽略请求体 |
+| POST | `/pair/start` | 桌面发起**移动端**配对：`{connectionIds?, code, expiresIn=60, qrPayload}`；需主令牌。`connectionIds` 为本次配对的连接授权清单（桌面端默认传入当前全部连接），省略时不授权任何连接 |
+| POST | `/pair/claim` | 移动端兑换：`{code, deviceName, platform}` → `{token, device, bridge}`；`scope` 服务端硬编码 `device`，忽略请求体，连接访问需管理员授权 |
 | POST | `/pair/mcp/start` | 桌面发起**MCP 客户端**配对：`{code, expiresIn=60, host, port, url}`；`url` 为网关自身监听地址（不受请求 Host 影响）；需主令牌；`features.mcp=false` 时 403 |
 | POST | `/pair/mcp/claim` | MCP 兑换：`{code, deviceName, platform}` → `{token, device, bridge}`；`scope` 服务端硬编码 `mcp:readonly`，忽略请求体 |
 | GET | `/devices` · DELETE `/devices/:id` | 设备管理（返回 `scope`）；吊销后 token 立即失效 |
@@ -371,12 +372,19 @@ export interface QueryResult {
 两个 start 端点均需主令牌。WebSocket 通道拒绝该凭据。详见 [12-bots-and-mcp.md](./12-bots-and-mcp.md) §4.5。
 
 **破坏性变更**：早期未发布的 `@aidb/mcp` 曾向 `/pair/claim` 发送 `scope:'mcp:readonly'`；
-现在该端点硬编码 `full`，旧包会静默获得 full 凭据，必须升级到走 `/pair/mcp/claim` 的版本。
+现在该端点硬编码受限的 `device` scope，连接访问需管理员显式授权；旧包必须升级到走 `/pair/mcp/claim` 的版本。
 
 ### 3.1 认证
-- 桌面/浏览器：Bridge 启动时生成一次性 token（`AIDB_TOKEN` 或 Electron 注入），`Authorization: Bearer`。
-- 移动：配对得到的设备 token（数据库仅存 SHA-256）；桥重启仍有效；可吊销。
+- 桌面：Electron 主进程启动内嵌 Bridge 并注入随机会话 token，仅经 IPC 传给渲染层内存；浏览器访问需显式配置 Bearer token。请求头均为 `Authorization: Bearer`。
+- 移动：配对得到的设备 token（数据库仅存 SHA-256）；桥重启仍有效；可吊销。默认无连接访问权，管理员需在设备权限中逐项授权；Agent 仅允许 `readonly` / `ask` 模式。
 - 所有请求写审计（读操作仅记录 query 类）。
+
+### 3.2 SSH 主机信任
+- SSH 隧道连接前必须验证主机密钥；未配置 `known_hosts` / `hostVerifier` 时直接返回 `SSH_HOST_KEY_UNKNOWN`，不会自动接受。
+- 桌面版自动复用用户目录下的 `~/.ssh/known_hosts`（Windows 为 `%USERPROFILE%\\.ssh\\known_hosts`）；独立部署可设置 `AIDB_SSH_KNOWN_HOSTS_FILE` 或 `AIDB_SSH_KNOWN_HOSTS`。
+- 私钥路径默认拒绝读取；部署方需通过 `AIDB_SSH_PRIVATE_KEY_FILE` 或 `AIDB_SSH_PRIVATE_KEY_DIRS` 明确授权目录。信任文件和私钥均限制为普通文件、拒绝符号链接并设 1 MiB 上限。
+- 桌面版「导入 SSH 私钥」由 Electron 主进程弹出原生选择器，拒绝符号链接/非普通文件并限制为 64 KiB；字节复制到 `userData/ssh-keys` 下的随机文件名（POSIX 目录 `0700`、文件 `0600`），IPC 只返回文件名/路径/大小等元数据。内嵌网关的 `AIDB_SSH_PRIVATE_KEY_DIRS` 追加该受保护目录，同时保留外部显式配置的 `AIDB_SSH_PRIVATE_KEY_FILE/DIRS`；手动路径仍须落在明确授权的根目录内。
+- 支持 OpenSSH 明文、通配符、否定模式、非 22 端口和 `|1|` 哈希主机名。首次接入应通过可信渠道核对指纹，不能把未经核对的 `ssh-keyscan` 输出直接视为可信。
 
 ### 3.1 仪表板接口（v0.4）
 
@@ -418,7 +426,7 @@ type AgentEvent =
   | { type: 'turn_usage'; steps: number; modelCalls: number; tokensIn: number; tokensOut: number;
       cacheHitTokens?: number; cacheMissTokens?: number; contextTokens: number; modelDurationMs: number }
   | { type: 'done'; turnId: string; durationMs: number; summary?: string }
-  | { type: 'aborted'; turnId: string; reason: string }
+  | { type: 'aborted'; turnId: string; reason: string; cause?: 'stalled' | 'user' | 'deadline' }
   | { type: 'error'; code: string; message: string; retryable?: boolean };
 ```
 
@@ -426,13 +434,15 @@ SSE 帧：具名事件 `event: <type>`，`data: <json>\n\n`；每 15s 心跳注�
 
 ### 4.0 结构变更广播（`/ws` 下行）
 
-`GET /ws?token=` 除回合事件外还推送全局结构变更事件，与具体回合无关：
+`GET /ws?token=` 除回合事件外还推送结构与连接变更事件，与具体回合无关。管理员接收所有连接的事件；设备只接收其当前持久化 ACL 允许的连接，授权撤销会在下一次广播前生效；`mcp:readonly` 凭据不能建立 WebSocket。
 
 ```ts
 { type: 'schema_changed'; connectionId: string; cause: 'agent' | 'user'; at: string }
+{ type: 'connections_changed'; connectionId: string; change: 'created' | 'updated' | 'deleted'; at: string }
 ```
 
-- 触发：任何使 `schema_cache` 失效的操作。SQL 类在 `ConnectionManager.query()` 判定已执行语句含 ddl/destructive 后发射；事务内的 DDL 延迟到 `COMMIT`（`ROLLBACK` 时同样发一次，结构可能已回退）。
+- `schema_changed` 触发：任何使 `schema_cache` 失效的操作。SQL 类在 `ConnectionManager.query()` 判定已执行语句含 ddl/destructive 后发射；事务内的 DDL 延迟到 `COMMIT`（`ROLLBACK` 时同样发一次，结构可能已回退）。
+- `connections_changed` 触发：连接创建、更新或删除；设备不得借此枚举未授权连接。
 - 粒度是连接，不带库：客户端需重载该连接已加载的所有库。
 - 不带变更明细；需要明细请用结构对比。
 - 未鉴权连接以 code `4401` 关闭，客户端不得重试。

@@ -333,4 +333,8 @@ export class ConnectionsRepo {
       createdAt: r.created_at,
     }));
   }
+
+  deleteBackup(id: string): void {
+    this.db.exec('DELETE FROM backups WHERE id = ?', [id]);
+  }
 }

@@ -42,7 +42,7 @@
   <img alt="55 agent tools" src="https://img.shields.io/badge/Agent%20Tools-55-45C8C3?style=flat-square" />
   <img alt="macOS, Windows, Linux" src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-0B0E0D?style=flat-square" />
   <img alt="MIT license" src="https://img.shields.io/badge/License-MIT-E0AF63?style=flat-square" />
-  <a href="https://github.com/keiskeies/ai-db/releases/tag/v0.0.10"><img alt="Release v0.0.8" src="https://img.shields.io/badge/Release-v0.0.10-45C8C3?style=flat-square&logo=github" /></a>
+  <a href="https://github.com/keiskeies/ai-db/releases/tag/v0.0.10"><img alt="Release v0.0.10" src="https://img.shields.io/badge/Release-v0.0.10-45C8C3?style=flat-square&logo=github" /></a>
   <a href="https://github.com/keiskeies/ai-db"><img alt="GitHub stars" src="https://img.shields.io/github/stars/keiskeies/ai-db?style=flat-square&logo=github&label=Stars&color=E0AF63" /></a>
 </p>
 
@@ -612,12 +612,14 @@ Releases are published per operating system and architecture — six desktop com
 - Windows on ARM can also run the x64 installer through the system emulator, and that build keeps the Oracle driver.
 - Linux filenames follow distribution conventions (x64 shows up as `amd64` or `x86_64`, arm64 as `aarch64`). deb and rpm install through the package manager; the AppImage is portable but needs FUSE 2 — otherwise run it with `--appimage-extract-and-run`. A graphical session is required either way; WSL2 needs WSLg.
 - Each installer carries only its own architecture's native bindings (DuckDB, node-oracledb), asserted per build in CI; the two exceptions are described in the engine section above.
-- Android ships as a universal `AiDB-Studio-<version>-android.apk`, built in CI with Gradle from `apps/mobile/android` and signed with the committed debug key — sideload-ready, not Play-ready. iOS is built through EAS and attached to the release only when the repository has an `EXPO_TOKEN` secret; without it the job skips with a warning.
+- The release workflow requires and verifies Authenticode on Windows and Developer ID signatures, hardened runtime, notarization, and stapling on macOS. Linux packages are not platform-code-signed; the release includes checksums and build-provenance attestations, and repository maintainers must re-sign deb/rpm packages.
+- Android ships as a universal `AiDB-Studio-<version>-android.apk`, built in CI with Gradle from `apps/mobile/android`. The protected `release` environment must provide `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`, and `ANDROID_CERT_SHA256`; CI rejects the debug key alias, requires a non-debuggable APK, and verifies the single signer certificate fingerprint.
+- iOS is built through the EAS `production` profile and attached to the release only after CI verifies the bundle/version, Developer ID signature, provisioning profile, hardened runtime, and entitlements. Missing `EXPO_TOKEN` or invalid signing fails the release instead of silently skipping it.
 
 ### Mobile builds
 
-- **Android** is built by CI (`./gradlew assembleRelease`) from the committed native project — no Expo account needed. The APK covers all four ABIs and is signed with the debug keystore in `apps/mobile/android/app`, so upgrades keep the same signature; swap in a release keystore before shipping through Google Play. Versions come from `apps/mobile/app.json`: `versionName` is its `version`, and `versionCode` is major×10000 + minor×100 + patch. To build one locally, run `cd apps/mobile/android && EXPO_NO_METRO_WORKSPACE_ROOT=1 ./gradlew assembleRelease` — the env keeps Metro's root aligned with the native project in this monorepo.
-- **iOS** goes through EAS and needs one-time setup: `npm i -g eas-cli`, `cd apps/mobile`, `eas login`, `eas init` (replaces the placeholder `projectId` in `app.json` — commit it), `eas device:create` for internal installs, then run `eas build -p ios --profile preview` once interactively so EAS stores the Apple certificate and provisioning profile. Create an access token at expo.dev/settings/access-tokens and add it as the `EXPO_TOKEN` repository secret; CI then triggers the same profile on every tag and attaches the IPA.
+- **Android** is built by CI (`./gradlew assembleRelease`) from the committed native project — no Expo account is needed for the Gradle job. The APK covers all four ABIs and uses the protected production upload key; Google Play applies the configured app-signing key after upload. Versions come from `apps/mobile/app.json`: `versionName` is its `version`. For a local Play bundle with the same release signing configuration, run `npm --workspace apps/mobile run build:android:release` (Android SDK, JDK 17, and signing properties are required).
+- **iOS** uses EAS remote credentials and the `production` profile (`distribution: store`, production update channel, Release configuration). One-time setup: install `eas-cli`, sign in, confirm the EAS project/Apple team, and let EAS create the distribution certificate and provisioning profile. Add the access token as the protected `EXPO_TOKEN` repository secret; CI runs `eas build -p ios --profile production` on a release tag and independently inspects the IPA before publishing it. Submission to the store is a separate `eas submit -p ios --profile production` step.
 - Local runs: `npm --workspace apps/mobile run android` (and `run ios`, which needs macOS + Xcode).
 
 ### Checking for updates
@@ -629,7 +631,7 @@ Settings → About has a version card that asks GitHub for the newest release an
 | Windows (NSIS) | Downloads and installs silently, with differential download (`latest.yml` + blockmap — usually tens of KB instead of the full installer) | The installer supports `/S` and the install directory is writable |
 | Linux (AppImage) | Same, using `latest-linux.yml` / `latest-linux-arm64.yml` | Only the AppImage can replace itself |
 | Linux (deb / rpm) | Opens the release page | `/opt` belongs to the package manager |
-| macOS | Opens the release page | The build is unsigned and Squirrel.Mac refuses to replace an unsigned app |
+| macOS | Opens the release page | macOS updates use the release page rather than in-place Squirrel replacement |
 | Dev mode / web | Version check only | No `app-update.yml`, and no installed bundle to swap |
 
 Auto-update relies on `latest*.yml` in the release (version, file name, sha512). Windows metadata carries no architecture suffix, so arm64 uses a separate `latest-arm64.yml` channel and the client picks the file matching `process.arch`; on Linux electron-updater appends `-linux-arm64` itself. Installer file names use hyphens throughout (`AiDB-Studio-...`): electron-builder rewrites spaces to `-` when writing the metadata, while GitHub rewrites them to `.` on upload, and the mismatch would 404 the download URL.
@@ -639,7 +641,7 @@ Auto-update relies on `latest*.yml` in the release (version, file name, sha512).
 ```
 apps/desktop     Electron 45 + React 18 + Vite 6 (also runs in a plain browser)
 apps/gateway     Bridge: drivers, metadata database, REST / SSE / WS, Agent host, scheduler
-apps/mobile      Expo SDK 52 / React Native 0.76 (Android / iOS / Web)
+apps/mobile      Expo SDK 58 / React Native 0.88 / React 19 (Android / iOS / Web)
 packages/core    Platform-agnostic core: SQL classification and dialects, DDL, Agent runtime, tools, permissions, memory, providers, capability contracts
 docs/            Design documents, verification reports, screenshots
 scripts/         Documentation contracts, seed data, E2E, QA, standalone MCP server

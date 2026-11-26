@@ -433,7 +433,7 @@ function rosePoints(chart: ChartSpec, maxPoints: number): RosePoint[] {
   ];
 }
 
-function PieBody({ chart, maxPoints, height: fixedHeight, maxHeight, zoomed, svgRef }: { chart: ChartSpec; maxPoints: number; height?: number; maxHeight?: number; zoomed: boolean; svgRef: RefObject<SVGSVGElement> }) {
+function PieBody({ chart, maxPoints, height: fixedHeight, maxHeight, zoomed, svgRef }: { chart: ChartSpec; maxPoints: number; height?: number; maxHeight?: number; zoomed: boolean; svgRef: RefObject<SVGSVGElement | null> }) {
   const measured = useElementWidth(svgRef, zoomed ? 720 : 380);
   const points = rosePoints(chart, maxPoints);
   if (!points.length) {
@@ -555,7 +555,7 @@ function SeriesLegend({ series }: { series: Array<{ name: string; color: string 
   );
 }
 
-function ScatterBody({ chart, maxPoints, zoomed, svgRef, maxHeight, height: targetHeight }: { chart: ChartSpec; maxPoints: number; zoomed: boolean; svgRef: RefObject<SVGSVGElement>; maxHeight?: number; height?: number }) {
+function ScatterBody({ chart, maxPoints, zoomed, svgRef, maxHeight, height: targetHeight }: { chart: ChartSpec; maxPoints: number; zoomed: boolean; svgRef: RefObject<SVGSVGElement | null>; maxHeight?: number; height?: number }) {
   const measured = useElementWidth(svgRef, zoomed ? 720 : 380);
   const points = scatterOf(chart, maxPoints);
   if (!points.length) {
@@ -639,7 +639,7 @@ function heatTone(ratio: number, dark: boolean): HeatTone {
   return { fill: `rgb(${rgb.join(',')})`, text: luminance > 0.45 ? '#10201c' : '#f2fbf8' };
 }
 
-function HeatmapBody({ chart, zoomed, svgRef, maxHeight, height: targetHeight, dark }: { chart: ChartSpec; zoomed: boolean; svgRef: RefObject<SVGSVGElement>; maxHeight?: number; height?: number; dark: boolean }) {
+function HeatmapBody({ chart, zoomed, svgRef, maxHeight, height: targetHeight, dark }: { chart: ChartSpec; zoomed: boolean; svgRef: RefObject<SVGSVGElement | null>; maxHeight?: number; height?: number; dark: boolean }) {
   const id = useStableId();
   const measured = useElementWidth(svgRef, zoomed ? 720 : 380);
   const matrix = heatmapOf(chart);
@@ -747,7 +747,7 @@ function HeatmapBody({ chart, zoomed, svgRef, maxHeight, height: targetHeight, d
   );
 }
 
-function RadarBody({ chart, maxPoints, zoomed, svgRef, maxHeight, height: targetHeight }: { chart: ChartSpec; maxPoints: number; zoomed: boolean; svgRef: RefObject<SVGSVGElement>; maxHeight?: number; height?: number }) {
+function RadarBody({ chart, maxPoints, zoomed, svgRef, maxHeight, height: targetHeight }: { chart: ChartSpec; maxPoints: number; zoomed: boolean; svgRef: RefObject<SVGSVGElement | null>; maxHeight?: number; height?: number }) {
   const measured = useElementWidth(svgRef, zoomed ? 720 : 380);
   const history = chart.series.slice(0, maxPoints);
   if (history.length < 3) {
@@ -839,12 +839,12 @@ interface AxisBodyProps {
   type: ChartType;
   maxPoints: number;
   zoomed: boolean;
-  svgRef: RefObject<SVGSVGElement>;
+  svgRef: RefObject<SVGSVGElement | null>;
   maxHeight?: number;
   height?: number;
 }
 
-function useElementWidth(ref: RefObject<Element>, fallback: number): number {
+function useElementWidth(ref: RefObject<Element | null>, fallback: number): number {
   const [width, setWidth] = useState(fallback);
   useEffect(() => {
     const measure = () => {
@@ -1311,7 +1311,7 @@ function useStableId(): string {
  * ② SVG 自身没有背景，drawImage 前要先 fillRect 底色，否则导出的是透明图。
  * 另外 class 样式在独立 SVG 里不生效，导出前要把网格线/坐标轴的颜色内联成属性。
  */
-async function exportPng(svgRef: RefObject<SVGSVGElement>, title: string, setExporting: (value: boolean) => void): Promise<void> {
+async function exportPng(svgRef: RefObject<SVGSVGElement | null>, title: string, setExporting: (value: boolean) => void): Promise<void> {
   const svg = svgRef.current;
   if (!svg) return;
   setExporting(true);

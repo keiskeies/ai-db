@@ -730,7 +730,7 @@
   "openDemo": "Ouvrir la base de données de démonstration",
   "page": "Pages",
   "pairCode": "Code d'appariement",
-  "pairHint": "Saisissez l'adresse et le code Bridge sur mobile. Valable 5 minutes.",
+  "pairHint": "Saisissez l'adresse et le code Bridge sur mobile. Valable 1 minute.",
   "pairing": "Couplage mobile",
   "password": "Mot de passe",
   "payload 字段": "Champ de charge utile",

@@ -32,6 +32,7 @@
   "Bridge 地址": "Bridge URL",
   "Bridge 未连接": "Bridge가 연결되지 않았습니다.",
   "Bridge、设备、扩展、主题与语言": "Bridge, 장치, 확장, 테마 및 언어",
+  "Bridge、主题与语言": "Bridge, 테마 및 언어",
   "CSV 导入、CSV / JSON 导出": "CSV 가져오기, CSV / JSON 내보내기",
   "CSV 导入；CSV / JSON / XML / SQL / XLSX 导出": "CSV 가져오기; CSV / JSON / XML / SQL / XLSX 내보내기",
   "CSV 首行作为列名，按列名写入当前表；只读连接会被拒绝。": "첫 번째 CSV 행을 열 이름으로 사용하고 열 이름으로 현재 테이블에 씁니다. 읽기 전용 연결은 거부됩니다.",

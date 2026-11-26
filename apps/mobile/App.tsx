@@ -218,6 +218,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
 
   const connName = activeConnection?.name ?? '未选择连接';
   const provider = boot?.settings.agent.provider === 'local' ? 'Local' : boot?.settings.agent.provider;
+  const canManageHost = !config.deviceId;
 
   return (
     <ChartInsightContext.Provider value={{ client, connectionId: activeConnectionId, database: activeDatabase }}>
@@ -270,6 +271,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
             tables={tables}
             agentSettings={boot?.settings.agent}
             onSaveAgent={(patch) => void saveAgent(patch)}
+            canManageHost={canManageHost}
             databases={databases}
             database={activeDatabase}
             onOpenDatabases={() => openPicker('databases')}
@@ -331,6 +333,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
             toolTable={toolTable}
             toolSql={toolSql}
             setToolSql={setToolSql}
+            canManageHost={canManageHost}
           />
         ) : null}
 
@@ -363,7 +366,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
         ) : null}
 
         {tab === 'me' && mePage === 'settings' ? (
-          <SettingsScreen client={client} boot={boot} config={config} mode={mode} connected={connected} onDisconnect={onDisconnect} onMode={setMode} themeMode={themeMode} resolvedTheme={resolvedTheme} onThemeMode={onThemeMode} locale={locale} onLocale={onLocale} onBack={() => setMePage(null)} />
+          <SettingsScreen client={client} boot={boot} config={config} mode={mode} connected={connected} onDisconnect={onDisconnect} onMode={setMode} themeMode={themeMode} resolvedTheme={resolvedTheme} onThemeMode={onThemeMode} locale={locale} onLocale={onLocale} onBack={() => setMePage(null)} canManageHost={canManageHost} />
         ) : null}
 
         {tab === 'me' && !mePage ? (
@@ -376,6 +379,7 @@ function Main({ config, onDisconnect, themeMode, resolvedTheme, onThemeMode, loc
             connected={connected}
             themeMode={themeMode}
             locale={locale}
+            canManageHost={canManageHost}
             onOpen={(page) => setMePage(page)}
           />
         ) : null}

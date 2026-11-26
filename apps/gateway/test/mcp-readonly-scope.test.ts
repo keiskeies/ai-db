@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { AddressInfo } from 'node:net';
+import { DatabaseSync } from 'node:sqlite';
 import { createGateway } from '../src/server';
 import { listenRandom } from './helpers';
 
@@ -116,6 +117,88 @@ test('mcp:readonly 在执行前拒绝 run_sql/explain_sql 携带的写 SQL', asy
   assert.equal(await count(), before, '只读 MCP 请求不能改变数据库');
 });
 
+test('mcp:readonly 逐条拒绝 session、PRAGMA setter 与危险方括号 SQL', async () => {
+  const mcp = await claim('mcp:readonly');
+  const boundaryFile = join(home, 'mcp-sql-boundary.sqlite');
+  const seed = new DatabaseSync(boundaryFile);
+  seed.exec('CREATE TABLE users (id INTEGER PRIMARY KEY)');
+  seed.close();
+  const sqlite = gateway.store.createConnection({ name: 'MCP SQL boundary', engine: 'sqlite', database: boundaryFile });
+  const sqlserver = gateway.store.createConnection({ name: 'MCP MSSQL boundary', engine: 'sqlserver', host: '127.0.0.1', port: 1, database: 'master' });
+  const before = await gateway.manager.query(sqlite.id, 'PRAGMA foreign_keys', { actor: 'user', autoLimit: false });
+  const cases = [
+    { connectionId: sqlite.id, sql: 'SELECT 1; BEGIN', allowMulti: true },
+    { connectionId: sqlite.id, sql: 'PRAGMA foreign_keys=OFF' },
+    { connectionId: sqlserver.id, sql: "SELECT [foo']; DELETE FROM dbo.users; --] FROM dbo.users" },
+  ];
+  for (const name of ['run_sql', 'explain_sql']) {
+    for (const args of cases) {
+      const response = await api(`/agent/tools/${name}`, {
+        method: 'POST',
+        body: JSON.stringify({ args }),
+      }, mcp.token);
+      assert.equal(response.status, 403, `${name}: ${args.sql}`);
+      const body = (await response.json()) as { error?: { code?: string } };
+      assert.equal(body.error?.code, 'TOOL_READ_ONLY', `${name}: ${args.sql}`);
+    }
+  }
+  const adminBridge = await api('/agent/tools/run_sql', {
+    method: 'POST',
+    body: JSON.stringify({ args: { connectionId: sqlite.id, sql: 'SELECT 1; BEGIN', allowMulti: true } }),
+  });
+  assert.equal(adminBridge.status, 403, '普通凭据的出站 MCP 桥也不能靠聚合 read 混入 session');
+  const state = await gateway.manager.query(sqlite.id, 'PRAGMA foreign_keys', { actor: 'user', autoLimit: false });
+  assert.equal(Number(state.sets[0].rows[0][0]), Number(before.sets[0].rows[0][0]), '被拒绝的 PRAGMA 不能改变数据库连接状态');
+});
+
+test('直接 /query 的 allowMulti 不能突破服务端开关', async () => {
+  const connection = gateway.store.listConnections().find((item) => item.engine === 'sqlite');
+  assert.ok(connection);
+  const original = gateway.store.getSettings();
+  const sql = 'SELECT 1 AS a; SELECT 2 AS b';
+  try {
+    gateway.store.saveSettings({ ...original, allowMultiStatement: false });
+    for (const allowMulti of [undefined, false, true]) {
+      const response = await api('/query', {
+        method: 'POST',
+        body: JSON.stringify({ connectionId: connection.id, sql, ...(allowMulti === undefined ? {} : { allowMulti }) }),
+      });
+      assert.equal(response.status, 400, `服务端关闭时 allowMulti=${String(allowMulti)}`);
+      const body = (await response.json()) as { error?: { code?: string } };
+      assert.equal(body.error?.code, 'SCRIPT_TOO_LARGE');
+    }
+
+    gateway.store.saveSettings({ ...original, allowMultiStatement: true });
+    for (const allowMulti of [undefined, true]) {
+      const response = await api('/query', {
+        method: 'POST',
+        body: JSON.stringify({ connectionId: connection.id, sql, ...(allowMulti === undefined ? {} : { allowMulti }) }),
+      });
+      assert.equal(response.status, 200, `服务端开启时 allowMulti=${String(allowMulti)}`);
+      const body = (await response.json()) as { batch?: { sets?: unknown[] } };
+      assert.equal(body.batch?.sets?.length, 2);
+    }
+    const veto = await api('/query', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: connection.id, sql, allowMulti: false }),
+    });
+    assert.equal(veto.status, 400, '客户端仍可用 false 主动关闭批量');
+    const vetoBody = (await veto.json()) as { error?: { code?: string } };
+    assert.equal(vetoBody.error?.code, 'SCRIPT_TOO_LARGE');
+
+    const sqlserver = gateway.store.createConnection({ name: 'Direct MSSQL boundary', engine: 'sqlserver', host: '127.0.0.1', port: 1, database: 'master' });
+    const unsafe = await api('/query', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: sqlserver.id, sql: "SELECT [foo']; DELETE FROM dbo.users; --] FROM dbo.users", allowMulti: true }),
+    });
+    assert.equal(unsafe.status, 400);
+    const unsafeBody = (await unsafe.json()) as { error?: { code?: string } };
+    assert.equal(unsafeBody.error?.code, 'SQL_UNKNOWN');
+  } finally {
+    gateway.store.saveSettings(original);
+  }
+});
+
 test('revoking the device invalidates the mcp:readonly credential', async () => {
   const mcp = await claim('mcp:readonly');
   const revoked = await api(`/devices/${mcp.id}`, { method: 'DELETE' });
@@ -124,8 +207,12 @@ test('revoking the device invalidates the mcp:readonly credential', async () => 
   assert.equal(res.status, 401);
 });
 
-test('a full-scope device token keeps access to the whole API', async () => {
-  const full = await claim();
-  const res = await api('/connections', {}, full.token);
+test('a new mobile device is restricted to explicitly authorized connections', async () => {
+  const mobile = await claim();
+  const res = await api('/connections', {}, mobile.token);
   assert.equal(res.status, 200);
+  const body = (await res.json()) as { connections: unknown[] };
+  assert.deepEqual(body.connections, []);
+  const settings = await api('/settings', {}, mobile.token);
+  assert.equal(settings.status, 403);
 });

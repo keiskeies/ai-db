@@ -1,10 +1,11 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import type { AddressInfo } from 'node:net';
+import { request } from 'node:http';
 import { createGateway } from '../src/server';
 import { ToolExecutor } from '../src/executor';
 import { CommandRunner } from '../src/commands/runner';
@@ -90,10 +91,20 @@ async function api<T = any>(path: string, init: RequestInit = {}): Promise<{ sta
   return { status: res.status, body };
 }
 
-async function streamRun(runId: string): Promise<any[]> {
-  const res = await fetch(`${base}/api/commands/runs/${runId}/events`, { headers });
-  assert.equal(res.status, 200);
-  const text = await res.text();
+async function streamRun(runId: string, after = 0): Promise<any[]> {
+  // A replay fixture can spend seconds seeding SQLite; always use a fresh socket.
+  const text = await new Promise<string>((resolve, reject) => {
+    const req = request(`${base}/api/commands/runs/${runId}/events?after=${after}`, { headers, agent: false }, (res) => {
+      assert.equal(res.statusCode, 200);
+      res.setEncoding('utf8');
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => resolve(body));
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.end();
+  });
   return text
     .split('\n\n')
     .map((block) => block.split('\n').find((line) => line.startsWith('data: '))?.slice(6))
@@ -530,7 +541,7 @@ test('/fix 在备份后执行修复计划', async () => {
   assert.ok(executed.body.executed > 0);
   assert.equal(executed.body.verification.ok, true);
   assert.match(executed.body.verification.summary, /体检完成/);
-  const db = new DatabaseSync(leftPath, { readOnly: true });
+  const db = new DatabaseSync(leftPath, { readOnly: true } as unknown as ConstructorParameters<typeof DatabaseSync>[1]);
   const indexes = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'dup_idx'").all();
   db.close();
   assert.equal(indexes.length, 1);
@@ -593,19 +604,158 @@ test('/fix dry-run 只返回计划，不执行也不要求备份', async () => {
 });
 
 
-test('命令运行可以手动取消', async () => {
+test('命令取消等底层 schema 退出后才落终态，且不补写成功审计', async () => {
+  let release!: () => void;
+  let bothStarted!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const started = new Promise<void>((resolve) => { bothStarted = resolve; });
+  let schemaCalls = 0;
   const slowManager = {
+    // 故意忽略 signal：取消不能假装让一个仍然运行的 Promise 立刻结束。
     schema: async () => {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      schemaCalls += 1;
+      if (schemaCalls === 2) bothStarted();
+      await gate;
       return [];
     },
   } as any;
   const runner = new CommandRunner(gateway.store, slowManager);
   const sources = [{ connectionId: leftConn.id }, { connectionId: rightConn.id }];
   const canceled = runner.start('diff', { sources });
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await started;
+  let waiterSettled = false;
+  const pending = runner.waitForRun(canceled.id).then((info) => {
+    waiterSettled = true;
+    return info;
+  });
   assert.equal(runner.cancel(canceled.id), true);
-  assert.equal(runner.get(canceled.id)?.status, 'canceled');
+  assert.equal(runner.cancel(canceled.id), true);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(waiterSettled, false);
+  assert.equal(runner.get(canceled.id)?.status, 'running');
+  assert.equal(gateway.store.getArtifactRun(canceled.id)?.status, 'running');
+
+  release();
+  await runner.waitForExecution(canceled.id);
+  assert.equal((await pending)?.status, 'canceled');
+  assert.equal(gateway.store.getArtifactRun(canceled.id)?.status, 'canceled');
+  assert.equal(gateway.store.getArtifactRun(canceled.id)?.result, null);
+  const events = runner.events(canceled.id);
+  assert.equal(events.filter((event) => event.type === 'run_finished').length, 1);
+  assert.equal(events.some((event) => event.type === 'step_succeeded' || event.type === 'artifact_ready'), false);
+  const audits = gateway.store.listAudit({ limit: 1000 }).filter((entry) => entry.tool === 'command.diff' && (entry.meta as any)?.runId === canceled.id);
+  assert.deepEqual(audits, [], '底层工作退出后也不能补写 command.diff 成功审计');
+});
+
+test('recon 取消信号贯通到 manager.query，底层退出前不落终态', async () => {
+  let release!: () => void;
+  let queryStarted!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const started = new Promise<void>((resolve) => { queryStarted = resolve; });
+  let queryCalls = 0;
+  let querySignal: AbortSignal | undefined;
+  const table = { name: 'recon_users', type: 'table', columns: [{ name: 'id', type: 'INTEGER', nullable: false, primaryKey: true }] };
+  const manager = {
+    schema: async () => [{ name: 'main', tables: [table] }],
+    query: async (_id: string, _sql: string, options: any) => {
+      queryCalls += 1;
+      querySignal = options.signal;
+      if (queryCalls === 1) {
+        queryStarted();
+        await gate;
+      }
+      return { sets: [{ rows: [[1]], columns: [{ name: 'count', type: 'INTEGER' }] }] };
+    },
+  } as any;
+  const runner = new CommandRunner(gateway.store, manager);
+  const run = runner.start('recon', {
+    sources: [{ connectionId: leftConn.id }, { connectionId: rightConn.id }],
+    level: 'counts',
+    mapping: {
+      mode: 'table-table',
+      left: { kind: 'table', connectionId: leftConn.id, table: 'recon_users' },
+      right: { kind: 'table', connectionId: rightConn.id, table: 'recon_users' },
+    },
+  });
+  await started;
+  assert.equal(runner.cancel(run.id), true);
+  assert.equal(querySignal?.aborted, true);
+  assert.equal(runner.get(run.id)?.status, 'running');
+  release();
+  await runner.waitForExecution(run.id);
+  assert.equal(runner.get(run.id)?.status, 'canceled');
+  const audits = gateway.store.listAudit({ limit: 1000 }).filter((entry) => entry.tool === 'command.recon' && (entry.meta as any)?.runId === run.id);
+  assert.deepEqual(audits, []);
+});
+
+test('queued run 只有在 execute 未启动时才能立即取消', async () => {
+  let schemaCalls = 0;
+  const runner = new CommandRunner(gateway.store, {
+    schema: async () => { schemaCalls += 1; return []; },
+  } as any);
+  const run = runner.start('diff', { sources: [{ connectionId: leftConn.id }, { connectionId: rightConn.id }] });
+  assert.equal(runner.cancel(run.id), true);
+  assert.equal(runner.get(run.id)?.status, 'canceled');
+  await runner.waitForExecution(run.id);
+  assert.equal(schemaCalls, 0);
+  assert.deepEqual(runner.events(run.id).map((event) => event.type), ['run_started', 'run_finished']);
+  assert.equal(gateway.store.getArtifactRun(run.id)?.status, 'canceled');
+});
+
+test('导出期间取消不会发布成功事件或留下导出文件', async () => {
+  const exportDir = join(home, 'cancel-export');
+  mkdirSync(exportDir, { recursive: true });
+  let runner!: CommandRunner;
+  let runId = '';
+  const originalUpdate = gateway.store.updateArtifactRun.bind(gateway.store);
+  (gateway.store as any).updateArtifactRun = (id: string, patch: any) => {
+    const updated = originalUpdate(id, patch);
+    // executeStep 已完成、导出即将开始；此时持久 run 必须仍是非终态。
+    if (id === runId && patch.status === 'running' && patch.result !== undefined) runner.cancel(runId);
+    return updated;
+  };
+  try {
+    runner = new CommandRunner(gateway.store, gateway.manager, undefined, undefined, exportDir);
+    const run = runner.start('report', {
+      sources: [{ connectionId: leftConn.id }],
+      topic: '取消导出回归',
+      format: 'xlsx',
+    });
+    runId = run.id;
+    const finished = await runner.waitForRun(run.id);
+    assert.equal(finished?.status, 'canceled');
+    assert.equal(gateway.store.getArtifactRun(run.id)?.status, 'canceled');
+    assert.equal(gateway.store.getArtifactRun(run.id)?.result, null);
+    const events = runner.events(run.id);
+    assert.equal(events.some((event) => event.type === 'step_succeeded' || event.type === 'artifact_ready'), false);
+    assert.equal(events.some((event) => event.type === 'run_finished' && event.status === 'succeeded'), false);
+    assert.deepEqual(readdirSync(exportDir), [], '取消的导出不能留下临时文件或已发布文件');
+  } finally {
+    (gateway.store as any).updateArtifactRun = originalUpdate;
+  }
+});
+
+test('命令 SSE 在持久事件裁剪后先发送 replay_truncated 标记', async () => {
+  const artifact = gateway.store.createArtifact({
+    type: 'report', title: 'replay gap', spec: { version: 1, type: 'report', title: 'replay gap', command: 'report', sources: [], input: {} },
+  });
+  const run = gateway.store.addArtifactRun({ artifactId: artifact.id, status: 'running', input: {}, steps: [] });
+  for (let seq = 1; seq <= 505; seq += 1) {
+    gateway.store.appendCommandEvent(run.id, seq, { type: 'step_progress', runId: run.id, stepId: 'report', message: String(seq) } as any);
+  }
+  gateway.store.appendCommandEvent(run.id, 506, { type: 'run_finished', runId: run.id, status: 'succeeded', durationMs: 1 } as any);
+  gateway.store.updateArtifactRun(run.id, { status: 'succeeded', finishedAt: new Date().toISOString() });
+  const events = await streamRun(run.id);
+  assert.equal(events[0]?.type, 'replay_truncated');
+  assert.equal(events[0]?.runId, run.id);
+  assert.equal(events[0]?.firstSeq, 7);
+  assert.equal(events[0]?.lastSeq, 506);
+  assert.equal(events.filter((event) => event.type === 'step_progress').length, 499);
+  assert.equal(events.at(-1)?.type, 'run_finished');
+
+  const contiguous = await streamRun(run.id, 6);
+  assert.equal(contiguous[0]?.type, 'step_progress');
+  assert.equal(contiguous.some((event) => event.type === 'replay_truncated'), false);
 });
 
 test('跑得久的运行不会被时长取消：慢到原来的上限之上也照样跑完', async () => {

@@ -171,15 +171,11 @@ export interface ApprovalPayload {
 /**
  * 一个回合为什么被中止。
  *
- * 'user' 之外只留 'stalled'：模型/连接彻底不动了，多等一秒都不会变。
- * 曾经还有个 'timeout'（回合跑满固定分钟数就被掐断），已删——回合该不该结束由
- * 「还有没有进展」决定，不由挂钟决定；健康长回合被计时器掐断是纯粹的浪费，
- * 用户看到的还是「跑到一半莫名其妙停了」。
- *
- * 区分仍然是必须的：停摆中止不是用户的选择，UI 不能继续显示「已中止」，
+ * 'stalled' 表示模型/连接彻底不动；'deadline' 表示网关的绝对预算到期。
+ * 停摆与预算中止都不是用户的选择，UI 不能继续显示「已中止」，
  * 上层也要据此写「可续跑」的检查点——用户点停止时不该替他留续跑提示。
  */
-export type AgentAbortCause = 'stalled' | 'user';
+export type AgentAbortCause = 'stalled' | 'user' | 'deadline';
 
 /**
  * 一个「正常返回」的回合究竟是怎么结束的。

@@ -1,5 +1,5 @@
 import { Alert, Platform } from 'react-native';
-import * as FileSystem from 'expo-file-system';
+import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { translate } from '../i18n';
 
@@ -32,9 +32,9 @@ export async function shareBase64(base64: string, format: string): Promise<void>
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     return;
   }
-  const path = `${FileSystem.cacheDirectory}export-${Date.now()}.${format}`;
-  await FileSystem.writeAsStringAsync(path, base64, { encoding: FileSystem.EncodingType.Base64 });
-  if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(path);
+  const file = new File(Paths.cache, `export-${Date.now()}.${format}`);
+  await file.write(base64, { encoding: 'base64' });
+  if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(file.uri);
 }
 
 export function humanBytes(bytes: number): string {

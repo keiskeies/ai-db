@@ -243,6 +243,7 @@
   "编辑": "Edit",
   "还没有记忆。与 AI 对话时它会自动沉淀事实、偏好与结论。": "No memories yet. During AI conversations, it automatically captures facts, preferences, and conclusions.",
   "选择数据库": "Select Database",
+  "回合已到达绝对时间预算，尚未完成。": "This turn reached its absolute time budget and is not complete.",
   "当前连接没有可切换的数据库。": "The current connection has no databases to switch to.",
   "会话": "Session",
   "新会话": "New Session",

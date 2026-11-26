@@ -1,7 +1,7 @@
-import { createReadStream, createWriteStream, existsSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, readFileSync, realpathSync, rmSync, statSync, statfsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   buildCreateIndex,
   buildCreateTable,
@@ -12,9 +12,12 @@ import {
   isSqlEngine,
   placeholder,
   quoteIdent,
+  quoteLiteral,
   quoteQualified,
+  splitStatements,
   type ColumnDef,
   type ConnectionConfig,
+  type DatabaseSchema,
   type DialectId,
   type Engine,
   type IndexDef,
@@ -25,7 +28,7 @@ import {
 import type { GatewayConfig } from './config';
 import { DbError, type Driver } from './drivers';
 import { throwIfAborted } from './drivers/timeout';
-import { estimateRowBytes, supportsRowStream } from './drivers/types';
+import { estimateRowBytes, supportsRowStream, supportsTransaction, type TransactionDriver } from './drivers/types';
 import { toCsv, toSqlInserts, type ExportFormat } from './exportFormat';
 import type { ConnectionManager } from './manager';
 import type { Store } from './store';
@@ -99,16 +102,29 @@ export function resolveInsideDir(dir: string, candidate?: string): string {
   return target;
 }
 
+const MAX_IMPORT_BYTES = 64 * 1024 * 1024;
+
+function isInside(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
+}
+
 export function resolveImportFile(config: GatewayConfig, requestedPath: string): string {
-  const path = resolve(requestedPath);
-  const allowedRoots = [resolve(config.importDir), resolve(config.home)];
-  const allowed = allowedRoots.some((root) => {
-    const rel = relative(root, path);
-    return !rel.startsWith('..') && !rel.includes(`..${process.platform === 'win32' ? '\\' : '/'}`);
-  });
-  if (!allowed) throw new DbError('导入文件必须位于导入目录或 AiDB 数据目录内', { code: 'PATH_NOT_ALLOWED' });
-  if (!existsSync(path) || !statSync(path).isFile()) throw new DbError(`文件不存在：${path}`, { code: 'FILE_NOT_FOUND' });
-  return path;
+  try {
+    const root = realpathSync(resolve(config.importDir));
+    const path = realpathSync(resolve(requestedPath));
+    if (!isInside(root, path)) throw new DbError('导入文件必须位于导入目录内', { code: 'PATH_NOT_ALLOWED' });
+    const extension = extname(path).toLowerCase();
+    if (extension !== '.csv' && extension !== '.tsv') throw new DbError('导入文件仅支持 .csv 或 .tsv', { code: 'INVALID_INPUT' });
+    const info = statSync(path);
+    if (!info.isFile()) throw new DbError('导入路径不是普通文件', { code: 'INVALID_INPUT' });
+    if (info.size > MAX_IMPORT_BYTES) throw new DbError('导入文件不能超过 64MB', { code: 'FILE_TOO_LARGE' });
+    return path;
+  } catch (err: any) {
+    if (err instanceof DbError) throw err;
+    if (err?.code === 'ENOENT' || err?.code === 'ENOTDIR') throw new DbError('导入文件不存在', { code: 'FILE_NOT_FOUND', status: 404 });
+    throw new DbError('无法读取导入文件', { code: 'INVALID_INPUT', status: 400 });
+  }
 }
 
 export interface ImportOptions {
@@ -377,28 +393,115 @@ export async function importCsv(
   }
 }
 
+type RestoreIdentifierPart = { value: string; sql: string; quoted: boolean };
+type RestoreObjectName = { schema?: RestoreIdentifierPart; name: RestoreIdentifierPart };
+
+/** 解析一个或两个标识符；引号内允许转义引号/方括号，点号留在标识符内部。 */
+function parseRestoreObjectName(input: string, dialect: DialectId): RestoreObjectName | undefined {
+  const parts: RestoreIdentifierPart[] = [];
+  let offset = 0;
+  const skipWhitespace = () => {
+    while (/\s/.test(input[offset] ?? '')) offset++;
+  };
+  while (parts.length < 2) {
+    skipWhitespace();
+    const start = offset;
+    const quote = input[offset];
+    const quoted = quote === '"' || (quote === '`' && ['mysql', 'clickhouse', 'sqlite'].includes(dialect)) || (quote === '[' && ['mssql', 'sqlite'].includes(dialect));
+    let value = '';
+    if (quoted) {
+      const closingQuote = quote === '[' ? ']' : quote;
+      offset++;
+      let closed = false;
+      while (offset < input.length) {
+        if (input[offset] === closingQuote) {
+          if (input[offset + 1] === closingQuote) {
+            value += closingQuote;
+            offset += 2;
+            continue;
+          }
+          offset++;
+          closed = true;
+          break;
+        }
+        value += input[offset++];
+      }
+      if (!closed) return undefined;
+    } else {
+      const bare = input.slice(offset).match(/^[A-Za-z_][\w$#]*/);
+      if (!bare) return undefined;
+      value = bare[0];
+      offset += value.length;
+    }
+    if (!value) return undefined;
+    parts.push({ value, sql: input.slice(start, offset), quoted });
+    skipWhitespace();
+    if (input[offset] !== '.') break;
+    offset++;
+    // 备份只生成 schema.table；三段引用不能截成前两段后生成危险的 DROP。
+    if (parts.length === 2) return undefined;
+  }
+  if (parts.length === 1) return { name: parts[0] };
+  return { schema: parts[0], name: parts[1] };
+}
+
 /**
- * 备份是完整的 DDL + INSERT 脚本，直接重放会撞上「表已存在」。
- * 恢复前先按脚本里的对象生成 DROP 语句；不支持的方言保持原行为。
+ * 恢复对象身份不能全局 lower：
+ * - PostgreSQL 仅裸标识符折叠为小写，引号标识符保持精确大小写；
+ * - SQL Server 由目标库 collation 决定（CS/BIN 精确，CI 折叠）；
+ * - Oracle/DM 裸标识符折叠为大写，引号标识符精确；
+ * - MySQL/SQLite 维持既有的不区分大小写匹配。
  */
-export function restoreDropStatements(engine: Engine, dump: string): string[] {
+function restoreIdentifierKey(part: RestoreIdentifierPart, dialect: DialectId, sqlServerCaseSensitive: boolean): string {
+  if (dialect === 'postgres') return part.quoted ? part.value : part.value.toLowerCase();
+  if (dialect === 'mssql') return sqlServerCaseSensitive ? part.value : part.value.toLowerCase();
+  if (dialect === 'oracle' || dialect === 'dm') return part.quoted ? part.value : part.value.toUpperCase();
+  if (dialect === 'clickhouse') return part.value;
+  return part.value.toLowerCase();
+}
+
+function restoreObjectKey(object: RestoreObjectName, dialect: DialectId, sqlServerCaseSensitive: boolean): string {
+  return JSON.stringify([
+    object.schema ? restoreIdentifierKey(object.schema, dialect, sqlServerCaseSensitive) : null,
+    restoreIdentifierKey(object.name, dialect, sqlServerCaseSensitive),
+  ]);
+}
+
+/** catalog 返回的是数据库中的规范名；PostgreSQL/CS SQL Server 下必须按原样精确匹配。 */
+function restoreTargetObjectKey(schema: string | undefined, name: string, dialect: DialectId, sqlServerCaseSensitive: boolean): string {
+  return restoreObjectKey({
+    schema: schema === undefined ? undefined : { value: schema, sql: schema, quoted: true },
+    name: { value: name, sql: name, quoted: true },
+  }, dialect, sqlServerCaseSensitive);
+}
+
+/** 按完整 SQL 语句解析 CREATE TABLE/VIEW，避免把 INSERT 字符串或注释里的同名文本当成对象。 */
+function restoreObjectNames(engine: Engine, dump: string, sqlServerCaseSensitive = true): { views: RestoreObjectName[]; tables: RestoreObjectName[] } {
+  const dialect = dialectOf(engine);
+  const views = new Map<string, RestoreObjectName>();
+  const tables = new Map<string, RestoreObjectName>();
+  for (const statement of splitStatements(dump, engine)) {
+    const code = statement.replace(/^(?:\s|--[^\n]*(?:\n|$)|#[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*/, '');
+    const match = /^CREATE\s+(?:OR\s+REPLACE\s+)?(TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?/i.exec(code);
+    if (!match) continue;
+    const object = parseRestoreObjectName(code.slice(match[0].length), dialect);
+    if (!object) continue;
+    const key = restoreObjectKey(object, dialect, sqlServerCaseSensitive);
+    (match[1].toUpperCase() === 'VIEW' ? views : tables).set(key, object);
+  }
+  return { views: [...views.values()], tables: [...tables.values()] };
+}
+
+export function restoreDropStatements(engine: Engine, dump: string, sqlServerCaseSensitive = true): string[] {
   const dialect = dialectOf(engine);
   if (!['sqlite', 'mysql', 'postgres', 'mssql', 'oracle', 'dm', 'clickhouse'].includes(dialect)) return [];
-  const pattern = /CREATE\s+(?:OR\s+REPLACE\s+)?(TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?("(?:[^"]|"")+"|`(?:[^`]|``)+`|\[[^\]]+\]|[A-Za-z_][\w$#]*(?:\.[A-Za-z_][\w$#]*)?)/gi;
-  const views = new Set<string>();
-  const tables = new Set<string>();
-  for (const match of dump.matchAll(pattern)) {
-    const kind = match[1].toUpperCase();
-    const name = match[2].trim();
-    (kind === 'VIEW' ? views : tables).add(name);
-  }
-  // mssql/oracle/dm/clickhouse 弃置方言特性：oracle/dm 无 IF EXISTS，需要时先查存在性（用简单可回退策略）。
-  // 这里统一按「IF EXISTS / 无 IF 回退」生成，避免恢复撞「已存在」。
+  const { views, tables } = restoreObjectNames(engine, dump, sqlServerCaseSensitive);
+  const sqlName = (object: RestoreObjectName) => [object.schema?.sql, object.name.sql].filter(Boolean).join('.');
   const supportsIfExists = dialect === 'mysql' || dialect === 'postgres' || dialect === 'mssql' || dialect === 'sqlite' || dialect === 'clickhouse';
   const cascade = dialect === 'postgres' ? ' CASCADE' : dialect === 'oracle' || dialect === 'dm' ? ' CASCADE CONSTRAINTS' : '';
   const drops = [
-    ...[...views].map((name) => `DROP VIEW ${supportsIfExists ? 'IF EXISTS ' : ''}${name}${cascade};`),
-    ...[...tables].map((name) => `DROP TABLE ${supportsIfExists ? 'IF EXISTS ' : ''}${name}${cascade};`),
+    ...[...views].map((name) => `DROP VIEW ${supportsIfExists ? 'IF EXISTS ' : ''}${sqlName(name)}${cascade};`),
+    ...[...tables].map((name) => `DROP TABLE ${supportsIfExists ? 'IF EXISTS ' : ''}${sqlName(name)}${cascade};`),
   ];
   if (!drops.length) return [];
   if (dialect === 'mysql') return ['SET FOREIGN_KEY_CHECKS=0;', ...drops, 'SET FOREIGN_KEY_CHECKS=1;'];
@@ -484,7 +587,7 @@ export async function writeTableRows(
   };
   // 流式驱动一条 SELECT 读完整表：单语句快照天然一致，不会像分页那样漏行/重行，
   // 无主键表也不再整表缓冲。批由驱动按字节产出，这里再按同一预算切 INSERT。
-  if (supportsRowStream(driver)) {
+  if (supportsRowStream(driver) && !read) {
     for await (const batch of driver.iterateRows(base, [], { database, signal })) {
       throwIfAborted(signal);
       await emitRows(batch.columns, batch.rows);
@@ -519,7 +622,7 @@ export async function writeTableRows(
     if (result.rows.length < DUMP_CHUNK_ROWS) return rowCount;
     const index = result.columns.findIndex((column) => column.name.toLowerCase() === plan.column.toLowerCase());
     const last = result.rows[result.rows.length - 1];
-    if (index < 0 || !last || last[index] === null || last[index] === undefined) return rowCount;
+    if (index < 0 || !last || last[index] === null || last[index] === undefined) throw new DbError('无法可靠继续备份分页', { code: 'BACKUP_TRUNCATED' });
     cursor = last[index];
   }
 }
@@ -536,6 +639,196 @@ export function safeDefaultToDump(value: string): string | undefined {
   return undefined;
 }
 
+const MIN_BACKUP_FREE_BYTES = 1024 * 1024 * 1024;
+const MAX_BACKUP_BYTES = 20 * 1024 * 1024 * 1024;
+const BACKUP_RETENTION_COUNT = 20;
+const BACKUP_RETENTION_DAYS = 30;
+
+export function backupCapacityByteLimit(availableBytes: number): number {
+  if (availableBytes < MIN_BACKUP_FREE_BYTES) throw new DbError('备份目录可用空间不足 1GB', { code: 'BACKUP_CAPACITY' });
+  return Math.min(MAX_BACKUP_BYTES, availableBytes - MIN_BACKUP_FREE_BYTES);
+}
+
+async function viewDefinition(txDriver: TransactionDriver, txId: string, conn: ConnectionConfig, table: TableInfo, database: string | undefined, signal?: AbortSignal, executionId?: string): Promise<string> {
+  const ref = quoteQualified([engineUsesSchema(conn.engine) ? table.schema : undefined, table.name], conn.engine);
+  const dialect = dialectOf(conn.engine);
+  let sql: string;
+  let column = 1;
+  if (dialect === 'sqlite') {
+    sql = `SELECT sql FROM sqlite_master WHERE type='view' AND name=${quoteLiteral(table.name)}`;
+    column = 0;
+  } else if (dialect === 'mysql') {
+    sql = `SHOW CREATE VIEW ${ref}`;
+  } else if (dialect === 'postgres') {
+    sql = `SELECT pg_get_viewdef(${quoteLiteral(ref)}::regclass, true)`;
+    column = 0;
+  } else if (dialect === 'mssql') {
+    sql = `SELECT definition FROM sys.sql_modules WHERE object_id=OBJECT_ID(${quoteLiteral(ref)})`;
+    column = 0;
+  } else if (dialect === 'oracle' || dialect === 'dm') {
+    sql = `SELECT TEXT FROM USER_VIEWS WHERE VIEW_NAME=${quoteLiteral(table.name.toUpperCase())}`;
+    column = 0;
+  } else if (dialect === 'clickhouse') {
+    sql = `SHOW CREATE VIEW ${ref}`;
+  } else {
+    throw new DbError(`${engineMeta(conn.engine).label} 暂不支持备份视图定义`, { code: 'NATIVE_BACKUP_REQUIRED' });
+  }
+  const result = await txDriver.runInTransaction(txId, sql, [], { database, maxRows: 1, timeoutMs: 120_000, signal, executionId });
+  const definition = String(result.rows[0]?.[column] ?? '').trim();
+  if (!definition) throw new DbError(`无法读取视图定义：${table.name}`, { code: 'NATIVE_BACKUP_REQUIRED' });
+  return /^CREATE\s+(?:OR\s+REPLACE\s+)?VIEW\b/i.test(definition) ? definition : `CREATE VIEW ${ref} AS ${definition}`;
+}
+
+function consistentBackupUnsupported(message: string, cause?: unknown): DbError {
+  return Object.assign(new DbError(message, { code: 'CONSISTENT_BACKUP_UNSUPPORTED' }), cause === undefined ? {} : { cause });
+}
+
+/** SQLite 的所有 describe/query 都固定在同一子进程连接上，可在事务内直接读取 schema。 */
+async function sqliteSchemaInTransaction(
+  txDriver: TransactionDriver,
+  txId: string,
+  database: string | undefined,
+  signal?: AbortSignal,
+  executionId?: string,
+): Promise<TableInfo[]> {
+  const run = async (sql: string): Promise<QueryResult> => {
+    const result = await txDriver.runInTransaction(txId, sql, [], { database, timeoutMs: 30_000, signal, executionId });
+    if (result.truncated) throw consistentBackupUnsupported('SQLite 结构元数据不完整，无法证明一致性备份');
+    return result;
+  };
+  const objects = await run("SELECT name, type, sql FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY type, name");
+  const tables: TableInfo[] = [];
+  for (const object of objects.rows) {
+    const name = String(object[0]);
+    const quoted = quoteIdent(name, 'sqlite');
+    const columnRows = (await run(`PRAGMA table_info(${quoted})`)).rows;
+    const columns = columnRows.map((row) => ({
+      name: String(row[1]),
+      type: String(row[2] || 'TEXT'),
+      nullable: Number(row[3]) === 0,
+      defaultValue: row[4] === null ? null : String(row[4]),
+      primaryKey: Number(row[5]) > 0,
+      autoIncrement: false,
+    }));
+    if (/AUTOINCREMENT/i.test(String(object[2] ?? ''))) {
+      const primary = columns.find((column) => column.primaryKey);
+      if (primary) primary.autoIncrement = true;
+    }
+    const indexes: NonNullable<TableInfo['indexes']> = [];
+    const foreignKeys: NonNullable<TableInfo['foreignKeys']> = [];
+    if (object[1] === 'table') {
+      for (const row of (await run(`PRAGMA index_list(${quoted})`)).rows) {
+        const indexName = String(row[1]);
+        if (indexName.startsWith('sqlite_autoindex_')) continue;
+        const indexColumns = (await run(`PRAGMA index_info(${quoteIdent(indexName, 'sqlite')})`)).rows;
+        indexes.push({
+          name: indexName,
+          columns: indexColumns.map((column) => String(column[2])),
+          unique: Number(row[2]) === 1,
+          primary: String(row[3]) === 'pk',
+        });
+      }
+      const foreignKeyMap = new Map<number, NonNullable<TableInfo['foreignKeys']>[number]>();
+      for (const row of (await run(`PRAGMA foreign_key_list(${quoted})`)).rows) {
+        const id = Number(row[0]);
+        const foreignKey = foreignKeyMap.get(id) ?? {
+          name: `fk_${name}_${id}`,
+          columns: [],
+          refTable: String(row[2]),
+          refColumns: [],
+          onDelete: String(row[6] ?? ''),
+          onUpdate: String(row[5] ?? ''),
+        };
+        foreignKey.columns.push(String(row[3]));
+        foreignKey.refColumns.push(String(row[4]));
+        foreignKeyMap.set(id, foreignKey);
+      }
+      foreignKeys.push(...foreignKeyMap.values());
+    }
+    tables.push({
+      name,
+      type: object[1] === 'view' ? 'view' : 'table',
+      schema: 'main',
+      columns,
+      indexes,
+      foreignKeys,
+    });
+  }
+  return tables;
+}
+
+function groupTransactionSchemas(conn: ConnectionConfig, database: string | undefined, tables: TableInfo[]): DatabaseSchema[] {
+  const dbKey = database ?? conn.database ?? (conn.engine === 'sqlite' ? 'main' : '');
+  if (!engineUsesSchema(conn.engine)) return [{ name: dbKey || 'main', tables }];
+  const groups = new Map<string, TableInfo[]>();
+  const fallback = conn.engine === 'sqlserver'
+    ? 'dbo'
+    : conn.engine === 'oracle'
+      ? (conn.username ?? '').toUpperCase()
+      : conn.engine === 'dm'
+        ? (conn.username ?? 'SYSDBA').toUpperCase()
+        : dbKey || 'public';
+  for (const table of tables) {
+    const key = table.schema ?? fallback;
+    groups.set(key, [...(groups.get(key) ?? []), table]);
+  }
+  if (!groups.size) groups.set(dbKey || fallback || 'public', []);
+  return [...groups.entries()].map(([name, list]) => ({ name, tables: list }));
+}
+
+async function schemaInTransaction(
+  txDriver: TransactionDriver,
+  engine: Engine,
+  conn: ConnectionConfig,
+  txId: string,
+  database: string | undefined,
+  signal?: AbortSignal,
+  executionId?: string,
+): Promise<DatabaseSchema[]> {
+  throwIfAborted(signal);
+  try {
+    let tables: TableInfo[];
+    if (typeof txDriver.describeInTransaction === 'function') {
+      tables = await txDriver.describeInTransaction(txId, database, { timeoutMs: 30_000, signal, executionId });
+    } else if (engine === 'sqlite') {
+      tables = await sqliteSchemaInTransaction(txDriver, txId, database, signal, executionId);
+    } else {
+      throw consistentBackupUnsupported(`${engineMeta(engine).label} 驱动不支持事务内结构读取，无法保证备份快照一致`);
+    }
+    throwIfAborted(signal);
+    return groupTransactionSchemas(conn, database, tables);
+  } catch (err: any) {
+    if (err?.code === 'ABORTED' || err?.code === 'CONSISTENT_BACKUP_UNSUPPORTED') throw err;
+    throw consistentBackupUnsupported(`${engineMeta(engine).label} 无法在备份事务内读取一致的结构元数据`, err);
+  }
+}
+
+function backupTransactionSetting(dialect: DialectId): string | undefined {
+  if (dialect === 'postgres') return 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY';
+  if (dialect === 'mssql') return 'SET TRANSACTION ISOLATION LEVEL SNAPSHOT';
+  if (dialect === 'oracle' || dialect === 'dm') return 'SET TRANSACTION READ ONLY';
+  return undefined;
+}
+
+async function applyBackupTransactionSetting(
+  txDriver: TransactionDriver,
+  txId: string,
+  engine: Engine,
+  database: string | undefined,
+  signal?: AbortSignal,
+  executionId?: string,
+): Promise<void> {
+  const sql = backupTransactionSetting(dialectOf(engine));
+  if (!sql) return;
+  throwIfAborted(signal);
+  try {
+    await txDriver.runInTransaction(txId, sql, [], { database, timeoutMs: 30_000, signal, executionId });
+  } catch (err: any) {
+    if (err?.code === 'ABORTED') throw err;
+    throw consistentBackupUnsupported(`${engineMeta(engine).label} 无法在事务读取前设置一致快照，已拒绝备份`, err);
+  }
+}
+
 export async function dumpDatabase(
   store: Store,
   manager: ConnectionManager,
@@ -549,37 +842,113 @@ export async function dumpDatabase(
   throwIfAborted(signal);
   const conn = store.getConnection(connectionId);
   if (!conn) throw new DbError('连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
-  const schemas = await manager.schema(connectionId, database, true, 30000, { signal, executionId });
-  throwIfAborted(signal);
+  const free = statfsSync(config.backupDir);
+  const backupByteLimit = backupCapacityByteLimit(free.bavail * free.bsize);
   const driver = await manager.rawDriver(connectionId);
-  throwIfAborted(signal);
+  const txDriver = supportsTransaction(driver) ? driver : undefined;
+  if (!txDriver) throw new DbError(`${engineMeta(conn.engine).label} 无法提供一致性快照，请使用原生备份工具`, { code: 'CONSISTENT_BACKUP_UNSUPPORTED' });
+  if (conn.engine !== 'sqlite' && typeof txDriver.describeInTransaction !== 'function') {
+    throw consistentBackupUnsupported(`${engineMeta(conn.engine).label} 驱动不支持事务内结构读取，无法保证备份快照一致`);
+  }
+  const txId = `backup-${randomUUID()}`;
+  const dialect = dialectOf(conn.engine);
+  const targetDatabase = database ?? conn.database;
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const safeName = (database ?? conn.database ?? conn.name).replace(/[^\w\u4e00-\u9fff-]+/g, '_').slice(0, 40);
+  const safeName = (targetDatabase ?? conn.name).replace(/[^\w\u4e00-\u9fff-]+/g, '_').slice(0, 40);
   const path = join(config.backupDir, `${conn.name.replace(/[^\w\u4e00-\u9fff-]+/g, '_')}-${safeName}-${stamp}-${randomUUID().slice(0, 8)}.sql`);
-  // 边读边写：整库备份不能再把「全部行 + 全部 INSERT 文本 + join 后的巨型字符串」同时留在内存里。
-  const stream = createWriteStream(path, { flags: 'w' });
-  const write = async (text: string) => {
-    throwIfAborted(signal);
-    await new Promise<void>((resolveWrite, rejectWrite) => {
-      stream.write(`${text}\n`, (err) => (err ? rejectWrite(err) : resolveWrite()));
-    });
-    throwIfAborted(signal);
-  };
+  let transactionOpen = false;
+  let stream: ReturnType<typeof createWriteStream> | undefined;
   let tableCount = 0;
   let rowCount = 0;
   let completed = false;
   try {
+    throwIfAborted(signal);
+    await txDriver.beginTransaction(txId, targetDatabase);
+    transactionOpen = true;
+    // 必须早于任何事务内读取；PostgreSQL/Oracle/DM 的晚 SET 会直接失败，SQL Server 的元数据也会脱离快照。
+    await applyBackupTransactionSetting(txDriver, txId, conn.engine, targetDatabase, signal, executionId);
+    if (dialect === 'mysql') {
+      const isolation = await txDriver.runInTransaction(txId, 'SELECT @@transaction_isolation', [], { database: targetDatabase, timeoutMs: 30_000, signal, executionId });
+      if (!String(isolation.rows[0]?.[0] ?? '').toUpperCase().includes('REPEATABLE-READ')) throw new DbError('MySQL 未启用 REPEATABLE READ，无法创建一致性备份', { code: 'CONSISTENT_BACKUP_UNSUPPORTED' });
+      if (!targetDatabase) throw new DbError('MySQL 一致性备份必须指定数据库', { code: 'CONSISTENT_BACKUP_UNSUPPORTED' });
+    }
+    const schemas = await schemaInTransaction(txDriver, conn.engine, conn, txId, targetDatabase, signal, executionId);
+    if (dialect === 'mysql' && schemas.some((schema) => schema.tables.some((table) => table.type === 'view'))) {
+      throw new DbError('MySQL 含视图的数据库请使用 mysqldump 原生备份，AiDB 备份仅覆盖可原子恢复的表', { code: 'NATIVE_BACKUP_REQUIRED' });
+    }
+    if (dialect === 'mysql') {
+      const engines = await txDriver.runInTransaction(
+        txId,
+        `SELECT TABLE_NAME, ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=${quoteLiteral(targetDatabase!)} AND TABLE_TYPE='BASE TABLE'`,
+        [],
+        { database: targetDatabase, timeoutMs: 30_000, signal, executionId },
+      );
+      if (engines.truncated) throw new DbError('MySQL 表引擎元数据不完整，无法证明一致性备份', { code: 'CONSISTENT_BACKUP_UNSUPPORTED' });
+      const transactionalEngines = new Set(['innodb', 'ndb']);
+      const expectedTables = new Set(schemas.flatMap((schema) => schema.tables).filter((table) => table.type === 'table').map((table) => table.name.toLowerCase()));
+      const checkedTables = new Set<string>();
+      for (const row of engines.rows) {
+        const tableName = String(row[0] ?? '');
+        const tableEngine = String(row[1] ?? '').toLowerCase();
+        if (!tableName || !transactionalEngines.has(tableEngine)) {
+          throw new DbError(`MySQL 表 ${tableName || '(未知)'} 使用非事务引擎 ${tableEngine || '(未知)'}，无法创建一致性备份；请先转换为 InnoDB/NDB 或使用原生备份工具`, { code: 'CONSISTENT_BACKUP_UNSUPPORTED' });
+        }
+        checkedTables.add(tableName.toLowerCase());
+      }
+      if (checkedTables.size !== expectedTables.size || [...expectedTables].some((name) => !checkedTables.has(name))) {
+        throw new DbError('MySQL 表引擎元数据与表清单不一致，无法证明一致性备份', { code: 'CONSISTENT_BACKUP_UNSUPPORTED' });
+      }
+    }
+    const unsupportedObjects = dialect === 'sqlite'
+      ? "SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND upper(sql) LIKE 'CREATE VIRTUAL TABLE%'"
+      : dialect === 'mysql'
+        ? "SELECT (SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE()) + (SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA=DATABASE()) + (SELECT COUNT(*) FROM information_schema.EVENTS WHERE EVENT_SCHEMA=DATABASE()) AS count"
+        : dialect === 'postgres'
+          ? "SELECT (SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind='S' AND n.nspname NOT IN ('pg_catalog','information_schema')) + (SELECT COUNT(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE p.prokind IN ('f','p') AND n.nspname NOT IN ('pg_catalog','information_schema')) + (SELECT COUNT(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE NOT t.tgisinternal AND n.nspname NOT IN ('pg_catalog','information_schema')) AS count"
+          : dialect === 'mssql'
+            ? "SELECT (SELECT COUNT(*) FROM sys.triggers) + (SELECT COUNT(*) FROM sys.sql_modules WHERE type IN ('P','FN','IF','TF')) + (SELECT COUNT(*) FROM sys.sequences) + (SELECT COUNT(*) FROM sys.synonyms) AS count"
+            : dialect === 'oracle' || dialect === 'dm'
+              ? 'SELECT (SELECT COUNT(*) FROM USER_SEQUENCES) + (SELECT COUNT(*) FROM USER_TRIGGERS) + (SELECT COUNT(*) FROM USER_PROCEDURES) + (SELECT COUNT(*) FROM USER_MVIEWS) AS count FROM DUAL'
+              : undefined;
+    if (unsupportedObjects) {
+      const objects = await txDriver.runInTransaction(txId, unsupportedObjects, [], {
+        database: targetDatabase,
+        timeoutMs: 30_000,
+        signal,
+        executionId,
+      });
+      if (objects.truncated || Number(objects.rows[0]?.[0] ?? 0) > 0) {
+        throw new DbError(`${engineMeta(conn.engine).label} 含 AiDB 尚不能完整重放的序列、例程或触发器，请使用原生备份工具`, { code: 'NATIVE_BACKUP_REQUIRED' });
+      }
+    }
+    stream = createWriteStream(path, { flags: 'wx', mode: 0o600 });
+    const output = stream;
+    let streamError: Error | undefined;
+    output.on('error', (err) => { streamError = err; });
+    let bytesWritten = 0;
+    const write = async (text: string) => {
+      throwIfAborted(signal);
+      if (streamError) throw streamError;
+      bytesWritten += Buffer.byteLength(text) + 1;
+      if (bytesWritten > backupByteLimit) throw new DbError('备份超过目录可用空间或 20GB 上限，请使用数据库原生备份工具', { code: 'BACKUP_CAPACITY' });
+      await new Promise<void>((resolveWrite, rejectWrite) => {
+        output.write(`${text}\n`, (err) => (err ? rejectWrite(err) : resolveWrite()));
+      });
+      throwIfAborted(signal);
+    };
     await write(`-- AiDB Studio backup`);
     await write(`-- connection: ${conn.name} (${conn.engine})`);
-    await write(`-- database: ${database ?? conn.database ?? ''}`);
+    await write(`-- database: ${targetDatabase ?? ''}`);
+    await write(`-- consistency: transaction snapshot`);
     await write(`-- created: ${new Date().toISOString()}`);
     await write('');
+    if (dialect === 'mysql') await write('SET FOREIGN_KEY_CHECKS=0;');
     for (const schema of schemas) {
       for (const table of schema.tables) {
         throwIfAborted(signal);
         if (table.type !== 'table') continue;
         const columns = table.columns ?? [];
-        if (!columns.length) continue;
+        if (!columns.length) throw new DbError(`无法读取表结构：${table.name}`, { code: 'NATIVE_BACKUP_REQUIRED' });
         tableCount++;
         const columnDefs: ColumnDef[] = columns.map((c) => ({
           name: c.name,
@@ -589,48 +958,75 @@ export async function dumpDatabase(
           primaryKey: c.primaryKey,
           autoIncrement: c.autoIncrement,
         }));
-        const indexes: IndexDef[] = (table.indexes ?? [])
-          .filter((i) => !i.primary)
-          .map((i) => ({ name: i.name, columns: i.columns, unique: i.unique }));
+        const indexes: IndexDef[] = (table.indexes ?? []).filter((i) => !i.primary).map((i) => ({ name: i.name, columns: i.columns, unique: i.unique }));
         await write(`-- table ${table.name}`);
-        await write(buildCreateTable(conn.engine, { table: table.name, columns: columnDefs, indexes: [], schema: engineUsesSchema(conn.engine) ? table.schema : undefined }) + ';');
-        for (const idx of indexes) {
-          await write(buildCreateIndex(conn.engine, table.name, idx, engineUsesSchema(conn.engine) ? table.schema : undefined) + ';');
-        }
+        await write(buildCreateTable(conn.engine, {
+          table: table.name,
+          columns: columnDefs,
+          indexes: [],
+          foreignKeys: table.foreignKeys,
+          schema: engineUsesSchema(conn.engine) && dialect !== 'mysql' ? table.schema : undefined,
+          comment: table.comment,
+        }) + ';');
+        for (const idx of indexes) await write(buildCreateIndex(conn.engine, table.name, idx, engineUsesSchema(conn.engine) && dialect !== 'mysql' ? table.schema : undefined) + ';');
         const target = quoteQualified([engineUsesSchema(conn.engine) ? table.schema : undefined, table.name], conn.engine);
-        // 备份的是哪个库就用哪个库读数据；写死 conn.database 会把非默认库的备份读成默认库的表。
         rowCount += await writeTableRows(
           write,
           driver,
           conn.engine,
           table,
           `SELECT * FROM ${target}`,
-          database ?? conn.database,
+          targetDatabase,
           signal,
           async (sql, params, db) => {
-            const options = { database: db, allowMulti: false, autoLimit: false, actor: 'user' as const, executionId, signal };
-            const result = params.length
-              ? await manager.runParams(connectionId, sql, params, options)
-              : (await manager.query(connectionId, sql, options)).sets[0];
-            if (!result) throw new DbError('备份读取没有返回结果', { code: 'BACKUP_READ_EMPTY' });
+            const result = await txDriver.runInTransaction(txId, sql, params, { database: db, timeoutMs: 120_000, signal, executionId });
+            if (result.truncated) throw new DbError(`备份读取被截断：${table.name}`, { code: 'BACKUP_TRUNCATED' });
             return result;
           },
         );
         await write('');
       }
     }
+    for (const schema of schemas) {
+      for (const view of schema.tables.filter((table) => table.type === 'view')) {
+        const definition = await viewDefinition(txDriver, txId, conn, view, targetDatabase, signal, executionId);
+        await write(`${definition.replace(/;\s*$/, '')};`);
+      }
+    }
+    if (conn.engine === 'sqlite') {
+      const triggers = await txDriver.runInTransaction(txId, "SELECT sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL", [], { database: targetDatabase, maxRows: 1000, timeoutMs: 30_000, signal, executionId });
+      if (triggers.truncated) throw new DbError('SQLite 触发器元数据不完整，无法创建一致性备份', { code: 'NATIVE_BACKUP_REQUIRED' });
+      for (const row of triggers.rows) await write(String(row[0]).replace(/;\s*$/, '') + ';');
+    }
+    if (dialect === 'mysql') await write('SET FOREIGN_KEY_CHECKS=1;');
+    await txDriver.commitTransaction(txId);
+    transactionOpen = false;
     completed = true;
   } finally {
-    await new Promise<void>((resolveClose, rejectClose) => {
-      stream.once('close', () => resolveClose());
-      stream.once('error', rejectClose);
-      stream.end();
-    });
+    if (transactionOpen) await txDriver.rollbackTransaction(txId).catch(() => undefined);
+    if (stream && !stream.closed) {
+      try {
+        await new Promise<void>((resolveClose, rejectClose) => {
+          stream!.once('close', () => resolveClose());
+          stream!.once('error', rejectClose);
+          stream!.end();
+        });
+      } catch (err) {
+        if (!completed) throw err;
+      }
+    }
     if (!completed) rmSync(path, { force: true });
   }
   throwIfAborted(signal);
   const bytes = statSync(path).size;
   const record = store.addBackup({ connectionId, database, path, format: 'sql', bytes, label });
+  const backups = store.listBackups(connectionId).filter((backup) => backup.database === database);
+  const expiredBefore = Date.now() - BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  for (const [index, old] of backups.entries()) {
+    if (index < BACKUP_RETENTION_COUNT && Date.parse(old.createdAt) >= expiredBefore) continue;
+    rmSync(old.path, { force: true });
+    store.deleteBackup(old.id);
+  }
   return { id: record.id, createdAt: record.createdAt, path, bytes, tables: tableCount, rows: rowCount };
 }
 
@@ -706,6 +1102,334 @@ export async function* readSqlStatements(path: string, signal?: AbortSignal): As
   }
 }
 
+const MAX_RESTORE_BYTES = 2 * 1024 * 1024 * 1024;
+const RESTORE_ALLOWED = /^(?:CREATE\s+(?:(?:UNIQUE\s+)?INDEX|TABLE|TRIGGER|VIEW)\b|CREATE\s+OR\s+REPLACE\s+VIEW\b|INSERT\s+INTO\b|SET\s+FOREIGN_KEY_CHECKS\s*=)/i;
+
+async function validateRestoreFile(path: string, engine: Engine, signal?: AbortSignal): Promise<{ headers: string[]; statements: number }> {
+  const info = statSync(path);
+  if (!info.isFile() || extname(path).toLowerCase() !== '.sql') throw new DbError('恢复文件必须是 .sql 备份', { code: 'INVALID_INPUT' });
+  if (info.size > MAX_RESTORE_BYTES) throw new DbError('恢复文件超过 2GB，请使用数据库原生恢复工具', { code: 'FILE_TOO_LARGE' });
+  const headers: string[] = [];
+  let statements = 0;
+  for await (const statement of readSqlStatements(path, signal)) {
+    if (splitStatements(statement, engine).length !== 1) throw new DbError('备份中包含多条语句或未闭合的字符串', { code: 'INVALID_BACKUP' });
+    const code = statement.replace(/^(?:\s*--[^\n]*\n)+/, '').trimStart();
+    if (!RESTORE_ALLOWED.test(code)) throw new DbError(`备份包含不受支持的语句：${code.slice(0, 60)}`, { code: 'INVALID_BACKUP' });
+    if (dialectOf(engine) === 'mysql' && /\b(?:TABLE(?:\s+IF\s+NOT\s+EXISTS)?|INTO|ON|REFERENCES)\s+(?:`(?:[^`]|``)+`|[\w$]+)\s*\./i.test(code)) {
+      throw new DbError('MySQL 暂存恢复不接受带库名的对象引用，请重新生成 AiDB 备份或使用 mysqldump', { code: 'INVALID_BACKUP' });
+    }
+    if (/^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|VIEW)\b/i.test(code)) headers.push(code);
+    statements++;
+  }
+  return { headers, statements };
+}
+
+async function assertRestoreDependenciesSupported(
+  manager: ConnectionManager,
+  connectionId: string,
+  engine: Engine,
+  database: string | undefined,
+  options: { signal?: AbortSignal; executionId?: string },
+): Promise<void> {
+  const dialect = dialectOf(engine);
+  const sql = dialect === 'postgres'
+    ? "SELECT (SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('S','m','f','p') AND n.nspname NOT IN ('pg_catalog','information_schema')) + (SELECT COUNT(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE p.prokind IN ('f','p') AND n.nspname NOT IN ('pg_catalog','information_schema')) + (SELECT COUNT(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE NOT t.tgisinternal AND n.nspname NOT IN ('pg_catalog','information_schema')) AS count"
+    : dialect === 'mssql'
+      ? "SELECT (SELECT COUNT(*) FROM sys.sequences) + (SELECT COUNT(*) FROM sys.synonyms) + (SELECT COUNT(*) FROM sys.triggers) + (SELECT COUNT(*) FROM sys.sql_modules WHERE type IN ('P','FN','IF','TF')) AS count"
+      : dialect === 'sqlite'
+        ? "SELECT COUNT(*) AS count FROM sqlite_master WHERE type='trigger'"
+        : undefined;
+  if (!sql) return;
+  try {
+    const result = await manager.query(connectionId, sql, { database, allowMulti: false, autoLimit: false, actor: 'user', signal: options.signal, executionId: options.executionId });
+    const set = result.sets[0];
+    if (!set || set.truncated || Number(set.rows[0]?.[0] ?? 0) > 0) {
+      throw new DbError(`${engineMeta(engine).label} 目标库包含 AiDB 无法完整重放的序列、例程、触发器或其他依赖对象，已拒绝可能级联删除的恢复；请使用原生备份恢复工具`, { code: 'ATOMIC_RESTORE_UNSUPPORTED' });
+    }
+  } catch (err: any) {
+    if (err instanceof DbError && err.code === 'ATOMIC_RESTORE_UNSUPPORTED') throw err;
+    throw Object.assign(new DbError(`无法完整核对 ${engineMeta(engine).label} 恢复依赖，已拒绝非原子恢复；请使用原生备份恢复工具`, { code: 'ATOMIC_RESTORE_UNSUPPORTED' }), { cause: err });
+  }
+}
+
+async function restoreTransactional(
+  manager: ConnectionManager,
+  connectionId: string,
+  engine: Engine,
+  database: string | undefined,
+  path: string,
+  drops: string[],
+  options: { signal?: AbortSignal; executionId?: string },
+  timeoutMs: number,
+): Promise<number> {
+  const txId = `restore-${randomUUID()}`;
+  const sqlite = engine === 'sqlite';
+  if (sqlite) await manager.query(connectionId, 'PRAGMA foreign_keys=OFF', { database, allowMulti: false, autoLimit: false, actor: 'user', signal: options.signal, executionId: options.executionId });
+  await manager.beginTransaction(txId, connectionId, { database, actor: 'user', signal: options.signal, executionId: options.executionId });
+  let committed = false;
+  let statements = 0;
+  try {
+    if (engine === 'postgresql' || engine === 'cockroachdb') {
+      await manager.query(connectionId, 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ', { database, allowMulti: false, autoLimit: false, actor: 'user', sessionId: txId, signal: options.signal, executionId: options.executionId });
+    }
+    if (engine === 'sqlserver') {
+      await manager.query(connectionId, 'SET XACT_ABORT ON', { database, allowMulti: false, autoLimit: false, actor: 'user', sessionId: txId, signal: options.signal, executionId: options.executionId });
+    }
+    const execute = async (statement: string) => {
+      await manager.query(connectionId, statement, {
+        database,
+        allowMulti: false,
+        autoLimit: false,
+        timeoutMs,
+        actor: 'user',
+        sessionId: txId,
+        signal: options.signal,
+        executionId: options.executionId,
+      });
+      statements++;
+    };
+    for (const statement of drops.filter((item) => !/^PRAGMA\b/i.test(item))) await execute(statement);
+    for await (const statement of readSqlStatements(path, options.signal)) await execute(statement);
+    await manager.commitTransaction(txId, 'user');
+    committed = true;
+    return statements;
+  } catch (err) {
+    if (!committed) {
+      try {
+        await manager.rollbackTransaction(txId, 'user');
+      } catch (rollbackErr: any) {
+        throw Object.assign(new Error(`恢复失败且回滚失败：${rollbackErr?.message ?? rollbackErr}`), { code: 'RESTORE_ROLLBACK_FAILED', cause: rollbackErr });
+      }
+    }
+    throw err;
+  } finally {
+    if (sqlite) await manager.query(connectionId, 'PRAGMA foreign_keys=ON', { database, allowMulti: false, autoLimit: false, actor: 'user', executionId: options.executionId }).catch(() => undefined);
+  }
+}
+
+async function restoreMysqlStaging(
+  manager: ConnectionManager,
+  connectionId: string,
+  engine: Engine,
+  database: string,
+  path: string,
+  headers: string[],
+  options: { signal?: AbortSignal; executionId?: string },
+  timeoutMs: number,
+): Promise<{ statements: number; messages: string[] }> {
+  if (/^\s*CREATE\s+(?:OR\s+REPLACE\s+)?VIEW\b/i.test(headers.join('\n'))) {
+    throw new DbError('MySQL 含视图的备份请使用 mysqldump 原生恢复，AiDB 暂不进行非原子换库', { code: 'ATOMIC_RESTORE_UNSUPPORTED' });
+  }
+  const protectedDatabases = new Set(['information_schema', 'mysql', 'performance_schema', 'sys']);
+  if (protectedDatabases.has(database.toLowerCase())) throw new DbError('禁止恢复系统数据库', { code: 'INVALID_INPUT' });
+  const suffix = randomUUID().replace(/-/g, '').slice(0, 16);
+  const staging = `aidb_restore_${suffix}`;
+  const rollback = `aidb_rollback_${suffix}`;
+  const run = (sql: string, db?: string) => manager.query(connectionId, sql, {
+    database: db,
+    allowMulti: false,
+    autoLimit: false,
+    timeoutMs,
+    actor: 'user',
+    signal: options.signal,
+    executionId: options.executionId,
+  });
+  let stagingCreated = false;
+  let rollbackCreated = false;
+  let targetCreated = false;
+  let swapAttempted = false;
+  const messages: string[] = [];
+  const cleanup = (sql: string) => manager.query(connectionId, sql, {
+    allowMulti: false,
+    autoLimit: false,
+    timeoutMs,
+    actor: 'user',
+    executionId: options.executionId,
+  });
+  const unsupportedObjects = async (db: string): Promise<void> => {
+    const result = await run(
+      `SELECT 'trigger' AS object_type, TRIGGER_NAME AS object_name FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=${quoteLiteral(db)}`
+      + ` UNION ALL SELECT 'routine', ROUTINE_NAME FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA=${quoteLiteral(db)}`
+      + ` UNION ALL SELECT 'event', EVENT_NAME FROM information_schema.EVENTS WHERE EVENT_SCHEMA=${quoteLiteral(db)}`
+      + ` UNION ALL SELECT 'non-table', TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=${quoteLiteral(db)} AND TABLE_TYPE <> 'BASE TABLE'`,
+      db,
+    );
+    const set = result.sets[0];
+    if (!set || set.truncated) throw new DbError(`无法完整核对 ${db} 的恢复依赖对象，已拒绝非原子恢复`, { code: 'ATOMIC_RESTORE_UNSUPPORTED' });
+    if (set.rows.length) {
+      const names = set.rows.map((row) => `${row[0] ?? 'object'} ${row[1] ?? ''}`).join(', ');
+      throw new DbError(`${db} 包含 AiDB 暂存换表无法完整迁移的对象（${names}），已拒绝非原子恢复；请使用 mysqldump 或先移除这些依赖`, { code: 'ATOMIC_RESTORE_UNSUPPORTED' });
+    }
+  };
+  const outcomeError = (cause: unknown, state: string): DbError => Object.assign(
+    new DbError(
+      `MySQL 原子换表结果无法确认（${state}）。为避免误删旧数据，已停止自动清理并保留暂存库 ${staging}${rollbackCreated ? ` 和回滚库 ${rollback}` : ''}；请人工核对目标库、暂存库和回滚库的表名与数据后再删除。原始错误：${(cause as Error)?.message ?? cause}`,
+      { code: 'ATOMIC_RESTORE_OUTCOME_UNKNOWN' },
+    ),
+    { cause },
+  );
+  try {
+    await run(`CREATE DATABASE ${quoteIdent(staging, engine)} CHARACTER SET utf8mb4`);
+    stagingCreated = true;
+    let pending = '';
+    let statements = 0;
+    const flush = async () => {
+      if (!pending.trim()) return;
+      const script = pending;
+      pending = '';
+      const executed = await manager.execScript(connectionId, script, {
+        database: staging,
+        timeoutMs,
+        actor: 'user',
+        signal: options.signal,
+        executionId: options.executionId,
+      });
+      if (!executed) throw new DbError('MySQL 驱动不支持暂存恢复', { code: 'ATOMIC_RESTORE_UNSUPPORTED' });
+    };
+    for await (const statement of readSqlStatements(path, options.signal)) {
+      pending += `${statement}\n`;
+      statements++;
+      if (pending.length >= RESTORE_BATCH_BYTES) await flush();
+    }
+    await flush();
+    const stagedTables = (await manager.schema(connectionId, staging, true, 30000, { signal: options.signal, executionId: options.executionId }))
+      .flatMap((schema) => schema.tables)
+      .filter((table) => table.type === 'table');
+    if (!stagedTables.length) throw new DbError('备份没有可恢复的表', { code: 'INVALID_BACKUP' });
+    const databases = new Set((await manager.listDatabases(connectionId)).map((name) => name.toLowerCase()));
+    const targetExists = databases.has(database.toLowerCase());
+    const targetTables = targetExists
+      ? (await manager.schema(connectionId, database, true, 30000, { signal: options.signal, executionId: options.executionId })).flatMap((schema) => schema.tables).filter((table) => table.type === 'table')
+      : [];
+    const targetNames = new Set(targetTables.map((table) => table.name.toLowerCase()));
+    const stagedNames = new Set(stagedTables.map((table) => table.name.toLowerCase()));
+    const preservedNames = new Set([...targetNames].filter((name) => !stagedNames.has(name)));
+    const blockingReference = targetTables.find((table) => !stagedNames.has(table.name.toLowerCase()) && (table.foreignKeys ?? []).some((foreignKey) => stagedNames.has(foreignKey.refTable.toLowerCase())));
+    if (blockingReference) throw new DbError(`目标表 ${blockingReference.name} 引用待替换表但不在备份中，已拒绝非原子恢复`, { code: 'ATOMIC_RESTORE_UNSUPPORTED' });
+
+    // RENAME TABLE 不会迁移例程/事件/触发器，DROP DATABASE 又会级联删除旧表触发器。
+    // 这些对象无法由当前备份完整重放时必须先失败，不能做“看似成功”的部分恢复。
+    await unsupportedObjects(staging);
+    if (targetExists) await unsupportedObjects(database);
+    if (targetExists) {
+      const references = await run(
+        `SELECT CONSTRAINT_SCHEMA, TABLE_NAME, REFERENCED_TABLE_SCHEMA, REFERENCED_TABLE_NAME FROM information_schema.KEY_COLUMN_USAGE`
+        + ` WHERE CONSTRAINT_SCHEMA=${quoteLiteral(database)} OR REFERENCED_TABLE_SCHEMA=${quoteLiteral(database)}`,
+        database,
+      );
+      const set = references.sets[0];
+      if (!set || set.truncated) throw new DbError('无法完整核对 MySQL 外键依赖，已拒绝非原子恢复', { code: 'ATOMIC_RESTORE_UNSUPPORTED' });
+      for (const row of set.rows) {
+        const constraintSchema = String(row[0] ?? '').toLowerCase();
+        const tableName = String(row[1] ?? '').toLowerCase();
+        const referencedSchema = String(row[2] ?? '').toLowerCase();
+        const referencedTable = String(row[3] ?? '').toLowerCase();
+        const internal = constraintSchema === database.toLowerCase()
+          && referencedSchema === database.toLowerCase()
+          && stagedNames.has(tableName)
+          && stagedNames.has(referencedTable);
+        if (!internal) throw new DbError(`MySQL 外键 ${constraintSchema}.${tableName} 依赖 ${referencedSchema}.${referencedTable}，超出本次完整替换范围，已拒绝非原子恢复`, { code: 'ATOMIC_RESTORE_UNSUPPORTED' });
+      }
+    }
+
+    const sameNames = (actual: Set<string>, expected: Set<string>) => actual.size === expected.size && [...expected].every((name) => actual.has(name));
+    const tableNames = async (db: string) => new Set((await manager.schema(connectionId, db, true, 30000))
+      .flatMap((schema) => schema.tables)
+      .filter((table) => table.type === 'table')
+      .map((table) => table.name.toLowerCase()));
+    const verifySwap = async (): Promise<'complete' | 'incomplete' | 'unknown'> => {
+      try {
+        const databases = new Set((await manager.listDatabases(connectionId)).map((name) => name.toLowerCase()));
+        const required = [database.toLowerCase(), staging.toLowerCase(), ...(rollbackCreated ? [rollback.toLowerCase()] : [])];
+        if (required.some((name) => !databases.has(name))) return 'incomplete';
+        const [targetNow, stagingNow, rollbackNow] = await Promise.all([
+          tableNames(database),
+          tableNames(staging),
+          rollbackCreated ? tableNames(rollback) : Promise.resolve(new Set<string>()),
+        ]);
+        const expectedTarget = new Set([...stagedNames, ...preservedNames]);
+        const expectedRollback = new Set([...stagedNames].filter((name) => targetNames.has(name)));
+        return sameNames(targetNow, expectedTarget) && stagingNow.size === 0 && sameNames(rollbackNow, expectedRollback) ? 'complete' : 'incomplete';
+      } catch {
+        return 'unknown';
+      }
+    };
+    const renames: string[] = [];
+    if (targetExists) {
+      await run(`CREATE DATABASE ${quoteIdent(rollback, engine)} CHARACTER SET utf8mb4`);
+      rollbackCreated = true;
+      for (const table of stagedTables) {
+        if (targetNames.has(table.name.toLowerCase())) renames.push(`${quoteQualified([database, table.name], engine)} TO ${quoteQualified([rollback, table.name], engine)}`);
+      }
+    } else {
+      await run(`CREATE DATABASE ${quoteIdent(database, engine)} CHARACTER SET utf8mb4`);
+      targetCreated = true;
+    }
+    for (const table of stagedTables) renames.push(`${quoteQualified([staging, table.name], engine)} TO ${quoteQualified([database, table.name], engine)}`);
+    const swap = `SET FOREIGN_KEY_CHECKS=0;\nRENAME TABLE ${renames.join(', ')};\nSET FOREIGN_KEY_CHECKS=1;`;
+    swapAttempted = true;
+    let swapError: unknown;
+    try {
+      const executed = await manager.execScript(connectionId, swap, { database, timeoutMs, actor: 'user', signal: options.signal, executionId: options.executionId });
+      if (!executed) throw new DbError('MySQL 驱动不支持原子换表', { code: 'ATOMIC_RESTORE_UNSUPPORTED' });
+    } catch (err) {
+      // RENAME TABLE 可能已提交但 ACK 丢失。此时绝不能根据 promoted=false 进入 DROP 清理。
+      swapError = err;
+    }
+    if (swapError) throw outcomeError(swapError, '换表脚本未收到成功确认');
+
+    const state = await verifySwap();
+    if (state !== 'complete') throw outcomeError(new Error(`换表后状态核对为 ${state}`), `换表后状态核对为 ${state}`);
+    manager.invalidate(connectionId, 'user');
+    if (rollbackCreated) {
+      try {
+        await run(`DROP DATABASE ${quoteIdent(rollback, engine)}`);
+        rollbackCreated = false;
+      } catch {
+        messages.push(`旧数据清理确认失败：回滚库 ${rollback} 可能仍存在，请人工核对目标库与回滚库后再删除`);
+      }
+    }
+    if (stagingCreated) {
+      try {
+        await cleanup(`DROP DATABASE IF EXISTS ${quoteIdent(staging, engine)}`);
+        stagingCreated = false;
+      } catch {
+        messages.push(`暂存库 ${staging} 清理确认失败，请人工核对后再删除`);
+      }
+    }
+    return { statements, messages };
+  } finally {
+    // 只有从未尝试换表时，才可安全清理本函数创建的暂存库/空回滚库/空目标库。
+    // 一旦尝试 RENAME，任何错误路径都保留现场，等待人工核对。
+    if (!swapAttempted) {
+      if (stagingCreated) await cleanup(`DROP DATABASE IF EXISTS ${quoteIdent(staging, engine)}`).catch(() => undefined);
+      if (rollbackCreated) await cleanup(`DROP DATABASE IF EXISTS ${quoteIdent(rollback, engine)}`).catch(() => undefined);
+      if (targetCreated) await cleanup(`DROP DATABASE IF EXISTS ${quoteIdent(database, engine)}`).catch(() => undefined);
+    }
+  }
+}
+
+async function restoreSqlServerCaseSensitive(
+  manager: ConnectionManager,
+  connectionId: string,
+  database: string,
+  options: { signal?: AbortSignal; executionId?: string },
+): Promise<boolean> {
+  try {
+    const result = await manager.query(
+      connectionId,
+      "SELECT CAST(DATABASEPROPERTYEX(DB_NAME(), 'Collation') AS nvarchar(128)) AS collation",
+      { database, allowMulti: false, autoLimit: false, actor: 'user', signal: options.signal, executionId: options.executionId },
+    );
+    const set = result.sets[0];
+    const collation = String(set?.rows[0]?.[0] ?? '').trim();
+    if (!set || set.truncated || !collation) throw new Error('未返回目标数据库排序规则');
+    return /(?:^|_)(?:CS|BIN2?)(?:_|$)/i.test(collation);
+  } catch (err: any) {
+    throw Object.assign(new DbError('无法确认 SQL Server 目标数据库排序规则，已拒绝可能误判对象身份的恢复', { code: 'ATOMIC_RESTORE_UNSUPPORTED' }), { cause: err });
+  }
+}
+
 export async function restoreBackupFile(
   store: Store,
   manager: ConnectionManager,
@@ -719,55 +1443,44 @@ export async function restoreBackupFile(
   if (!conn) throw new DbError('备份对应的连接不存在', { code: 'CONNECTION_NOT_FOUND', status: 404 });
   const started = Date.now();
   const timeoutMs = store.getSettings().queryTimeoutMs;
-  // 第一遍只留 CREATE 的表头，用来生成 DROP；第二遍才真正回放，避免整库脚本进内存。
-  const headers: string[] = [];
-  for await (const statement of readSqlStatements(path, options.signal)) {
-    if (/^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|VIEW)\b/i.test(statement)) headers.push(statement.split('\n', 1)[0]);
-  }
-  const drops = restoreDropStatements(conn.engine, headers.join('\n'));
-  const driver = await manager.rawDriver(connectionId);
-  const viaScript = typeof driver.execScript === 'function';
-  const sets: QueryResult[] = [];
+  const inspected = await validateRestoreFile(path, conn.engine, options.signal);
+  const dialect = dialectOf(conn.engine);
+  const targetDatabase = database ?? conn.database;
+  let sqlServerCaseSensitive = true;
+  let statements = inspected.statements;
   const messages: string[] = [];
-  let pending = '';
-  let statements = 0;
-  const flush = async () => {
-    throwIfAborted(options.signal);
-    if (!pending.trim()) return;
-    const script = pending;
-    pending = '';
-    if (viaScript) {
-      // SQLite / DuckDB 走整段脚本：几十万条 INSERT 逐条执行会阻塞事件循环十几分钟。
-      await manager.execScript(connectionId, `BEGIN;\n${script}\nCOMMIT;`, {
-        database,
-        timeoutMs,
-        actor: 'user',
-        signal: options.signal,
-        executionId: options.executionId,
+  if (dialect === 'sqlite' || dialect === 'mysql' || dialect === 'postgres' || dialect === 'mssql') {
+    if (!targetDatabase && dialect !== 'sqlite') throw new DbError('恢复必须指定目标数据库', { code: 'INVALID_INPUT' });
+    const databases = dialect === 'sqlite' ? [targetDatabase ?? ''] : await manager.listDatabases(connectionId);
+    if (dialect === 'sqlite' || databases.some((name) => name.toLowerCase() === targetDatabase!.toLowerCase())) {
+      if (dialect === 'mssql') sqlServerCaseSensitive = await restoreSqlServerCaseSensitive(manager, connectionId, targetDatabase!, options);
+      const objects = restoreObjectNames(conn.engine, inspected.headers.join('\n'), sqlServerCaseSensitive);
+      const expected = new Set([...objects.tables, ...objects.views].map((object) => restoreObjectKey(object, dialect, sqlServerCaseSensitive)));
+      const targetSchemas = await manager.schema(connectionId, targetDatabase, true, 30000, { signal: options.signal, executionId: options.executionId });
+      const extra = targetSchemas.flatMap((schema) => schema.tables).find((table) => {
+        if (table.type !== 'table' && table.type !== 'view') return false;
+        const schema = engineUsesSchema(conn.engine) && dialect !== 'mysql' ? table.schema : undefined;
+        return !expected.has(restoreTargetObjectKey(schema, table.name, dialect, sqlServerCaseSensitive));
       });
-    } else {
-      const batch = await manager.query(connectionId, script, {
-        database,
-        allowMulti: true,
-        autoLimit: false,
-        timeoutMs,
-        actor: 'user',
-        signal: options.signal,
-        executionId: options.executionId,
-      });
-      sets.push(...batch.sets);
+      if (extra) throw new DbError(`目标数据库包含备份外的对象 ${extra.schema ? `${extra.schema}.` : ''}${extra.name}，已拒绝非完整恢复`, { code: 'RESTORE_OBJECT_MISMATCH' });
     }
-  };
-  pending = drops.length ? `${drops.join('\n')}\n` : '';
-  for await (const statement of readSqlStatements(path, options.signal)) {
-    throwIfAborted(options.signal);
-    pending += `${statement}\n`;
-    statements += 1;
-    if (pending.length >= RESTORE_BATCH_BYTES) await flush();
   }
-  await flush();
-  messages.push(viaScript ? `备份已恢复 · ${statements} 条语句` : `备份已恢复 · ${statements} 条语句 · ${sets.length} 个结果集`);
-  return { sets, messages, durationMs: Date.now() - started };
+  if (dialect === 'mysql') {
+    if (!targetDatabase) throw new DbError('MySQL 恢复必须指定目标数据库', { code: 'INVALID_INPUT' });
+    const restored = await restoreMysqlStaging(manager, connectionId, conn.engine, targetDatabase, path, inspected.headers, options, timeoutMs);
+    statements = restored.statements;
+    messages.push(...restored.messages);
+  } else if (['sqlite', 'postgres', 'mssql'].includes(dialect) && supportsTransaction(await manager.rawDriver(connectionId))) {
+    await assertRestoreDependenciesSupported(manager, connectionId, conn.engine, targetDatabase, options);
+    const drops = restoreDropStatements(conn.engine, inspected.headers.join('\n'), sqlServerCaseSensitive);
+    statements = await restoreTransactional(manager, connectionId, conn.engine, targetDatabase, path, drops, options, timeoutMs);
+  } else if (dialect === 'sqlite' && typeof (await manager.rawDriver(connectionId)).execScript === 'function') {
+    throw new DbError('SQLite 驱动缺少事务能力，已拒绝恢复', { code: 'ATOMIC_RESTORE_UNSUPPORTED' });
+  } else {
+    throw new DbError(`${engineMeta(conn.engine).label} 暂不支持 AiDB 原子恢复，请使用数据库原生备份恢复工具`, { code: 'ATOMIC_RESTORE_UNSUPPORTED' });
+  }
+  messages.push(`备份已原子恢复 · ${statements} 条语句`);
+  return { sets: [], messages, durationMs: Date.now() - started };
 }
 
 export function auditCsv(rows: Array<Record<string, unknown>>): string {

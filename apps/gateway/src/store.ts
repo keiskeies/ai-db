@@ -3,6 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type {
   AgentContextBundle,
   AgentContextEntry,
+  AgentEvent,
   AgentMessage,
   AgentMessageBlock,
   AgentSessionMeta,
@@ -17,6 +18,7 @@ import type {
   BackupInfo,
   ConnectionConfig,
   ConnectionSecret,
+  CommandRunEvent,
   DashboardCard,
   DashboardCardInput,
   DashboardScheduleInfo,
@@ -44,6 +46,7 @@ import { DashboardsRepo } from './store/dashboards';
 import { ArtifactsRepo } from './store/artifacts';
 import { IntegrationsRepo } from './store/integrations';
 import { JobsRepo } from './store/jobs';
+import { RuntimeRepo, type AgentTurnClaim, type AgentTurnStatus, type CommandEventReplay, type RecoveryResult, type StoredEvent } from './store/runtime';
 import { AuditRepo } from './store/audit';
 import type { ConnectionRow, ConnectionInput, DatabaseBriefRecord } from './store/connections';
 import type { ArtifactRunRow } from './store/artifacts';
@@ -64,23 +67,30 @@ export class Store {
   private artifacts: ArtifactsRepo;
   private integrations: IntegrationsRepo;
   private jobs: JobsRepo;
+  private runtime: RuntimeRepo;
   private audit: AuditRepo;
   private lastPruneAt = 0;
 
   constructor(dbPath: string, secret: string) {
     this.storeDb = new StoreDb(dbPath, secret);
-    this.connections = new ConnectionsRepo(this.storeDb);
-    this.settings = new SettingsRepo(this.storeDb);
-    this.history = new HistoryRepo(this.storeDb, this);
-    this.agent = new AgentRepo(this.storeDb);
-    this.dashboards = new DashboardsRepo(this.storeDb);
-    this.artifacts = new ArtifactsRepo(this.storeDb);
-    this.integrations = new IntegrationsRepo(this.storeDb);
-    this.jobs = new JobsRepo(this.storeDb);
-    this.audit = new AuditRepo(this.storeDb);
-    // 旧版本没有保留期，审计/运行表可能已严重超限：启动时强制裁剪一次。
-    this.pruneRetention(true);
-    this.sweepDataDirs(dbPath);
+    try {
+      this.connections = new ConnectionsRepo(this.storeDb);
+      this.settings = new SettingsRepo(this.storeDb);
+      this.history = new HistoryRepo(this.storeDb, this);
+      this.agent = new AgentRepo(this.storeDb);
+      this.dashboards = new DashboardsRepo(this.storeDb);
+      this.artifacts = new ArtifactsRepo(this.storeDb);
+      this.integrations = new IntegrationsRepo(this.storeDb);
+      this.jobs = new JobsRepo(this.storeDb);
+      this.runtime = new RuntimeRepo(this.storeDb);
+      this.audit = new AuditRepo(this.storeDb);
+      // 旧版本没有保留期，审计/运行表可能已严重超限：启动时强制裁剪一次。
+      this.pruneRetention(true);
+      this.sweepDataDirs(dbPath);
+    } catch (err) {
+      this.storeDb.close();
+      throw err;
+    }
   }
 
   get db(): DatabaseSync {
@@ -156,6 +166,10 @@ export class Store {
 
   listBackups(connectionId?: string): BackupInfo[] {
     return this.connections.listBackups(connectionId);
+  }
+
+  deleteBackup(id: string): void {
+    this.connections.deleteBackup(id);
   }
 
   getSettings(): AppSettings {
@@ -387,6 +401,54 @@ export class Store {
    */
   agentContextBundle(connectionId: string, database?: string): AgentContextBundle {
     return this.agent.agentContextBundle(connectionId, database);
+  }
+
+  claimTurn(input: { id: string; sessionId: string; ownerId: string; idempotencyKey: string; deadlineAt?: string }): AgentTurnClaim {
+    return this.runtime.claimTurn(input);
+  }
+
+  getTurn(id: string): AgentTurnClaim | undefined {
+    return this.runtime.getTurn(id);
+  }
+
+  listTurns(sessionId: string, limit?: number): AgentTurnClaim[] {
+    return this.runtime.listTurns(sessionId, limit);
+  }
+
+  finishTurn(id: string, ownerId: string, status: Exclude<AgentTurnStatus, 'running'>, abortCause?: string, terminalEvent?: AgentEvent): boolean {
+    return this.runtime.finishTurn(id, ownerId, status, abortCause, terminalEvent);
+  }
+
+  setTurnAbortCause(id: string, ownerId: string, cause: string): void {
+    this.runtime.setTurnAbortCause(id, ownerId, cause);
+  }
+
+  appendAgentEvent(turnId: string, seq: number, event: AgentEvent): void {
+    this.runtime.appendAgentEvent(turnId, seq, event);
+  }
+
+  agentEvents(turnId: string, after?: number, limit?: number): { events: StoredEvent<AgentEvent>[]; firstSeq?: number; lastSeq: number } {
+    return this.runtime.agentEvents(turnId, after, limit);
+  }
+
+  appendCommandEvent(runId: string, seq: number, event: CommandRunEvent): void {
+    this.runtime.appendCommandEvent(runId, seq, event);
+  }
+
+  commandEventReplay(runId: string, after?: number): CommandEventReplay {
+    return this.runtime.commandEventReplay(runId, after);
+  }
+
+  commandEvents(runId: string, after?: number): StoredEvent<CommandRunEvent>[] {
+    return this.runtime.commandEvents(runId, after);
+  }
+
+  recoverInterrupted(): RecoveryResult {
+    return this.runtime.recoverInterrupted();
+  }
+
+  pruneRuntime(): void {
+    this.runtime.pruneRuntime();
   }
 
   listDashboardCards(connectionId: string, database?: string): DashboardCard[] {
@@ -632,7 +694,7 @@ export class Store {
   }
 
   // ---------- devices ----------
-  createDevice(input: { name: string; platform: string; tokenHash: string; scope?: DeviceInfo['scope'] }): DeviceInfo {
+  createDevice(input: { name: string; platform: string; tokenHash: string; scope?: DeviceInfo['scope']; connectionIds?: string[] }): DeviceInfo {
     return this.integrations.createDevice(input);
   }
 
@@ -642,6 +704,18 @@ export class Store {
 
   listDevices(): DeviceInfo[] {
     return this.integrations.listDevices();
+  }
+
+  listDeviceConnectionPermissions(deviceId: string): string[] {
+    return this.integrations.listDeviceConnectionPermissions(deviceId);
+  }
+
+  canDeviceAccessConnection(deviceId: string, connectionId: string): boolean {
+    return this.integrations.canDeviceAccessConnection(deviceId, connectionId);
+  }
+
+  setDeviceConnectionPermissions(deviceId: string, connectionIds: string[]): string[] {
+    return this.integrations.setDeviceConnectionPermissions(deviceId, connectionIds);
   }
 
   revokeDevice(id: string): void {
@@ -799,6 +873,7 @@ export class Store {
     this.audit.pruneAuditLog();
     this.agent.pruneToolRuns();
     this.artifacts.pruneArtifactRuns();
+    this.runtime.pruneRuntime();
   }
 
   /** 立即裁剪一次（不受节流限制），供启动与测试 / 手动维护使用。 */

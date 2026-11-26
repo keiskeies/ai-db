@@ -1,6 +1,7 @@
 import { dialectOf } from '../engines';
 import type { DialectId, Engine, ForeignKeyInfo } from '../types';
 import { placeholder, quoteIdent, quoteQualified, sanitizeDefaultLiteral } from './ident';
+import { classifyStatement, splitStatements } from './classify';
 
 export interface ColumnDef {
   name: string;
@@ -374,9 +375,48 @@ export function buildDeleteMany(engine: Engine, table: string, keyColumns: strin
   return `DELETE FROM ${quoteQualified([schema, table], engine)} WHERE ${groups.join(' OR ')}`;
 }
 
+export type ExplainSqlErrorCode = 'EXPLAIN_SQL_EMPTY' | 'EXPLAIN_SQL_MULTIPLE' | 'EXPLAIN_SQL_NOT_READONLY' | 'EXPLAIN_SQL_NESTED';
+
+export class ExplainSqlError extends Error {
+  constructor(public readonly code: ExplainSqlErrorCode, message: string) {
+    super(message);
+    this.name = 'ExplainSqlError';
+  }
+}
+
+/**
+ * The only accepted input to buildExplain/explain_sql is one provably read-only
+ * statement in the connection's dialect. This is deliberately independent of
+ * manager.allowMulti: an EXPLAIN wrapper must never become a script channel.
+ */
+export function validateExplainSql(engine: Engine, sql: string): string {
+  if (typeof sql !== 'string' || !sql.trim()) {
+    throw new ExplainSqlError('EXPLAIN_SQL_EMPTY', 'EXPLAIN 需要一条非空 SQL');
+  }
+  const statements = splitStatements(sql, engine);
+  if (statements.length !== 1) {
+    throw new ExplainSqlError(
+      'EXPLAIN_SQL_MULTIPLE',
+      `EXPLAIN 只接受一条语句，当前包含 ${statements.length} 条；请移除分号后的额外语句`,
+    );
+  }
+  const statement = statements[0];
+  const info = classifyStatement(statement, engine);
+  if (info.kind !== 'read') {
+    throw new ExplainSqlError(
+      'EXPLAIN_SQL_NOT_READONLY',
+      `EXPLAIN 只接受明确只读的 SQL，当前识别为 ${info.verb}${info.reason ? `（${info.reason}）` : ''}`,
+    );
+  }
+  if (info.verb === 'EXPLAIN') {
+    throw new ExplainSqlError('EXPLAIN_SQL_NESTED', 'explain_sql 需要原始查询，不要传入已包装的 EXPLAIN 语句');
+  }
+  return statement;
+}
+
 export function buildExplain(engine: Engine, sql: string, analyze = false): string {
   const d = dialectOf(engine);
-  const clean = sql.replace(/;\s*$/, '');
+  const clean = validateExplainSql(engine, sql);
   if (engine === 'duckdb') return `EXPLAIN ${clean}`;
   if (d === 'sqlite') return `EXPLAIN QUERY PLAN ${clean}`;
   if (isMysqlLike(d)) return engine === 'mysql' ? `EXPLAIN FORMAT=JSON ${clean}` : `EXPLAIN ${clean}`;

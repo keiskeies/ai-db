@@ -12,6 +12,7 @@ import type { SkillWorker } from '../skillWorker';
 import type { SkillRunner } from '../skillRunner';
 import type { CommandRunner } from '../commands/runner';
 import type { JobScheduler } from '../scheduler';
+import type { GatewayMetrics } from '../observability';
 
 /** 网关自身的监听地址（不读请求 Host）：MCP CLI 跑在本机，要的是能连上 gateway 的地址，
  *  不能被 Vite 代理带过来的前端 Host（如 localhost:5180）干扰。
@@ -37,6 +38,7 @@ export interface ApiDeps {
   scheduler: JobScheduler;
   events: GatewayEvents;
   commands: CommandRunner;
+  metrics: GatewayMetrics;
   startedAt: number;
 }
 

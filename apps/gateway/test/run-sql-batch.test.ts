@@ -66,6 +66,7 @@ function setup(overrides: Partial<AppSettings> = {}) {
       { sessionId: 'sess-1', connectionId },
     );
   return {
+    store,
     manager,
     executor,
     conn,
@@ -83,12 +84,11 @@ function setup(overrides: Partial<AppSettings> = {}) {
  * 特性测试：这些用例在实现之前必须红，实现之后转绿。
  * ------------------------------------------------------------------ */
 
-test('run_sql 缺省即可执行上限内的多条 DDL，结果标明是批量执行', async () => {
+test('run_sql 显式 allowMulti 后执行多条 DDL，结果标明是批量执行', async () => {
   const env = setup();
   try {
-    // 缺省（不传 allowMulti）就该跑通：建表序列是常态工作，不是危险操作。
-    // 权限由 resolveRisk 按整段最高风险判定，与语句条数无关。
-    const result = await env.runSql(env.conn.id, { sql: DDL_SCRIPT });
+    // 建表序列是正常脚本，但必须显式声明；权限仍由 resolveRisk 按整段最高风险判定。
+    const result = await env.runSql(env.conn.id, { sql: DDL_SCRIPT, allowMulti: true });
     assert.equal(result.ok, true, `批量 DDL 应一次执行成功：${result.error?.message ?? ''}`);
     const data = result.data as { sets?: unknown[]; multiStatement?: boolean };
     assert.equal(data.sets?.length, 3, '三条语句都应执行并逐条返回结果');
@@ -97,10 +97,97 @@ test('run_sql 缺省即可执行上限内的多条 DDL，结果标明是批量�
     const counted = await env.manager.query(env.conn.id, 'SELECT COUNT(*) AS n FROM audit_a', { actor: 'agent' });
     assert.equal(Number(counted.sets[0].rows[0][0]), 1, '写语句的副作用应真实落库');
 
-    // 显式传 allowMulti 依旧有效，行为不因缺省放行而改变。
+    // 单条语句也允许显式声明，行为与普通单语句执行一致。
     const explicit = await env.runSql(env.conn.id, { sql: 'ALTER TABLE audit_a ADD COLUMN more TEXT;', allowMulti: true }, 'call-2');
     assert.equal(explicit.ok, true, explicit.error?.message ?? '');
   } finally {
+    await env.cleanup();
+  }
+});
+
+test('explain_sql 拒绝多语句、写语句、ANALYZE 与未知语法且不产生副作用', async () => {
+  const env = setup();
+  try {
+    const before = await env.manager.query(env.conn.id, 'SELECT COUNT(*) AS n FROM probe', { actor: 'agent' });
+    const cases: Array<[string, string]> = [
+      ['SELECT 1; DELETE FROM probe', 'EXPLAIN_SQL_MULTIPLE'],
+      ['DELETE FROM probe', 'EXPLAIN_SQL_NOT_READONLY'],
+      ['EXPLAIN (ANALYZE) DELETE FROM probe', 'EXPLAIN_SQL_NOT_READONLY'],
+      ['SELEC 1', 'EXPLAIN_SQL_NOT_READONLY'],
+    ];
+    for (const [sql, code] of cases) {
+      const result = await env.executor.execute(
+        { id: `explain-${code}-${sql}`, name: 'explain_sql', args: { connectionId: env.conn.id, sql } },
+        { sessionId: 'explain-security', connectionId: env.conn.id },
+      );
+      assert.equal(result.ok, false, sql);
+      assert.equal(result.error?.code, code, sql);
+    }
+    const after = await env.manager.query(env.conn.id, 'SELECT COUNT(*) AS n FROM probe', { actor: 'agent' });
+    assert.equal(Number(after.sets[0].rows[0][0]), Number(before.sets[0].rows[0][0]));
+
+    const valid = await env.executor.execute(
+      { id: 'explain-valid', name: 'explain_sql', args: { connectionId: env.conn.id, sql: 'SELECT * FROM probe' } },
+      { sessionId: 'explain-security', connectionId: env.conn.id },
+    );
+    assert.equal(valid.ok, true, valid.error?.message ?? '');
+  } finally {
+    await env.cleanup();
+  }
+});
+
+test('run_sql 执行层硬拒绝 unknown，不等待审批或驱动执行', async () => {
+  const env = setup();
+  try {
+    const result = await env.runSql(env.conn.id, { sql: 'SELEC 1' });
+    assert.equal(result.ok, false);
+    assert.equal(result.error?.code, 'SQL_UNKNOWN');
+  } finally {
+    await env.cleanup();
+  }
+});
+
+test('Oracle explain 只执行固定的受控两条语句，注入脚本在 manager 前被拒绝', async () => {
+  const env = setup();
+  const oracle = env.store.createConnection({ name: 'oracle-explain', engine: 'oracle', host: '127.0.0.1', port: 1521, database: 'ORCL' });
+  const originalQuery = env.manager.query.bind(env.manager);
+  let calls = 0;
+  let captured = '';
+  let capturedAllowMulti: boolean | undefined;
+  try {
+    env.manager.query = async (_connectionId, sql, opts) => {
+      calls += 1;
+      captured = sql;
+      capturedAllowMulti = opts.allowMulti;
+      return {
+        sets: [
+          { columns: [], rows: [], rowCount: 0, affected: 0, durationMs: 0 },
+          { columns: [{ name: 'plan' }], rows: [['fixed plan']], rowCount: 1, durationMs: 0 },
+        ],
+        messages: [],
+        durationMs: 0,
+      };
+    };
+    const denied = await env.executor.execute(
+      { id: 'oracle-inject', name: 'explain_sql', args: { connectionId: oracle.id, sql: 'SELECT 1; DELETE FROM users' } },
+      { sessionId: 'oracle-explain', connectionId: oracle.id },
+    );
+    assert.equal(denied.ok, false);
+    assert.equal(denied.error?.code, 'EXPLAIN_SQL_MULTIPLE');
+    assert.equal(calls, 0, '注入输入不能进入 manager');
+
+    const valid = await env.executor.execute(
+      { id: 'oracle-valid', name: 'explain_sql', args: { connectionId: oracle.id, sql: 'SELECT 1 FROM DUAL' } },
+      { sessionId: 'oracle-explain', connectionId: oracle.id },
+    );
+    assert.equal(valid.ok, true, valid.error?.message ?? '');
+    assert.equal(calls, 1);
+    assert.equal(capturedAllowMulti, true, '内部两条语句必须显式声明脚本执行');
+    assert.equal(countStatements(captured, 'oracle'), 2);
+    assert.match(captured, /SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE\(DBMS_XPLAN\.DISPLAY\(\)\)$/);
+    assert.deepEqual(classifySql(captured, 'oracle').statements.map((statement) => statement.kind), ['write', 'read']);
+  } finally {
+    env.manager.query = originalQuery;
     await env.cleanup();
   }
 });
@@ -120,7 +207,7 @@ test('只读连接上批量写脚本仍被 READONLY 拒绝，而不是被多语�
   }
 });
 
-test('超过上限的脚本给出 SCRIPT_TOO_LARGE 与可照抄的出路', async () => {
+test('未显式 allowMulti 的脚本给出 SCRIPT_TOO_LARGE 与可照抄的出路', async () => {
   const env = setup();
   try {
     const huge = Array.from({ length: 201 }, () => 'SELECT 1 AS a').join('; ');
@@ -351,6 +438,7 @@ test('批量脚本中途失败仍返回已执行结果，避免模型误判副�
   try {
     const result = await env.runSql(env.conn.id, {
       sql: 'CREATE TABLE partial_batch (id INTEGER PRIMARY KEY); INSERT INTO missing_table VALUES (1); INSERT INTO partial_batch VALUES (1);',
+      allowMulti: true,
     });
     assert.equal(result.ok, false);
     const data = result.data as { sets?: unknown[]; partial?: boolean; failedStatementIndex?: number; appliedStatements?: number };
@@ -453,7 +541,7 @@ test('批量脚本在执行间隙收到取消后停止后续语句', async () =>
   try {
     (env.manager as any).driverFor = async () => fakeDriver;
     await assert.rejects(
-      () => env.manager.query(env.conn.id, 'SELECT 1; SELECT 2; SELECT 3', { actor: 'agent', executionId: 'batch-abort' }),
+      () => env.manager.query(env.conn.id, 'SELECT 1; SELECT 2; SELECT 3', { actor: 'agent', executionId: 'batch-abort', allowMulti: true }),
       (error: any) => error.code === 'ABORTED',
     );
     assert.equal(runs, 1, '取消后不能继续执行第二条及后续语句');

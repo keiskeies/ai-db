@@ -16,6 +16,7 @@ export function MeScreen({
   connected,
   themeMode,
   locale,
+  canManageHost,
   onOpen,
 }: {
   boot: BootstrapData | null;
@@ -26,12 +27,13 @@ export function MeScreen({
   connected: boolean;
   themeMode: 'dark' | 'light' | 'system';
   locale: Locale;
+  canManageHost: boolean;
   onOpen: (page: 'memory' | 'connections' | 'settings') => void;
 }) {
   const entries = [
     { page: 'memory' as const, icon: <Brain size={17} color={colors.agent} />, title: '记忆', desc: translate('{0} 条 · 跨会话召回', [memories.length]) },
     { page: 'connections' as const, icon: <Database size={17} color={colors.accent} />, title: '连接', desc: translate('{0} 个 · 当前 {1}', [connections.length, activeConnection?.name ?? translate('未选择')]) },
-    { page: 'settings' as const, icon: <SettingsIcon size={17} color={colors.accent} />, title: '设置', desc: 'Bridge、设备、扩展、主题与语言' },
+    { page: 'settings' as const, icon: <SettingsIcon size={17} color={colors.accent} />, title: '设置', desc: canManageHost ? translate('Bridge、设备、扩展、主题与语言') : translate('Bridge、主题与语言') },
   ];
   return (
     <View style={{ flex: 1 }}>

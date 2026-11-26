@@ -19,7 +19,7 @@
     <key>CFBundlePackageType</key>
     <string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.0.10</string>
+    <string>$(MARKETING_VERSION)</string>
     <key>CFBundleSignature</key>
     <string>????</string>
     <key>CFBundleURLTypes</key>
@@ -33,13 +33,15 @@
       </dict>
     </array>
     <key>CFBundleVersion</key>
-    <string>3</string>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>LSMinimumSystemVersion</key>
-    <string>12.0</string>
+    <string>16.4</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>NSAppTransportSecurity</key>
     <dict>
+      <key>NSAllowsArbitraryLoads</key>
+      <false/>
       <key>NSAllowsLocalNetworking</key>
       <true/>
     </dict>
@@ -55,6 +57,25 @@
     <string>AiDB Studio 需要访问局域网以发现并连接 Bridge。</string>
     <key>NSPhotoLibraryUsageDescription</key>
     <string>允许 AiDB Studio 选择图片作为附件。</string>
+    <key>RCTNewArchEnabled</key>
+    <true/>
+    <key>UIApplicationSceneManifest</key>
+    <dict>
+      <key>UIApplicationSupportsMultipleScenes</key>
+      <false/>
+      <key>UISceneConfigurations</key>
+      <dict>
+        <key>UIWindowSceneSessionRoleApplication</key>
+        <array>
+          <dict>
+            <key>UISceneConfigurationName</key>
+            <string>Default Configuration</string>
+            <key>UISceneDelegateClassName</key>
+            <string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+          </dict>
+        </array>
+      </dict>
+    </dict>
     <key>UILaunchStoryboardName</key>
     <string>SplashScreen</string>
     <key>UIRequiredDeviceCapabilities</key>

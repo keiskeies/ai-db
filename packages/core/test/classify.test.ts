@@ -91,3 +91,43 @@ test('SQL Server 的 sp_rename 是结构变更，不是 unknown', () => {
   // 其它 EXEC 不一定是结构变更，不能被一起归成 ddl。
   assert.equal(classifyStatement('EXEC usp_rebuild_indexes').kind, 'unknown');
 });
+
+test('EXPLAIN 识别无括号与括号选项，ANALYZE 按内层真实风险处理', () => {
+  const reads = [
+    ['postgresql', 'EXPLAIN (FORMAT JSON) SELECT * FROM t'],
+    ['postgresql', 'EXPLAIN (COSTS FALSE, FORMAT JSON) SELECT 1'],
+    ['mysql', 'EXPLAIN FORMAT=JSON SELECT * FROM t'],
+    ['sqlite', 'EXPLAIN QUERY PLAN SELECT * FROM t'],
+  ] as const;
+  for (const [engine, sql] of reads) assert.equal(classifyStatement(sql, engine).kind, 'read', sql);
+
+  const executed = [
+    ['postgresql', 'EXPLAIN ANALYZE SELECT * FROM t', 'write'],
+    ['postgresql', 'EXPLAIN ANALYSE SELECT * FROM t', 'write'],
+    ['postgresql', 'EXPLAIN (ANALYZE) SELECT * FROM t', 'write'],
+    ['postgresql', 'EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) SELECT * FROM t', 'write'],
+    ['postgresql', 'EXPLAIN (ANALYZE FALSE) SELECT * FROM t', 'write'],
+    ['mysql', 'EXPLAIN ANALYZE SELECT * FROM t', 'write'],
+    ['postgresql', 'EXPLAIN (ANALYZE) DELETE FROM t', 'destructive'],
+    ['postgresql', 'EXPLAIN (FORMAT JSON, ANALYSE) UPDATE t SET a = 1 WHERE id = 2', 'write'],
+    ['postgresql', 'EXPLAIN (ANALYZE) CREATE TABLE t (id int)', 'ddl'],
+    ['oracle', 'EXPLAIN PLAN FOR SELECT * FROM t', 'write'],
+  ] as const;
+  for (const [engine, sql, kind] of executed) assert.equal(classifyStatement(sql, engine).kind, kind, sql);
+});
+
+test('普通 EXPLAIN 不把内层写语句伪装成 read，损坏选项保持 unknown', () => {
+  assert.equal(classifyStatement('EXPLAIN (FORMAT JSON) DELETE FROM t', 'postgresql').kind, 'destructive');
+  assert.equal(classifyStatement('EXPLAIN UPDATE t SET a = 1 WHERE id = 2', 'mysql').kind, 'write');
+  assert.equal(classifyStatement('EXPLAIN PLAN FOR SELECT * FROM t').kind, 'write', '方言不明时也要保守识别 Oracle plan-table 写入');
+  assert.equal(classifyStatement('EXPLAIN (FORMAT JSON SELECT * FROM t', 'postgresql').kind, 'unknown');
+  assert.equal(classifyStatement("EXPLAIN (FORMAT JSON) SELECT 'ANALYZE' AS note", 'postgresql').kind, 'read');
+});
+
+test('未知语法保留 unknown，只读边界与最高风险分类都不会放行', () => {
+  const unknown = classifySql('SELEC 1', 'sqlite');
+  assert.equal(unknown.kind, 'ddl', '兼容既有聚合类型，但 statements 必须保留 unknown');
+  assert.equal(unknown.statements[0]?.kind, 'unknown');
+  assert.match(readonlyViolation('SELEC 1', 'sqlite') ?? '', /只读/);
+  assert.equal(classifySql('SELECT 1; EXEC usp_rebuild_indexes', 'sqlserver').statements[1]?.kind, 'unknown');
+});

@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('aidbDesktop', {
   createTableShortcut: (payload) => ipcRenderer.invoke('create-table-shortcut', payload),
   saveExportedFile: (payload) => ipcRenderer.invoke('save-export-file', payload),
   exportPdf: (payload) => ipcRenderer.invoke('export-pdf', payload),
+  // 仅请求主进程打开原生选择器并导入；不提供读取任意路径或私钥内容的 IPC。
+  importSshPrivateKey: (ui) => ipcRenderer.invoke('ssh:import-private-key', { ui }),
   // 菜单文案跟随界面语言：渲染层把整棵树下发，主进程只做安装
   setApplicationMenu: (spec) => ipcRenderer.invoke('menu:set', spec),
   onMenuCommand: (callback) => {

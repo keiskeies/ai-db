@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import { pairingCode, hashToken, randomToken } from '../crypto';
 import {
   ah,
@@ -12,6 +12,7 @@ import {
 /** 配对码有效期：60 秒，桌面端显示倒计时。移动端与 MCP 共用同一窗口。 */
 const PAIR_CODE_TTL_MS = 60_000;
 const PAIR_CODE_TTL_SECONDS = PAIR_CODE_TTL_MS / 1000;
+type PairEntry = { expiresAt: number; connectionIds?: string[] };
 
 export function createPairingRouter(deps: ApiDeps): Router {
   const { store, host, config } = deps;
@@ -39,14 +40,30 @@ export function createPairingRouter(deps: ApiDeps): Router {
   // ---------- pairing ----------
   // 移动端与 MCP 是两条完全隔离的链路：独立端点、独立码池、scope 由服务端硬编码。
   // 调用方无法通过 body.scope 铸造另一种凭据，码也不能跨端点兑换。
-  function startPair(pool: Map<string, { expiresAt: number }>, bucket: string, withQr: boolean, forMcp = false) {
+  function startPair(pool: Map<string, PairEntry>, bucket: string, withQr: boolean, forMcp = false) {
     return ah(async (req, res) => {
       if (!allowPairHit(bucket, req, 30, 60_000)) {
         pairRateLimited(res, 60);
         return;
       }
+      let connectionIds: string[] = [];
+      if (!forMcp && req.body?.connectionIds !== undefined) {
+        if (!Array.isArray(req.body.connectionIds) || req.body.connectionIds.some((id: unknown) => typeof id !== 'string' || !id.trim())) {
+          throw Object.assign(new Error('connectionIds 必须是连接 id 数组'), { code: 'INVALID_INPUT', status: 400 });
+        }
+        const requestedConnections = req.body.connectionIds as string[];
+        connectionIds = [...new Set(requestedConnections.map((id) => id.trim()))];
+        if (connectionIds.length > 1000) {
+          throw Object.assign(new Error('单设备最多授权 1000 个连接'), { code: 'INVALID_INPUT', status: 400 });
+        }
+        for (const connectionId of connectionIds) {
+          if (!store.getConnection(connectionId)) {
+            throw Object.assign(new Error(`连接不存在：${connectionId}`), { code: 'CONNECTION_NOT_FOUND', status: 400 });
+          }
+        }
+      }
       const code = pairingCode();
-      pool.set(code, { expiresAt: Date.now() + PAIR_CODE_TTL_MS });
+      pool.set(code, { expiresAt: Date.now() + PAIR_CODE_TTL_MS, connectionIds });
       for (const [k, v] of pool) if (v.expiresAt < Date.now()) pool.delete(k);
       // 移动端二维码要「客户端实际访问到的地址」；MCP CLI 要网关自身监听地址。
       const origin = forMcp ? mcpBridgeAddress(req, config) : pairingOrigin(req, config);
@@ -61,7 +78,7 @@ export function createPairingRouter(deps: ApiDeps): Router {
     });
   }
 
-  function claimPair(pool: Map<string, { expiresAt: number }>, bucket: string, scope: 'full' | 'mcp:readonly', defaultName: string) {
+  function claimPair(pool: Map<string, PairEntry>, bucket: string, scope: 'device' | 'mcp:readonly', defaultName: string) {
     return ah(async (req, res) => {
       if (!allowPairHit(bucket, req, 10, 5 * 60_000)) {
         pairRateLimited(res, 300);
@@ -78,6 +95,7 @@ export function createPairingRouter(deps: ApiDeps): Router {
         platform: str(body.platform) ?? 'unknown',
         tokenHash: hashToken(token),
         scope,
+        connectionIds: entry.connectionIds,
       });
       const origin = pairingOrigin(req, config);
       res.json({
@@ -95,7 +113,7 @@ export function createPairingRouter(deps: ApiDeps): Router {
   };
 
   router.post('/pair/start', startPair(deps.pairCodes, 'start', true));
-  router.post('/pair/claim', claimPair(deps.pairCodes, 'claim', 'full', '移动设备'));
+  router.post('/pair/claim', claimPair(deps.pairCodes, 'claim', 'device', '移动设备'));
 
   router.post('/pair/mcp/start', (req, res, next) => {
     if (!mcpPairingEnabled(res)) return;
@@ -106,8 +124,24 @@ export function createPairingRouter(deps: ApiDeps): Router {
     next();
   }, claimPair(deps.mcpPairCodes, 'mcp-claim', 'mcp:readonly', 'MCP Client'));
 
-  router.get('/devices', (_req, res) => res.json({ devices: store.listDevices() }));
-  router.delete('/devices/:id', (req, res) => {
+  const requireAdmin = (req: Request, res: Response, next: NextFunction): void => {
+    if (res.locals.device && res.locals.device.scope !== 'admin') {
+      res.status(403).json({ error: { code: 'SCOPE_DENIED', message: '仅管理员可以管理设备' } });
+      return;
+    }
+    next();
+  };
+
+  router.get('/devices', requireAdmin, (_req, res) => res.json({ devices: store.listDevices() }));
+  router.put('/devices/:id/permissions', requireAdmin, (req, res) => {
+    const body = obj(req.body, 'body');
+    if (!Array.isArray(body.connectionIds) || body.connectionIds.some((id) => typeof id !== 'string' || !id.trim())) {
+      throw Object.assign(new Error('connectionIds 必须是连接 id 数组'), { code: 'INVALID_INPUT', status: 400 });
+    }
+    const connectionIds = store.setDeviceConnectionPermissions(req.params.id, body.connectionIds.map((id: string) => id.trim()));
+    res.json({ deviceId: req.params.id, connectionIds });
+  });
+  router.delete('/devices/:id', requireAdmin, (req, res) => {
     store.revokeDevice(req.params.id);
     res.status(204).end();
   });

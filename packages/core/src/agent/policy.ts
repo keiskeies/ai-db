@@ -1,5 +1,6 @@
 import type { Engine, Environment, PermissionMode, Risk } from '../types';
 import { classifySql, countStatements } from '../sql/classify';
+import { validateExplainSql } from '../sql/ddl';
 import { classifyAql, classifyCql, classifyCypher, classifyMql, classifyRedis, aqlQueryFromArgs, cqlQueryFromArgs, cypherQueryFromArgs, formatStructuredQuery, mqlQueryFromArgs, redisQueryFromArgs } from '../query';
 import { builtinMcpToolRisk, builtinMcpToolRiskByName } from './builtinMcp';
 import type { ToolCall, ToolDefinition } from './types';
@@ -10,6 +11,8 @@ export interface PermissionContext {
   mode: PermissionMode;
   connectionReadonly: boolean;
   environment: Environment;
+  /** SQL dialect used by the same call in resolveRisk and the executor. */
+  engine?: Engine;
   connectionId?: string;
   database?: string;
   sessionAllowed?: Set<string>;
@@ -161,9 +164,13 @@ export function resolveRisk(call: ToolCall, tool: ToolDefinition, engine?: Engin
       const ref = String(call.args.server ?? '').trim();
       return (ref ? builtinMcpToolRisk(ref, tool) : builtinMcpToolRiskByName(tool)) ?? 'write';
     }
-    if (call.name === 'run_sql') {
+    if (call.name === 'run_sql' || call.name === 'explain_sql') {
       const sql = String(call.args.sql ?? '');
-      return sql.trim() ? classifySql(sql, engine).risk : 'ddl';
+      const risk = sql.trim() ? classifySql(sql, engine).risk : 'ddl';
+      // Oracle EXPLAIN PLAN FOR writes PLAN_TABLE_OUTPUT even when its target is
+      // a read. The tool must not present that fixed side effect as risk=read.
+      if (call.name === 'explain_sql' && engine === 'oracle' && risk === 'read') return 'write';
+      return risk;
     }
     if (call.name === 'run_mql') return classifyMql(mqlQueryFromArgs(call.args)).risk;
     if (call.name === 'run_redis') return classifyRedis(redisQueryFromArgs(call.args)).risk;
@@ -304,6 +311,30 @@ export function describeCall(call: ToolCall): { summary: string; sql?: string } 
 }
 
 export function evaluatePermission(risk: Risk, ctx: PermissionContext, call?: ToolCall): PermissionVerdict {
+  if (call && (call.name === 'run_sql' || call.name === 'explain_sql')) {
+    const sql = typeof call.args.sql === 'string' ? call.args.sql : '';
+    const classification = classifySql(sql, ctx.engine);
+    // unknown 的历史风险映射是 ddl；auto/full 会放行 ddl，因此必须在读取
+    // risk 之前逐条检查真实 kind，不能让“无法证明安全”变成“像 DDL 一样可自动执行”。
+    if (!sql.trim() || !classification.statements.length || classification.statements.some((statement) => statement.kind === 'unknown')) {
+      return 'deny';
+    }
+    // readonly 模式只允许明确的数据读取；SET/USE/事务边界虽然不改数据，也不是只读查询。
+    if (ctx.mode === 'readonly' && classification.statements.some((statement) => statement.kind !== 'read')) {
+      return 'deny';
+    }
+    if (call.name === 'explain_sql') {
+      // 没有目标连接方言时不能做严格拆句（例如跨连接调用）；执行器虽会
+      // 再校验，但审批前不能把一个无法证明只读的 EXPLAIN 请求放出去。
+      if (!ctx.engine) return 'deny';
+      try {
+        validateExplainSql(ctx.engine, sql);
+      } catch {
+        // 非法 EXPLAIN 输入不是可审批操作：多语句、写语句和 ANALYZE 一律拒绝。
+        return 'deny';
+      }
+    }
+  }
   if (risk === 'read') return 'allow';
   if (ctx.connectionReadonly) return 'deny';
   if (ctx.mode === 'readonly') return 'deny';

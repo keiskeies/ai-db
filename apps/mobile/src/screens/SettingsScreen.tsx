@@ -24,6 +24,7 @@ export function SettingsScreen({
   locale,
   onLocale,
   onBack,
+  canManageHost,
 }: {
   client: BridgeClient;
   boot: BootstrapData | null;
@@ -38,11 +39,13 @@ export function SettingsScreen({
   locale: Locale;
   onLocale: (locale: Locale) => void;
   onBack: () => void;
+  canManageHost: boolean;
 }) {
   const [skills, setSkills] = useState<Array<{ id: string; name: string; description: string; enabled: boolean; builtin?: boolean }>>([]);
   const [mcps, setMcps] = useState<Array<{ id: string; name: string; command: string; enabled: boolean; builtin?: boolean }>>([]);
   const [devices, setDevices] = useState<Array<{ id: string; name: string; platform: string; pairedAt: string; revoked: boolean }>>([]);
   useEffect(() => {
+    if (!canManageHost) return;
     void (async () => {
       try {
         const [skillResult, mcpResult, deviceResult] = await Promise.all([client.skills(true), client.mcpServers(), client.devices()]);
@@ -54,7 +57,7 @@ export function SettingsScreen({
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [canManageHost]);
   return (
     <View style={{ flex: 1 }}>
       <View style={styles.tableHead}>
@@ -86,6 +89,7 @@ export function SettingsScreen({
           <Text style={styles.listMeta}>{boot?.tools.length ?? 18} 个工具 · 四层记忆 · {boot?.sessions.length ?? 0} 个会话</Text>
         </View>
 
+        {canManageHost ? (
         <View style={styles.card}>
           <Text style={styles.sectionLabel}>已配对设备</Text>
           {devices.map((device) => (
@@ -116,11 +120,12 @@ export function SettingsScreen({
           ))}
           {!devices.length ? <Text style={styles.hint}>没有已配对设备。</Text> : null}
         </View>
+        ) : null}
 
         <View style={styles.card}>
           <Text style={[styles.sectionLabel, { marginTop: 12 }]}>默认权限</Text>
           <View style={{ flexDirection: 'row', marginTop: 6 }}>
-            <PermissionSelect mode={mode} onChange={onMode} testID="m-settings-mode" />
+            <PermissionSelect mode={mode} onChange={onMode} testID="m-settings-mode" modes={canManageHost ? undefined : ['readonly', 'ask']} />
           </View>
           <Text style={[styles.hint, { marginTop: 8 }]}>移动端新会话默认只读；破坏性操作即使在全自动模式下也需要审批。</Text>
         </View>
@@ -163,6 +168,7 @@ export function SettingsScreen({
           <Text style={[styles.hint, { marginTop: 8 }]}>界面文案即时切换，只保存在本机。</Text>
         </View>
 
+        {canManageHost ? (
         <View style={styles.card}>
           <Text style={styles.sectionLabel}>扩展</Text>
           <Text style={[styles.listMeta, { marginTop: 6 }]}>Skills</Text>
@@ -207,6 +213,7 @@ export function SettingsScreen({
             </View>
           ))}
         </View>
+        ) : null}
 
         <View style={styles.card}>
           <Text style={styles.sectionLabel}>数据</Text>

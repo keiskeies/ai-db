@@ -157,12 +157,12 @@ export function QueryView({ tab }: { tab: QueryTab }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const hostRef = useRef<HTMLDivElement>(null);
-  const viewRef = useRef<EditorView | undefined>();
+  const viewRef = useRef<EditorView | null>(null);
   const sqlRef = useRef(sql);
   const tabIdRef = useRef(tab.id);
   const runSeq = useRef(0);
   // 运行/脚本执行共用一个中止句柄：取消按钮 abort 它，网关靠连接 close 终止服务端查询（WP2 G1）。
-  const runAbortRef = useRef<AbortController | undefined>();
+  const runAbortRef = useRef<AbortController | null>(null);
   // 上次已持久化到 tab 的 SQL（仅在真正写库时更新），用于卸载/切 tab 时去重，避免 updateTab 自我触发放大。
   const savedSqlRef = useRef(tab.sql);
   const runRef = useRef<() => void>(() => undefined);
@@ -238,7 +238,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
         updateTab(tab.id, { sql: live });
       }
       view.destroy();
-      viewRef.current = undefined;
+      viewRef.current = null;
     };
   }, [tab.id, conn?.engine, isDark]);
 
@@ -341,7 +341,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
       setResultTab('messages');
     } finally {
       if (seq === runSeq.current) setRunning(false);
-      if (runAbortRef.current === controller) runAbortRef.current = undefined;
+      if (runAbortRef.current === controller) runAbortRef.current = null;
     }
   };
   runRef.current = () => {
@@ -378,7 +378,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
       setResultTab('messages');
     } finally {
       if (seq === runSeq.current) setRunning(false);
-      if (runAbortRef.current === controller) runAbortRef.current = undefined;
+      if (runAbortRef.current === controller) runAbortRef.current = null;
     }
   };
 
@@ -466,7 +466,7 @@ export function QueryView({ tab }: { tab: QueryTab }) {
       setResultTab('messages');
     } finally {
       if (seq === runSeq.current) setRunning(false);
-      if (runAbortRef.current === controller) runAbortRef.current = undefined;
+      if (runAbortRef.current === controller) runAbortRef.current = null;
     }
   };
 

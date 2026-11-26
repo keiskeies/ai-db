@@ -7,7 +7,15 @@ import type { CommandRunInfo } from '@aidb/core';
 // catch→记失败→释放槽路径对齐）；终态 run 保留窗口过后被回收，运行中的不受影响。
 
 function makeRunner(): CommandRunner {
-  const store = { updateArtifactRun: () => undefined, updateArtifact: () => undefined };
+  const store = {
+    updateArtifactRun: () => undefined,
+    updateArtifact: () => undefined,
+    getArtifactRun: () => undefined,
+    getArtifact: () => undefined,
+    commandEvents: () => [],
+    commandEventReplay: () => ({ events: [], lastSeq: 0, truncated: false }),
+    appendCommandEvent: () => undefined,
+  };
   return new CommandRunner(store as any, {} as any);
 }
 
@@ -32,11 +40,54 @@ function injectState(runner: CommandRunner, id: string, finished = false): any {
     controller: new AbortController(),
     seq: 0,
     finished,
+    cancellationRequested: false,
+    executionStarted: false,
     waiters: [],
+    execution: Promise.resolve(),
   };
   (runner as any).runs.set(id, state);
   return state;
 }
+
+test('cancel 只记录取消请求，终态 waiter 必须等底层执行结束', async () => {
+  const runner = makeRunner();
+  const state = injectState(runner, 'r-execution');
+  state.executionStarted = true;
+  let finishExecution!: () => void;
+  state.execution = new Promise<void>((resolve) => { finishExecution = resolve; });
+  let runSettled = false;
+  const pendingRun = runner.waitForRun('r-execution').then((info) => {
+    runSettled = true;
+    return info;
+  });
+  assert.equal(runner.cancel('r-execution'), true);
+  assert.equal(runner.cancel('r-execution'), true, '重复 cancel 必须幂等');
+  assert.equal(state.cancellationRequested, true);
+  assert.equal(state.controller.signal.aborted, true);
+  assert.equal(state.finished, false);
+  assert.equal(runner.get('r-execution')?.status, 'running');
+
+  let executionSettled = false;
+  const pendingExecution = runner.waitForExecution('r-execution').then(() => { executionSettled = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(runSettled, false, '底层执行未结束时不能结算终态 waiter');
+  assert.equal(executionSettled, false);
+  finishExecution();
+  await pendingExecution;
+  (runner as any).finishCanceled(state);
+  assert.equal((await pendingRun)?.status, 'canceled');
+  assert.equal(executionSettled, true);
+});
+
+test('queued run 在 execute 尚未开始时可以立即取消', async () => {
+  const runner = makeRunner();
+  const state = injectState(runner, 'r-queued');
+  state.info.status = 'queued';
+  assert.equal(runner.cancel('r-queued'), true);
+  assert.equal(state.finished, true);
+  assert.equal((await runner.waitForRun('r-queued'))?.status, 'canceled');
+  assert.equal(runner.cancel('r-queued'), false, '终态后不再接受新的取消');
+});
 
 test('waitForRun：未知 runId 仍 resolve undefined（旧行为不变）', async () => {
   const runner = makeRunner();

@@ -88,6 +88,30 @@ test('取消直驱写后立即返回，但执行追踪保留到底层写真正�
   }
 });
 
+test('manager schema 显式超时会拒绝并取消在途 describe', async () => {
+  const { store, manager, cleanup } = setup();
+  const conn = store.createConnection({ name: 'schema timeout', engine: 'sqlite', database: ':memory:' });
+  const describeGate = deferred<TableInfo[]>();
+  const state = manager as any;
+  state.driverFor = async () => ({ describe: () => describeGate.promise });
+  try {
+    const pending = manager.schema(conn.id, undefined, true, undefined, { timeoutMs: 40, executionId: 'schema-timeout' });
+    await assert.rejects(pending, (error: any) => error?.code === 'SCHEMA_TIMEOUT' && error?.status === 504);
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    assert.equal(state.abandonedExecutions.has('schema-timeout'), true);
+    assert.equal(state.activeExecutions.has('schema-timeout'), true, '底层 describe 未退出前必须保留执行追踪');
+    describeGate.resolve([]);
+    for (let index = 0; index < 5 && state.activeExecutions.has('schema-timeout'); index += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    assert.equal(state.activeExecutions.has('schema-timeout'), false);
+    assert.equal(state.abandonedExecutions.has('schema-timeout'), false);
+  } finally {
+    describeGate.resolve([]);
+    await cleanup();
+  }
+});
+
 test('脚本在 mkdir/writeFile 期间被取消时不会启动子进程', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'aidb-script-abort-'));
   const marker = join(dir, 'spawned.txt');
@@ -121,18 +145,22 @@ test('整库备份的非流式读取带执行追踪，取消后删除未完成�
   let schemaOptions: unknown;
   let queryOptions: any;
   const manager = {
-    schema: async (_id: string, _db: string, refresh: boolean, ttl: number, options: unknown) => {
-      schemaOptions = options;
-      assert.equal(refresh, true);
-      assert.equal(ttl, 30000);
-      return [{ name: 'main', tables: [table] }];
-    },
-    rawDriver: async () => ({}),
-    query: async (_id: string, _sql: string, options: any) => {
-      queryOptions = options;
-      started.resolve();
-      return abortableQuery(options.signal);
-    },
+    rawDriver: async () => ({
+      beginTransaction: async () => undefined,
+      describeInTransaction: async (_txId: string, _db: string | undefined, options: unknown) => {
+        schemaOptions = options;
+        return [table];
+      },
+      runInTransaction: async (_txId: string, sql: string, _params: unknown[], options: any) => {
+        if (sql.includes('sqlite_master')) return { columns: [{ name: 'count' }], rows: [[0]], rowCount: 1, affected: 0, durationMs: 0, truncated: false };
+        queryOptions = options;
+        started.resolve();
+        return abortableQuery(options.signal);
+      },
+      commitTransaction: async () => undefined,
+      rollbackTransaction: async () => undefined,
+    }),
+    query: async () => { throw new Error('备份数据读取必须走事务快照'); },
   } as unknown as ConnectionManager;
   try {
     const pending = dumpDatabase(store, manager, config, conn.id, undefined, 'cancel-test', controller.signal, 'backup-1');
@@ -140,6 +168,7 @@ test('整库备份的非流式读取带执行追踪，取消后删除未完成�
     controller.abort();
     await assert.rejects(pending, { code: 'ABORTED' });
     assert.equal((schemaOptions as any).executionId, 'backup-1');
+    assert.equal((schemaOptions as any).signal, controller.signal);
     assert.equal(queryOptions.executionId, 'backup-1');
     assert.equal(queryOptions.signal, controller.signal);
     assert.deepEqual(readdirSync(config.backupDir), [], '未完成备份不能留在目录里');
@@ -158,9 +187,23 @@ test('恢复备份的分批执行带取消信号与执行 ID', async () => {
   const controller = new AbortController();
   const started = deferred();
   let queryOptions: any;
+  let rolledBack = false;
   const manager = {
-    rawDriver: async () => ({}),
-    query: async (_id: string, _sql: string, options: any) => {
+    schema: async () => [{ name: 'main', tables: [] }],
+    rawDriver: async () => ({
+      beginTransaction: async () => undefined,
+      runInTransaction: async () => ({ sets: [] }),
+      commitTransaction: async () => undefined,
+      rollbackTransaction: async () => undefined,
+    }),
+    beginTransaction: async () => undefined,
+    commitTransaction: async () => undefined,
+    rollbackTransaction: async () => { rolledBack = true; },
+    query: async (_id: string, sql: string, options: any) => {
+      if (sql.includes('sqlite_master')) {
+        return { sets: [{ columns: [{ name: 'count' }], rows: [[0]], rowCount: 1, affected: 0, durationMs: 0, truncated: false }], messages: [], durationMs: 0 };
+      }
+      if (!/^INSERT\s+INTO/i.test(sql)) return { sets: [] };
       queryOptions = options;
       started.resolve();
       return abortableQuery(options.signal);
@@ -173,7 +216,9 @@ test('恢复备份的分批执行带取消信号与执行 ID', async () => {
     await assert.rejects(pending, { code: 'ABORTED' });
     assert.equal(queryOptions.executionId, 'restore-1');
     assert.equal(queryOptions.signal, controller.signal);
-    assert.equal(queryOptions.allowMulti, true);
+    assert.equal(queryOptions.allowMulti, false);
+    assert.match(queryOptions.sessionId, /^restore-/);
+    assert.equal(rolledBack, true);
   } finally {
     controller.abort();
     await cleanup();

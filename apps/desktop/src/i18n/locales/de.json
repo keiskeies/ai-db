@@ -730,7 +730,7 @@
   "openDemo": "Demodatenbank öffnen",
   "page": "Seite",
   "pairCode": "Pairing-Code",
-  "pairHint": "Geben Sie die Bridge-Adresse und den Code auf dem Handy ein. Gültig für 5 Minuten.",
+  "pairHint": "Geben Sie die Bridge-Adresse und den Code auf dem Handy ein. Gültig für 1 Minute.",
   "pairing": "Mobile Kopplung",
   "password": "Passwort",
   "payload 字段": "Nutzlastfeld",

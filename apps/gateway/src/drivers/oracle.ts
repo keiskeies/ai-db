@@ -2,6 +2,7 @@ import oracledb from 'oracledb';
 import type { ColumnInfo, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo } from '@aidb/core';
 import type { Driver, DriverTestResult, RunOptions } from './types';
 import { DbError, toRowArray } from './types';
+import { throwIfAborted } from './timeout';
 
 export interface OracleOptions {
   host: string;
@@ -137,10 +138,33 @@ export class OracleDriver implements Driver {
     }
   }
 
-  async describe(): Promise<TableInfo[]> {
-    const pool = await this.pool();
+  async describe(database?: string): Promise<TableInfo[]> {
+    const pool = await this.pool(database);
     const connection = await pool.getConnection();
     connection.callTimeout = METADATA_TIMEOUT_MS;
+    try {
+      return await this.describeOnConnection(connection);
+    } finally {
+      connection.callTimeout = 0;
+      await connection.close().catch(() => undefined);
+    }
+  }
+
+  /** 备份快照专用：复用同一 catalog 逻辑，但连接由 txConnections 固定且不在此处关闭。 */
+  async describeInTransaction(sessionId: string, _database?: string, opts: RunOptions = {}): Promise<TableInfo[]> {
+    const connection = this.txConnections.get(sessionId);
+    if (!connection) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
+    throwIfAborted(opts.signal);
+    connection.callTimeout = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : METADATA_TIMEOUT_MS;
+    try {
+      return await this.describeOnConnection(connection, opts);
+    } finally {
+      connection.callTimeout = 0;
+    }
+  }
+
+  private async describeOnConnection(connection: oracledb.Connection, opts: RunOptions = {}): Promise<TableInfo[]> {
+    throwIfAborted(opts.signal);
     try {
       const tables = await connection.execute(
         `SELECT OWNER, TABLE_NAME, 'TABLE' AS KIND, NUM_ROWS FROM ALL_TABLES WHERE OWNER = :1
@@ -250,11 +274,11 @@ export class OracleDriver implements Driver {
       for (const [key, fk] of fkMap) {
         map.get(key.split('.')[0])?.foreignKeys?.push(fk);
       }
+      throwIfAborted(opts.signal);
       return [...map.values()];
     } catch (err: any) {
+      if (err instanceof DbError) throw err;
       throw new DbError(err.message, { code: 'ORACLE_METADATA_ERROR', hint: oracleBindingHint(err) });
-    } finally {
-      await connection.close().catch(() => undefined);
     }
   }
 

@@ -30,6 +30,13 @@ interface NotificationChannelRow {
   updated_at: string;
 }
 
+/** 未配置 expiry 的设备令牌长期有效；已配置但无法解析的时间按失效处理。 */
+function deviceExpired(value: unknown, now = Date.now()): boolean {
+  if (value === null || value === undefined || value === '') return false;
+  const timestamp = typeof value === 'number' ? value : Date.parse(String(value));
+  return !Number.isFinite(timestamp) || timestamp <= now;
+}
+
 export class IntegrationsRepo {
   constructor(private db: StoreDb) {}
 
@@ -225,31 +232,100 @@ export class IntegrationsRepo {
   }
 
   // ---------- devices ----------
-  createDevice(input: { name: string; platform: string; tokenHash: string; scope?: DeviceInfo['scope'] }): DeviceInfo {
+  private rowToDevice(row: Record<string, any>): DeviceInfo {
+    return {
+      id: row.id,
+      name: row.name,
+      platform: row.platform,
+      pairedAt: row.paired_at,
+      lastSeenAt: row.last_seen_at ?? undefined,
+      revoked: Boolean(row.revoked) || deviceExpired(row.expires_at),
+      // 未知/损坏 scope 按最小权限处理；只有明确保存的 admin 才提升权限。
+      scope: row.scope === 'admin' || row.scope === 'mcp:readonly' ? row.scope : 'device',
+      connectionIds: this.listDeviceConnectionPermissions(row.id),
+    };
+  }
+
+  createDevice(input: { name: string; platform: string; tokenHash: string; scope?: DeviceInfo['scope']; connectionIds?: string[] }): DeviceInfo {
     const id = randomUUID();
     const now = iso();
-    const scope = input.scope ?? 'full';
-    this.db.exec('INSERT INTO devices (id,name,platform,token_hash,paired_at,revoked,scope) VALUES (?,?,?,?,?,0,?)', [id, input.name, input.platform, input.tokenHash, now, scope]);
-    return { id, name: input.name, platform: input.platform, pairedAt: now, revoked: false, scope };
+    const scope = input.scope ?? 'device';
+    this.db.db.exec('BEGIN');
+    try {
+      this.db.exec('INSERT INTO devices (id,name,platform,token_hash,paired_at,revoked,scope) VALUES (?,?,?,?,?,0,?)', [id, input.name, input.platform, input.tokenHash, now, scope]);
+      if (scope === 'device' && input.connectionIds?.length) {
+        const grantedAt = iso();
+        for (const connectionId of new Set(input.connectionIds)) {
+          this.db.exec('INSERT INTO device_connection_permissions (device_id,connection_id,granted_at) VALUES (?,?,?)', [id, connectionId, grantedAt]);
+        }
+      }
+      this.db.db.exec('COMMIT');
+    } catch (err) {
+      this.db.db.exec('ROLLBACK');
+      throw err;
+    }
+    return this.rowToDevice(this.db.one<Record<string, any>>('SELECT * FROM devices WHERE id = ?', [id])!);
   }
 
   findDeviceByTokenHash(hash: string): DeviceInfo | undefined {
     const row = this.db.one<Record<string, any>>('SELECT * FROM devices WHERE token_hash = ? AND revoked = 0', [hash]);
-    if (!row) return undefined;
+    if (!row || deviceExpired(row.expires_at)) return undefined;
     this.db.exec('UPDATE devices SET last_seen_at = ? WHERE id = ?', [iso(), row.id]);
-    return { id: row.id, name: row.name, platform: row.platform, pairedAt: row.paired_at, lastSeenAt: row.last_seen_at ?? undefined, revoked: false, scope: row.scope ?? 'full' };
+    return this.rowToDevice(row);
   }
 
   listDevices(): DeviceInfo[] {
-    return this.db.all<Record<string, any>>('SELECT * FROM devices ORDER BY paired_at DESC').map((r) => ({
-      id: r.id,
-      name: r.name,
-      platform: r.platform,
-      pairedAt: r.paired_at,
-      lastSeenAt: r.last_seen_at ?? undefined,
-      revoked: Boolean(r.revoked),
-      scope: r.scope ?? 'full',
-    }));
+    return this.db.all<Record<string, any>>('SELECT * FROM devices ORDER BY paired_at DESC').map((row) => this.rowToDevice(row));
+  }
+
+  listDeviceConnectionPermissions(deviceId: string): string[] {
+    return this.db.all<{ connection_id: string }>(
+      'SELECT connection_id FROM device_connection_permissions WHERE device_id = ? ORDER BY connection_id',
+      [deviceId],
+    ).map((row) => row.connection_id);
+  }
+
+  canDeviceAccessConnection(deviceId: string, connectionId: string): boolean {
+    const row = this.db.one<{ expires_at: string | null }>(
+      `SELECT device.expires_at
+       FROM device_connection_permissions AS permission
+       JOIN devices AS device ON device.id = permission.device_id
+       WHERE permission.device_id = ? AND permission.connection_id = ?
+         AND device.revoked = 0 AND device.scope = 'device'`,
+      [deviceId, connectionId],
+    );
+    return Boolean(row && !deviceExpired(row.expires_at));
+  }
+
+  /** 管理端整体替换 ACL；空数组成员 Explicit deny，未知连接拒绝，避免静默制造失效授权。 */
+  setDeviceConnectionPermissions(deviceId: string, connectionIds: string[]): string[] {
+    const device = this.db.one<{ scope: string }>('SELECT scope FROM devices WHERE id = ?', [deviceId]);
+    if (!device) {
+      throw Object.assign(new Error('设备不存在'), { code: 'DEVICE_NOT_FOUND', status: 404 });
+    }
+    if (device.scope !== 'device') {
+      throw Object.assign(new Error('只有 device 角色可以配置连接 ACL'), { code: 'INVALID_INPUT', status: 400 });
+    }
+    const unique = [...new Set(connectionIds)];
+    if (unique.length > 1000) throw Object.assign(new Error('单设备最多授权 1000 个连接'), { code: 'INVALID_INPUT', status: 400 });
+    for (const connectionId of unique) {
+      if (!this.db.one('SELECT 1 AS one FROM connections WHERE id = ?', [connectionId])) {
+        throw Object.assign(new Error(`连接不存在：${connectionId}`), { code: 'CONNECTION_NOT_FOUND', status: 400 });
+      }
+    }
+    this.db.db.exec('BEGIN');
+    try {
+      this.db.exec('DELETE FROM device_connection_permissions WHERE device_id = ?', [deviceId]);
+      const grantedAt = iso();
+      for (const connectionId of unique) {
+        this.db.exec('INSERT INTO device_connection_permissions (device_id,connection_id,granted_at) VALUES (?,?,?)', [deviceId, connectionId, grantedAt]);
+      }
+      this.db.db.exec('COMMIT');
+    } catch (err) {
+      this.db.db.exec('ROLLBACK');
+      throw err;
+    }
+    return this.listDeviceConnectionPermissions(deviceId);
   }
 
   revokeDevice(id: string): void {

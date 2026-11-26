@@ -612,12 +612,14 @@ release 页按「系统 + 架构」出包，六个桌面组合：
 - Windows on ARM 也能直接跑 x64 安装包（系统模拟），而那份保留 Oracle 驱动。
 - Linux 的文件名按发行版惯例带架构后缀（x64 是 `amd64` / `x86_64`，arm64 是 `aarch64`）。deb / rpm 走发行版包管理器；AppImage 免安装但需要 FUSE 2，没有就 `--appimage-extract-and-run`。两者都需要图形会话，WSL2 需要 WSLg。
 - 每个安装包只带自身架构的原生绑定（DuckDB、node-oracledb），CI 在发布前逐个断言；两个例外见上文引擎说明。
-- Android 以通用 `AiDB-Studio-<版本>-android.apk` 随 release 发布：CI 用 `apps/mobile/android` 里的原生工程跑 Gradle 构建，用仓库内的 debug keystore 签名——可直接侧载安装，但不适合上架 Google Play。iOS 走 EAS 构建，仓库配置了 `EXPO_TOKEN` secret 时才产出并附上 IPA；没配就告警跳过。
+- 发布工作流要求并校验 Windows Authenticode，以及 macOS Developer ID 签名、hardened runtime、公证和 stapling。Linux 包不做平台代码签名；release 提供校验和与构建来源证明，发行版仓库维护者需为 deb/rpm 重新签名。
+- Android 以通用 `AiDB-Studio-<版本>-android.apk` 随 release 发布：CI 用 `apps/mobile/android` 里的原生工程跑 Gradle 构建。受保护的 `release` 环境必须提供 `ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 和 `ANDROID_CERT_SHA256`；CI 拒绝 debug 密钥别名，要求 APK 不可调试，并校验唯一签名证书指纹。
+- iOS 通过 EAS `production` profile 构建；CI 校验 bundle/版本、Developer ID 签名、描述文件、hardened runtime 与 entitlements 后才附上 IPA。缺少 `EXPO_TOKEN` 或签名无效会直接阻断发布，不再静默跳过。
 
 ### 移动端构建
 
-- **Android**：CI 用已入库的原生工程执行 `./gradlew assembleRelease`，不需要 Expo 账号。APK 是通用包（四个 ABI），用 `apps/mobile/android/app` 里的 debug keystore 签名，升级时签名一致；正式上架 Google Play 前要换成 release keystore。版本号取自 `apps/mobile/app.json`：`versionName` 就是它的 `version`，`versionCode` 按 major×10000 + minor×100 + patch 计算。本地出包：`cd apps/mobile/android && EXPO_NO_METRO_WORKSPACE_ROOT=1 ./gradlew assembleRelease`——这个环境变量让 Metro 的根与原生工程对齐，否则它会去 monorepo 根找 `index.ts`。
-- **iOS**：走 EAS，需一次性配置：`npm i -g eas-cli`、`cd apps/mobile`、`eas login`、`eas init`（把 `app.json` 里的占位 `projectId` 换成真实 id 并提交）、内测安装需 `eas device:create`；再交互式跑一次 `eas build -p ios --profile preview`，让 EAS 保存 Apple 证书与描述文件。到 expo.dev/settings/access-tokens 建 token，配成仓库 secret `EXPO_TOKEN`，之后每次打 tag CI 会触发同一 profile 并附上 IPA。
+- **Android**：CI 用已入库的原生工程执行 `./gradlew assembleRelease`，Gradle 作业本身不需要 Expo 账号。APK 是通用包（四个 ABI），使用受保护的生产上传密钥；上传后由 Google Play 按已配置的应用签名密钥重新签名。版本号取自 `apps/mobile/app.json`：`versionName` 就是它的 `version`。本地生成同样配置的 Play bundle 可运行 `npm --workspace apps/mobile run build:android:release`（需要 Android SDK、JDK 17 与签名属性）。
+- **iOS**：使用 EAS 远程凭据和 `production` profile（`distribution: store`、production 更新通道、Release 配置）。一次性准备包括安装 `eas-cli`、登录、确认 EAS 项目与 Apple team，并由 EAS 创建分发证书和描述文件。将 access token 配成受保护的 `EXPO_TOKEN` secret；发布 tag 时 CI 执行 `eas build -p ios --profile production`，独立检查 IPA 后发布。提交商店是单独的 `eas submit -p ios --profile production` 步骤。
 - 本地运行：`npm --workspace apps/mobile run android`（`run ios` 需要 macOS + Xcode）。
 
 ### 检查更新
@@ -629,7 +631,7 @@ release 页按「系统 + 架构」出包，六个桌面组合：
 | Windows（NSIS） | 下载并静默安装，支持差分下载（`latest.yml` + blockmap，通常几十 KB 而非整包） | 安装器支持 `/S`，且当前目录可写 |
 | Linux（AppImage） | 同上，按 `latest-linux.yml` / `latest-linux-arm64.yml` 取包 | 只有 AppImage 能自我替换 |
 | Linux（deb / rpm） | 跳转下载页 | `/opt` 由包管理器接管，应用无权覆盖 |
-| macOS | 跳转下载页 | 构建未签名，Squirrel.Mac 拒绝替换未签名的 app |
+| macOS | 跳转下载页 | macOS 更新走 release 页，不使用 Squirrel 原地替换 |
 | 开发态 / 网页版 | 只检查版本，不提供安装 | 没有 `app-update.yml`，也没有安装包可换 |
 
 自动更新依赖 release 里的 `latest*.yml`（版本、文件名、sha512）。Windows 的元数据不带架构后缀，所以 arm64 走独立通道 `latest-arm64.yml`，客户端按 `process.arch` 选同名文件；Linux 的文件名由 electron-updater 自己加 `-linux-arm64` 后坠。安装包文件名统一用连字符（`AiDB-Studio-...`）：electron-builder 写元数据时会把空格换成 `-`，而 GitHub 上传时会把空格换成 `.`，两边不一致会让下载地址 404。
@@ -639,7 +641,7 @@ release 页按「系统 + 架构」出包，六个桌面组合：
 ```
 apps/desktop     Electron 45 + React 18 + Vite 6（也可纯浏览器运行）
 apps/gateway     Bridge：驱动、元数据库、REST / SSE / WS、Agent 宿主、调度器
-apps/mobile      Expo SDK 52 / React Native 0.76（Android / iOS / Web）
+apps/mobile      Expo SDK 58 / React Native 0.88 / React 19（Android / iOS / Web）
 packages/core    平台无关内核：SQL 分类与方言、DDL、Agent 运行时、工具、权限、记忆、Provider、能力契约
 docs/            设计文档、验证报告、截图
 scripts/         文档契约、种子、E2E、QA、独立 MCP Server

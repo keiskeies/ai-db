@@ -58,34 +58,133 @@ import {
   type SseIdleOptions,
   type TurnPayload,
 } from '@aidb/client';
+import type {
+  DesktopBridge,
+  SshPrivateKeyImportDialogUi,
+  SshPrivateKeyImportResult,
+} from './desktop';
 
-function resolveToken(): string {
-  const params = new URLSearchParams(location.hash.replace(/^#/, ''));
-  const fromHash = params.get('token');
-  if (fromHash) {
-    try {
-      localStorage.setItem('aidb.token', fromHash);
-    } catch {
-      /* ignore */
-    }
-    history.replaceState(null, '', location.pathname + location.search);
-    return fromHash;
+const SESSION_TOKEN_KEY = 'aidb.session.token';
+const LEGACY_TOKEN_KEY = 'aidb.token';
+
+type SessionTokenEvent = { type?: unknown; token?: unknown };
+type SessionTokenBridge = {
+  onGatewayEvent?: (listener: (event: SessionTokenEvent) => void) => () => void;
+  importSshPrivateKey?: DesktopBridge['importSshPrivateKey'];
+};
+// 复用现有 preload 的 Bridge 监听能力；不新增持久化通道，也不把 token 挂到全局对象上。
+const tokenBridge = typeof window === 'undefined'
+  ? undefined
+  : (window as unknown as { aidbDesktop?: SessionTokenBridge }).aidbDesktop;
+const electronSession = Boolean(tokenBridge);
+
+let memoryToken = '';
+let tokenWaiter: ((token: string) => void) | undefined;
+const sessionTokenReady = electronSession
+  ? new Promise<string>((resolve) => { tokenWaiter = resolve; })
+  : Promise.resolve('');
+
+function settleToken(token: string): void {
+  const resolve = tokenWaiter;
+  tokenWaiter = undefined;
+  resolve?.(token);
+}
+
+function removeStoredTokens(): void {
+  try {
+    globalThis.localStorage?.removeItem(LEGACY_TOKEN_KEY);
+  } catch {
+    /* storage may be unavailable */
   }
   try {
-    return localStorage.getItem('aidb.token') || (import.meta.env.DEV ? 'dev-token' : '');
+    globalThis.sessionStorage?.removeItem(SESSION_TOKEN_KEY);
   } catch {
-    return import.meta.env.DEV ? 'dev-token' : '';
+    /* storage may be unavailable */
   }
 }
 
-export const TOKEN = resolveToken();
+/** URL 只作为一次性交接入口；保留其它 hash 参数，替换当前历史项而不是新增一条。 */
+function scrubHashToken(): void {
+  if (typeof location === 'undefined' || typeof history === 'undefined') return;
+  try {
+    const params = new URLSearchParams(location.hash.replace(/^#/, ''));
+    if (!params.has('token')) return;
+    params.delete('token');
+    const suffix = params.toString();
+    history.replaceState(history.state, '', location.pathname + location.search + (suffix ? `#${suffix}` : ''));
+  } catch {
+    /* a hostile/blocked history API must not make the app unusable */
+  }
+}
 
-/**
- * 每次调用都重新解析：WS 重连时要能拿到配对之后才写入的 token，
- * 而不是页面加载时快照下来的那个空串。
- */
+function readInitialToken(): string {
+  try {
+    globalThis.localStorage?.removeItem(LEGACY_TOKEN_KEY);
+  } catch {
+    /* migrate away from the old persistent token even when storage is blocked */
+  }
+  let fromHash = '';
+  try {
+    fromHash = new URLSearchParams(location.hash.replace(/^#/, '')).get('token')?.trim() ?? '';
+  } catch {
+    /* no URL token */
+  }
+
+  if (electronSession) {
+    // 新主进程不再把 token 放进 URL；保留这段兼容读取，随后立即清除并淘汰旧存储。
+    try {
+      globalThis.sessionStorage?.removeItem(SESSION_TOKEN_KEY);
+    } catch {
+      /* Electron uses renderer memory only */
+    }
+    scrubHashToken();
+    return fromHash;
+  }
+
+  if (fromHash) {
+    try {
+      globalThis.sessionStorage?.setItem(SESSION_TOKEN_KEY, fromHash);
+    } catch {
+      /* the module-level memory token still works for this page */
+    }
+  }
+  scrubHashToken();
+  try {
+    return globalThis.sessionStorage?.getItem(SESSION_TOKEN_KEY)?.trim() || fromHash || (import.meta.env?.DEV ? 'dev-token' : '');
+  } catch {
+    return fromHash || (import.meta.env?.DEV ? 'dev-token' : '');
+  }
+}
+
+/** live binding：Bridge 在 dom-ready 或网关恢复时更新，后续请求/WS重连立即拿到新值。 */
+export let TOKEN = readInitialToken();
+if (TOKEN) settleToken(TOKEN);
+
+tokenBridge?.onGatewayEvent?.((event) => {
+  if (event?.type !== 'token' || typeof event.token !== 'string' || !event.token) return;
+  memoryToken = event.token;
+  TOKEN = memoryToken;
+  settleToken(memoryToken);
+});
+
+/** 当前渲染层内存令牌；Web 独立形态初始化时已从 sessionStorage 恢复。 */
 export function authToken(): string {
-  return resolveToken();
+  return TOKEN;
+}
+
+/** Electron 首轮请求等 preload 交付令牌，避免 dom-ready 与 React 启动竞态。 */
+async function requireSessionToken(): Promise<string> {
+  if (!electronSession || TOKEN) return TOKEN;
+  return sessionTokenReady;
+}
+
+/** Web 独立形态的 logout/解除会话入口；Electron 内存令牌随窗口销毁，重载由 Bridge 重新交付。 */
+export function clearSessionToken(): void {
+  memoryToken = '';
+  TOKEN = '';
+  removeStoredTokens();
+  scrubHashToken();
+  settleToken('');
 }
 
 export class ApiError extends TransportError {
@@ -117,12 +216,13 @@ const desktopDeps = {
 
 const transportCfg: RequestConfig = {
   baseUrl: '',
-  getToken: () => TOKEN,
+  getToken: authToken,
   normalizeNetworkErrors: true,
   ...desktopDeps,
 };
 
 async function request<T>(path: string, init: RequestInit = {}, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS): Promise<T> {
+  await requireSessionToken();
   return sharedRequest<T>(path, init, timeoutMs, transportCfg);
 }
 
@@ -206,9 +306,10 @@ export async function readWithIdleCeiling(
 }
 
 export async function streamTurn(sessionId: string, payload: TurnPayload, onEvent: (event: AgentEvent) => void, signal?: AbortSignal, /** 只给测试用：默认值就是线上阈值，没必要让用例真等 5 分钟。 */ eventIdleMs = EVENT_IDLE_MS): Promise<void> {
+  await requireSessionToken();
   await sharedStreamTurn(sessionId, payload, onEvent, signal, eventIdleMs, {
     baseUrl: '',
-    getToken: () => TOKEN,
+    getToken: authToken,
     byteIdleMs: TURN_IDLE_CEILING_MS,
     eventIdleMessage: tr("与服务端的连接连续 {0} 秒没有任何响应，本次回复已断开。已完成的部分仍然保留，回复「继续」可接着做。", [Math.round(eventIdleMs / 1000)]),
     ...desktopDeps,
@@ -283,9 +384,10 @@ export async function streamTransfer(
   onEvent: (event: TransferEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
+  const token = await requireSessionToken();
   const res = await fetch('/api/transfer/stream', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
     body: JSON.stringify(body),
     signal,
   });
@@ -312,9 +414,10 @@ export async function streamPipelineRun(
   onEvent: (event: PipelineEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
+  const token = await requireSessionToken();
   const res = await fetch(`/api/pipelines/${encodeURIComponent(pipelineId)}/stream`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
     body: JSON.stringify(body),
     signal,
   });
@@ -346,8 +449,9 @@ export async function streamCommandRun(
   after = 0,
   signal?: AbortSignal,
 ): Promise<void> {
+  const token = await requireSessionToken();
   const res = await fetch(`/api/commands/runs/${encodeURIComponent(runId)}/events?after=${after}`, {
-    headers: { authorization: `Bearer ${TOKEN}` },
+    headers: { authorization: `Bearer ${token}` },
     signal,
   });
   if (!res.ok || !res.body) throw new ApiError(tr("命令进度读取失败（{0}）", [res.status]), { code: 'COMMAND_STREAM', status: res.status });
@@ -365,8 +469,9 @@ export async function streamSkillRun(
   after = 0,
   signal?: AbortSignal,
 ): Promise<void> {
+  const token = await requireSessionToken();
   const res = await fetch(`/api/skills/runs/${encodeURIComponent(runId)}/events?after=${after}`, {
-    headers: { authorization: `Bearer ${TOKEN}` },
+    headers: { authorization: `Bearer ${token}` },
     signal,
   });
   if (!res.ok || !res.body) throw new ApiError(tr("Skill 进度读取失败（{0}）", [res.status]), { code: 'SKILL_STREAM', status: res.status });
@@ -385,6 +490,7 @@ const attachmentUrls = new Map<string, string>();
 
 /** 图片走带令牌的 fetch 再转 object URL，避免把令牌暴露在 <img src> 里。 */
 export async function attachmentObjectUrl(id: string): Promise<string> {
+  const token = await requireSessionToken();
   const cached = attachmentUrls.get(id);
   if (cached) {
     // 命中即刷新到队尾，成为最近使用项。
@@ -392,7 +498,7 @@ export async function attachmentObjectUrl(id: string): Promise<string> {
     attachmentUrls.set(id, cached);
     return cached;
   }
-  const res = await fetch(`/api/agent/attachments/${encodeURIComponent(id)}`, { headers: { authorization: `Bearer ${TOKEN}` } });
+  const res = await fetch(`/api/agent/attachments/${encodeURIComponent(id)}`, { headers: { authorization: `Bearer ${token}` } });
   if (!res.ok) throw new ApiError(tr("图片读取失败（{0}）", [res.status]), { code: 'ATTACHMENT_ERROR', status: res.status });
   const url = URL.createObjectURL(await res.blob());
   attachmentUrls.set(id, url);
@@ -503,6 +609,13 @@ export const api = {
     request<{ result: { ok: boolean; message: string; name: string } }>(`/notifications/channels/${encodeURIComponent(id)}/test`, { method: 'POST' }),
   deleteArtifactSchedule: (id: string) => request<void>(`/artifacts/${encodeURIComponent(id)}/schedule`, { method: 'DELETE' }),
   deleteArtifact: (id: string) => request<void>(`/artifacts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  canImportSshPrivateKey: () => Boolean(tokenBridge?.importSshPrivateKey),
+  importSshPrivateKey: async (ui: SshPrivateKeyImportDialogUi): Promise<SshPrivateKeyImportResult> => {
+    const importKey = tokenBridge?.importSshPrivateKey;
+    if (!importKey) return { ok: false, code: 'SSH_KEY_IMPORT_UNAVAILABLE' };
+    return importKey(ui);
+  },
 
   connections: () => request<{ connections: ConnectionConfig[] }>('/connections'),
   createConnection: (body: Record<string, unknown>) => request<{ connection: ConnectionConfig }>('/connections', { method: 'POST', body: JSON.stringify(body) }),
@@ -830,7 +943,7 @@ export const api = {
   deletePipelineCredential: (id: string) => request<void>(`/pipelines/credentials/${id}`, { method: 'DELETE' }),
   restoreBackup: (id: string) => request<{ batch: QueryBatchResult }>(`/backups/${id}/restore`, { method: 'POST' }, BACKUP_REQUEST_TIMEOUT_MS),
 
-  pairStart: () => request<{ code: string; expiresIn: number; qrPayload: string; host: string; port: number; url: string }>('/pair/start', { method: 'POST' }),
+  pairStart: (connectionIds: string[]) => request<{ code: string; expiresIn: number; qrPayload: string; host: string; port: number; url: string }>('/pair/start', { method: 'POST', body: JSON.stringify({ connectionIds }) }),
   pairMcpStart: () => request<{ code: string; expiresIn: number; host: string; port: number; url: string }>('/pair/mcp/start', { method: 'POST' }),
   devices: () => request<{ devices: DeviceInfo[] }>('/devices'),
   revokeDevice: (id: string) => request<void>(`/devices/${id}`, { method: 'DELETE' }),

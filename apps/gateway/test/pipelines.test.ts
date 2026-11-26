@@ -110,6 +110,7 @@ const upstream: Server = createServer((req, res) => {
 });
 const upstreamPort = await listenRandom(upstream);
 const upstreamBase = `http://127.0.0.1:${upstreamPort}`;
+process.env.AIDB_EGRESS_ALLOW_PRIVATE_ORIGINS = [process.env.AIDB_EGRESS_ALLOW_PRIVATE_ORIGINS, upstreamBase].filter(Boolean).join(',');
 
 after(async () => {
   await gateway.close();
@@ -557,8 +558,10 @@ test('v8 老库升级：重建 jobs 后旧任务保留，且能存 pipeline 类�
     store.deletePipeline(flow.id);
   } finally {
     store.close();
-    const check = new DatabaseSync(dbPath, { readOnly: true });
-    assert.equal(Number(check.prepare('PRAGMA user_version').get()!.user_version), 9, '迁移把版本推到 9');
+    const check = new DatabaseSync(dbPath, { readOnly: true } as unknown as ConstructorParameters<typeof DatabaseSync>[1]);
+    const version = check.prepare('PRAGMA user_version') as ReturnType<DatabaseSync['prepare']> & { close(): void };
+    assert.equal(Number((version.get() as { user_version: number }).user_version), 11, '迁移把版本推到 11');
+    version.close();
     check.close();
     rmSync(dir, { recursive: true, force: true });
   }

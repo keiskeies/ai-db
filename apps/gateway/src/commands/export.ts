@@ -1,9 +1,12 @@
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, statSync } from 'node:fs';
+import { promises as fsp } from 'node:fs';
 import { join } from 'node:path';
 import PptxGenJS from 'pptxgenjs';
 import { flattenDeckSlides, planReportDeck, reportSheets } from '@aidb/core';
 import type { ArtifactInfo, ArtifactRunInfo, DeckSlide, ReportSpec } from '@aidb/core';
 import { writeExportFile } from '../xlsx';
+import { throwIfAborted } from '../drivers/timeout';
 import type { Store } from '../store';
 
 export type ExportFormat = 'xlsx' | 'pptx';
@@ -279,7 +282,7 @@ function writeReportSlides(pptx: PptxGenJS, spec: ReportSpec): void {
   });
 }
 
-async function writePptx(artifact: ArtifactInfo, run: ArtifactRunInfo | undefined, config: ExportTarget): Promise<{ path: string; rows: number }> {
+async function writePptx(artifact: ArtifactInfo, run: ArtifactRunInfo | undefined, config: ExportTarget, signal?: AbortSignal): Promise<{ path: string; rows: number }> {
   const pptx = new PptxGenJS();
   pptx.layout = 'LAYOUT_WIDE';
   pptx.author = 'AiDB Studio';
@@ -305,8 +308,21 @@ async function writePptx(artifact: ArtifactInfo, run: ArtifactRunInfo | undefine
   mkdirSync(config.exportDir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const path = join(config.exportDir, `${safeName(artifact.title)}-${stamp}.pptx`);
-  await pptx.writeFile({ fileName: path });
-  return { path, rows: tabular(artifact, run).rows.length };
+  const tempPath = join(config.exportDir, `.${randomUUID()}.tmp.pptx`);
+  let published = false;
+  try {
+    throwIfAborted(signal);
+    await pptx.writeFile({ fileName: tempPath });
+    throwIfAborted(signal);
+    await fsp.rename(tempPath, path);
+    published = true;
+    throwIfAborted(signal);
+    return { path, rows: tabular(artifact, run).rows.length };
+  } catch (err) {
+    await fsp.rm(tempPath, { force: true }).catch(() => undefined);
+    if (published && signal?.aborted) await fsp.rm(path, { force: true }).catch(() => undefined);
+    throw err;
+  }
 }
 
 export async function exportArtifact(
@@ -314,14 +330,19 @@ export async function exportArtifact(
   config: ExportTarget,
   artifactId: string,
   format: ExportFormat,
+  signal?: AbortSignal,
 ): Promise<ArtifactExportResult> {
+  throwIfAborted(signal);
   const artifact = store.getArtifact(artifactId);
   if (!artifact) throw Object.assign(new Error('产物不存在'), { code: 'ARTIFACT_NOT_FOUND', status: 404 });
   const run = latestRun(store, artifactId);
   if (!run) throw Object.assign(new Error('产物还没有运行结果'), { code: 'ARTIFACT_NOT_RUN', status: 400 });
   if (format === 'pptx') {
-    const result = await writePptx(artifact, run, config);
-    return { ...result, bytes: statSync(result.path).size, format };
+    const result = await writePptx(artifact, run, config, signal);
+    throwIfAborted(signal);
+    const bytes = statSync(result.path).size;
+    throwIfAborted(signal);
+    return { ...result, bytes, format };
   }
   const reportSpec = (artifact.type === 'report' || artifact.type === 'compare') && (run?.result as ReportSpec | undefined)?.sections
     ? (run!.result as ReportSpec)
@@ -335,8 +356,13 @@ export async function exportArtifact(
     tableName: safeName(artifact.title),
     engine: 'sqlite',
     baseName: safeName(artifact.title),
+    signal,
     // 报告按结构分 sheet：摘要、指标、每个表格块各一张，图表与对比另存。
     ...(reportSpec ? { sheets: reportSheetsOf(reportSpec) } : {}),
   });
+  if (signal?.aborted) {
+    await fsp.rm(file.path, { force: true }).catch(() => undefined);
+    throwIfAborted(signal);
+  }
   return { path: file.path, rows: file.rows, bytes: file.bytes ?? 0, format };
 }

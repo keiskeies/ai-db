@@ -17,7 +17,7 @@
 | D9 | 状态管理 | **Zustand + 自研 SSE 事件总线** | Redux | 轻量，store 切片清晰，配合流式事件简单。 |
 | D10 | 样式 | **原生 CSS + Design Tokens（CSS 变量）** | Tailwind | 精细控制桌面密度与主题切换；移动端单独 RN StyleSheet，共享 token 数值常量。 |
 | D11 | AI Provider | **Anthropic Messages、OpenAI Chat Completions（兼容）+ 内置 Local Reasoner** | 单一云厂商 | 用户可接 Ollama/DeepSeek/Qwen；无 Key 也能演示与可用。 |
-| D12 | 密钥 | Electron `safeStorage` 加密，Bridge 独立部署用 `AIDB_SECRET`；移动端 SecureStore | 明文配置 | 避免凭据泄露。 |
+| D12 | 密钥 | 桌面内嵌 Bridge 使用用户数据目录中的受保护主密钥；独立 Bridge 用 `AIDB_SECRET` / `AIDB_SECRET_FILE`；移动端 SecureStore | 明文配置 | 避免凭据泄露。 |
 | D13 | 测试 | `node:test`（core/网关）+ Playwright（桌面 Web 形态）+ `tsc --noEmit` + Expo Web 冒烟 | 仅手工 | 可在 CI 与本地无头环境复现。 |
 
 ## 2. 仓库结构
@@ -63,7 +63,7 @@ flowchart LR
   end
 
   subgraph Shell
-    E[Electron Main<br/>窗口 / safeStorage / 自动更新]
+    E[Electron Main<br/>窗口 / 内嵌 Bridge / 自动更新]
   end
 
   subgraph Bridge[Bridge Gateway · Node]
@@ -165,7 +165,7 @@ Electron 打包配置集中在 `apps/desktop/electron-builder.yml`；Bridge 以 
 
 1. **网络**：Bridge 默认仅监听 `127.0.0.1`；远程模式需显式 `--host` + TLS（反向代理）或内网信任；所有请求需 Bearer token（桌面一次性 token，移动端配对后长期 token 可撤销）。
 2. **配对**：移动端扫描桌面显示的一次性 6 位码 + 二维码（内含 host/port），交换为设备 token；设备可在设置中吊销。
-3. **凭据**：连接密码/SSH 私钥使用 Electron safeStorage（Win DPAPI / mac Keychain / Linux libsecret）；独立 Bridge 用 `AIDB_SECRET` 派生密钥 AES-256-GCM；移动端 SecureStore。API Key 同样处理。
+3. **凭据**：连接密码、SSH 私钥和 API Key 由 Bridge 使用 AES-256-GCM 加密；主密钥保存在权限受限的 AiDB 数据目录，独立部署可通过 `AIDB_SECRET` 或 `AIDB_SECRET_FILE` 提供。移动端设备凭据使用 SecureStore。桌面会话 token 仅由 Electron 主进程经 IPC 注入渲染层内存。
 4. **SQL 安全**：静态分类（read/write/ddl/destructive）；`readonly` 模式仅允许 SELECT/EXPLAIN/SHOW/PRAGMA 白名单；自动追加 LIMIT；多语句默认拒绝执行（可配置）；超时（默认 30s）；标识符引用防注入（DDL 构造器）。
 5. **破坏性操作**：DROP/TRUNCATE/无 WHERE 的 UPDATE/DELETE/删列 → 在 `ask`/`auto` 下强制审批；`full` 模式也写审计并在 UI 顶部显红。
 6. **审计**：所有工具/查询记录 `audit_log`（who=user|agent, sql, connection, result summary, approval, duration）。可导出。

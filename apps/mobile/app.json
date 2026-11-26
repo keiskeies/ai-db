@@ -19,6 +19,7 @@
     ],
     "android": {
       "package": "top.keiskei.aidb",
+      "versionCode": 10,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0B0E0D"
@@ -27,8 +28,7 @@
         "INTERNET",
         "CHANGE_WIFI_MULTICAST_STATE",
         "ACCESS_WIFI_STATE",
-        "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.CAMERA"
       ]
     },
     "ios": {
@@ -57,7 +57,8 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "允许 AiDB Studio 扫描桌面端配对二维码"
+          "cameraPermission": "允许 AiDB Studio 扫描桌面端配对二维码",
+          "recordAudioAndroid": false
         }
       ]
     ],

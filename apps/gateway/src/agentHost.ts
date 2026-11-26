@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   activeReasoningTier,
   AgentRuntime,
@@ -25,6 +26,7 @@ import {
   disabledTableInSql,
   CAPABILITIES,
   isCallable,
+  isDevicePermissionMode,
   type Capability,
   type AgentContextBundle,
   type AgentEvent,
@@ -49,9 +51,12 @@ import {
 } from '@aidb/core';
 import type { GatewayConfig } from './config';
 import { DbError } from './drivers';
+import { throwIfAborted } from './drivers/timeout';
 import type { ToolExecutor } from './executor';
 import type { ConnectionManager } from './manager';
 import type { Store } from './store';
+import type { AgentTurnClaim, AgentTurnStatus } from './store/runtime';
+import { currentCorrelationId, logGateway, type AlertSender, type GatewayLogger, type GatewayMetrics } from './observability';
 import type { SkillStore } from './skills';
 import { readAttachment } from './attachments';
 import { allTableScanNeedsScope, disabledTableTarget, disabledToolError, filterDisabledObjects, metadataBlockedError, scopeRequiredError, systemCatalogQuery } from './agentContextGuard';
@@ -142,8 +147,67 @@ export interface TurnInput {
   connectionId?: string;
   /** 本回合的目标库；缺省用会话记录的库，再缺省用连接默认库。 */
   database?: string;
+  /** 调用方重试时复用，防止重复创建同一回合。 */
+  idempotencyKey?: string;
   /** 机器人等远程入口不得触达本机 MCP（文件系统 / Git / 网页抓取）。 */
   disableMcp?: boolean;
+}
+
+/** 已鉴权请求的 Agent 能力上下文；device 必须同时携带持久化 ACL 中的 deviceId。 */
+export interface AgentAccessContext {
+  scope: 'admin' | 'device';
+  deviceId?: string;
+  connectionIds: readonly string[];
+}
+
+const ADMIN_ACCESS: AgentAccessContext = { scope: 'admin', connectionIds: [] };
+const agentAccessStorage = new AsyncLocalStorage<AgentAccessContext>();
+
+/** HTTP/WS 入口在调用 Host 前建立上下文；Host 仍会独立复核，不信任调用方入参。 */
+export function runWithAgentAccess<T>(access: AgentAccessContext, callback: () => T): T {
+  return agentAccessStorage.run(access, callback);
+}
+
+/**
+ * device 只使用与当前授权数据库有关的正向工具白名单。连接/引擎管理、MCP、技能、
+ * 记忆、历史、导入导出、备份与数据迁移不暴露给设备，也不能靠 prompt 约束绕过。
+ */
+const DEVICE_AGENT_TOOLS = new Set([
+  'inspect_schema',
+  'search_objects',
+  'run_sql',
+  'run_mql',
+  'run_redis',
+  'run_cypher',
+  'run_cql',
+  'run_aql',
+  'vector_search',
+  'upsert_document',
+  'delete_documents',
+  'write_line_protocol',
+  'search_index',
+  'create_collection',
+  'delete_collection',
+  'explain_sql',
+  'sample_rows',
+  'profile_column',
+  'create_table',
+  'alter_table',
+  'drop_object',
+  'manage_index',
+  'begin_transaction',
+  'commit_transaction',
+  'rollback_transaction',
+  'render_chart',
+  'analyze_chart',
+  'forecast_chart',
+  'check_data_quality',
+  'generate_data',
+  'update_plan',
+]);
+
+export function isDeviceAgentToolAllowed(name: string): boolean {
+  return DEVICE_AGENT_TOOLS.has(name);
 }
 
 export interface AgentHostOptions {
@@ -152,19 +216,12 @@ export interface AgentHostOptions {
   executor: ToolExecutor;
   config: GatewayConfig;
   skills?: SkillStore;
+  metrics?: GatewayMetrics;
+  alerts?: AlertSender;
+  logger?: GatewayLogger;
 }
 
-/**
- * 这里曾经有 deriveTurnBudgetMs / resolveTurnBudgetMs：把步数预算折成时间预算，
- * 到点就 abort 整个回合。已整体删除——回合该不该结束取决于「还有没有进展」，
- * 不是「挂了多久」。定时器看不见进展：模型在连续生成、工具在连续返回的健康长回合，
- * 和真卡死的连接对它来说一模一样，只能一起掐断，用户看到的就是「跑到一半莫名其妙停了」。
- *
- * 卡死的判定改由唯一知道进展的那一层负责：providers/common.ts 的停摆阈值看的是
- * 「连续多久没有任何字节进来」，SSE keep-alive 也算进展。运维开关换成了
- * AIDB_PROVIDER_STALL_MS（0 = 关闭），不再是 AIDB_AGENT_TURN_MS。
- * 资源上限依然有：步数上限与上下文 token 预算，两者都是「资源真的不够」才说话。
- */
+/** 绝对预算与 provider 字节停摆检测并存：前者限制资源占用，后者识别无进展连接。 */
 
 /** 把毫秒说成「M 分 S 秒」，避免检查点里出现 493000 这种没人读的数字。 */
 function humanDuration(ms: number): string {
@@ -206,7 +263,11 @@ export function buildResumeCheckpoint(input: {
           : cause === 'max_steps'
             ? '本回合跑满工具步数上限而未完成（进度已保留，回复「继续」可接着做）'
             : cause === 'provider_incomplete'
-              ? '本回合因模型返回未完成状态而未完成（进度已保留，回复「继续」可接着做）'
+          ? '本回合因模型返回未完成状态而未完成（进度已保留，回复「继续」可接着做）'
+          : cause === 'deadline'
+            ? '本回合到达绝对时间预算而未完成（进度已保留，回复「继续」可接着做）'
+            : cause === 'interrupted'
+              ? '本回合因网关进程中断而未完成（进度已保留，回复「继续」可接着做）'
               : '本回合因模型连接无响应而中止（进度已保留，回复「继续」可接着做）';
   const why =
     cause === 'truncated'
@@ -219,7 +280,11 @@ export function buildResumeCheckpoint(input: {
         ? `已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）后，到达本次允许的工具步数上限，剩下的步骤没有执行。这不是执行出错，也不是模型放弃——已完成的部分都算数。续跑时把同类操作合并成批量写法，同样的工作量能少花很多步。`
       : cause === 'provider_incomplete'
         ? `已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）后，模型返回了内容过滤、暂停或上下文超限等未完成状态，不能视为正常结束。已完成的部分都算数。`
-        : `已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）后，模型端连续无响应，连接被判定为已死。这不是执行出错，也不是模型放弃——已完成的部分都算数。`;
+        : cause === 'deadline'
+          ? `已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）后到达网关配置的绝对预算。已完成的部分都算数，未开始的写入不会自动恢复。`
+          : cause === 'interrupted'
+            ? `网关进程中断，已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）。已完成的部分都算数，未开始的写入不会自动恢复。`
+            : `已跑 ${steps} 步、${toolCalls} 次工具调用（共 ${humanDuration(elapsedMs)}）后，模型端连续无响应，连接被判定为已死。这不是执行出错，也不是模型放弃——已完成的部分都算数。`;
   const lines: string[] = [`## ${headline}`, '', why];
   if (plan.length) {
     lines.push('', '计划状态：');
@@ -249,14 +314,26 @@ interface PendingApproval {
   resolve: (decision: ApprovalDecision) => void;
   timer: NodeJS.Timeout;
   sessionId: string;
+  turnId?: string;
   payload: ApprovalPayload;
+  onAbort?: () => void;
 }
 
 interface ActiveTurn {
   id: string;
+  ownerId: string;
+  claim?: AgentTurnClaim;
   controller: AbortController;
+  signal: AbortSignal;
+  deadlineTimer?: NodeJS.Timeout;
+  deadlineExpired: boolean;
   invalidated: boolean;
-  abortCause?: 'user' | 'disconnected';
+  abortCause?: 'user' | 'disconnected' | 'deadline';
+  outcome: Exclude<AgentTurnStatus, 'running'>;
+  started: boolean;
+  seq: number;
+  terminalEvent?: AgentEvent;
+  finished: boolean;
   settled: Promise<void>;
   finish: () => void;
 }
@@ -441,11 +518,16 @@ export function capabilityPromptBlock(capabilities: Capability[] = CAPABILITIES)
 }
 
 /** Tools visible to a turn; remote (bot/mobile/external WS) turns must not reach local MCP. */
-export function visibleAgentTools(settings: Pick<AppSettings, 'features'>, allowMcp: boolean) {
+export function visibleAgentTools(
+  settings: Pick<AppSettings, 'features'>,
+  allowMcp: boolean,
+  restrictedDevice = false,
+) {
   return providerTools().filter(
     (tool) =>
       (settings.features.skills || !tool.name.startsWith('skill_')) &&
-      ((settings.features.mcp && allowMcp) || !tool.name.startsWith('mcp_')),
+      ((settings.features.mcp && allowMcp) || !tool.name.startsWith('mcp_')) &&
+      (!restrictedDevice || DEVICE_AGENT_TOOLS.has(tool.name)),
   );
 }
 
@@ -453,6 +535,8 @@ export class AgentHost {
   private active = new Map<string, ActiveTurn>();
   /** 删除会话期间禁止新回合，直到旧回合收尾并从 store 删除。 */
   private deletingSessions = new Set<string>();
+  /** 网关停机后不再接受任何来源的新回合。 */
+  private shuttingDown = false;
   private approvals = new Map<string, PendingApproval>();
   /** "本会话允许"：跨回合保留，直到会话删除或进程退出。 */
   private sessionAllowed = new Map<string, Set<string>>();
@@ -460,6 +544,40 @@ export class AgentHost {
   private alwaysAllowed = new Set<string>();
 
   constructor(private opts: AgentHostOptions) {}
+
+  private getAccess(explicit?: AgentAccessContext): AgentAccessContext {
+    const access = explicit ?? agentAccessStorage.getStore() ?? ADMIN_ACCESS;
+    if (access.scope !== 'admin' && access.scope !== 'device') {
+      throw new DbError('当前凭据不能访问 Agent', { code: 'SCOPE_DENIED', status: 403 });
+    }
+    if (access.scope === 'device' && !access.deviceId) {
+      throw new DbError('设备 Agent 缺少持久化授权上下文', { code: 'SCOPE_DENIED', status: 403 });
+    }
+    return access;
+  }
+
+  private assertConnectionAccess(access: AgentAccessContext, connectionId?: string): void {
+    if (access.scope === 'admin') return;
+    // 每次重新读取设备状态与 ACL；撤销、到期、降级后残留的权限行不能继续授权。
+    if (!access.deviceId || !connectionId || !this.opts.store.canDeviceAccessConnection(access.deviceId, connectionId)) {
+      throw new DbError('设备无权访问该连接', { code: 'CONNECTION_FORBIDDEN', status: 403 });
+    }
+  }
+
+  private assertPermissionMode(mode: PermissionMode, access: AgentAccessContext): void {
+    if (access.scope === 'device' && !isDevicePermissionMode(mode)) {
+      throw new DbError('设备 Agent 只能使用 readonly 或 ask 模式', { code: 'MODE_NOT_ALLOWED', status: 403 });
+    }
+  }
+
+  private assertSessionAccess(sessionId: string, access: AgentAccessContext, requireConnection = true) {
+    const session = this.opts.store.getSession(sessionId);
+    if (!session) throw new DbError('会话不存在', { code: 'SESSION_NOT_FOUND', status: 404 });
+    if (session.connectionId || requireConnection) {
+      this.assertConnectionAccess(access, session.connectionId);
+    }
+    return session;
+  }
 
   forgetSessionApprovals(sessionId: string): void {
     this.sessionAllowed.delete(sessionId);
@@ -482,50 +600,194 @@ export class AgentHost {
     return this.active.get(sessionId)?.settled ?? Promise.resolve();
   }
 
-  private beginTurn(sessionId: string): ActiveTurn {
+  /** 停机时先拒绝新回合，再取消全部来源；会话 ACL 不限制内部停机清理。 */
+  abortAll(): void {
+    this.shuttingDown = true;
+    for (const [sessionId, turn] of this.active) {
+      this.abort(sessionId, 'user', turn.id, ADMIN_ACCESS);
+    }
+  }
+
+  /** 等待实际执行链结算，而不只是收到取消信号。 */
+  async waitIdle(): Promise<void> {
+    while (this.active.size > 0) {
+      await Promise.allSettled([...this.active.values()].map((turn) => turn.settled));
+    }
+  }
+
+  getApprovalOwner(id: string): { sessionId: string; turnId?: string } | undefined {
+    const pending = this.approvals.get(id);
+    return pending ? { sessionId: pending.sessionId, turnId: pending.turnId } : undefined;
+  }
+
+  private beginTurn(sessionId: string, claim?: AgentTurnClaim): ActiveTurn {
     let finish!: () => void;
     const settled = new Promise<void>((resolve) => { finish = resolve; });
+    const controller = new AbortController();
+    const deadlineController = new AbortController();
     const turn: ActiveTurn = {
-      id: randomUUID(),
-      controller: new AbortController(),
+      id: claim?.id ?? randomUUID(),
+      ownerId: claim?.ownerId ?? this.opts.config.instanceId ?? randomUUID(),
+      claim,
+      controller,
+      signal: AbortSignal.any([controller.signal, deadlineController.signal]),
+      deadlineExpired: false,
       invalidated: false,
+      outcome: 'failed',
+      started: false,
+      seq: 0,
+      finished: false,
       settled,
       finish: () => {
+        if (turn.finished) return;
+        turn.finished = true;
+        if (turn.deadlineTimer) clearTimeout(turn.deadlineTimer);
         if (this.active.get(sessionId) === turn) this.active.delete(sessionId);
-        finish();
+        try {
+          if (turn.claim) {
+            const terminal = turn.terminalEvent ?? (turn.deadlineExpired
+              ? { type: 'error', code: 'TURN_DEADLINE', message: 'Agent 回合已到达绝对时间预算', retryable: false }
+              : turn.outcome === 'aborted'
+                ? { type: 'aborted', turnId: turn.id, reason: '回合已中止', cause: 'user' }
+                : { type: 'error', code: 'AGENT_ERROR', message: 'Agent 回合异常结束', retryable: false });
+            try {
+              this.opts.store.finishTurn(turn.id, turn.ownerId, turn.outcome, turn.abortCause, terminal);
+            } catch (err) {
+              logGateway('error', 'agent_turn_finish_failed', { turnId: turn.id, sessionId, error: { name: (err as Error)?.name, message: (err as Error)?.message } });
+            }
+            try {
+              this.opts.store.pruneRuntime();
+            } catch (err) {
+              logGateway('error', 'runtime_prune_failed', { turnId: turn.id, sessionId, error: { name: (err as Error)?.name, message: (err as Error)?.message } });
+            }
+          }
+          this.opts.metrics?.gauge('aidb_agent_turns_active', this.active.size);
+          this.opts.metrics?.inc('aidb_agent_turns_total', { status: turn.outcome });
+          this.opts.metrics?.observe('aidb_agent_turn_duration_ms', Date.now() - new Date(turn.claim?.startedAt ?? Date.now()).getTime(), { status: turn.outcome });
+          if (turn.deadlineExpired) this.opts.metrics?.inc('aidb_agent_turn_deadlines_total');
+          const correlationId = currentCorrelationId();
+          this.opts.logger?.(turn.outcome === 'failed' ? 'error' : 'info', 'agent_turn_finished', {
+            correlationId, turnId: turn.id, sessionId, ownerId: turn.ownerId, status: turn.outcome, abortCause: turn.abortCause,
+          });
+          if (turn.started && (turn.deadlineExpired || turn.outcome === 'failed')) {
+            this.opts.alerts?.notify({
+              type: turn.deadlineExpired ? 'turn_deadline' : 'agent_terminal_failure',
+              correlationId, turnId: turn.id, sessionId, ...(turn.deadlineExpired ? {} : { code: 'AGENT_ERROR' }),
+            });
+          }
+        } catch (err) {
+          logGateway('error', 'agent_turn_finalize_failed', { turnId: turn.id, sessionId, error: { name: (err as Error)?.name, message: (err as Error)?.message } });
+        } finally {
+          finish();
+        }
       },
     };
+    if (claim?.deadlineAt) {
+      const delay = Math.max(0, new Date(claim.deadlineAt).getTime() - Date.now());
+      turn.deadlineTimer = setTimeout(() => {
+        if (turn.deadlineExpired || turn.claim?.status !== 'running') return;
+        turn.deadlineExpired = true;
+        if (!turn.abortCause) turn.abortCause = 'deadline';
+        deadlineController.abort(Object.assign(new Error('Agent 回合已到达绝对时间预算'), { code: 'TURN_DEADLINE' }));
+        try {
+          this.opts.store.setTurnAbortCause(turn.id, turn.ownerId, 'deadline');
+        } catch (err) {
+          logGateway('error', 'agent_deadline_persist_failed', { turnId: turn.id, sessionId, error: { name: (err as Error)?.name, message: (err as Error)?.message } });
+        }
+      }, delay);
+      turn.deadlineTimer.unref?.();
+    }
     this.active.set(sessionId, turn);
+    this.opts.metrics?.gauge('aidb_agent_turns_active', this.active.size);
     return turn;
+  }
+
+  private persistEvent(turn: ActiveTurn, event: AgentEvent): void {
+    if (!turn.claim) return;
+    this.opts.store.appendAgentEvent(turn.id, ++turn.seq, event);
+    if (event.type === 'done' || event.type === 'aborted' || event.type === 'error') turn.terminalEvent = event;
+  }
+
+  private throwIfExpired(turn: ActiveTurn): void {
+    if (!turn.deadlineExpired) return;
+    throw Object.assign(new Error('Agent 回合已到达绝对时间预算'), { code: 'TURN_DEADLINE', status: 504 });
+  }
+
+  /** Schema 读取也必须受同一绝对预算约束；0 关闭预算时不注入 timeoutMs。 */
+  private async schemaForTurn(turn: ActiveTurn, connectionId: string, database?: string): Promise<DatabaseSchema[]> {
+    this.throwIfExpired(turn);
+    throwIfAborted(turn.signal);
+    let timeoutMs: number | undefined;
+    if (turn.claim?.deadlineAt) {
+      timeoutMs = Math.max(0, new Date(turn.claim.deadlineAt).getTime() - Date.now());
+      if (timeoutMs <= 0) {
+        throw Object.assign(new Error('Agent 回合已到达绝对时间预算'), { code: 'TURN_DEADLINE', status: 504 });
+      }
+    }
+    try {
+      const schemas = await this.opts.manager.schema(connectionId, database, false, undefined, {
+        signal: turn.signal,
+        executionId: turn.id,
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      });
+      this.throwIfExpired(turn);
+      throwIfAborted(turn.signal);
+      return schemas;
+    } catch (err: any) {
+      this.throwIfExpired(turn);
+      throwIfAborted(turn.signal);
+      // timeoutMs 只来自回合剩余预算；管理器先触发时也统一成回合deadline语义。
+      if (err?.code === 'SCHEMA_TIMEOUT' && turn.claim?.deadlineAt) {
+        throw Object.assign(new Error('Agent 回合已到达绝对时间预算'), { code: 'TURN_DEADLINE', status: 504 });
+      }
+      throw err;
+    }
   }
 
   /**
    * 中止一个回合，并记下是谁中止的。传 turnId 时只中止该代次，旧 WebSocket
    * 的迟到 close 不会影响同会话已经启动的新回合。
    */
-  abort(sessionId: string, cause: 'user' | 'disconnected' = 'user', turnId?: string): boolean {
+  abort(
+    sessionId: string,
+    cause: 'user' | 'disconnected' = 'user',
+    turnId?: string,
+    access?: AgentAccessContext,
+  ): boolean {
     const turn = this.active.get(sessionId);
     if (!turn || (turnId !== undefined && turn.id !== turnId)) return false;
+    try {
+      this.assertSessionAccess(sessionId, this.getAccess(access));
+    } catch {
+      return false;
+    }
     if (!turn.abortCause) turn.abortCause = cause;
     // 只有用户手动停止/删除才让回合失效；断线仍要写续跑检查点。
     if (cause === 'user') turn.invalidated = true;
     turn.controller.abort();
-    // 立即落状态：provider 卡住时 runtime 可能迟迟不返回，UI 不能一直显示“运行中”。
-    this.opts.store.updateSession(sessionId, { status: 'aborted' });
     for (const [id, pending] of this.approvals) {
       if (pending.sessionId !== sessionId) continue;
-      clearTimeout(pending.timer);
+      pending.onAbort?.();
       this.approvals.delete(id);
       pending.resolve({ decision: 'deny', scope: 'once' });
+    }
+    try {
+      if (turn.claim) this.opts.store.setTurnAbortCause(turn.id, turn.ownerId, turn.abortCause);
+      // 立即落状态：provider 卡住时 runtime 可能迟迟不返回，UI 不能一直显示“运行中”。
+      this.opts.store.updateSession(sessionId, { status: 'aborted' });
+    } catch (err) {
+      logGateway('error', 'agent_abort_persist_failed', { turnId: turn.id, sessionId, error: { name: (err as Error)?.name, message: (err as Error)?.message } });
     }
     return true;
   }
 
   /** 先封住新回合，再取消并等待旧回合收尾，最后按原语义删除会话。 */
-  async deleteSession(sessionId: string): Promise<void> {
+  async deleteSession(sessionId: string, access?: AgentAccessContext): Promise<void> {
+    const resolvedAccess = this.getAccess(access);
+    this.assertSessionAccess(sessionId, resolvedAccess);
     this.deletingSessions.add(sessionId);
     try {
-      this.abort(sessionId, 'user');
+      this.abort(sessionId, 'user', undefined, resolvedAccess);
       await this.waitForTurn(sessionId);
       this.forgetSessionApprovals(sessionId);
       this.opts.store.deleteSession(sessionId);
@@ -534,9 +796,21 @@ export class AgentHost {
     }
   }
 
-  resolveApproval(id: string, decision: ApprovalDecision['decision'], scope: ApprovalDecision['scope']): boolean {
+  resolveApproval(
+    id: string,
+    decision: ApprovalDecision['decision'],
+    scope: ApprovalDecision['scope'],
+    access?: AgentAccessContext,
+  ): boolean {
     const pending = this.approvals.get(id);
     if (!pending) return false;
+    let resolvedAccess: AgentAccessContext;
+    try {
+      resolvedAccess = this.getAccess(access);
+      this.assertSessionAccess(pending.sessionId, resolvedAccess);
+    } catch {
+      return false;
+    }
     const session = this.opts.store.getSession(pending.sessionId);
     const connectionScoped = pending.payload.call.name !== 'create_connection';
     const connId = connectionScoped
@@ -544,6 +818,13 @@ export class AgentHost {
         ? pending.payload.call.args.connectionId
         : session?.connectionId
       : undefined;
+    if (connectionScoped) {
+      try {
+        this.assertConnectionAccess(resolvedAccess, connId);
+      } catch {
+        return false;
+      }
+    }
     this.opts.store.addAudit({
       actor: 'agent',
       connectionId: connId,
@@ -562,18 +843,27 @@ export class AgentHost {
     // 审计成功后才消费审批并结算 Promise；审计失败时保留 pending 和超时，
     // 调用方可重试，不会出现审批已消失、runtime 却永远等待的情况。
     clearTimeout(pending.timer);
-    this.approvals.delete(id);
+    pending.onAbort?.();
     pending.resolve({ decision, scope });
     return true;
   }
 
-  private waitApproval(payload: ApprovalPayload, sessionId: string): Promise<ApprovalDecision> {
+  private waitApproval(payload: ApprovalPayload, sessionId: string, turn: ActiveTurn): Promise<ApprovalDecision> {
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
+      const cleanup = () => {
+        clearTimeout(timer);
+        turn.signal.removeEventListener('abort', onAbort);
         this.approvals.delete(payload.id);
+      };
+      const onAbort = () => {
+        cleanup();
         resolve({ decision: 'deny', scope: 'once' });
-      }, 5 * 60 * 1000);
-      this.approvals.set(payload.id, { resolve, timer, sessionId, payload });
+      };
+      const remaining = turn.claim?.deadlineAt ? Math.max(0, new Date(turn.claim.deadlineAt).getTime() - Date.now()) : 5 * 60 * 1000;
+      const timer = setTimeout(onAbort, Math.min(5 * 60 * 1000, remaining));
+      turn.signal.addEventListener('abort', onAbort, { once: true });
+      this.approvals.set(payload.id, { resolve, timer, sessionId, turnId: turn.id, payload, onAbort: cleanup });
+      if (turn.signal.aborted) onAbort();
     });
   }
 
@@ -587,19 +877,50 @@ export class AgentHost {
     return out;
   }
 
-  async startTurn(sessionId: string, input: TurnInput, emit: (event: AgentEvent) => void): Promise<void> {
+  async startTurn(
+    sessionId: string,
+    input: TurnInput,
+    emit: (event: AgentEvent) => void,
+    access?: AgentAccessContext,
+  ): Promise<void> {
+    if (this.shuttingDown) throw new DbError('网关正在停机', { code: 'GATEWAY_SHUTDOWN', status: 503 });
+    const resolvedAccess = this.getAccess(access);
+    // 在任何会话变更、附件读取、provider/schema 加载之前完成服务端上限校验。
+    const existing = this.assertSessionAccess(sessionId, resolvedAccess, false);
+    const requestedMode = MODES.includes(input.mode as PermissionMode)
+      ? (input.mode as PermissionMode)
+      : existing.permissionMode;
+    this.assertPermissionMode(requestedMode, resolvedAccess);
+    this.assertConnectionAccess(resolvedAccess, input.connectionId ?? existing.connectionId);
     if (this.deletingSessions.has(sessionId) || this.active.has(sessionId)) {
       throw new DbError('该会话正在运行或删除，请先中止或等待完成', { code: 'SESSION_BUSY', status: 409 });
     }
-    // 在第一次 await 前原子占用回合。图片、历史和 schema 加载都让出执行权，
-    // 不能等它们做完才注册，否则并发请求会各自创建 controller、互相覆盖。
-    const turn = this.beginTurn(sessionId);
+    // 持久化 claim 与内存占用都必须在首个 await 前完成；唯一索引负责跨 Host 实例互斥。
+    const id = randomUUID();
+    const budgetMs = this.opts.config.agentTurnMs ?? 0;
+    const claim = this.opts.store.claimTurn({
+      id,
+      sessionId,
+      ownerId: this.opts.config.instanceId ?? randomUUID(),
+      idempotencyKey: input.idempotencyKey?.slice(0, 128) || randomUUID(),
+      ...(budgetMs > 0 ? { deadlineAt: new Date(Date.now() + budgetMs).toISOString() } : {}),
+    });
+    const turn = this.beginTurn(sessionId, claim);
+    const durableEmit = (event: AgentEvent): void => {
+      this.persistEvent(turn, event);
+      if (event.type === 'tool_result') {
+        this.opts.metrics?.inc('aidb_agent_tool_calls_total', { tool: event.tool, status: event.result.ok ? 'ok' : 'error' });
+        this.opts.metrics?.observe('aidb_agent_tool_duration_ms', event.result.meta.durationMs, { tool: event.tool });
+      }
+      emit(event);
+    };
     try {
-      await this.startTurnOwned(sessionId, input, emit, turn);
+      this.throwIfExpired(turn);
+      await this.startTurnOwned(sessionId, input, durableEmit, turn, resolvedAccess);
     } finally {
       for (const [id, pending] of this.approvals) {
-        if (pending.sessionId !== sessionId) continue;
-        clearTimeout(pending.timer);
+        if (pending.sessionId !== sessionId || pending.turnId !== turn.id) continue;
+        pending.onAbort?.();
         this.approvals.delete(id);
         pending.resolve({ decision: 'deny', scope: 'once' });
       }
@@ -608,7 +929,14 @@ export class AgentHost {
     }
   }
 
-  private async startTurnOwned(sessionId: string, input: TurnInput, emit: (event: AgentEvent) => void, turn: ActiveTurn): Promise<void> {
+  private async startTurnOwned(
+    sessionId: string,
+    input: TurnInput,
+    emit: (event: AgentEvent) => void,
+    turn: ActiveTurn,
+    access: AgentAccessContext,
+  ): Promise<void> {
+    this.throwIfExpired(turn);
     const rawText = input.text?.trim();
     if (!rawText) throw new DbError('消息不能为空', { code: 'EMPTY_MESSAGE', status: 400 });
     // 斜杠命令是目的信号：裸命令也有默认任务，不让用户补表单参数。
@@ -619,6 +947,8 @@ export class AgentHost {
     if (!session) throw new DbError('会话不存在', { code: 'SESSION_NOT_FOUND', status: 404 });
     const mode = MODES.includes(input.mode as PermissionMode) ? (input.mode as PermissionMode) : session.permissionMode;
     const connectionId = input.connectionId ?? session.connectionId;
+    this.assertPermissionMode(mode, access);
+    this.assertConnectionAccess(access, connectionId);
     const stored = connectionId ? this.opts.store.getConnection(connectionId) : undefined;
     // 目标库按「本回合 > 会话记录 > 连接默认」取，并替换进 conn，
     // 让 schema、召回、业务上下文、提示词和工具默认库都指向同一个库。
@@ -628,6 +958,9 @@ export class AgentHost {
     const conn = stored ? { ...stored, database } : undefined;
     const initMatch = /^\/init(?:\s+([\s\S]+))?$/i.exec(rawText);
     if (initMatch) {
+      if (access.scope === 'device') {
+        throw new DbError('设备 Agent 不能执行 /init', { code: 'COMMAND_NOT_ALLOWED', status: 403 });
+      }
       await this.runInit(sessionId, input, rawText, initMatch[1]?.trim(), emit, turn);
       return;
     }
@@ -637,35 +970,42 @@ export class AgentHost {
       throw new DbError('当前模型没有开启图片输入，请在 设置 → 模型能力 里勾选「图片」。', { code: 'MODEL_NO_VISION', status: 400 });
     }
     const images = await this.loadImages(input.images);
-    if (!this.isCurrentTurn(sessionId, turn) || turn.controller.signal.aborted) return;
+    this.throwIfExpired(turn);
+    this.assertConnectionAccess(access, connectionId);
+    if (!this.isCurrentTurn(sessionId, turn) || turn.signal.aborted) return;
     const provider = createProvider(settings.agent);
     // 语义命令通常要「看结构 → 多次查数 → 出图」，给足步数；普通提问保持用户设置。
-    // 这是回合唯一的量上限：时间不参与判定（见文件头那段说明），0 表示不限步数，
-    // 一直跑到模型自己收尾、用户中止或连接停摆。
+    // 0 表示不限步数；绝对时间预算由持久化 claim 的 deadline_at 单独约束。
     const maxSteps = intent ? Math.min(40, Math.max(16, (settings.agent.maxSteps || 12) * 2)) : settings.agent.maxSteps;
     const startedAt = Date.now();
-    const controller = turn.controller;
 
     const store = this.opts.store;
     const historyMessages = store.listMessages(sessionId);
     // 按落库消息成组还原，避免先切 ProviderMessage 再把 tool_call 与结果拆散。
     const history = await providerHistory(historyMessages.slice(-24), this.opts.config.attachmentDir);
-    if (!this.isCurrentTurn(sessionId, turn) || controller.signal.aborted) return;
+    this.throwIfExpired(turn);
+    this.assertConnectionAccess(access, connectionId);
+    if (!this.isCurrentTurn(sessionId, turn) || turn.signal.aborted) return;
 
     let schemas: DatabaseSchema[] | undefined;
     let schemaError: string | undefined;
     if (conn) {
       try {
-        schemas = await this.opts.manager.schema(conn.id, conn.database);
+        schemas = await this.schemaForTurn(turn, conn.id, conn.database);
       } catch (err: any) {
+        // 结构读取失败可以降级继续，但用户停止/绝对deadline不能被吞成普通 schemaError。
+        if (turn.signal.aborted || turn.deadlineExpired || err?.code === 'TURN_DEADLINE' || err?.code === 'ABORTED') throw err;
         schemaError = err?.message ?? '无法读取结构';
       }
     }
+    this.throwIfExpired(turn);
+    this.assertConnectionAccess(access, connectionId);
     let brief: LoadedBrief | undefined;
     if (conn) {
       const record = this.opts.store.getDatabaseBrief(conn.id, conn.database);
       const briefPath = record?.path ?? defaultBriefPath(this.opts.config.home, conn);
       const briefMarkdown = await readBrief(briefPath);
+      this.throwIfExpired(turn);
       if (briefMarkdown && schemas) brief = loadBrief(briefMarkdown, briefPath, schemas);
     }
 
@@ -686,7 +1026,10 @@ export class AgentHost {
       })
       : undefined;
     const compacted = compactProviderHistory(history, historyTokenBudget(settings.agent, profile));
-    if (!this.isCurrentTurn(sessionId, turn) || controller.signal.aborted) return;
+    this.throwIfExpired(turn);
+    this.assertConnectionAccess(access, connectionId);
+    if (!this.isCurrentTurn(sessionId, turn) || turn.signal.aborted) return;
+    turn.started = true;
 
     const title = session.title === '新会话' || !session.title ? rawText.slice(0, 28) : session.title;
     store.updateSession(sessionId, {
@@ -713,6 +1056,9 @@ export class AgentHost {
     const sessionForAudit = session;
 
     const wrappedEmit = (event: AgentEvent): void => {
+      if (turn.deadlineExpired && event.type === 'aborted') {
+        event = { type: 'error', code: 'TURN_DEADLINE', message: 'Agent 回合已到达绝对时间预算', retryable: false };
+      }
       switch (event.type) {
         case 'thinking_delta':
           thinking += event.text;
@@ -766,10 +1112,16 @@ export class AgentHost {
     };
 
     const memoryContext: Memory[] = memories;
-    const allowMcp = input.disableMcp !== true;
-    const allowedTools = visibleAgentTools(settings, allowMcp);
-    const sessionAllowed = this.sessionAllowed.get(sessionId) ?? new Set<string>();
-    this.sessionAllowed.set(sessionId, sessionAllowed);
+    const restrictedDevice = access.scope === 'device';
+    // device 的 disableMcp:false 不能重新打开宿主命令；自定义 MCP 仅 admin 可执行。
+    const allowMcp = !restrictedDevice && input.disableMcp !== true;
+    const allowedTools = visibleAgentTools(settings, allowMcp, restrictedDevice);
+    // 管理员此前授予的会话/全局工具允许项不能继承给受限设备。
+    const sessionAllowed = restrictedDevice
+      ? new Set<string>()
+      : this.sessionAllowed.get(sessionId) ?? new Set<string>();
+    const alwaysAllowed = restrictedDevice ? new Set<string>() : this.alwaysAllowed;
+    if (!restrictedDevice) this.sessionAllowed.set(sessionId, sessionAllowed);
     const runtime = new AgentRuntime({
       provider,
       maxSteps,
@@ -827,7 +1179,7 @@ export class AgentHost {
         if (schemaError) extra.push(`## Schema loading warning\n${schemaError}`);
         if (settings.features.mcp && allowMcp) extra.push(mcpPromptBlock(this.opts.store));
         // 能力目录是常量开销（12 条约 1.4k token），本地推理器用不到，跳过。
-        if (settings.agent.provider !== 'local') extra.push(capabilityPromptBlock());
+        if (!restrictedDevice && settings.agent.provider !== 'local') extra.push(capabilityPromptBlock());
         if (settings.agent.provider === 'local') {
           extra.push('## Runtime\nYou are running with the offline Local Reasoner. Keep to clear, rule-parsable instructions; if a request is ambiguous, explain what you can do.');
         }
@@ -836,6 +1188,49 @@ export class AgentHost {
       tools: allowedTools,
       getTool: (name) => allowedTools.some((tool) => tool.name === name) ? getTool(name) : undefined,
       executeTool: (call, signal) => {
+        if (restrictedDevice) {
+          if (!DEVICE_AGENT_TOOLS.has(call.name)) {
+            return Promise.resolve({
+              ok: false,
+              summary: '设备不能使用该工具',
+              error: {
+                code: 'TOOL_NOT_ALLOWED',
+                message: `设备 Agent 不能调用 ${call.name}`,
+                hint: '请在本机管理员界面执行该操作。',
+              },
+              meta: { durationMs: 0 },
+            });
+          }
+          const targetConnectionId = typeof call.args.connectionId === 'string'
+            ? call.args.connectionId
+            : conn?.id;
+          if (!access.deviceId || !targetConnectionId || !this.opts.store.canDeviceAccessConnection(access.deviceId, targetConnectionId)) {
+            return Promise.resolve({
+              ok: false,
+              summary: '设备无权访问该连接',
+              error: {
+                code: 'CONNECTION_FORBIDDEN',
+                message: '工具目标连接不在设备授权列表中',
+                hint: '请联系管理员授权连接后再试。',
+              },
+              meta: { durationMs: 0 },
+            });
+          }
+          // 即便 ACL 中有多个连接，本回合也只允许当前会话绑定的连接，避免模型静默换库。
+          if (targetConnectionId !== conn?.id) {
+            return Promise.resolve({
+              ok: false,
+              summary: '工具目标连接与当前会话不一致',
+              error: {
+                code: 'CONNECTION_FORBIDDEN',
+                message: '设备回合不能切换到其他连接',
+                hint: '请新建或选择目标连接的会话。',
+              },
+              meta: { durationMs: 0 },
+            });
+          }
+          call = { ...call, args: { ...call.args, connectionId: targetConnectionId } };
+        }
         const contextDb = businessContext?.database?.toLowerCase() ?? '';
         const targetDb = String(call.args.database ?? conn?.database ?? '').toLowerCase();
         const scoped = !contextDb || !targetDb || targetDb === contextDb;
@@ -870,7 +1265,7 @@ export class AgentHost {
           .execute(call, { sessionId, connectionId: conn?.id, database: conn?.database, disabledTables: disabled, signal })
           .then((result) => filterDisabledObjects(call, result, disabled));
       },
-      requestApproval: (payload) => this.waitApproval(payload, sessionId),
+      requestApproval: (payload) => this.waitApproval(payload, sessionId, turn),
       emit: wrappedEmit,
     });
 
@@ -888,14 +1283,11 @@ export class AgentHost {
         history: compacted,
         context: { connection: conn, databases: schemas, memories, agentContext: businessContext, glossary: recall.glossary, sqlExamples: recall.sqlExamples, attachmentTables, locale: /^zh/i.test(this.opts.store.getSettings().locale) ? 'zh' : 'en' },
         sessionAllowed,
-        alwaysAllowed: this.alwaysAllowed,
-        signal: controller.signal,
-        // 这里原来传的是 deadlineAt / turnBudgetMs / abortCause 三件套：一个到点就掐
-        // 整个回合的计时器，加一个告诉 runtime「这次掐断算超时不算用户停止」的标记。
-        // 都删了——回合没有截止时间，中止只可能是用户点的或连接停摆（后者由 runtime
-        // 自己从 PROVIDER_STALLED 认出来，不需要上层转述）。
+        alwaysAllowed,
+        signal: turn.signal,
       });
       status = result.status;
+      turn.outcome = turn.deadlineExpired ? 'failed' : result.status === 'done' ? 'succeeded' : result.status === 'aborted' ? 'aborted' : 'failed';
       usage = result.usage;
       if (!this.isCurrentTurn(sessionId, turn)) return;
       // 被中止（用户停止或断线触发 abort）的回合不再写「完成」终态：
@@ -918,8 +1310,10 @@ export class AgentHost {
         // 区别只存在于传输层，只能由 abort() 记下的那一份来补：没人点过停止的中止，
         // 就该留检查点，否则用户重开页面点「继续」时模型只看得到半截正文。
         const disconnected = turn.abortCause === 'disconnected';
-        const unfinished: AgentResumeCause | undefined = result.status === 'aborted' && result.abortCause === 'stalled'
-          ? 'stalled'
+        const unfinished: AgentResumeCause | undefined = turn.deadlineExpired
+          ? 'deadline'
+          : result.status === 'aborted' && result.abortCause === 'stalled'
+            ? 'stalled'
           : result.status === 'aborted' && disconnected
             ? 'disconnected'
             : result.stop === 'max_output_tokens'
@@ -952,7 +1346,7 @@ export class AgentHost {
         const summaryLine = `Q: ${text.slice(0, 200)}\nA: ${result.text.slice(0, 400)}`;
         const summary = `${previous?.summary ? `${previous.summary}\n---\n` : ''}${summaryLine}`.slice(-6000);
         store.updateSession(sessionId, {
-          status: result.status === 'done' ? 'done' : result.status === 'aborted' ? 'aborted' : 'error',
+          status: turn.deadlineExpired ? 'error' : result.status === 'done' ? 'done' : result.status === 'aborted' ? 'aborted' : 'error',
           summary,
           tokensIn: (previous?.tokensIn ?? 0) + result.usage.tokensIn,
           tokensOut: (previous?.tokensOut ?? 0) + result.usage.tokensOut,
@@ -973,16 +1367,28 @@ export class AgentHost {
         // 中止的回合只保留 aborted 状态与「不可继续」，不累积任何统计。
         store.updateSession(sessionId, { status: 'aborted', resume: null });
       }
-      if (!turn.invalidated && result.status === 'done' && settings.agent.followUpSuggestions) {
+      if (!turn.invalidated && !turn.deadlineExpired && result.status === 'done' && turn.outcome === 'succeeded' && settings.agent.followUpSuggestions) {
         for (const item of this.followUps(blocks, schemas, businessContext)) emit({ type: 'suggestions', items: item });
       }
-      if (!turn.invalidated && settings.agent.autoMemory) this.captureMemories(text, result.text, sessionId, conn);
+      if (!turn.invalidated && !turn.deadlineExpired && turn.outcome === 'succeeded' && settings.agent.autoMemory) this.captureMemories(text, result.text, sessionId, conn);
     } catch (err: any) {
       status = 'error';
+      turn.outcome = turn.invalidated ? 'aborted' : 'failed';
       // 已停止的回合出错不再把状态改成 error：abort 时说好的 aborted 就是最终状态。
       if (!turn.invalidated && this.isCurrentTurn(sessionId, turn)) {
-        store.updateSession(sessionId, { status: 'error' });
-        emit({ type: 'error', code: err?.code ?? 'AGENT_ERROR', message: err?.message ?? 'Agent 运行失败', retryable: false });
+        const deadline = turn.deadlineExpired || err?.code === 'TURN_DEADLINE';
+        const terminal: AgentEvent = {
+          type: 'error',
+          code: deadline ? 'TURN_DEADLINE' : err?.code ?? 'AGENT_ERROR',
+          message: deadline ? 'Agent 回合已到达绝对时间预算' : err?.message ?? 'Agent 运行失败',
+          retryable: false,
+        };
+        turn.terminalEvent = terminal;
+        try {
+          store.updateSession(sessionId, { status: 'error', ...(deadline ? { resume: 'deadline' as const } : {}) });
+        } finally {
+          emit(terminal);
+        }
       }
     }
     if (status === 'done' && usage.tokensIn + usage.tokensOut > 0) {
@@ -1011,12 +1417,9 @@ export class AgentHost {
     const database = input.database || (sameConnection ? session.database : undefined) || stored.database;
     const conn = { ...stored, database };
     const turnId = turn.id;
-    const controller = turn.controller;
-    // 这里原来有个 5 分钟到点就 abort 的定时器。删掉了，理由和回合计时器一样：
-    // 几百张表的库扫 schema + 补注解就是会跑很久，到点掐断只会把已经扫完的部分扔掉，
-    // 而且它 abort 之后照实报的是「用户中止」——用户根本没点过停止。
-    // 挂死由模型流的停摆看门狗兜（注解调用走同一个 provider），用户随时能手动中止。
+    const signal = turn.signal;
     const started = Date.now();
+    turn.started = true;
     store.updateSession(sessionId, {
       connectionId,
       database,
@@ -1029,8 +1432,9 @@ export class AgentHost {
     store.appendMessage({ sessionId, role: 'user', content: rawText });
     emit({ type: 'start', turnId, sessionId, model: 'init' });
     try {
-      const schemas = await this.opts.manager.schema(conn.id, conn.database);
-      if (!this.isCurrentTurn(sessionId, turn) || controller.signal.aborted) throw Object.assign(new Error('已中止'), { code: 'ABORTED' });
+      const schemas = await this.schemaForTurn(turn, conn.id, conn.database);
+      this.throwIfExpired(turn);
+      if (!this.isCurrentTurn(sessionId, turn) || signal.aborted) throw Object.assign(new Error('已中止'), { code: 'ABORTED' });
       const settings = store.getSettings();
       const recall = store.recallForTurn('', { connectionId: conn.id, database: conn.database });
       const history = store.listHistory({ connectionId: conn.id, limit: 100 }).map((item) => ({ sql: item.sql, status: item.status }));
@@ -1042,6 +1446,7 @@ export class AgentHost {
         requestedPath,
       });
       const existing = await readBrief(path);
+      this.throwIfExpired(turn);
       let provider: ReturnType<typeof createProvider> | undefined;
       if (settings.agent.provider !== 'local') {
         try {
@@ -1058,15 +1463,17 @@ export class AgentHost {
         sqlExamples: recall.sqlExamples,
         history,
         provider,
-        signal: controller.signal,
+        signal: signal,
         home: this.opts.config.home,
         requestedPath,
         storedPath: record?.path,
         existing: existing ?? undefined,
       });
-      if (!this.isCurrentTurn(sessionId, turn) || controller.signal.aborted) throw Object.assign(new Error('已中止'), { code: 'ABORTED' });
+      this.throwIfExpired(turn);
+      if (!this.isCurrentTurn(sessionId, turn) || signal.aborted) throw Object.assign(new Error('已中止'), { code: 'ABORTED' });
       await writeDatabaseBrief(result.path, result.markdown, existing ?? undefined);
-      if (!this.isCurrentTurn(sessionId, turn) || controller.signal.aborted) throw Object.assign(new Error('已中止'), { code: 'ABORTED' });
+      this.throwIfExpired(turn);
+      if (!this.isCurrentTurn(sessionId, turn) || signal.aborted) throw Object.assign(new Error('已中止'), { code: 'ABORTED' });
       const generatedAt = new Date().toISOString();
       store.saveDatabaseBrief({
         connectionId: conn.id,
@@ -1082,6 +1489,7 @@ export class AgentHost {
         summary: `Q: ${rawText.slice(0, 200)}\nA: ${content.slice(0, 400)}`,
       });
       emit({ type: 'text_delta', text: content });
+      turn.outcome = 'succeeded';
       emit({ type: 'done', turnId, durationMs: Date.now() - started, summary: content.slice(0, 280) });
       store.addAudit({
         actor: 'user',
@@ -1103,9 +1511,12 @@ export class AgentHost {
       });
     } catch (err: any) {
       if (!this.isCurrentTurn(sessionId, turn)) return;
-      const aborted = controller.signal.aborted || err?.code === 'ABORTED';
-      if (!turn.invalidated) store.updateSession(sessionId, { status: aborted ? 'aborted' : 'error' });
-      if (aborted) emit({ type: 'aborted', turnId, reason: '用户中止' });
+      const deadline = turn.deadlineExpired || err?.code === 'TURN_DEADLINE';
+      const aborted = !deadline && (signal.aborted || err?.code === 'ABORTED');
+      turn.outcome = turn.invalidated ? 'aborted' : deadline ? 'failed' : aborted ? 'aborted' : 'failed';
+      if (!turn.invalidated) store.updateSession(sessionId, { status: deadline ? 'error' : aborted ? 'aborted' : 'error', ...(deadline ? { resume: 'deadline' as const } : {}) });
+      if (deadline) emit({ type: 'error', code: 'TURN_DEADLINE', message: 'Agent 回合已到达绝对时间预算', retryable: false });
+      else if (aborted) emit({ type: 'aborted', turnId, reason: turn.abortCause === 'disconnected' ? '客户端连接中断' : '用户中止' });
       else emit({ type: 'error', code: err?.code ?? 'INIT_FAILED', message: err?.message ?? '初始化失败' });
       store.addAudit({
         actor: 'user',

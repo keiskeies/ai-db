@@ -143,6 +143,14 @@ test('停摆中止与用户停止在状态层就分得开', () => {
   assert.equal(isUnfinishedStop(state().live!.stop), false);
 });
 
+test('绝对预算到期保留 deadline 原因，不冒充用户停止或连接停摆', () => {
+  startLive();
+  send({ type: 'aborted', turnId: 't1', reason: '回合已到达绝对时间预算', cause: 'deadline' });
+  assert.equal(state().live!.status, 'aborted');
+  assert.equal(state().live!.abortCause, 'deadline');
+  assert.equal(state().live!.abortReason, '回合已到达绝对时间预算');
+});
+
 // ---------- 界面源码：转圈的图标与「已完成」那行字 ----------
 
 test('计划卡只有在回合真的在跑时才转圈', () => {
@@ -194,6 +202,7 @@ test('续跑入口在停摆与三种没做完时都出现', () => {
   assert.match(notice, /data-testid="turn-continue"/);
   assert.match(notice, /isUnfinishedStop\(live\.stop\)/);
   assert.match(notice, /live\.abortCause === 'stalled'/, '停摆也要能给「继续」：服务端留了检查点');
+  assert.match(notice, /live\.abortCause === 'deadline'/, '预算到期也要能给「继续」');
   assert.match(notice, /live\.error\s*\?\s*null/, 'runtime 已经说清原因时不再重复一句');
   assert.match(agentPanel, /onContinue=\{\(\) => void sendAgent\(tr\("继续"\)/, '点下去就是发一句「继续」，走正常回合');
 });

@@ -54,12 +54,22 @@ export interface DataPage {
 }
 
 const KEY = 'aidb.bridge.v1';
+// Web 没有 SecureStore：bearer token 仅跟随当前页面实例，刷新/重开即失效。
+let webBridgeConfig: BridgeConfig | null = null;
+
+const removeLegacyWebConfig = (): void => {
+  try {
+    globalThis.localStorage?.removeItem(KEY);
+  } catch {
+    /* 隐私模式可能禁用 Storage；内存配置仍可使用。 */
+  }
+};
 
 export async function loadBridgeConfig(): Promise<BridgeConfig | null> {
   try {
     if (Platform.OS === 'web') {
-      const raw = globalThis.localStorage?.getItem(KEY);
-      return raw ? (JSON.parse(raw) as BridgeConfig) : null;
+      removeLegacyWebConfig();
+      return webBridgeConfig ? { ...webBridgeConfig } : null;
     }
     const raw = await SecureStore.getItemAsync(KEY);
     return raw ? (JSON.parse(raw) as BridgeConfig) : null;
@@ -71,7 +81,8 @@ export async function loadBridgeConfig(): Promise<BridgeConfig | null> {
 export async function saveBridgeConfig(config: BridgeConfig): Promise<void> {
   try {
     if (Platform.OS === 'web') {
-      globalThis.localStorage?.setItem(KEY, JSON.stringify(config));
+      webBridgeConfig = { ...config };
+      removeLegacyWebConfig();
       return;
     }
     await SecureStore.setItemAsync(KEY, JSON.stringify(config));
@@ -82,8 +93,12 @@ export async function saveBridgeConfig(config: BridgeConfig): Promise<void> {
 
 export async function clearBridgeConfig(): Promise<void> {
   try {
-    if (Platform.OS === 'web') globalThis.localStorage?.removeItem(KEY);
-    else await SecureStore.deleteItemAsync(KEY);
+    if (Platform.OS === 'web') {
+      webBridgeConfig = null;
+      removeLegacyWebConfig();
+    } else {
+      await SecureStore.deleteItemAsync(KEY);
+    }
   } catch {
     /* ignore */
   }

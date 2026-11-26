@@ -32,6 +32,7 @@
   "Bridge 地址": "Bridge URL",
   "Bridge 未连接": "Bridge bağlı değil",
   "Bridge、设备、扩展、主题与语言": "Bridge, Cihazlar, Uzantılar, Temalar ve Dil",
+  "Bridge、主题与语言": "Bridge, Temalar ve Dil",
   "CSV 导入、CSV / JSON 导出": "CSV içe aktar, CSV / JSON dışa aktar",
   "CSV 导入；CSV / JSON / XML / SQL / XLSX 导出": "CSV'yi İçe Aktar; CSV / JSON / XML / SQL / XLSX'i Dışa Aktar",
   "CSV 首行作为列名，按列名写入当前表；只读连接会被拒绝。": "İlk CSV satırını sütun adı olarak kullanın ve sütun adına göre mevcut tabloya yazın; salt okunur bağlantılar reddedilecektir.",

@@ -72,7 +72,9 @@ export interface LiveTurn {
   plan: AgentPlanItem[];
   status: 'streaming' | 'awaiting' | 'done' | 'aborted' | 'error';
   /** 中止原因：连接停摆不是用户点的停止，界面不能都说成「已中止」。 */
-  abortCause?: 'stalled' | 'user';
+  abortCause?: 'stalled' | 'user' | 'deadline';
+  /** 服务端给出的具体中止事由，界面不把预算到期或停摆改写成用户停止。 */
+  abortReason?: string;
   /**
    * 回合结束的原因。'done' 不足以说明「做完了」：截断与跑满步数同样是 done，
    * 界面据此决定计划卡该不该继续转圈、要不要给「继续」。
@@ -1548,6 +1550,7 @@ export const useApp = create<AppStore>((set, get) => ({
         case 'aborted':
           live.status = 'aborted';
           live.abortCause = event.cause ?? 'user';
+          live.abortReason = event.reason;
           live.endedAt = Date.now();
           return { live, ...NO_APPROVAL };
         case 'error':
@@ -1899,7 +1902,8 @@ export const useApp = create<AppStore>((set, get) => ({
 
   startPairing: async () => {
     try {
-      const pairing = await api.pairStart();
+      const connectionIds = get().connections.map((connection) => connection.id);
+      const pairing = await api.pairStart(connectionIds);
       set({ pairing: { ...pairing, createdAt: Date.now() } });
       await get().loadDevices();
     } catch (err) {

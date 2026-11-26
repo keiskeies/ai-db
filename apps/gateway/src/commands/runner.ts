@@ -13,12 +13,16 @@ import { getCommand,
 import type { ToolExecutor } from '../executor';
 import type { ConnectionManager } from '../manager';
 import type { Store } from '../store';
+import type { CommandEventReplay } from '../store/runtime';
+import { currentCorrelationId, logGateway, type GatewayLogger, type GatewayMetrics } from '../observability';
+import { DbError } from '../drivers';
 import { compareValues } from '../features/compare';
 import { reconcileData, type ReconLevel, type ReconMapping } from '../features/reconcile';
 import { generateReport } from '../features/report';
 import { exportArtifact } from './export';
 import { generateAgentReport } from './reportAgent';
 import { compareSchemas } from '../features/schemaCompare';
+import { throwIfAborted } from '../drivers/timeout';
 
 interface RunState {
   info: CommandRunInfo;
@@ -29,7 +33,11 @@ interface RunState {
   controller: AbortController;
   seq: number;
   finished: boolean;
+  cancellationRequested: boolean;
+  executionStarted: boolean;
   waiters: Array<() => void>;
+  /** 真正的 execute promise；终态 waiter 必须等它退出后才能结算。 */
+  execution: Promise<void>;
 }
 
 /**
@@ -38,7 +46,7 @@ interface RunState {
  * 这里曾经是整次运行的总时长上限：report 15 分钟、compare/fix 10 分钟、其余 120 秒，
  * 到点直接 cancel。一份 Agent 报告要跑 20~40 步、每步实测十几秒，慢服务商下超过 15 分钟完全正常，
  * 于是读者看到的就是「报告生成到一半被取消了」，原因还写成 COMMAND_TIMEOUT。
- * 这和回合计时器是同一个错误（见 docs/04-ai-agent-design.md 的「回合没有截止时间」）：
+ * 命令自身不设这种总时长上限；Agent 报告路径另受宿主持久化回合的绝对预算约束。
  * 跑得久正是它还需要跑的信号，时长本身不是停止的理由。
  *
  * 中途也考虑过换成「静默判定」——连续 N 秒没有任何事件就算卡死。看着对，实际会误杀：
@@ -69,9 +77,8 @@ interface StepResult {
 const DIFF_STEP = 'schema-diff';
 
 /**
- * 终态 run 在内存里的保留窗口：结果查询（get/events/SSE 回放）依赖这份内存态，
- * 不能结束即删；但永不回收会让 events（每条最多 500）随运行次数无限累积。
- * 持久结果在 store 的 artifact_runs 里，窗口过后删内存态不丢数据。
+ * 终态 run 在内存里的保留窗口：实时订阅依赖内存态；持久结果与有界事件日志
+ * 落在 artifact_runs / artifact_run_events，窗口过后回放仍可用。
  */
 const RUN_RETENTION_MS = 10 * 60 * 1000;
 
@@ -99,6 +106,8 @@ export class CommandRunner {
     private readonly home?: string,
     /** 导出目录；表单选择 Excel / PPT 时，运行成功后直接把文件落盘。 */
     private readonly exportDir?: string,
+    private readonly metrics?: GatewayMetrics,
+    private readonly logger: GatewayLogger = logGateway,
   ) {
     // 周期清扫兜底：终态超过保留窗口的条目即使漏挂延迟删除也会被回收
     this.sweeper = setInterval(() => this.sweepRuns(), 5 * 60 * 1000);
@@ -183,24 +192,63 @@ export class CommandRunner {
       controller: new AbortController(),
       seq: 0,
       finished: false,
+      cancellationRequested: false,
+      executionStarted: false,
       waiters: [],
+      execution: Promise.resolve(),
     };
+    state.execution = Promise.resolve().then(() => this.execute(command, state));
+    void state.execution.catch(() => undefined);
     this.runs.set(run.id, state);
     this.emit(state, { type: 'run_started', runId: run.id, command: command.id, startedAt: new Date().toISOString() });
-    queueMicrotask(() => void this.execute(command, state));
+    this.metrics?.inc('aidb_command_runs_total', { command: command.id, status: 'started' });
+    this.metrics?.gauge('aidb_command_runs_active', [...this.runs.values()].filter((item) => !item.finished).length);
+    this.logger('info', 'command_run_started', { correlationId: currentCorrelationId(), runId: run.id, artifactId: artifact.id, command: command.id });
     return { ...info, steps: info.steps.map((step) => ({ ...step })) };
+  }
+
+  private storedRun(runId: string): CommandRunInfo | undefined {
+    const run = this.store.getArtifactRun(runId);
+    if (!run) return undefined;
+    const artifact = this.store.getArtifact(run.artifactId);
+    const spec = artifact?.spec as Record<string, unknown> | undefined;
+    return {
+      id: run.id,
+      command: (typeof spec?.command === 'string' ? spec.command : artifact?.type ?? 'report') as CommandRunInfo['command'],
+      title: artifact?.title ?? '命令运行',
+      status: run.status,
+      input: (run.input ?? {}) as CommandRunInput,
+      steps: (run.steps ?? []) as CommandStepInfo[],
+      artifactId: run.artifactId,
+      ...(run.error ? { error: { code: 'COMMAND_FAILED', message: run.error } } : {}),
+      createdAt: run.startedAt,
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+      durationMs: run.durationMs,
+    };
   }
 
   get(runId: string): CommandRunInfo | undefined {
     const state = this.runs.get(runId);
-    if (!state) return undefined;
-    return { ...state.info, steps: state.info.steps.map((step) => ({ ...step })) };
+    const info = state ? { ...state.info, steps: state.info.steps.map((step) => ({ ...step })) } : this.storedRun(runId);
+    return info;
   }
 
   events(runId: string, after = 0): CommandRunEvent[] {
+    return this.eventReplay(runId, after).events.map((item) => item.event);
+  }
+
+  eventReplay(runId: string, after = 0): CommandEventReplay {
     const state = this.runs.get(runId);
-    if (!state) return [];
-    return state.events.filter((event) => event.seq > after);
+    if (!state) return this.store.commandEventReplay(runId, after);
+    const events = state.events.filter((event) => event.seq > after).map((event) => ({ seq: event.seq, event }));
+    const firstSeq = state.events[0]?.seq;
+    return {
+      events,
+      firstSeq,
+      lastSeq: state.seq,
+      truncated: firstSeq !== undefined && after < firstSeq - 1,
+    };
   }
 
   subscribe(runId: string, listener: (event: CommandRunEvent) => void): () => void {
@@ -211,7 +259,15 @@ export class CommandRunner {
   }
 
   isFinished(runId: string): boolean {
-    return this.runs.get(runId)?.finished ?? true;
+    const state = this.runs.get(runId);
+    if (state) return state.finished;
+    const status = this.store.getArtifactRun(runId)?.status;
+    return !status || !['queued', 'running', 'waiting_approval'].includes(status);
+  }
+
+  /** 等待底层 execute 真正退出；即使调用方提前停止等待，也可用它排空后台工作。 */
+  waitForExecution(runId: string): Promise<void> {
+    return this.runs.get(runId)?.execution ?? Promise.resolve();
   }
 
   /**
@@ -222,7 +278,7 @@ export class CommandRunner {
    */
   waitForRun(runId: string, timeoutMs?: number): Promise<CommandRunInfo | undefined> {
     const state = this.runs.get(runId);
-    if (!state) return Promise.resolve(undefined);
+    if (!state) return Promise.resolve(this.storedRun(runId));
     const snapshot = (): CommandRunInfo => ({ ...state.info, steps: state.info.steps.map((step) => ({ ...step })) });
     if (state.finished) return Promise.resolve(snapshot());
     return new Promise((resolve, reject) => {
@@ -256,7 +312,17 @@ export class CommandRunner {
   cancel(runId: string): boolean {
     const state = this.runs.get(runId);
     if (!state || state.finished) return false;
-    state.controller.abort();
+    if (state.cancellationRequested) return true;
+    state.cancellationRequested = true;
+    state.controller.abort(new DbError('命令运行已取消', { code: 'ABORTED' }));
+    // 只有 execute 尚未开始才能证明没有任何底层工作；此时可立即落终态。
+    // 已开始的运行由 execute 的 finally 在 executeStep/导出/清理退出后结算。
+    if (!state.executionStarted) this.finishCanceled(state);
+    return true;
+  }
+
+  private finishCanceled(state: RunState): void {
+    if (state.finished) return;
     state.info.status = 'canceled';
     state.info.finishedAt = new Date().toISOString();
     state.info.durationMs = state.info.startedAt ? Date.now() - new Date(state.info.startedAt).getTime() : undefined;
@@ -266,23 +332,29 @@ export class CommandRunner {
         step.finishedAt = state.info.finishedAt;
       }
     }
-    this.store.updateArtifactRun(state.artifactRunId, {
-      status: 'canceled',
-      steps: state.info.steps,
-      finishedAt: state.info.finishedAt,
-      durationMs: state.info.durationMs,
-    });
-    this.store.updateArtifact(state.artifactId, { status: 'ready' });
-    state.finished = true;
-    this.emit(state, {
-      type: 'run_finished',
-      runId: state.info.id,
-      status: 'canceled',
-      durationMs: state.info.durationMs ?? 0,
-    });
-    for (const resolve of state.waiters.splice(0)) resolve();
-    this.scheduleEviction(state);
-    return true;
+    try {
+      this.store.updateArtifactRun(state.artifactRunId, {
+        status: 'canceled',
+        steps: state.info.steps,
+        result: null,
+        finishedAt: state.info.finishedAt,
+        durationMs: state.info.durationMs,
+      });
+    } catch (err) {
+      this.logger('error', 'command_cancel_persist_failed', {
+        correlationId: currentCorrelationId(), runId: state.info.id,
+        error: { name: (err as Error)?.name, message: (err as Error)?.message },
+      });
+    }
+    try {
+      this.store.updateArtifact(state.artifactId, { status: 'ready' });
+    } catch (err) {
+      this.logger('error', 'command_cancel_artifact_persist_failed', {
+        correlationId: currentCorrelationId(), runId: state.info.id,
+        error: { name: (err as Error)?.name, message: (err as Error)?.message },
+      });
+    }
+    this.finish(state, 'canceled');
   }
 
   private stepPlan(command: CommandDefinition): CommandStepInfo[] {
@@ -303,24 +375,37 @@ export class CommandRunner {
   }
 
   private async execute(command: CommandDefinition, state: RunState): Promise<void> {
-    state.info.status = 'running';
-    state.info.startedAt = new Date().toISOString();
-    this.store.updateArtifactRun(state.artifactRunId, { status: 'running' });
     try {
+      throwIfAborted(state.controller.signal);
+      state.executionStarted = true;
+      state.info.status = 'running';
+      state.info.startedAt = new Date().toISOString();
+      this.store.updateArtifactRun(state.artifactRunId, { status: 'running' });
       const step = state.info.steps[0];
       step.status = 'running';
       step.startedAt = new Date().toISOString();
       this.emit(state, { type: 'step_started', runId: state.info.id, stepId: step.id, label: step.label, kind: step.kind });
-      if (state.controller.signal.aborted) return;
+      throwIfAborted(state.controller.signal);
       const result = await this.executeStep(command, state, step);
-      if (state.controller.signal.aborted) return;
+      throwIfAborted(state.controller.signal);
       step.status = 'ok';
       step.summary = result.summary;
       step.finishedAt = new Date().toISOString();
       step.durationMs = step.startedAt ? Date.now() - new Date(step.startedAt).getTime() : 0;
+      // 导出依赖最新 run.result，但成功终态必须等导出及其清理结束后再落盘。
+      // 取消发生在导出期间时，持久状态仍是 running，不会闪现 succeeded。
+      this.store.updateArtifactRun(state.artifactRunId, {
+        status: 'running',
+        steps: state.info.steps,
+        result: result.result,
+      });
+      // 表单里选了文件格式，就应该真的拿到文件；导出失败只记录，不改变报告本身的结果。
+      const file = await this.exportIfRequested(command, state).catch((err: any) => `导出失败：${err?.message ?? '未知错误'}`);
+      throwIfAborted(state.controller.signal);
+      if (file) step.summary = `${step.summary} · ${file}`;
       state.info.status = 'succeeded';
       state.info.finishedAt = new Date().toISOString();
-      state.info.durationMs = Date.now() - new Date(state.info.startedAt).getTime();
+      state.info.durationMs = state.info.startedAt ? Date.now() - new Date(state.info.startedAt).getTime() : 0;
       this.store.updateArtifactRun(state.artifactRunId, {
         status: 'succeeded',
         steps: state.info.steps,
@@ -328,12 +413,7 @@ export class CommandRunner {
         finishedAt: state.info.finishedAt,
         durationMs: state.info.durationMs,
       });
-      // 表单里选了文件格式，就应该真的拿到文件；导出失败只记录，不改变报告本身的结果。
-      const file = await this.exportIfRequested(command, state).catch((err: any) => `导出失败：${err?.message ?? '未知错误'}`);
-      if (file) {
-        step.summary = `${step.summary} · ${file}`;
-        this.store.updateArtifactRun(state.artifactRunId, { steps: state.info.steps });
-      }
+      throwIfAborted(state.controller.signal);
       this.emit(state, {
         type: 'step_succeeded',
         runId: state.info.id,
@@ -366,7 +446,7 @@ export class CommandRunner {
       state.info.status = 'failed';
       state.info.error = step.error;
       state.info.finishedAt = new Date().toISOString();
-      state.info.durationMs = Date.now() - new Date(state.info.startedAt).getTime();
+      state.info.durationMs = state.info.startedAt ? Date.now() - new Date(state.info.startedAt).getTime() : 0;
       this.store.updateArtifactRun(state.artifactRunId, {
         status: 'failed',
         steps: state.info.steps,
@@ -377,6 +457,9 @@ export class CommandRunner {
       this.store.updateArtifact(state.artifactId, { status: 'error' });
       this.emit(state, { type: 'error', runId: state.info.id, code: step.error.code, message: step.error.message });
       this.finish(state, 'failed');
+    } finally {
+      // 取消只表示“请求停止”；底层步骤和导出彻底退出后才允许发布 canceled 终态。
+      if (state.cancellationRequested) this.finishCanceled(state);
     }
   }
 
@@ -384,7 +467,8 @@ export class CommandRunner {
     if (command.id !== 'report' || !this.exportDir) return undefined;
     const format = state.info.input.format;
     if (format !== 'xlsx' && format !== 'pptx') return undefined;
-    const exported = await exportArtifact(this.store, { exportDir: this.exportDir }, state.artifactId, format);
+    const exported = await exportArtifact(this.store, { exportDir: this.exportDir }, state.artifactId, format, state.controller.signal);
+    throwIfAborted(state.controller.signal);
     return `已导出 ${format.toUpperCase()}：${exported.path}`;
   }
 
@@ -401,6 +485,7 @@ export class CommandRunner {
   }
 
   private async executeStep(command: CommandDefinition, state: RunState, step: CommandStepInfo): Promise<StepResult> {
+    throwIfAborted(state.controller.signal);
     switch (command.id) {
       case 'diff': {
         const [left, right] = state.info.input.sources ?? [];
@@ -415,8 +500,10 @@ export class CommandRunner {
           {
             includeDrops: state.info.input.includeDrops === true,
             tables: Array.isArray(state.info.input.tables) ? (state.info.input.tables as string[]) : undefined,
+            signal: state.controller.signal,
           },
         );
+        throwIfAborted(state.controller.signal);
         this.store.addAudit({
           actor: 'user',
           connectionId: left.connectionId,
@@ -452,7 +539,14 @@ export class CommandRunner {
         }
         const started = Date.now();
         const level = (input.level === 'keys' || input.level === 'fields' ? input.level : 'counts') as ReconLevel;
-        const result = await reconcileData(this.store, this.manager, { ...mapping, maxKeys: Number(input.maxKeys) || mapping.maxKeys }, level);
+        const result = await reconcileData(
+          this.store,
+          this.manager,
+          { ...mapping, maxKeys: Number(input.maxKeys) || mapping.maxKeys },
+          level,
+          state.controller.signal,
+        );
+        throwIfAborted(state.controller.signal);
         this.store.addAudit({
           actor: 'user',
           connectionId: mapping.left?.connectionId,
@@ -507,6 +601,7 @@ export class CommandRunner {
             );
             spec.meta.notes = [...(spec.meta.notes ?? []), '报告由 Agent 查数并生成；数字经过工具结果来源校验。'];
           } catch (err: any) {
+            throwIfAborted(state.controller.signal);
             spec = await generateReport(this.store, this.manager, { sources, topic, tables, period, audience, target }, state.controller.signal);
             const reason = `Agent 报告未生成，已回退确定性统计：${err?.message ?? '未知错误'}`;
             spec.meta.notes = [...(spec.meta.notes ?? []), reason];
@@ -517,6 +612,7 @@ export class CommandRunner {
         } else {
           spec = await generateReport(this.store, this.manager, { sources, topic, tables, period, audience, target }, state.controller.signal);
         }
+        throwIfAborted(state.controller.signal);
         this.store.addAudit({
           actor: 'user',
           connectionId: sources[0]?.connectionId,
@@ -563,12 +659,14 @@ export class CommandRunner {
             }, state.controller.signal, (message, current, total) => this.reportProgress(state, step, message, current, total));
             spec.meta.notes = [...(spec.meta.notes ?? []), '对比由 Agent 查数并生成；数字经过工具结果来源校验。'];
           } catch (err: any) {
+            throwIfAborted(state.controller.signal);
             spec = await compareValues(this.store, this.manager, { sources, metric, leftLabel, rightLabel, queryA, queryB });
             spec.meta.notes = [...(spec.meta.notes ?? []), `Agent 对比未生成，已回退确定性对比：${err?.message ?? '未知错误'}`];
           }
         } else {
           spec = await compareValues(this.store, this.manager, { sources, metric, leftLabel, rightLabel, queryA, queryB });
         }
+        throwIfAborted(state.controller.signal);
         this.store.addAudit({
           actor: 'user',
           connectionId: sources[0]?.connectionId,
@@ -598,6 +696,7 @@ export class CommandRunner {
           { id: `fix-${state.info.id}`, name: 'audit_database', args: { connectionId: source.connectionId, database: source.database } },
           { sessionId: `command:${state.info.id}`, connectionId: source.connectionId, database: source.database, signal: state.controller.signal },
         );
+        throwIfAborted(state.controller.signal);
         if (!audit.ok) {
           throw Object.assign(new Error(audit.error?.message ?? '体检失败'), { code: audit.error?.code ?? 'FIX_FAILED', status: 400 });
         }
@@ -668,7 +767,22 @@ export class CommandRunner {
     }
   }
 
-  private finish(state: RunState, status: 'succeeded' | 'failed'): void {
+  private recordFinished(state: RunState, status: 'succeeded' | 'failed' | 'canceled'): void {
+    this.metrics?.inc('aidb_command_runs_total', { command: state.info.command, status });
+    this.metrics?.observe('aidb_command_run_duration_ms', state.info.durationMs ?? 0, { command: state.info.command, status });
+    this.metrics?.gauge('aidb_command_runs_active', [...this.runs.values()].filter((item) => !item.finished).length);
+    this.logger(status === 'failed' ? 'error' : 'info', 'command_run_finished', {
+      correlationId: currentCorrelationId(), runId: state.info.id, artifactId: state.artifactId,
+      command: state.info.command, status, durationMs: state.info.durationMs, errorCode: state.info.error?.code,
+    });
+  }
+
+  private finish(state: RunState, status: 'succeeded' | 'failed' | 'canceled'): void {
+    if (state.finished) return;
+    if (state.cancellationRequested && status !== 'canceled') {
+      this.finishCanceled(state);
+      return;
+    }
     state.info.status = status;
     state.finished = true;
     this.emit(state, {
@@ -679,6 +793,7 @@ export class CommandRunner {
     });
     state.listeners.clear();
     for (const resolve of state.waiters.splice(0)) resolve();
+    this.recordFinished(state, status);
     this.scheduleEviction(state);
   }
 
@@ -686,6 +801,14 @@ export class CommandRunner {
     const full = { ...event, seq: ++state.seq } as CommandRunEvent;
     state.events.push(full);
     if (state.events.length > 500) state.events.shift();
+    try {
+      this.store.appendCommandEvent(state.artifactRunId, full.seq, full);
+    } catch (err) {
+      this.logger('error', 'command_event_persist_failed', {
+        correlationId: currentCorrelationId(), runId: state.info.id, seq: full.seq,
+        error: { name: (err as Error)?.name, message: (err as Error)?.message },
+      });
+    }
     for (const listener of state.listeners) listener(full);
   }
 }

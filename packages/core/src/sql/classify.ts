@@ -46,6 +46,33 @@ function isPgDialect(engine?: Engine): boolean {
   }
 }
 
+function isMssqlDialect(engine?: Engine): boolean {
+  if (!engine) return false;
+  try {
+    return dialectOf(engine) === 'mssql';
+  } catch {
+    return false;
+  }
+}
+
+/** MySQL 的 -- 注释要求第二个 - 后还有空白/控制字符；1--1 是算术表达式而非注释。 */
+function startsLineComment(sql: string, i: number, mysql: boolean): boolean {
+  if (sql[i] !== '-' || sql[i + 1] !== '-') return false;
+  return !mysql || i + 2 >= sql.length || /[\u0000-\u0020]/.test(sql[i + 2]);
+}
+
+/** SQL Server 方括号标识符中出现这些字符时无法安全证明它只是标识符，整体拒绝。 */
+function unsafeBracketChar(sql: string, i: number): boolean {
+  const c = sql[i];
+  return /['"`;#\r\n\[]/.test(c) || sql.startsWith('--', i) || sql.startsWith('/*', i) || sql.startsWith('*/', i);
+}
+
+interface SqlScan {
+  masked: string;
+  statements: string[];
+  unsafe: boolean;
+}
+
 /**
  * Replace quoted literals/identifiers and comments with blanks so keyword checks never fire inside data.
  * 掩码必须与原文等长：注释按原长填空格、双写引号/转义按 2 格填。
@@ -56,155 +83,251 @@ function isPgDialect(engine?: Engine): boolean {
  *    按转义处理会把后面的真实语句吞进掩码，整段被误判成一条 read。
  *  - MySQL 的 /*! 版本注释（可执行注释）按代码处理，否则 INTO OUTFILE / FOR UPDATE
  *    这类子句藏在注释里就能骗过只读判定；引擎未知时同样按代码（宁可误拦）。
+ *  - MySQL # 行注释与 -- 一样屏蔽到换行，注释内的分号不参与语句拆分。
+ *  - SQL Server [...] 标识符支持 ]] 转义；危险或未闭合的括号语法由分类层拒绝。
  *  - $$...$$ 美元引用按字符串掩掉（仅 PG 系方言），函数体里的关键字不参与判定。
  */
 export function maskLiterals(sql: string, engine?: Engine): string {
+  return scanSql(sql, engine).masked;
+}
+
+/**
+ * 掩码与语句拆分共用同一套词法扫描，避免两边对方括号、注释和转义的理解漂移。
+ * 掩码与原文严格等长，splitStatements 则只在引号/注释/方括号标识符之外识别分号。
+ * 未闭合引号、注释、方括号，以及方括号标识符中的语句/注释元字符均标记为 unsafe，
+ * 让分类与 manager 执行边界 fail-closed，而不是把剩余 SQL 吞成一条 read。
+ */
+function scanSql(sql: string, engine?: Engine): SqlScan {
   const mysql = isMysqlDialect(engine);
   const pg = isPgDialect(engine);
-  let out = '';
+  const mssql = isMssqlDialect(engine);
+  const statements: string[] = [];
+  let masked = '';
+  let current = '';
+  let bracketDepth = 0;
+  let unsafe = false;
   let i = 0;
   const n = sql.length;
+  const maskRaw = (raw: string) => {
+    masked += ' '.repeat(raw.length);
+    current += raw;
+  };
+
   while (i < n) {
     const c = sql[i];
-    if (c === '-' && sql[i + 1] === '-') {
+    if (startsLineComment(sql, i, mysql)) {
       const start = i;
       while (i < n && sql[i] !== '\n') i++;
-      out += ' '.repeat(i - start);
+      maskRaw(sql.slice(start, i));
+      continue;
+    }
+    if (mysql && c === '#') {
+      const start = i;
+      while (i < n && sql[i] !== '\n') i++;
+      maskRaw(sql.slice(start, i));
       continue;
     }
     if (c === '/' && sql[i + 1] === '*') {
       if (sql[i + 2] === '!' && (mysql || engine === undefined)) {
-        // 可执行注释：只跳过 /*! 标记，内容按正常代码继续扫描。
-        out += '   ';
+        // 可执行注释：只跳过 /*! 标记，内容按正常代码继续扫描，分号仍是语句边界。
+        masked += '   ';
+        current += '/*!';
         i += 3;
         continue;
       }
       const start = i;
-      i += 2;
-      while (i < n && !(sql[i] === '*' && sql[i + 1] === '/')) i++;
-      i = Math.min(n, i + 2);
-      out += ' '.repeat(i - start);
+      const end = sql.indexOf('*/', i + 2);
+      if (end === -1) unsafe = true;
+      i = end === -1 ? n : end + 2;
+      maskRaw(sql.slice(start, i));
       continue;
     }
     const tag = pg ? dollarTagAt(sql, i) : undefined;
     if (tag) {
+      const start = i;
       const close = sql.indexOf(tag, i + tag.length);
+      if (close === -1) unsafe = true;
       const end = close === -1 ? n : close + tag.length;
-      out += tag + ' '.repeat(Math.max(0, end - i - tag.length * 2)) + (close === -1 ? '' : tag);
+      const innerLength = end - i - tag.length - (close === -1 ? 0 : tag.length);
+      masked += tag + ' '.repeat(Math.max(0, innerLength)) + (close === -1 ? '' : tag);
+      current += sql.slice(start, end);
       i = end;
+      continue;
+    }
+    if (mssql && c === '[') {
+      const start = i;
+      let closed = false;
+      i++;
+      while (i < n) {
+        if (sql[i] === ']' && sql[i + 1] === ']') {
+          i += 2;
+          continue;
+        }
+        if (sql[i] === ']') {
+          closed = true;
+          i++;
+          break;
+        }
+        if (unsafeBracketChar(sql, i)) unsafe = true;
+        i++;
+      }
+      if (!closed) unsafe = true;
+      const raw = sql.slice(start, i);
+      const innerLength = raw.length - 1 - (closed ? 1 : 0);
+      masked += '[' + ' '.repeat(innerLength) + (closed ? ']' : '');
+      current += raw;
+      continue;
+    }
+    if (mssql && c === ']') {
+      unsafe = true;
+      masked += c;
+      current += c;
+      i++;
+      continue;
+    }
+    if (!mssql && c === '[') {
+      bracketDepth += 1;
+      masked += c;
+      current += c;
+      i++;
+      continue;
+    }
+    if (!mssql && c === ']') {
+      if (bracketDepth === 0) unsafe = true;
+      else bracketDepth -= 1;
+      masked += c;
+      current += c;
+      i++;
       continue;
     }
     if (c === "'" || c === '"' || c === '`') {
       const q = c;
-      out += q;
+      const start = i;
+      let closed = false;
+      masked += q;
       i++;
       while (i < n) {
         if (sql[i] === '\\' && mysql) {
           const step = Math.min(2, n - i);
-          out += ' '.repeat(step);
+          masked += ' '.repeat(step);
           i += step;
           continue;
         }
         if (sql[i] === q) {
           if (sql[i + 1] === q) {
-            out += '  ';
+            masked += '  ';
             i += 2;
             continue;
           }
-          out += q;
+          masked += q;
           i++;
+          closed = true;
           break;
         }
-        out += ' ';
+        masked += ' ';
         i++;
       }
-      continue;
-    }
-    out += c;
-    i++;
-  }
-  return out;
-}
-
-/** Split a script into statements, respecting strings, quoted identifiers and comments. */
-export function splitStatements(sql: string, engine?: Engine): string[] {
-  const mysql = isMysqlDialect(engine);
-  const pg = isPgDialect(engine);
-  const statements: string[] = [];
-  let current = '';
-  let i = 0;
-  const n = sql.length;
-  while (i < n) {
-    const c = sql[i];
-    if (c === '-' && sql[i + 1] === '-') {
-      const end = sql.indexOf('\n', i);
-      const stop = end === -1 ? n : end;
-      current += sql.slice(i, stop);
-      i = stop;
-      continue;
-    }
-    if (c === '/' && sql[i + 1] === '*') {
-      if (sql[i + 2] === '!' && (mysql || engine === undefined)) {
-        // 可执行注释里的 ; 是真实语句边界，必须参与拆分。
-        current += '/*!';
-        i += 3;
-        continue;
-      }
-      const end = sql.indexOf('*/', i + 2);
-      const stop = end === -1 ? n : end + 2;
-      current += sql.slice(i, stop);
-      i = stop;
-      continue;
-    }
-    const tag = pg ? dollarTagAt(sql, i) : undefined;
-    if (tag) {
-      const close = sql.indexOf(tag, i + tag.length);
-      const stop = close === -1 ? n : close + tag.length;
-      current += sql.slice(i, stop);
-      i = stop;
-      continue;
-    }
-    if (c === "'" || c === '"' || c === '`') {
-      const q = c;
-      current += c;
-      i++;
-      while (i < n) {
-        current += sql[i];
-        if (sql[i] === '\\' && mysql && i + 1 < n) {
-          current += sql[i + 1];
-          i += 2;
-          continue;
-        }
-        if (sql[i] === q) {
-          if (sql[i + 1] === q) {
-            current += sql[i + 1];
-            i += 2;
-            continue;
-          }
-          i++;
-          break;
-        }
-        i++;
-      }
+      if (!closed) unsafe = true;
+      current += sql.slice(start, i);
       continue;
     }
     if (c === ';') {
       if (current.trim()) statements.push(current.trim());
       current = '';
+      masked += ';';
       i++;
       continue;
     }
+    masked += c;
     current += c;
     i++;
   }
+  if (bracketDepth > 0) unsafe = true;
   if (current.trim()) statements.push(current.trim());
-  return statements;
+  return { masked, statements, unsafe };
+}
+
+/** Split a script into statements, respecting strings, quoted identifiers and comments. */
+export function splitStatements(sql: string, engine?: Engine): string[] {
+  return scanSql(sql, engine).statements;
+}
+
+/** 执行边界使用：词法不完整或方言歧义时必须在连接数据库之前拒绝。 */
+export function hasUnsafeSqlSyntax(sql: string, engine?: Engine): boolean {
+  return scanSql(sql, engine).unsafe;
+}
+
+interface ExplainPrefix {
+  target: string;
+  analyze: boolean;
+  valid: boolean;
+}
+
+/** 仅这些 SQLite PRAGMA 的无赋值查询形态可视为 read；其余一律按写处理。 */
+const READ_ONLY_PRAGMAS = new Set([
+  'APPLICATION_ID', 'AUTO_VACUUM', 'AUTOMATIC_INDEX', 'BUSY_TIMEOUT', 'CACHE_SIZE', 'CACHE_SPILL',
+  'CELL_SIZE_CHECK', 'CHECKPOINT_FULLFSYNC', 'COLLATION_LIST', 'COMPILE_OPTIONS', 'DATA_VERSION',
+  'DATABASE_LIST', 'DEFER_FOREIGN_KEYS', 'ENCODING', 'FOREIGN_KEYS', 'FREELIST_COUNT', 'FULLFSYNC',
+  'FOREIGN_KEY_LIST', 'FUNCTION_LIST', 'HARD_HEAP_LIMIT', 'INDEX_INFO', 'INDEX_LIST', 'INDEX_XINFO',
+  'INTEGRITY_CHECK', 'JOURNAL_MODE', 'JOURNAL_SIZE_LIMIT', 'LEGACY_ALTER_TABLE', 'LOCKING_MODE',
+  'MMAP_SIZE', 'MODULE_LIST', 'PAGE_COUNT', 'PAGE_SIZE', 'QUERY_ONLY', 'QUICK_CHECK',
+  'READ_UNCOMMITTED', 'RECURSIVE_TRIGGERS', 'REVERSE_UNORDERED_SELECTS',
+  'SCHEMA_VERSION', 'SECURE_DELETE', 'SOFT_HEAP_LIMIT', 'STATS', 'SYNCHRONOUS', 'TEMP_STORE',
+  'TABLE_INFO', 'TABLE_LIST', 'TABLE_XINFO', 'THREADS', 'TRUSTED_SCHEMA', 'USER_VERSION', 'WAL_AUTOCHECKPOINT',
+]);
+
+/** 这些 PRAGMA 的括号参数是表/索引名；状态类 PRAGMA 的括号值是 setter，不能放行。 */
+const PRAGMA_WITH_OBJECT_ARGUMENT = new Set([
+  'FOREIGN_KEY_LIST', 'INDEX_INFO', 'INDEX_LIST', 'INDEX_XINFO', 'TABLE_INFO', 'TABLE_XINFO',
+]);
+
+/**
+ * Parse only the EXPLAIN prefix; the target is classified recursively.
+ * Parenthesized options are balanced rather than matched with a single regex so
+ * PostgreSQL forms such as EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) cannot hide
+ * an executing option behind another option or a nested value.
+ */
+function parseExplainPrefix(code: string): ExplainPrefix {
+  let rest = code.replace(/^EXPLAIN\b/, '').trimStart();
+  let analyze = false;
+  if (/^(ANALYZE|ANALYSE)\b/.test(rest)) {
+    analyze = true;
+    rest = rest.replace(/^(ANALYZE|ANALYSE)\b/, '').trimStart();
+  }
+  if (rest.startsWith('(')) {
+    let depth = 0;
+    let close = -1;
+    for (let i = 0; i < rest.length; i += 1) {
+      if (rest[i] === '(') depth += 1;
+      else if (rest[i] === ')') {
+        depth -= 1;
+        if (depth === 0) { close = i; break; }
+      }
+    }
+    if (close < 0) return { target: '', analyze, valid: false };
+    const options = rest.slice(1, close);
+    if (/\b(ANALYZE|ANALYSE)\b/.test(options)) analyze = true;
+    rest = rest.slice(close + 1).trimStart();
+  }
+  // Be conservative about non-standard option placement as well: an ANALYZE
+  // token after the option list still means the target may actually execute.
+  if (/^(ANALYZE|ANALYSE)\b/.test(rest)) {
+    analyze = true;
+    rest = rest.replace(/^(ANALYZE|ANALYSE)\b/, '').trimStart();
+  }
+  rest = rest.replace(/^QUERY\s+PLAN\b/, '').replace(/^PLAN\s+FOR\b/, '').trimStart();
+  // MySQL/MariaDB also accept FORMAT=JSON without parentheses.
+  rest = rest.replace(/^FORMAT\s*=\s*[A-Za-z_][A-Za-z0-9_]*\b/, '').trimStart();
+  return { target: rest, analyze, valid: Boolean(rest) };
 }
 
 export function classifyStatement(sql: string, engine?: Engine): StatementInfo {
-  const masked = maskLiterals(sql, engine).replace(/\s+/g, ' ').trim();
-  const code = masked.toUpperCase();
+  const scan = scanSql(sql, engine);
+  const code = scan.masked.replace(/\s+/g, ' ').trim().toUpperCase();
   const verb = (code.match(/^[A-Z]+/) || [''])[0];
+  if (scan.unsafe) {
+    return { sql, kind: 'unknown', verb: verb || 'UNKNOWN', reason: 'SQL 包含无法安全解析的括号、引号或注释' };
+  }
 
   if (/^(SELECT|VALUES|TABLE)\b/.test(code) || /^WITH\b/.test(code)) {
     if (/^WITH\b/.test(code) && /\b(INSERT|UPDATE|DELETE|REPLACE|MERGE)\b/.test(code)) {
@@ -225,19 +348,39 @@ export function classifyStatement(sql: string, engine?: Engine): StatementInfo {
   if (/^(SHOW|DESCRIBE|DESC)\b/.test(code)) return { sql, kind: 'read', verb };
 
   if (/^PRAGMA\b/.test(code)) {
-    if (/\b(JOURNAL_MODE|WAL_CHECKPOINT|REKEY|KEY|VACUUM|OPTIMIZE|USER_VERSION|APPLICATION_ID)\b/.test(code)) {
-      return { sql, kind: 'write', verb, reason: 'PRAGMA 会产生副作用' };
+    const match = /^PRAGMA\s+(?:[A-Z_][A-Z0-9_$]*\.)?([A-Z_][A-Z0-9_$]*)/.exec(code);
+    const name = match?.[1];
+    if (!name) return { sql, kind: 'unknown', verb, reason: 'PRAGMA 名称不完整' };
+    if (!READ_ONLY_PRAGMAS.has(name)) {
+      return { sql, kind: 'write', verb, reason: 'PRAGMA 会产生副作用或修改连接状态' };
+    }
+    const rest = code.slice(match[0].length).trim();
+    const objectQuery = PRAGMA_WITH_OBJECT_ARGUMENT.has(name) && /^\([^=]*\)$/.test(rest);
+    if (rest && !objectQuery) {
+      return { sql, kind: 'write', verb, reason: 'PRAGMA 赋值或参数形式会产生副作用' };
     }
     return { sql, kind: 'read', verb };
   }
 
   if (/^EXPLAIN\b/.test(code)) {
-    if (/^EXPLAIN\s+(ANALYZE|ANALYSE)\b/.test(code)) {
-      const inner = classifyStatement(code.replace(/^EXPLAIN\s+(ANALYZE|ANALYSE)\b/, ''), engine);
-      const kind: SqlKind = inner.kind === 'read' ? 'write' : inner.kind;
-      return { sql, kind, verb: 'EXPLAIN', reason: 'EXPLAIN ANALYZE 会实际执行语句' };
+    const prefix = parseExplainPrefix(code);
+    if (!prefix.valid) return { sql, kind: 'unknown', verb: 'EXPLAIN', reason: 'EXPLAIN 选项或内层语句不完整' };
+    const inner = classifyStatement(prefix.target, engine);
+    const writesPlanTable = /^EXPLAIN\s+PLAN\s+FOR\b/.test(code);
+    if (prefix.analyze || writesPlanTable) {
+      const kind: SqlKind = inner.kind === 'read' || inner.kind === 'session' ? 'write' : inner.kind;
+      return {
+        sql,
+        kind,
+        verb: 'EXPLAIN',
+        reason: writesPlanTable ? 'EXPLAIN PLAN FOR 会写入 PLAN_TABLE_OUTPUT' : 'EXPLAIN ANALYZE/ANALYSE 会实际执行内层语句',
+      };
     }
-    return { sql, kind: 'read', verb: 'EXPLAIN' };
+    // A plain EXPLAIN does not normally execute its target, but classifying by
+    // the inner statement is safer across dialects and keeps locking/writing
+    // clauses from being presented as read-only.
+    const kind: SqlKind = inner.kind === 'session' ? 'unknown' : inner.kind;
+    return { sql, kind, verb: 'EXPLAIN', ...(kind === 'read' ? {} : { reason: `EXPLAIN 内层语句为 ${inner.kind}` }) };
   }
 
   if (/^(INSERT|REPLACE|MERGE)\b/.test(code)) return { sql, kind: 'write', verb };

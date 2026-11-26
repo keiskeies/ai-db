@@ -1,12 +1,16 @@
 import type { ModelInputModality, ModelProfile } from '../../types';
 import { DEFAULT_REASONING_TIERS } from './profile';
 import { ProviderError, mapHttpError } from './common';
-import { ollamaOrigin, type ProviderKind } from './presets';
+import { ollamaOrigin, presetById, type ProviderKind } from './presets';
 
 export interface ModelSource {
   kind: ProviderKind;
   baseUrl: string;
   apiKey?: string;
+  /** 已存密钥的原 origin；只有同 origin 才允许复用，不能随任意 baseUrl 外发。 */
+  keyOrigin?: string;
+  /** 已存密钥对应的协议，防止把 OpenAI key 改名成 Anthropic 协议外发。 */
+  keyProvider?: ProviderKind;
 }
 
 /** 服务商 /models 里能安全识别出来的能力信息；识别不到时字段全部缺省。 */
@@ -29,6 +33,9 @@ export interface ModelList {
 }
 
 const MAX_MODELS = 500;
+const MAX_MODEL_LIST_BYTES = 2 * 1024 * 1024;
+const MAX_MODEL_REDIRECTS = 5;
+const ANTHROPIC_ORIGIN = new URL(presetById('anthropic')!.baseUrl).origin;
 
 function invalidUrl(label: string, value: string): ProviderError {
   return new ProviderError(`${label}不是合法的 http/https 地址：${value || '（空）'}`, { code: 'INVALID_BASE_URL' });
@@ -44,7 +51,32 @@ function requireUrl(value: string, label: string): URL {
     throw invalidUrl(label, trimmed);
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw invalidUrl(label, trimmed);
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) throw invalidUrl(label, trimmed);
   return parsed;
+}
+
+/** 统一 origin 比较：默认端口、大小写和末尾斜杠不造成虚假差异。 */
+export function modelOrigin(value: string): string | undefined {
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.origin : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function assertCredentialBinding(input: ModelSource, base: URL, apiKey: string): void {
+  if (!apiKey) return;
+  if (input.keyProvider && input.keyProvider !== input.kind) {
+    throw new ProviderError('已存模型密钥的协议与当前请求不一致', { code: 'MODEL_KEY_PROVIDER_MISMATCH' });
+  }
+  if (input.keyOrigin && modelOrigin(input.keyOrigin) !== base.origin) {
+    throw new ProviderError('已存模型密钥不能用于其他 origin；自定义 origin 必须重新提供 API Key', { code: 'MODEL_KEY_ORIGIN_MISMATCH' });
+  }
+  // 直接调用 core 时，自定义 Anthropic origin 也必须显式声明该 key 属于这个 origin。
+  if (input.kind === 'anthropic' && base.origin !== ANTHROPIC_ORIGIN && !input.keyOrigin) {
+    throw new ProviderError('Anthropic API Key 不能发往未声明绑定的自定义 origin', { code: 'MODEL_KEY_ORIGIN_UNTRUSTED' });
+  }
 }
 
 function num(value: unknown): number | undefined {
@@ -153,21 +185,63 @@ export function profileFromModelInfo(info: ModelInfo): ModelProfile | undefined 
   return Object.keys(profile).length ? profile : undefined;
 }
 
+async function readModelText(response: Response): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    size += value.byteLength;
+    if (size > MAX_MODEL_LIST_BYTES) {
+      void reader.cancel().catch(() => undefined);
+      throw new ProviderError('模型列表响应超过读取上限', { code: 'PROVIDER_BAD_PAYLOAD' });
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), size).toString('utf8');
+}
+
 async function fetchJson(url: string, headers: Record<string, string>, timeoutMs: number, fetchImpl: typeof fetch): Promise<unknown> {
   const signal = typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal ? AbortSignal.timeout(timeoutMs) : undefined;
-  let res: Response;
-  try {
-    res = await fetchImpl(url, { method: 'GET', headers, signal });
-  } catch (err: any) {
-    throw new ProviderError(`无法连接 ${url}：${err?.cause?.code ?? err?.message ?? '网络不可达'}`, { code: 'PROVIDER_UNREACHABLE', retryable: true });
+  const original = new URL(url);
+  let current = url;
+  for (let hop = 0; hop <= MAX_MODEL_REDIRECTS; hop += 1) {
+    let res: Response;
+    try {
+      res = await fetchImpl(current, { method: 'GET', headers, signal, redirect: 'manual' });
+    } catch (err: any) {
+      throw new ProviderError(`无法连接 ${current}：${err?.cause?.code ?? err?.message ?? '网络不可达'}`, { code: 'PROVIDER_UNREACHABLE', retryable: true });
+    }
+    if ([301, 302, 303, 307, 308].includes(res.status)) {
+      const location = res.headers.get('location');
+      void res.body?.cancel().catch(() => undefined);
+      if (!location) throw new ProviderError('模型接口重定向缺少 Location', { code: 'PROVIDER_REDIRECT_DENIED' });
+      if (hop === MAX_MODEL_REDIRECTS) throw new ProviderError('模型接口重定向次数过多', { code: 'PROVIDER_REDIRECT_DENIED' });
+      let next: URL;
+      try {
+        next = new URL(location, current);
+      } catch {
+        throw new ProviderError('模型接口重定向地址无效', { code: 'PROVIDER_REDIRECT_DENIED' });
+      }
+      // 模型 Key 只允许留在最初绑定 origin；同 origin 重定向也要重新经过网关 egress 校验。
+      if (next.origin !== original.origin || next.username || next.password) {
+        throw new ProviderError('模型接口重定向跨 origin，已拒绝外发 API Key', { code: 'PROVIDER_REDIRECT_DENIED' });
+      }
+      current = next.toString();
+      continue;
+    }
+    const text = await readModelText(res);
+    if (!res.ok) throw mapHttpError(res.status, text);
+    try {
+      return JSON.parse(text || '{}');
+    } catch {
+      throw new ProviderError(`${current} 返回的不是 JSON，请检查接入地址`, { code: 'PROVIDER_BAD_PAYLOAD' });
+    }
   }
-  const text = await res.text();
-  if (!res.ok) throw mapHttpError(res.status, text);
-  try {
-    return JSON.parse(text || '{}');
-  } catch {
-    throw new ProviderError(`${url} 返回的不是 JSON，请检查接入地址`, { code: 'PROVIDER_BAD_PAYLOAD' });
-  }
+  throw new ProviderError('模型接口重定向次数过多', { code: 'PROVIDER_REDIRECT_DENIED' });
 }
 
 /** 读取服务商的模型列表：OpenAI 兼容读 /models，Anthropic 读 /v1/models，Ollama 优先原生 /api/tags。 */
@@ -183,6 +257,7 @@ export async function listProviderModels(
 
   if (input.kind === 'anthropic') {
     const base = requireUrl(input.baseUrl, 'Anthropic 接入地址');
+    assertCredentialBinding(input, base, apiKey);
     if (!apiKey) throw new ProviderError('Anthropic 需要 API Key 才能读取模型列表', { code: 'NO_API_KEY' });
     const url = `${base.toString().replace(/\/+$/, '')}/v1/models`;
     const payload = await fetchJson(
@@ -196,6 +271,7 @@ export async function listProviderModels(
   }
 
   const base = requireUrl(input.baseUrl, '模型服务接入地址');
+  assertCredentialBinding(input, base, apiKey);
 
   if (input.kind === 'ollama') {
     const tagsUrl = `${ollamaOrigin(base.toString())}/api/tags`;

@@ -5,14 +5,76 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v* tag to build and stage as a draft release.
+        required: true
+        type: string
+      prerelease:
+        description: Mark the draft as a prerelease.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+  NPM_CONFIG_REPLACE_REGISTRY_HOST: always
 
 jobs:
+  source:
+    name: Validate release source
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.source.outputs.tag }}
+      sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Validate tag, version and dispatch source
+        id: source
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          expected="v$(node -p "require('./package.json').version")"
+          mobile=$(node -p "require('./apps/mobile/package.json').version")
+          if [ "$RELEASE_TAG" != "$expected" ] || [ "$mobile" != "${expected#v}" ]; then
+            echo "::error::release tag/version mismatch: tag=$RELEASE_TAG root=$expected mobile=$mobile"
+            exit 1
+          fi
+          tested=$(git rev-parse HEAD)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$tested" != "$GITHUB_SHA" ]; then
+            echo "::error::manual release tag must point at the dispatch commit"
+            exit 1
+          fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$tested" >> "$GITHUB_OUTPUT"
+
+  quality:
+    name: Quality gate
+    needs: source
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.source.outputs.sha }}
+
   desktop:
     name: Build desktop (${{ matrix.os }})
+    needs: quality
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    environment: release
     strategy:
       fail-fast: false
       matrix:
@@ -23,21 +85,23 @@ jobs:
           - os: macos-latest
             target: --mac
             artifact: macos
-          # ubuntu-latest 已升到 RPM 6，fpm 1.9.3 生成的 spec 会被 rpmbuild 直接拒绝；
-          # 固定 24.04（RPM 4.18）保证 AppImage/deb/rpm 全链路可用
+          # Ubuntu 24.04 keeps RPM 4.18; RPM 6 rejects the spec from the pinned fpm.
           - os: ubuntu-24.04
             target: --linux
             artifact: linux
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          node-version: '22'
+          ref: ${{ needs.quality.outputs.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --include=optional --registry=https://registry.npmjs.org --replace-registry-host=always
 
       - name: Build core, gateway and desktop UI
         run: |
@@ -45,60 +109,96 @@ jobs:
           npm --workspace apps/gateway run build
           npm --workspace apps/desktop run build
 
-      - name: Ensure app-builder binaries
+      - name: Verify locked app-builder binaries
+        # app-builder-bin ships every platform binary in its npm tarball. npm ci
+        # verifies the lockfile SHA-512 integrity, so no curl/replacement step is needed.
         shell: bash
         run: |
           set -euo pipefail
-          ver=$(node -p "require('./node_modules/app-builder-bin/package.json').version")
-          tmp=$(mktemp -d)
-          curl -fsSL "https://registry.npmjs.org/app-builder-bin/-/app-builder-bin-${ver}.tgz" -o "$tmp/ab.tgz" || { echo "::error::download app-builder-bin failed"; exit 1; }
-          tar xzf "$tmp/ab.tgz" -C "$tmp"
-          rm -rf node_modules/app-builder-bin
-          mv "$tmp/package" node_modules/app-builder-bin
-          chmod +x node_modules/app-builder-bin/linux/*/app-builder node_modules/app-builder-bin/mac/app-builder_* 2>/dev/null || true
-          ls -la node_modules/app-builder-bin/linux/x64/app-builder node_modules/app-builder-bin/mac/app-builder_arm64
+          installed=$(node -p "require('./node_modules/app-builder-bin/package.json').version")
+          locked=$(node -p "require('./package-lock.json').packages['node_modules/app-builder-bin'].version")
+          if [ "$installed" != "$locked" ]; then
+            echo "::error::app-builder-bin $installed does not match locked $locked"
+            exit 1
+          fi
+          case "$RUNNER_OS" in
+            macOS) binaries=(node_modules/app-builder-bin/mac/app-builder_amd64 node_modules/app-builder-bin/mac/app-builder_arm64) ;;
+            Linux) binaries=(node_modules/app-builder-bin/linux/x64/app-builder node_modules/app-builder-bin/linux/arm64/app-builder) ;;
+            Windows) binaries=(node_modules/app-builder-bin/win/x64/app-builder.exe node_modules/app-builder-bin/win/arm64/app-builder.exe) ;;
+            *) echo "::error::unsupported runner $RUNNER_OS"; exit 1 ;;
+          esac
+          for binary in "${binaries[@]}"; do
+            test -f "$binary" || { echo "::error::missing locked binary $binary"; exit 1; }
+          done
+          echo "app-builder-bin $locked verified from the npm lockfile"
 
-      - name: Ensure cross-arch DuckDB bindings
-        # 每个平台一次跑出 x64 + arm64，但 @duckdb/node-bindings 只会安装宿主架构那一个
-        # optionalDependency。把另一架构的预编译绑定补进 node_modules，duckdb.js 运行时会
-        # 按 process.platform-process.arch 自行挑选，afterPack 再按架构裁掉多余那份。
+      - name: Install cross-arch DuckDB optional dependencies
+        # @duckdb/node-api declares these as platform optionalDependencies. npm's
+        # platform filter installs only the host, so request both exact locked
+        # versions in one standard npm install. --force bypasses only the foreign
+        # platform check; npm still verifies registry SHA-512 integrity. No tarball
+        # is curled or unpacked over node_modules, and the lockfile must not change.
         shell: bash
         run: |
           set -euo pipefail
-          ver=$(node -p "require('./node_modules/@duckdb/node-bindings/package.json').version")
+          ver=$(node -p "require('./package-lock.json').packages['node_modules/@duckdb/node-bindings'].version")
           case "$RUNNER_OS" in
             macOS) pkgs="node-bindings-darwin-x64 node-bindings-darwin-arm64" ;;
             Linux) pkgs="node-bindings-linux-x64 node-bindings-linux-arm64" ;;
             Windows) pkgs="node-bindings-win32-x64 node-bindings-win32-arm64" ;;
             *) echo "::error::unsupported runner $RUNNER_OS"; exit 1 ;;
           esac
+          specs=()
           for pkg in $pkgs; do
-            if [ -f "node_modules/@duckdb/${pkg}/duckdb.node" ]; then
-              echo "already present: ${pkg}"
-              continue
-            fi
-            tmp=$(mktemp -d)
-            curl -fsSL "https://registry.npmjs.org/@duckdb/${pkg}/-/${pkg}-${ver}.tgz" -o "$tmp/pkg.tgz" || { echo "::error::download ${pkg} failed"; exit 1; }
-            tar xzf "$tmp/pkg.tgz" -C "$tmp"
-            rm -rf "node_modules/@duckdb/${pkg}"
-            mv "$tmp/package" "node_modules/@duckdb/${pkg}"
-            echo "fetched: ${pkg}"
+            integrity=$(npm view "@duckdb/${pkg}@${ver}" dist.integrity --json --registry=https://registry.npmjs.org)
+            PKG="$pkg" EXPECTED_INTEGRITY="$integrity" node <<'NODE'
+          const lock = require('./package-lock.json');
+          const entry = lock.packages[`node_modules/@duckdb/${process.env.PKG}`];
+          const expected = JSON.parse(process.env.EXPECTED_INTEGRITY);
+          if (!entry || entry.version !== lock.packages['node_modules/@duckdb/node-bindings'].version || entry.integrity !== expected) {
+            throw new Error(`DuckDB lockfile integrity mismatch for ${process.env.PKG}`);
+          }
+          NODE
+            specs+=("@duckdb/${pkg}@${ver}")
+          done
+          npm install --no-save --ignore-scripts --include=optional --force --registry=https://registry.npmjs.org "${specs[@]}"
+          git diff --exit-code -- package.json package-lock.json apps/gateway/package.json
+          for pkg in $pkgs; do
+            test -f "node_modules/@duckdb/${pkg}/package.json" || { echo "::error::missing ${pkg}"; exit 1; }
           done
           ls -d node_modules/@duckdb/node-bindings-* | xargs -n1 basename
 
-      - name: Diagnose toolchain
+      - name: Require release signing credentials
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
         shell: bash
-        working-directory: apps/desktop
+        env:
+          WIN_CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK_BASE64 }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+          CSC_LINK: ${{ secrets.APPLE_CSC_LINK_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          node -v
-          npm -v
-          echo "node_modules/.bin:"
-          ls node_modules/.bin 2>/dev/null | grep -i electron || true
-          ls ../../node_modules/.bin 2>/dev/null | grep -i electron || true
-          npx --no-install electron-builder --version || true
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows)
+              : "${WIN_CSC_LINK:?WINDOWS_CSC_LINK_BASE64 secret is required}"
+              : "${WIN_CSC_KEY_PASSWORD:?WINDOWS_CSC_KEY_PASSWORD secret is required}"
+              ;;
+            macOS)
+              : "${CSC_LINK:?APPLE_CSC_LINK_BASE64 secret is required}"
+              : "${CSC_KEY_PASSWORD:?APPLE_CSC_KEY_PASSWORD secret is required}"
+              : "${APPLE_ID:?APPLE_ID secret is required}"
+              : "${APPLE_APP_SPECIFIC_PASSWORD:?APPLE_APP_SPECIFIC_PASSWORD secret is required}"
+              : "${APPLE_TEAM_ID:?APPLE_TEAM_ID secret is required}"
+              ;;
+            Linux)
+              echo "Linux policy: no platform signature; publish checksums and GitHub provenance."
+              ;;
+          esac
 
       - name: Surface rpmbuild errors
-        # fpm 只抛出 "rpmbuild failed (exit code 1)"，真实 stderr 被吞掉；包一层带出来
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -130,20 +230,24 @@ jobs:
           echo "REAL_RPMBUILD=$real" >> "$GITHUB_ENV"
           echo "$RUNNER_TEMP/rpmbin" >> "$GITHUB_PATH"
 
-      - name: Package installer
-        # 每个架构单独跑一次：NSIS 在一次传入多个架构时会额外产出一个合并安装器
-        # （约 284 MB，内容与两个单架构包重复），分开跑才只留 x64 / arm64 各自的安装器。
+      - name: Package installers
+        # Separate architecture runs avoid NSIS's redundant combined installer.
         shell: bash
         working-directory: apps/desktop
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          WIN_CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK_BASE64 }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+          CSC_LINK: ${{ secrets.APPLE_CSC_LINK_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
+          CSC_NAME: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -o pipefail
           : > electron-builder.log
           for arch in x64 arm64; do
-            # Windows 的更新元数据只有一份 latest.yml（不像 Linux 会带 -linux-arm64 后缀），
-            # 两个架构分别打包会互相覆盖，所以 arm64 走独立通道 latest-arm64.yml，
-            # 客户端按 process.arch 选同名文件（见 apps/desktop/electron/updater.cjs）。
             extra=""
             if [ "${{ matrix.artifact }}" = "windows" ] && [ "$arch" = "arm64" ]; then
               extra="-c.publish.channel=latest-arm64"
@@ -152,10 +256,7 @@ jobs:
             npx electron-builder ${{ matrix.target }} --${arch} ${extra} --publish never 2>&1 | tee -a electron-builder.log
           done
 
-      - name: Verify mac architectures
-        # 交叉架构打包最容易出的错是「dmg 名字对了、里面的原生二进制错了」，
-        # 所以这里同时校验主程序架构、DuckDB 绑定与 node-oracledb 绑定，
-        # 并确认多余架构已被 afterPack 裁掉。
+      - name: Verify mac architectures and signatures
         if: runner.os == 'macOS'
         shell: bash
         working-directory: apps/desktop
@@ -173,7 +274,7 @@ jobs:
 
           check() {
             local appdir="$1" archname="$2" expect="$3" other="$4"
-            local app bin duckdb oracle_bins
+            local app bin duckdb oracle_bins details
             if [ ! -d "$appdir" ]; then
               echo "::error::missing output dir $appdir"
               exit 1
@@ -213,15 +314,20 @@ jobs:
               exit 1
             fi
             if [ "$archname" = "x64" ]; then
-              echo "::warning::Intel 包不含 node-oracledb 绑定（上游 oracledb 26.0.0 无 darwin-x64 预编译），该包内 Oracle 驱动不可用"
+              echo "::warning::Intel package has no upstream darwin-x64 node-oracledb binding"
             fi
+
+            codesign --verify --deep --strict --verbose=2 "$app"
+            details=$(codesign -dv --verbose=4 "$app" 2>&1)
+            printf '%s\n' "$details" | grep -q 'Authority=Developer ID Application:' || { echo "::error::$app is not Developer ID signed"; exit 1; }
+            printf '%s\n' "$details" | grep -q 'flags=0x10000(runtime)' || { echo "::error::$app lacks hardened runtime"; exit 1; }
+            xcrun stapler validate "$app"
           }
 
           check release/mac x64 x86_64 arm64
           check release/mac-arm64 arm64 arm64 x64
 
-      - name: Verify Linux artifacts
-        # deb / rpm / AppImage 各出两份（x64 + arm64），并核对解包目录里的原生绑定。
+      - name: Verify Linux artifacts and record unsigned policy
         if: runner.os == 'Linux'
         shell: bash
         working-directory: apps/desktop
@@ -281,8 +387,17 @@ jobs:
           check release/linux-unpacked x64 x86-64 arm64
           check release/linux-arm64-unpacked arm64 aarch64 x64
 
-      - name: Verify Windows artifacts
-        # arm64 的 Oracle 上游没有预编译绑定（win32-arm64 缺），只告警不判失败。
+          node <<'NODE'
+          const fs = require('fs');
+          fs.writeFileSync('release/LINUX_SIGNING.txt', [
+            'Linux artifacts are intentionally not platform-code-signed by this workflow.',
+            'Verify SHA256SUMS-linux and the GitHub build-provenance attestations before use.',
+            'Distribution maintainers must re-sign deb/rpm packages with their repository keys.',
+            'AppImage recipients should verify the published checksum and provenance.',
+          ].join('\n') + '\n');
+          NODE
+
+      - name: Verify Windows artifacts and Authenticode signatures
         if: runner.os == 'Windows'
         shell: bash
         working-directory: apps/desktop
@@ -328,13 +443,21 @@ jobs:
             echo "::error::win x64 build lost its node-oracledb binding"
             exit 1
           fi
-          echo "::warning::Windows arm64 不含 node-oracledb 绑定（上游无 win32-arm64 预编译），该包内 Oracle 驱动不可用"
+          echo "::warning::Windows arm64 has no upstream win32-arm64 node-oracledb binding"
+
+          powershell.exe -NoProfile -NonInteractive -Command '
+            $ErrorActionPreference = "Stop"
+            $files = Get-ChildItem release/*.exe
+            foreach ($file in $files) {
+              $signature = Get-AuthenticodeSignature $file.FullName
+              if ($signature.Status -ne "Valid") {
+                throw "Authenticode verification failed for $($file.Name): $($signature.Status)"
+              }
+              Write-Output "$($file.Name): $($signature.Status) ($($signature.SignerCertificate.Subject))"
+            }
+          '
 
       - name: Pack Windows portable zips
-        # 绿色版：把校验过的 win-unpacked 目录以产品名打成 zip，解压后运行里面的 exe 即可。
-        # NSIS 安装器写 HKCU 的卸载项和快捷方式，绿色版没有这一步；Electron 本体不碰
-        # 注册表，用户数据照旧在 %APPDATA%\AiDB Studio。zip 名以 -portable.zip 结尾，
-        # 不会被 pickAsset 的 -setup.exe 后缀匹配到，不影响自动更新通道。
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: apps/desktop
@@ -349,10 +472,7 @@ jobs:
           foreach ($p in $pairs) {
             $dir = "release/$($p.unpacked)"
             if (-not (Test-Path $dir)) { Write-Error "missing $dir"; exit 1 }
-            # zip 根目录用产品名而不是 win-unpacked，解压出来的文件夹才体面
             Rename-Item $dir 'AiDB Studio'
-            # zip 直接落在 release/ 下（上传步骤的 glob 是 release/*.zip）：
-            # 从 release/ 里以 ..\ 输出会写到 apps/desktop/，glob 匹配不到还不报错
             Push-Location release
             try {
               & $7z a -tzip -mx=1 "AiDB-Studio-$ver-$($p.arch)-portable.zip" '.\AiDB Studio' | Out-Null
@@ -365,6 +485,37 @@ jobs:
           if ($zips.Count -ne 2) { Write-Error "expected 2 portable zips, got $($zips.Count)"; exit 1 }
           $zips | Format-Table Name, Length
 
+      - name: Record signing policy and checksums
+        shell: bash
+        working-directory: apps/desktop
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const crypto = require('crypto');
+          const platform = process.env.RUNNER_OS.toLowerCase();
+          const signed = platform !== 'linux';
+          const manifest = {
+            platform,
+            signed,
+            notarized: platform === 'macos',
+            hardenedRuntime: platform === 'macos',
+            verification: platform === 'windows'
+              ? 'Get-AuthenticodeSignature: Valid'
+              : platform === 'macos'
+                ? 'codesign --verify --deep --strict; Developer ID; hardened runtime; stapler validate'
+                : 'Not platform-signed; see LINUX_SIGNING.txt',
+          };
+          fs.writeFileSync(path.join('release', `signing-${platform}.json`), JSON.stringify(manifest, null, 2) + '\n');
+          const files = fs.readdirSync('release', { withFileTypes: true })
+            .filter((entry) => entry.isFile() && entry.name !== `SHA256SUMS-${platform}`)
+            .map((entry) => entry.name)
+            .sort();
+          const lines = files.map((name) => `${crypto.createHash('sha256').update(fs.readFileSync(path.join('release', name))).digest('hex')}  ${name}`);
+          fs.writeFileSync(path.join('release', `SHA256SUMS-${platform}`), lines.join('\n') + '\n');
+          NODE
+
       - name: Report packaging error
         if: failure()
         shell: bash
@@ -375,14 +526,13 @@ jobs:
           else
             echo "::error::electron-builder.log was not created"
           fi
-          # rpmbuild 的 stderr 被 fpm 吞掉，wrapper 已把它写到这个文件
           out="$RUNNER_TEMP/rpmbuild.out"
           if [ -f "$out" ]; then
             tail -n 60 "$out" | while IFS= read -r line; do echo "::error::rpmbuild: $line"; done
           fi
 
-      - name: Upload installer
-        uses: actions/upload-artifact@v4
+      - name: Upload installers
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: aidb-${{ matrix.artifact }}
           path: |
@@ -394,35 +544,86 @@ jobs:
             apps/desktop/release/*.rpm
             apps/desktop/release/*.yml
             apps/desktop/release/*.blockmap
+            apps/desktop/release/signing-*.json
+            apps/desktop/release/SHA256SUMS-*
+            apps/desktop/release/LINUX_SIGNING.txt
           if-no-files-found: error
           retention-days: 7
 
   android:
     name: Build Android APK
+    needs: quality
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    environment: release
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          node-version: '22'
+          ref: ${{ needs.quality.outputs.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
           cache: npm
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12 # v4.7.0
         with:
           distribution: temurin
           java-version: '17'
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@ac638b010cf58a27ee6c972d7336334ccaf61c96 # v4.4.1
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --include=optional --registry=https://registry.npmjs.org --replace-registry-host=always
+
+      - name: Require and stage Android signing credentials
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_CERT_SHA256: ${{ secrets.ANDROID_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          : "${ANDROID_KEYSTORE_BASE64:?ANDROID_KEYSTORE_BASE64 secret is required}"
+          : "${ANDROID_KEYSTORE_PASSWORD:?ANDROID_KEYSTORE_PASSWORD secret is required}"
+          : "${ANDROID_KEY_ALIAS:?ANDROID_KEY_ALIAS secret is required}"
+          : "${ANDROID_KEY_PASSWORD:?ANDROID_KEY_PASSWORD secret is required}"
+          : "${ANDROID_CERT_SHA256:?ANDROID_CERT_SHA256 secret is required}"
+          if [ "$ANDROID_KEY_ALIAS" = "androiddebugkey" ]; then
+            echo "::error::Android release signing refuses the debug key alias"
+            exit 1
+          fi
+          for value in "$ANDROID_KEYSTORE_PASSWORD" "$ANDROID_KEY_ALIAS" "$ANDROID_KEY_PASSWORD" "$ANDROID_CERT_SHA256"; do
+            case "$value" in
+              *$'\n'*|*$'\r'*) echo "::error::Android signing values must be single-line"; exit 1 ;;
+            esac
+          done
+          cert=$(printf '%s' "$ANDROID_CERT_SHA256" | tr -d '[:space:]:' | tr '[:lower:]' '[:upper:]')
+          if [[ ! "$cert" =~ ^[0-9A-F]{64}$ ]]; then
+            echo "::error::ANDROID_CERT_SHA256 must be a SHA-256 fingerprint"
+            exit 1
+          fi
+          umask 077
+          keystore="$RUNNER_TEMP/aidb-upload.keystore"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          chmod 600 "$keystore"
+          test -s "$keystore" || { echo "::error::decoded Android keystore is empty"; exit 1; }
+          {
+            printf '%s\n' "MYAPP_UPLOAD_STORE_FILE=$keystore"
+            printf '%s\n' "MYAPP_UPLOAD_STORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD"
+            printf '%s\n' "MYAPP_UPLOAD_KEY_ALIAS=$ANDROID_KEY_ALIAS"
+            printf '%s\n' "MYAPP_UPLOAD_KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
+            printf '%s\n' "MYAPP_UPLOAD_CERT_SHA256=$cert"
+          } >> "$GITHUB_ENV"
+          echo "Android production signing credentials staged without logging secret values"
 
       - name: Build release APK
         working-directory: apps/mobile/android
-        # Expo CLI 默认把 Metro 根设成 monorepo 根，而 RN Gradle 插件传的是相对 apps/mobile 的入口，
-        # 不开这个开关会去仓库根找 index.ts。
         env:
           EXPO_NO_METRO_WORKSPACE_ROOT: '1'
         run: ./gradlew assembleRelease --no-daemon
@@ -444,43 +645,106 @@ jobs:
           fi
           app_id=$(node -p "require('./apps/mobile/app.json').expo.android.package")
           aapt2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -n 1)
-          badging=$("$aapt2" dump badging "$apk" | head -n 1)
+          badging=$("$aapt2" dump badging "$apk")
           echo "$badging"
+          case "$badging" in
+            *"application-debuggable"*) echo "::error::Android release APK is debuggable"; exit 1 ;;
+          esac
+          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)
+          certs=$("$apksigner" verify --verbose --print-certs "$apk")
+          printf '%s\n' "$certs"
+          fingerprints=$(printf '%s\n' "$certs" | awk '/^Signer #[0-9]+ certificate SHA-256 digest: / { print $NF }')
+          signer_count=$(printf '%s\n' "$fingerprints" | awk 'NF { count++ } END { print count + 0 }')
+          if [ "$signer_count" -ne 1 ]; then
+            echo "::error::expected exactly one APK signer certificate, got $signer_count"
+            exit 1
+          fi
+          actual=$(printf '%s' "$fingerprints" | tr -d '[:space:]:' | tr '[:lower:]' '[:upper:]')
+          expected=$(printf '%s' "$MYAPP_UPLOAD_CERT_SHA256" | tr -d '[:space:]:' | tr '[:lower:]' '[:upper:]')
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::APK signer certificate SHA-256 does not match ANDROID_CERT_SHA256"
+            exit 1
+          fi
           case "$badging" in
             *"package: name='$app_id'"*"versionName='$version'"*) ;;
             *) echo "::error::APK identity mismatch, expected $app_id $version"; exit 1 ;;
           esac
-          unzip -l "$apk" | grep -q 'lib/arm64-v8a/' || { echo "::error::APK lacks arm64-v8a libraries"; exit 1; }
+          unzip -l "$apk" > "$RUNNER_TEMP/apk-contents.txt"
+          grep -q 'lib/arm64-v8a/' "$RUNNER_TEMP/apk-contents.txt" || { echo "::error::APK lacks arm64-v8a libraries"; exit 1; }
           mkdir -p dist-mobile
           cp "$apk" "dist-mobile/AiDB-Studio-$version-android.apk"
-          ls -lh dist-mobile/*.apk
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const crypto = require('crypto');
+          const dir = 'dist-mobile';
+          const certificateSha256 = process.env.MYAPP_UPLOAD_CERT_SHA256;
+          if (!/^[0-9A-F]{64}$/.test(certificateSha256)) throw new Error('normalized Android certificate fingerprint is missing');
+          fs.writeFileSync(path.join(dir, 'signing-android.json'), JSON.stringify({
+            platform: 'android',
+            signed: true,
+            signatureVerified: true,
+            signing: 'production upload key',
+            certificateSha256,
+            productionReady: true,
+            verification: 'apksigner certificate SHA-256 matches ANDROID_CERT_SHA256; debug signing rejected',
+          }, null, 2) + '\n');
+          const files = fs.readdirSync(dir, { withFileTypes: true })
+            .filter((entry) => entry.isFile() && entry.name !== 'SHA256SUMS-android')
+            .map((entry) => entry.name)
+            .sort();
+          fs.writeFileSync(path.join(dir, 'SHA256SUMS-android'), files.map((name) => `${crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, name))).digest('hex')}  ${name}`).join('\n') + '\n');
+          NODE
+          ls -lh dist-mobile/*
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: aidb-android
-          path: dist-mobile/*.apk
+          path: |
+            dist-mobile/*.apk
+            dist-mobile/SHA256SUMS-android
+            dist-mobile/signing-android.json
           if-no-files-found: error
           retention-days: 7
 
   ios:
-    name: Build iOS (EAS)
-    runs-on: ubuntu-latest
+    name: Build and verify iOS (EAS)
+    needs: quality
+    runs-on: macos-latest
+    environment: release
+    permissions:
+      contents: read
     timeout-minutes: 120
-    # iOS 需要 Expo + Apple 两个账号；账号没备齐时只告警跳过，不能拦住桌面发布
-    continue-on-error: true
-    env:
-      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          node-version: '22'
+          ref: ${{ needs.quality.outputs.sha }}
+          persist-credentials: false
+
+      - name: Check EAS configuration
+        shell: bash
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${EXPO_TOKEN:-}" ]; then
+            echo "::error::EXPO_TOKEN secret is required for the iOS production build"
+            exit 1
+          fi
+          project=$(node -p 'require("./apps/mobile/app.json").expo.extra?.eas?.projectId ?? ""')
+          project=$(printf '%s' "$project" | tr '[:upper:]' '[:lower:]')
+          if [[ ! "$project" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || [ "$project" = "00000000-0000-0000-0000-000000000000" ]; then
+            echo "::error::EAS projectId must be a configured non-placeholder UUID"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
           cache: npm
 
-      # eas-cli 在上传前会在本地解析 app.json 的 config plugins，没有 node_modules 会直接失败
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --include=optional --registry=https://registry.npmjs.org --replace-registry-host=always
 
       - name: Verify native version sync
         shell: bash
@@ -502,72 +766,262 @@ jobs:
             console.log("iOS native version synced: " + version);
           '
 
-      - name: Check EAS configuration
-        id: guard
-        shell: bash
+      - name: Trigger EAS production build
+        working-directory: apps/mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EAS_BUILD_JSON: ${{ runner.temp }}/eas-build.json
+          IPA_URL_FILE: ${{ runner.temp }}/ipa-url.txt
         run: |
           set -euo pipefail
-          project=$(node -p 'require("./apps/mobile/app.json").expo.extra?.eas?.projectId ?? ""')
-          ok=1
-          if [ -z "${EXPO_TOKEN:-}" ]; then
-            echo "::warning::EXPO_TOKEN secret is not set — iOS build skipped. One-time setup is documented under Mobile builds in README."
-            ok=0
-          fi
-          if [ "$project" = "00000000-0000-0000-0000-000000000000" ] || [ -z "$project" ]; then
-            echo "::warning::EAS projectId is still the placeholder — run eas init in apps/mobile, commit the real id, then rerun. iOS build skipped."
-            ok=0
-          fi
-          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+          npx --yes eas-cli@27.11.0 build --platform ios --profile production --non-interactive --wait --json > "$EAS_BUILD_JSON"
+          node <<'NODE'
+          const fs = require('fs');
+          const raw = JSON.parse(fs.readFileSync(process.env.EAS_BUILD_JSON, 'utf8'));
+          const build = Array.isArray(raw) ? raw[0] : raw;
+          if (build?.status !== 'FINISHED' || !build?.artifacts?.buildUrl) {
+            throw new Error('EAS production build did not finish with an IPA artifact URL');
+          }
+          const url = new URL(build.artifacts.buildUrl);
+          if (url.protocol !== 'https:') throw new Error('EAS IPA artifact URL must use HTTPS');
+          fs.writeFileSync(process.env.IPA_URL_FILE, url.href + '\n');
+          NODE
 
-      - name: Trigger EAS build
-        if: steps.guard.outputs.ok == '1'
-        working-directory: apps/mobile
-        run: |
-          set -o pipefail
-          npx --yes eas-cli@27.11.0 build --platform ios --profile preview --non-interactive --wait --json > eas-build.json
-          node -e '
-            const [build] = require("./eas-build.json");
-            if (!build?.artifacts?.buildUrl) {
-              console.error("EAS build finished without an artifact URL");
-              process.exit(1);
-            }
-            console.log(build.artifacts.buildUrl);
-          ' > ipa-url.txt
-
-      - name: Download IPA
-        if: steps.guard.outputs.ok == '1'
+      - name: Download, inspect and stage IPA
         shell: bash
         working-directory: apps/mobile
         run: |
           set -euo pipefail
           version=$(node -p "require('./app.json').expo.version")
+          build_number=$(node -p "require('./app.json').expo.ios.buildNumber")
+          bundle_id=$(node -p "require('./app.json').expo.ios.bundleIdentifier")
           mkdir -p ../../dist-mobile
-          curl -fsSL "$(cat ipa-url.txt)" -o "../../dist-mobile/AiDB-Studio-$version-ios.ipa"
-          ls -lh "../../dist-mobile/AiDB-Studio-$version-ios.ipa"
+          ipa="../../dist-mobile/AiDB-Studio-$version-ios.ipa"
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 --connect-timeout 20 --max-time 1800 "$(cat "$RUNNER_TEMP/ipa-url.txt")" --output "$ipa"
+          test -s "$ipa" || { echo "::error::downloaded iOS IPA is empty"; exit 1; }
+          unzip -tq "$ipa" > /dev/null
+          IPA_PATH="$ipa" node <<'NODE'
+          const { execFileSync } = require('child_process');
+          const entries = execFileSync('unzip', ['-Z1', process.env.IPA_PATH], { encoding: 'utf8' }).split('\n');
+          for (const entry of entries) {
+            if (!entry) continue;
+            if (entry.startsWith('/') || /^[A-Za-z]:/.test(entry) || entry.split('/').includes('..')) {
+              throw new Error(`unsafe path in IPA: ${entry}`);
+            }
+          }
+          NODE
+          payload="$RUNNER_TEMP/ios-ipa"
+          rm -rf "$payload"
+          mkdir -p "$payload"
+          unzip -q "$ipa" -d "$payload"
+          shopt -s nullglob
+          apps=("$payload"/Payload/*.app)
+          if [ ${#apps[@]} -ne 1 ]; then
+            echo "::error::expected exactly one .app in the IPA, got ${#apps[@]}"
+            exit 1
+          fi
+          app="${apps[0]}"
+          plist="$app/Info.plist"
+          test -f "$plist" || { echo "::error::IPA app has no Info.plist"; exit 1; }
+          actual_bundle=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")
+          actual_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")
+          actual_build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")
+          if [ "$actual_bundle" != "$bundle_id" ] || [ "$actual_version" != "$version" ]; then
+            echo "::error::IPA identity mismatch: expected $bundle_id $version, got $actual_bundle $actual_version"
+            exit 1
+          fi
+          if [[ ! "$actual_build" =~ ^[0-9]+$ ]]; then
+            echo "::error::IPA CFBundleVersion is not numeric"
+            exit 1
+          fi
+          codesign --verify --deep --strict --verbose=2 "$app"
+          details=$(codesign -dv --verbose=4 "$app" 2>&1)
+          printf '%s\n' "$details" | grep -q '^Authority=Apple Distribution:' || { echo "::error::IPA app is not Apple Distribution signed"; exit 1; }
+          printf '%s\n' "$details" | grep -q 'flags=0x10000(runtime)' || { echo "::error::IPA app lacks hardened runtime"; exit 1; }
+          signed_identifier=$(printf '%s\n' "$details" | awk -F= '/^Identifier=/{ print $2; exit }')
+          signed_team=$(printf '%s\n' "$details" | awk -F= '/^TeamIdentifier=/{ print $2; exit }')
+          if [ "$signed_identifier" != "$bundle_id" ] || [[ ! "$signed_team" =~ ^[A-Z0-9]{10}$ ]]; then
+            echo "::error::IPA codesign identifier or team is invalid"
+            exit 1
+          fi
 
-      - uses: actions/upload-artifact@v4
-        if: steps.guard.outputs.ok == '1'
+          profile="$app/embedded.mobileprovision"
+          test -f "$profile" || { echo "::error::IPA app has no embedded provisioning profile"; exit 1; }
+          profile_plist="$RUNNER_TEMP/ios-profile.plist"
+          security cms -D -i "$profile" -o "$profile_plist"
+          profile_team=$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$profile_plist")
+          profile_entitlement=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$profile_plist")
+          profile_application=$(/usr/libexec/PlistBuddy -c 'Print :ApplicationIdentifier:0' "$profile_plist")
+          expected_application="$profile_team.$bundle_id"
+          if [ "$profile_team" != "$signed_team" ] || [ "$profile_entitlement" != "$expected_application" ] || [ "$profile_application" != "$expected_application" ]; then
+            echo "::error::IPA provisioning team/application identifier does not match the signed app"
+            exit 1
+          fi
+          if /usr/libexec/PlistBuddy -c 'Print :ProvisionedDevices' "$profile_plist" > /dev/null 2>&1; then
+            echo "::error::IPA provisioning profile is ad-hoc/development, not App Store distribution"
+            exit 1
+          fi
+          entitlements="$RUNNER_TEMP/ios-entitlements.plist"
+          codesign -d --entitlements :- "$app" > "$entitlements"
+          signed_application=$(/usr/libexec/PlistBuddy -c 'Print :application-identifier' "$entitlements")
+          get_task_allow=$(/usr/libexec/PlistBuddy -c 'Print :get-task-allow' "$entitlements" 2>/dev/null || true)
+          if [ "$signed_application" != "$expected_application" ] || [ "$get_task_allow" = "true" ]; then
+            echo "::error::IPA signed entitlements do not match production provisioning"
+            exit 1
+          fi
+
+          TEAM_IDENTIFIER="$profile_team" BUNDLE_IDENTIFIER="$bundle_id" APP_VERSION="$version" BUILD_NUMBER="$actual_build" CONFIGURED_BUILD_NUMBER="$build_number" node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const crypto = require('crypto');
+          const dir = '../../dist-mobile';
+          fs.writeFileSync(path.join(dir, 'signing-ios.json'), JSON.stringify({
+            platform: 'ios',
+            signed: true,
+            signatureVerified: true,
+            signing: 'Apple Distribution',
+            productionReady: true,
+            hardenedRuntime: true,
+            provisioningVerified: true,
+            storeProfile: true,
+            teamIdentifier: process.env.TEAM_IDENTIFIER,
+            bundleIdentifier: process.env.BUNDLE_IDENTIFIER,
+            version: process.env.APP_VERSION,
+            buildNumber: process.env.BUILD_NUMBER,
+            configuredBuildNumber: process.env.CONFIGURED_BUILD_NUMBER,
+            verification: 'codesign --verify --deep --strict; Apple Distribution; hardened runtime; embedded provisioning profile; Info.plist',
+          }, null, 2) + '\n');
+          const files = fs.readdirSync(dir, { withFileTypes: true })
+            .filter((entry) => entry.isFile() && entry.name !== 'SHA256SUMS-ios')
+            .map((entry) => entry.name)
+            .sort();
+          fs.writeFileSync(path.join(dir, 'SHA256SUMS-ios'), files.map((name) => `${crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, name))).digest('hex')}  ${name}`).join('\n') + '\n');
+          NODE
+          ls -lh ../../dist-mobile/*
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: aidb-ios
-          path: dist-mobile/*.ipa
+          path: |
+            dist-mobile/*.ipa
+            dist-mobile/SHA256SUMS-ios
+            dist-mobile/signing-ios.json
           if-no-files-found: error
           retention-days: 7
 
-  release:
-    name: Publish GitHub release
+  attest:
+    name: Attest release artifact provenance
     needs: [desktop, android, ios]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          pattern: aidb-*
           path: dist-release
           merge-multiple: true
 
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: dist-release/*
+
+  release:
+    name: Stage protected draft release
+    needs: [quality, desktop, android, ios, attest]
+    runs-on: ubuntu-latest
+    # Configure required reviewers, deployment branches and secret access on this
+    # GitHub environment. CI only creates a draft; a reviewer must publish it manually.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Validate release tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "$RELEASE_TAG" in
+            v*) ;;
+            *) echo "::error::release tag must start with v"; exit 1 ;;
+          esac
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: aidb-*
+          path: dist-release
+          merge-multiple: true
+
+      - name: Verify SBOM, signing manifests and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const dir = 'dist-release';
+          const readJson = (name) => JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+          const sbom = readJson('sbom.cdx.json');
+          if (sbom.bomFormat !== 'CycloneDX' || !Array.isArray(sbom.components) || sbom.components.length === 0) {
+            throw new Error('invalid or empty CycloneDX SBOM');
+          }
+          for (const platform of ['windows', 'macos']) {
+            const manifest = readJson(`signing-${platform}.json`);
+            if (manifest.signed !== true) throw new Error(`${platform} release is not signed`);
+            if (platform === 'macos' && (manifest.notarized !== true || manifest.hardenedRuntime !== true)) {
+              throw new Error('macOS release is not notarized with hardened runtime');
+            }
+          }
+          const linux = readJson('signing-linux.json');
+          if (linux.signed !== false || !fs.existsSync(path.join(dir, 'LINUX_SIGNING.txt'))) {
+            throw new Error('Linux signing policy is missing or inconsistent');
+          }
+
+          const android = readJson('signing-android.json');
+          const certificateSha256 = String(android.certificateSha256 ?? '').replace(/[:\s]/g, '').toUpperCase();
+          if (android.signed !== true || android.signatureVerified !== true || android.productionReady !== true || android.signing === 'debug') {
+            throw new Error('Android release signing manifest is not production-ready');
+          }
+          if (!/^[0-9A-F]{64}$/.test(certificateSha256)) {
+            throw new Error('Android signing manifest has no valid certificate SHA-256 fingerprint');
+          }
+
+          const ios = readJson('signing-ios.json');
+          if (ios.signed !== true || ios.signatureVerified !== true || ios.productionReady !== true || ios.signing !== 'Apple Distribution') {
+            throw new Error('iOS release signature was not independently verified');
+          }
+          if (ios.hardenedRuntime !== true || ios.provisioningVerified !== true || ios.storeProfile !== true) {
+            throw new Error('iOS release is missing hardened-runtime or store-provisioning verification');
+          }
+          if (!/^[A-Z0-9]{10}$/.test(String(ios.teamIdentifier ?? '')) || !ios.bundleIdentifier || !ios.version || !/^\d+$/.test(String(ios.buildNumber ?? ''))) {
+            throw new Error('iOS signing manifest identity is incomplete');
+          }
+
+          const files = fs.readdirSync(dir);
+          if (!files.some((name) => name.endsWith('.apk')) || !files.some((name) => name.endsWith('.ipa'))) {
+            throw new Error('release staging requires both Android APK and iOS IPA artifacts');
+          }
+          for (const platform of ['windows', 'macos', 'linux', 'android', 'ios']) {
+            const checksumName = `SHA256SUMS-${platform}`;
+            const lines = fs.readFileSync(path.join(dir, checksumName), 'utf8').split(/\r?\n/).filter(Boolean);
+            if (lines.length === 0) throw new Error(`${checksumName} is empty`);
+            const listed = new Set(lines.map((line) => line.slice(66).replace(/^\*/, '')));
+            if (!listed.has(`signing-${platform}.json`)) {
+              throw new Error(`${checksumName} does not cover signing-${platform}.json`);
+            }
+          }
+          console.log(`SBOM: ${sbom.components.length} components; desktop, Android and iOS signing manifests verified`);
+          NODE
+          for platform in windows macos linux android ios; do
+            checksums="dist-release/SHA256SUMS-${platform}"
+            test -f "$checksums" || { echo "::error::missing $checksums"; exit 1; }
+            (cd dist-release && sha256sum -c "SHA256SUMS-${platform}")
+          done
+
       - name: Verify update metadata
-        # latest*.yml 里引用的文件名必须与实际上传的资产完全一致：electron-builder 写元数据时
-        # 把空格换成 "-"，GitHub 上传时把空格换成 "."，两边不一致时自动更新会在下载阶段 404，
-        # 而且只有用户真的点了「检查更新」才会暴露，所以在这里提前拦。
         shell: bash
         run: |
           set -euo pipefail
@@ -599,56 +1053,54 @@ jobs:
             process.exit(bad ? 1 : 0);
           '
 
-      - name: Create release
-        uses: softprops/action-gh-release@v2
+      - name: Generate release notes
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const dir = 'dist-release';
+          const tag = process.env.RELEASE_TAG;
+          const sha = process.env.TESTED_SHA;
+          const assets = fs.readdirSync(dir).filter((name) => name !== 'RELEASE_NOTES.md').sort();
+          const notes = [
+            `# AiDB Studio ${tag}`,
+            '',
+            '> Draft created by CI. This is not a public release; a reviewer must inspect the assets and publish the draft manually.',
+            '',
+            `Tested commit: \`${sha}\``,
+            '',
+            '## Verification and supply chain',
+            '- Quality gate passed: install, typecheck, all workspace/MCP/Electron CJS tests, build, docs/controls/i18n, production npm audit and CycloneDX validation.',
+            '- Windows installers are Authenticode signed; macOS apps are Developer ID signed, notarized and use hardened runtime.',
+            '- Linux artifacts are intentionally not platform-code-signed. Verify `SHA256SUMS-linux`, `LINUX_SIGNING.txt` and GitHub provenance; repository maintainers must re-sign deb/rpm packages.',
+            '- `sbom.cdx.json` is the CycloneDX SBOM. Build provenance attestations are attached to the release assets in GitHub.',
+            '',
+            '## Distribution notes',
+            '- Android is an APK signed with the protected production upload key; apksigner verified its certificate SHA-256 against `ANDROID_CERT_SHA256`. It is for sideloading, not a Google Play App Bundle.',
+            '- iOS is an EAS production/store IPA. The downloaded app was independently verified on macOS with `codesign` (Apple Distribution and hardened runtime), embedded provisioning identity and `Info.plist` version checks; it has not been submitted to App Store Connect.',
+            '- Oracle has no upstream prebuilt binding for macOS Intel or Windows ARM64; Oracle is unavailable in those packages.',
+            '',
+            '## Assets',
+            ...assets.map((name) => `- \`${name}\``),
+            '',
+          ].join('\n');
+          fs.writeFileSync(path.join(dir, 'RELEASE_NOTES.md'), notes);
+          NODE
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          TESTED_SHA: ${{ needs.quality.outputs.sha }}
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
         with:
-          name: AiDB Studio ${{ github.ref_name }}
-          tag_name: ${{ github.ref_name }}
-          draft: false
-          prerelease: false
+          name: AiDB Studio ${{ inputs.tag || github.ref_name }}
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          target_commitish: ${{ needs.quality.outputs.sha }}
+          draft: true
+          prerelease: ${{ inputs.prerelease || false }}
           generate_release_notes: false
-          body: |
-            AiDB Studio **v0.0.10** — the app is now built for every platform by GitHub Actions, including Android and iOS, and the mobile identity moves to the project's own domain.
-
-            **All platforms from CI**
-            - Windows, macOS and Linux installers keep the same feature set. The Linux job is pinned to Ubuntu 24.04 because the current `ubuntu-latest` ships RPM 6, which rejects the spec generated by electron-builder's bundled fpm 1.9.3.
-            - **Android** ships as a universal APK (arm64-v8a, armeabi-v7a, x86, x86_64), built with Gradle in CI and signed with a stable debug key. It is ready for sideloading, not for Google Play.
-            - **iOS** ships as an ad-hoc IPA built by EAS and attached here. Apple credentials live on EAS; GitHub only needs an Expo access token. The IPA installs on devices registered in the ad-hoc profile.
-            - Mobile versions come from `apps/mobile/app.json`; Android's `versionName`/`versionCode` derive from it, and CI asserts iOS `MARKETING_VERSION` matches.
-
-            **Identity change**
-            - Android package `top.keiskei.aidb`, iOS bundle id `top.keiskei.ai-db`, desktop appId `top.keiskei.aidb` (previously `com.aidb.studio`).
-            - Android: the new package id installs alongside the old app; uninstall the `com.aidb.studio` build first.
-            - iOS: the new bundle id is a separate app from earlier test builds.
-            - Windows: uninstall 0.0.9 first — the uninstall entry and taskbar identity are keyed by appId, so an in-place upgrade would leave a duplicate entry.
-            - Linux deb/rpm keep the `aidb-studio` package name and upgrade normally; the AppImage is replaced manually.
-
-            **iOS startup fix**
-            - The first EAS build exited as soon as the pairing screen mounted: the committed native project was missing `NSCameraUsageDescription`, `NSLocalNetworkUsageDescription`, `NSBonjourServices` and `NSPhotoLibraryUsageDescription`, and expo-camera raises a fatal error when the camera usage string is absent. The keys were added to the native Info.plist — EAS uses the committed native project and does not apply `app.json` plugins when `ios/` exists.
-
-            **Installers**
-
-            | Platform | Architecture | Files |
-            |---|---|---|
-            | Windows | x64 | `AiDB-Studio-0.0.10-x64-setup.exe` · `AiDB-Studio-0.0.10-x64-portable.zip` |
-            | Windows | arm64 | `AiDB-Studio-0.0.10-arm64-setup.exe` · `AiDB-Studio-0.0.10-arm64-portable.zip` |
-            | macOS | Apple Silicon | `AiDB-Studio-0.0.10-arm64.dmg` |
-            | macOS | Intel | `AiDB-Studio-0.0.10-x64.dmg` |
-            | Linux | x64 | `AiDB-Studio-0.0.10-x86_64.AppImage` · `-amd64.deb` · `-x86_64.rpm` |
-            | Linux | arm64 | `AiDB-Studio-0.0.10-arm64.AppImage` · `-arm64.deb` · `-aarch64.rpm` |
-            | Android | universal | `AiDB-Studio-0.0.10-android.apk` |
-            | iOS | arm64 | `AiDB-Studio-0.0.10-ios.ipa` |
-
-            **Platform notes**
-            - Oracle needs a prebuilt node-oracledb binding; upstream ships none for macOS Intel or Windows arm64, so the engine is greyed out there with the reason. Linux arm64 does ship it.
-            - Linux deb/rpm install through the package manager; the AppImage is portable but needs FUSE 2. RPMs are produced on Ubuntu 24.04 (RPM 4.18).
-            - The Android APK is debug-signed for internal distribution; sideload it or install with `adb install`. Do not publish it to a store without a release keystore.
-            - The iOS IPA is ad-hoc distribution: only devices registered in the EAS provisioning profile can install it. Install it from the EAS build page or with Apple Configurator.
-            - macOS builds stay unsigned; the update card links to this release instead of replacing the app. Windows NSIS and Linux AppImage auto-update channels keep working for installs of this version.
-
-            **Verification**
-            - CI builds the six desktop combinations (Windows/macOS/Linux × x64/arm64), the Android APK and the iOS IPA from this tag, and asserts the APK's package id, version and native bindings before publishing.
-            - The iOS credentials were created through EAS; the project is linked to `@keiskeies/aidb-studio`.
+          body_path: dist-release/RELEASE_NOTES.md
           files: |
             dist-release/*.exe
             dist-release/*.zip
@@ -658,9 +1110,11 @@ jobs:
             dist-release/*.rpm
             dist-release/*.apk
             dist-release/*.ipa
-            # 自动更新的元数据（latest.yml / latest-linux.yml）：客户端靠它判断版本与差分下载。
-            # 只取 latest 前缀，避免把 electron-builder 的 builder-debug.yml 也发上线。
             dist-release/latest*.yml
             dist-release/*.blockmap
+            dist-release/sbom.cdx.json
+            dist-release/signing-*.json
+            dist-release/SHA256SUMS-*
+            dist-release/LINUX_SIGNING.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

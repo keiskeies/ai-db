@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { ScrollView, View } from 'react-native';
+import { Platform, ScrollView, View } from 'react-native';
 import * as Linking from 'expo-linking';
 import { colors } from '../theme';
 import { styles } from '../styles';
@@ -146,6 +146,37 @@ function parseMarkdown(text: string): MdBlock[] {
 
 const MD_INLINE = /(\*\*[^*]+\*\*|__[^_]+__|`[^`\n]+`|~~[^~\n]+~~|\[[^\]\n]+\]\([^)\s]+\)|\*[^*\n]+\*)/g;
 
+/** Markdown 内容来自模型/数据库，链接必须在调用平台 opener 前再次做绝对 URL 白名单校验。 */
+export function getSafeMarkdownUrl(raw: string): string | null {
+  if (/[\\\s\u0000-\u001f\u007f-\u009f]/u.test(raw)) return null;
+  const value = raw;
+  if (!value || !/^https?:\/\//i.test(value)) return null;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
+    if (!parsed.hostname || parsed.username || parsed.password) return null;
+    return parsed.href;
+  } catch {
+    return null;
+  }
+}
+
+export function openMarkdownLink(raw: string): void {
+  const url = getSafeMarkdownUrl(raw);
+  if (!url) return;
+  if (Platform.OS === 'web') {
+    // Expo Linking 的 Web 实现会替换当前页面地址；新标签 + noopener 保留应用与内存凭据。
+    if (typeof window === 'undefined' || typeof window.open !== 'function') return;
+    try {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch {
+      /* 浏览器可能阻止弹窗；绝不回退到顶层导航。 */
+    }
+    return;
+  }
+  void Linking.openURL(url).catch(() => undefined);
+}
+
 function Inline({ text, style }: { text: string; style?: any }) {
   const parts = text.split(MD_INLINE).filter(Boolean);
   return (
@@ -157,8 +188,9 @@ function Inline({ text, style }: { text: string; style?: any }) {
         if (part.startsWith('~~') && part.endsWith('~~')) return <Text key={index} style={styles.mdStrike}>{part.slice(2, -2)}</Text>;
         const link = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(part);
         if (link) {
+          if (!getSafeMarkdownUrl(link[2])) return <Text key={index}>{link[1]}</Text>;
           return (
-            <Text key={index} style={styles.mdLink} onPress={() => void Linking.openURL(link[2])}>
+            <Text key={index} style={styles.mdLink} onPress={() => openMarkdownLink(link[2])}>
               {link[1]}
             </Text>
           );

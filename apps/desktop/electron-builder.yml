@@ -50,6 +50,13 @@ npmRebuild: false
 # 跨架构构建时另一架构的 duckdb.node 会各多出约 60 MB）。
 afterPack: build/afterPack.cjs
 win:
+  # 发布构建强制 Authenticode 签名；CI 只从 secrets 注入 WIN_CSC_LINK /
+  # WIN_CSC_KEY_PASSWORD（base64 PFX + 密码），仓库不保存证书或私钥。
+  forceCodeSigning: true
+  signtoolOptions:
+    signingHashAlgorithms:
+      - sha256
+    rfc3161TimeStampServer: http://timestamp.digicert.com
   # 两个架构都要出安装器：arm64 原生比 x64 模拟省电、启动快。
   # Windows on ARM 也能跑 x64 版，所以两版并存不影响老用户。
   target:
@@ -60,11 +67,25 @@ win:
 mac:
   # 未指定 arch 时 electron-builder 回落到宿主架构（process.arch），只会出一个包。
   # 同时出 Apple Silicon 与 Intel 由 CI 传入 `--mac --x64 --arm64`。
+  # 发布构建强制 Developer ID Application 签名与 notarization；CI 从 secrets
+  # 注入 CSC_LINK / CSC_KEY_PASSWORD / CSC_NAME，以及 APPLE_ID /
+  # APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID。无密钥时构建必须失败。
+  forceCodeSigning: true
+  hardenedRuntime: true
+  notarize: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
   target:
     - dmg
   category: public.app-category.developer-tools
   artifactName: AiDB-Studio-${version}-${arch}.${ext}
 linux:
+  # 签名策略：当前 CI 不对 AppImage/deb/rpm 做平台代码签名，也不伪装签名成功。
+  # 每个产物由 GitHub build provenance 证明来源，并发布 SHA256SUMS-linux 供校验；
+  # deb/rpm 的分发方应使用各自发行版密钥重新签名，AppImage 用户应核对校验和与
+  # attestation。需要平台签名时必须接入维护者的 GPG/APT/RPM 密钥与受保护发布环境。
+  forceCodeSigning: false
   # AppImage 免安装；deb / rpm 走发行版包管理器，装完在应用菜单里出现。
   target:
     - AppImage

@@ -30,6 +30,36 @@ export interface SaveExportedFileResult {
   error?: string;
 }
 
+export interface SshPrivateKeyImportDialogUi {
+  title: string;
+  buttonLabel: string;
+  privateKeys: string;
+  allFiles: string;
+}
+
+export type SshPrivateKeyImportErrorCode =
+  | 'SSH_KEY_IMPORT_UNAVAILABLE'
+  | 'SSH_KEY_DIALOG_FAILED'
+  | 'SSH_KEY_READ_FAILED'
+  | 'SSH_KEY_SYMLINK_REJECTED'
+  | 'SSH_KEY_TOO_LARGE'
+  | 'SSH_KEY_STORE_FAILED'
+  | 'SSH_KEY_IMPORT_FAILED';
+
+export interface ImportedSshPrivateKey {
+  /** 主进程生成的受保护随机文件名。 */
+  fileName: string;
+  /** 仅用于界面展示的源文件名，不含源绝对路径。 */
+  sourceFileName: string;
+  path: string;
+  sizeBytes: number;
+}
+
+export type SshPrivateKeyImportResult =
+  | { ok: true; canceled?: false } & ImportedSshPrivateKey
+  | { ok: false; canceled?: false; code: SshPrivateKeyImportErrorCode }
+  | { ok?: false; canceled: true };
+
 /** 原生菜单描述项：由渲染层按当前语言生成，主进程负责安装（见 electron/menuTemplate.cjs）。 */
 export type AppMenuItem =
   | { type: 'separator' }
@@ -97,6 +127,7 @@ export interface DesktopBridge {
   createTableShortcut: (payload: TableShortcutPayload & { ui?: DesktopDialogUi }) => Promise<{ ok: boolean; path?: string; error?: string }>;
   saveExportedFile?: (payload: { sourcePath: string; ui?: DesktopDialogUi }) => Promise<SaveExportedFileResult>;
   exportPdf?: (payload: { html: string; name?: string; ui?: DesktopDialogUi }) => Promise<SaveExportedFileResult>;
+  importSshPrivateKey?: (ui: SshPrivateKeyImportDialogUi) => Promise<SshPrivateKeyImportResult>;
   setApplicationMenu?: (spec: AppMenuItem[]) => Promise<boolean>;
   onMenuCommand?: (callback: (id: string) => void) => () => void;
   updater?: DesktopUpdaterBridge;

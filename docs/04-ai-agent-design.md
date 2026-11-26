@@ -63,23 +63,26 @@ for (step = 0; step < maxSteps; step++) {
 
 **约束**：`maxSteps` 默认 12；同一工具相同参数连续失败 2 次 → 中止并解释；单工具超时 60s（查询 30s）；取消信号贯穿 Provider 与 Driver。
 
-**回合没有截止时间**（曾有，已删）。原先的 `AIDB_AGENT_TURN_MS` / `clamp(maxSteps × 20s, 8min, 30min)`
-时间预算会在跑满时 abort 整个回合，看起来像「跑到一半莫名其妙停了」。删掉它的理由不是「上限太短」，
-而是**用总时长当结束条件本身就是错的**：回合该不该结束取决于还有没有进展，而回合级计时器看不见进展——
-模型在连续生成、工具在连续返回的健康长回合，和真卡死的连接，对它来说一模一样。
-同理删掉了 `[deadline reminder]`：它是计时器的同伙，没有掐断之后还催模型提前收尾，只会让长回合草草出结论。
+**绝对预算与进展判定是两层约束，不能互相替代**。网关在创建持久化回合 claim 时写入
+`deadline_at`，默认 `AIDB_AGENT_TURN_MS=30min`；允许配置为 `0..86400000` 的整数，`0` 表示关闭。
+预算从首个 await 之前开始计时，覆盖附件、结构、模型、工具和审批等待。到期会 abort 合并信号、
+持久化 `deadline` 原因，并在阶段/工具边界及运行器响应后检查；不能依赖尚未返回的 Provider 或驱动
+合作退出，因此单次底层操作仍受各自超时约束。审批最多等到剩余预算，不会另起 5 分钟。
+预算中止显示 `TURN_DEADLINE`、会话标记 error，并写 `deadline` 续跑检查点，而不是冒充用户停止。
 
-现在的约束分三类，全都按「资源/进展」判定，不按挂钟：
+其余约束按资源或进展判定：
 
-- **步数**：`maxSteps`（0 = 不限），先卡住的是步数而不是时间。
+- **步数**：`maxSteps`（0 = 不限），先卡住的是步数而不是模型静默。
 - **上下文**：`contextTokenBudget` 触及即压缩最早的工具结果；单条结果按剩余窗口装箱。
 - **进展**：模型流的字节级停摆看门狗（`AIDB_PROVIDER_STALL_MS`，默认 300s，0 = 关闭）。
   判定在 `providers/common.ts`：连续无字节才算死，SSE keep-alive 注释帧也算活着，
   本地推理（Ollama）首 token 前可以静默很久，因此该路径直接关闭看门狗。
   响应头之前的静默由 `watchRequestStall` 覆盖，拿到头之后交回逐块判定。
 
-中止原因只有两种（`AgentAbortCause = 'stalled' | 'user'`）：用户点的停止，或连接停摆。
-半截正文在步骤边界处入账到 `result.text`，所以中止时「已经说过的话」仍然落库并回灌给模型。
+核心运行器的中止原因有三种（`AgentAbortCause = 'stalled' | 'user' | 'deadline'`）：模型连接停摆、
+用户停止、网关绝对预算到期。传输层断线在核心运行器看来仍是 signal abort，但 Host 会另行记住
+`disconnected`，用于续跑检查点。半截正文在步骤边界处入账到 `result.text`，所以中止时「已经说过的话」
+仍然落库并回灌给模型。进程重启后遗留 running claim 则恢复为 `interrupted`，与上述主动中止分开。
 
 但「中止」只覆盖了一半的「莫名其妙就停了」。`done` 曾经把三件事说成一件——模型真说完了、
 回复被 `max_tokens` 拦腰截断（常发生在工具调用写到一半时）、跑满 `maxSteps`——界面只能一律显示
@@ -109,22 +112,22 @@ for (step = 0; step < maxSteps; step++) {
 界面据此决定三件事：计划卡还转不转圈（只有回合真的在跑才动画）、结尾行写「已完成」还是
 「未完成（可继续）」、以及给不给一键「继续」。运行中的回合另有两句实话：距最后一个事件
 30 秒起报告「已经等了多久」（只报告，不判定失败——一次全表扫描本来就可能几分钟没事件），
-90 秒无字节则由 `readWithIdleCeiling` 判定通道已死。后者在 runtime 眼里与用户点停止一模一样
-（都只是 `signal.aborted`，`abortCause` 一律 `user`），区别只存在于传输层：SSE 路由的
-`res.on('close')` 用 `host.abort(sessionId, 'disconnected')` 把它记下来，回合结束时据此落
-`cause: disconnected` 的检查点。同一个回合只认第一次登记——用户点停止之后流才会关闭并再报
-一次 `disconnected`，那时不能改口。
+90 秒无字节则由 `readWithIdleCeiling` 判定通道已死。客户端断线对核心 runtime 通常仍只是
+`signal.aborted`，传输层额外用 `host.abort(sessionId, 'disconnected')` 记住原因，回合结束时据此落
+`cause: disconnected` 的检查点；核心自己识别模型停摆时则填 `stalled`，宿主预算到期填 `deadline`。
+同一个回合只认第一次登记——用户点停止之后流才会关闭并再报一次 `disconnected`，那时不能改口。
 
-单条 SQL / 单次 HTTP / 子进程仍然有自己的超时（查询默认 30s），那是「一个操作多久算卡住」，
-与回合活多久无关。等待用户审批的 5 分钟自动拒绝也保留：那期间确实没有任何进展。
+单条 SQL / 单次 HTTP / 子进程仍然有自己的超时（查询默认 30s），那是「一个操作多久算卡死」，
+与宿主回合的绝对预算各司其职。等待用户审批最多 5 分钟，但宿主预算更短时只等到剩余预算。
 
-同一把刀也切掉了回合之外的两处总时长上限：
+命令与 Skill 也没有另设一套互相打架的总时长上限：
 
 - **命令运行**（`/report`、`/compare`、`/diff` 等，`commands/runner.ts`）：原先整次运行有总时长
   上限（report 15 分钟、其余 10 分钟），到点 canceled，原因还写成 `COMMAND_TIMEOUT`。
   中途试过换成「静默判定」，也是错的：`diff` / `fix` 这类确定性步骤本来就有一整段没有可播报
   进度的计算，**忙但安静 ≠ 死了**。现在运行器里一个计时器都不留，卡住的运行留在 running，
   由用户按取消；「它还活着」靠真实进度让人看见（Agent 每步 tool_call 上抛成 `step_progress`）。
+  若命令由 Agent 工具发起，调用方的绝对预算仍通过 controller 向上传递，不能靠取消命令计时器来绕过。
 - **`skill_worker_run` 的等待**（`executor.ts`）：原先 30~900 秒到点 cancel + `SKILL_TIMEOUT`。
   deck 生成本来就是几十分钟的活儿。改成一直等到 Worker 自己到终态或上游 abort；
   里面的模型调用有 provider 看门狗、起的子进程有 skillRunner 自己的超时。
@@ -228,7 +231,7 @@ for (step = 0; step < maxSteps; step++) {
 | 4 | `inspect_schema` | read | 获取库/表结构（列、索引、外键、注释） | `{ connectionId, database?, tables?: string[] }` |
 | 5 | `search_objects` | read | 按名称/注释搜索表、列 | `{ connectionId, query, limit? }` |
 | 6 | `run_sql` | 动态* | 执行 SQL（SELECT/DML/DDL，按语句分类） | `{ connectionId, database?, sql, maxRows?, dryRun? }` |
-| 7 | `explain_sql` | read | 执行计划 | `{ connectionId, database?, sql }` |
+| 7 | `explain_sql` | 动态* | 严格只读校验后取执行计划；Oracle 因写入 PLAN_TABLE_OUTPUT 视为写风险 | `{ connectionId, database?, sql }` |
 | 8 | `sample_rows` | read | 表样例数据（脱敏可选） | `{ connectionId, database?, table, limit? }` |
 | 9 | `profile_column` | read | 列画像（空值率、基数、Top 值、min/max） | `{ connectionId, table, column }` |
 | 10 | `create_table` | ddl | 结构化建表（列/索引定义） | `{ connectionId, database?, table, columns[], indexes? }` |
@@ -275,7 +278,7 @@ for (step = 0; step < maxSteps; step++) {
 | 51 | `skill_write` | write | 写入 Skill 运行 workspace / output | `{ skill, runId?, area?, path, content }` |
 | 52 | `skill_run` | write | 按 aidb.skill.json 声明运行 python/node 入口 | `{ skill, entrypoint, runId? }` |
 | 53 | `skill_list_files` | read | 列出 Skill 运行的 workspace/input/output | `{ runId }` |
-| 54 | `skill_worker_run` | write | 在独立 Skill Worker 中运行技能，等待完成后返回最终答复与产物 | `{ skill, prompt }`（等待无上限，见 §2「回合没有截止时间」） |
+| 54 | `skill_worker_run` | write | 在独立 Skill Worker 中运行技能，等待完成后返回最终答复与产物 | `{ skill, prompt }`（不再单设等待上限，但受宿主回合绝对预算与上游 abort 约束） |
 | 55 | `manage_pipeline` | write | 数据流处理的增删改查与运行：`list` / `validate` / `create` / `update` / `run` / `delete`；`run` 支持 `dryRun` 只渲染目标端 SQL/请求体不写库；返回逐步状态与行数，不含样本行 | `{ action, id?, name?, description?, connectionId?, database?, spec?, params?, dryRun? }` |
 
 \* `run_sql`、`run_mql`、`run_redis`、`run_cypher`、`run_cql`、`run_aql` 风险按各自语言的安全分类动态提升；`alter_table` 按 `operations` 动态判定（`add_column` 为 ddl、`drop_column` 为 destructive）；`mcp_call` 按内置 Server 的工具声明动态判定（只读工具为 read，写工具与外部 Server 为 write）；`dryRun=true` 时 DDL 只返回将执行的 SQL（用于预览）。`run_mql` / `run_redis` / `run_cypher` / `run_aql` / `vector_search` 仅用于对应模型的连接，SQL 专属工具（DDL、审计、图表等）在非 SQL 连接上明确返回不支持；例外是 `manage_index`，在 MongoDB 连接上改走结构化索引通道（同一实现服务对象信息面板的建删），不拼 SQL DDL。

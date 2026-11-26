@@ -1,8 +1,9 @@
-import { Router } from 'express';
+import { Router, type Response } from 'express';
 import {
   COMMANDS,
   encodeSse,
   sseHeaders,
+  type ArtifactInfo,
   type ArtifactType,
   type ReportSpec,
 } from '@aidb/core';
@@ -19,6 +20,20 @@ import {
   num,
   type ApiDeps,
 } from './shared';
+
+/** 设备只能看到来源连接全部已授权的产物；无来源信息的宿主产物一律隐藏。 */
+function deviceCanReadArtifact(res: Response, artifact: ArtifactInfo): boolean {
+  const access = res.locals.agentAccess as { connectionIds: string[] } | undefined;
+  if (!access) return true;
+  const sources = artifact.spec.sources;
+  return Array.isArray(sources) && sources.length > 0
+    && sources.every((source) => access.connectionIds.includes(source.connectionId));
+}
+
+function findDeviceArtifact(deps: ApiDeps, res: Response, id: string): ArtifactInfo | undefined {
+  const artifact = deps.store.getArtifact(id);
+  return artifact && deviceCanReadArtifact(res, artifact) ? artifact : undefined;
+}
 
 function reportDeckOutline(result: any): string {
   const lines: string[] = [];
@@ -92,8 +107,19 @@ export function createCommandsRouter(deps: ApiDeps): Router {
       }
     };
     res.on('close', cleanup);
-    for (const event of commands.events(runId, after)) {
-      send(event);
+    const replay = commands.eventReplay(runId, after);
+    if (replay.truncated) {
+      send({
+        type: 'replay_truncated',
+        runId,
+        after,
+        firstSeq: replay.firstSeq,
+        lastSeq: replay.lastSeq,
+      });
+      if (closed) return;
+    }
+    for (const item of replay.events) {
+      send(item.event);
       if (closed) return;
     }
     if (commands.isFinished(runId)) {
@@ -113,12 +139,12 @@ export function createCommandsRouter(deps: ApiDeps): Router {
       artifacts: store.listArtifacts({
         type: str(req.query.type) as ArtifactType | undefined,
         limit: num(req.query.limit, 100, 1, 500),
-      }),
+      }).filter((artifact) => deviceCanReadArtifact(res, artifact)),
     });
   });
 
   router.get('/artifacts/:id', (req, res) => {
-    const artifact = store.getArtifact(req.params.id);
+    const artifact = findDeviceArtifact(deps, res, req.params.id);
     if (!artifact) {
       res.status(404).json({ error: { code: 'ARTIFACT_NOT_FOUND', message: '产物不存在' } });
       return;
@@ -127,7 +153,7 @@ export function createCommandsRouter(deps: ApiDeps): Router {
   });
 
   router.get('/artifacts/:id/runs', (req, res) => {
-    if (!store.getArtifact(req.params.id)) {
+    if (!findDeviceArtifact(deps, res, req.params.id)) {
       res.status(404).json({ error: { code: 'ARTIFACT_NOT_FOUND', message: '产物不存在' } });
       return;
     }
@@ -137,6 +163,10 @@ export function createCommandsRouter(deps: ApiDeps): Router {
   router.get(
     '/artifacts/:id/export',
     ah(async (req, res) => {
+      if (!findDeviceArtifact(deps, res, req.params.id)) {
+        res.status(404).json({ error: { code: 'ARTIFACT_NOT_FOUND', message: '产物不存在' } });
+        return;
+      }
       const format = str(req.query.format) === 'pptx' ? 'pptx' : 'xlsx';
       const result = await exportArtifact(store, config, req.params.id, format);
       // K5：与 /export 一致，inline 改返回下载 URL（exportArtifact 同样落在 exportDir）。

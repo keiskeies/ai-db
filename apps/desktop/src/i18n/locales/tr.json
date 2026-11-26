@@ -730,7 +730,7 @@
   "openDemo": "Demo veritabanını aç",
   "page": "Sayfa",
   "pairCode": "Eşleştirme kodu",
-  "pairHint": "Mobilde Bridge adresini ve kodunu girin. 5 dakika geçerlidir.",
+  "pairHint": "Mobilde Bridge adresini ve kodunu girin. 1 dakika geçerlidir.",
   "pairing": "Mobil eşleştirme",
   "password": "Şifre",
   "payload 字段": "Yük alanı",

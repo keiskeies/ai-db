@@ -11,7 +11,7 @@
     "package": "npm run build && electron-builder",
     "preview": "vite preview --port 4173 --strictPort",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/layout.test.ts test/agent-turn-ownership.test.ts test/approval-queue.test.ts test/pairingCountdown.test.ts test/store-approval.test.ts test/connection-events.test.ts test/live-timeline.test.ts test/agent-timeline.test.ts test/schema-loading.test.ts test/model-defaults-ui.test.ts test/turn-stop-honesty.test.ts test/turn-channel-idle.test.ts test/updater.test.ts test/csv.test.ts"
+    "test": "node --import tsx --test test/layout.test.ts test/agent-turn-ownership.test.ts test/approval-queue.test.ts test/pairingCountdown.test.ts test/store-approval.test.ts test/connection-events.test.ts test/live-timeline.test.ts test/agent-timeline.test.ts test/schema-loading.test.ts test/model-defaults-ui.test.ts test/turn-stop-honesty.test.ts test/turn-channel-idle.test.ts test/updater.test.ts test/ssh-key-import.test.ts test/csv.test.ts"
   },
   "dependencies": {
     "@aidb/client": "*",
@@ -26,20 +26,20 @@
     "electron-updater": "^6.8.11",
     "lucide-react": "^0.469.0",
     "qrcode": "^1.5.4",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
     "react-markdown": "^9.0.3",
     "remark-gfm": "^4.0.0",
     "zustand": "^5.0.2"
   },
   "devDependencies": {
     "@types/qrcode": "^1.5.6",
-    "@types/react": "^18.3.17",
-    "@types/react-dom": "^18.3.5",
+    "@types/react": "19.3.2",
+    "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "^4.3.4",
     "cross-env": "^7.0.3",
     "electron": "^45.0.0",
-    "electron-builder": "^25.1.8",
+    "electron-builder": "^26.18.0",
     "typescript": "^5.7.3",
     "vite": "^6.0.7",
     "wait-on": "^8.0.2"

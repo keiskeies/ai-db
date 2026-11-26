@@ -202,12 +202,12 @@ export function applyAgentEvent(live: LiveTurn, event: any): LiveTurn {
 }
 
 export function isUnfinishedLiveTurn(live: LiveTurn): boolean {
-  if (live.status === 'aborted') return live.abortCause === 'stalled';
+  if (live.status === 'aborted') return live.abortCause === 'stalled' || live.abortCause === 'deadline';
   return isUnfinishedStop(live.stop) || (live.status === 'done' && !live.text.trim() && !live.tools.length);
 }
 
 export function liveTurnEndLabel(live: LiveTurn): string {
-  if (live.status === 'aborted') return live.abortCause === 'stalled' ? '连接中断' : '已中止';
+  if (live.status === 'aborted') return live.abortCause === 'stalled' ? '连接中断' : live.abortCause === 'deadline' ? '未完成' : '已中止';
   if (isUnfinishedLiveTurn(live)) return '未完成';
   return live.status === 'error' ? '失败' : '已完成';
 }

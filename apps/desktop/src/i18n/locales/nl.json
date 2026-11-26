@@ -730,7 +730,7 @@
   "openDemo": "Open demodatabase",
   "page": "Pagina",
   "pairCode": "Koppelingscode",
-  "pairHint": "Voer het Bridge-adres en de code in op mobiel. Geldig voor 5 minuten.",
+  "pairHint": "Voer het Bridge-adres en de code in op mobiel. Geldig voor 1 minuut.",
   "pairing": "Mobiele koppeling",
   "password": "Wachtwoord",
   "payload 字段": "Payload-veld",

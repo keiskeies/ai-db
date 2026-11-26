@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import type { NativeScrollEvent, NativeSyntheticEvent, ScrollView } from 'react-native';
+import type { NativeScrollEvent, NativeSyntheticEvent, ScrollViewInstance } from 'react-native';
 import type { AgentMessage } from '@aidb/core';
 import type { LiveTurn } from '../types';
 
 export function useChatScroll({ live, messages, sessionId, busy }: { live: LiveTurn | undefined; messages: AgentMessage[]; sessionId: string | undefined; busy: boolean | undefined }) {
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance | null>(null);
   /** 是否跟随最新输出；用户手动上滑后置为 false，滑回底部再恢复。 */
   const stickRef = useRef(true);
   const lastScrollTopRef = useRef(0);

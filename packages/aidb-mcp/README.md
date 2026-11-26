@@ -9,7 +9,7 @@ AiDB Studio 的**只读** MCP Server：把 AiDB 的查询类工具（看连接�
 
 ## 环境要求
 
-- **Node.js ≥ 22.5**（本包零运行时依赖，`npx` 会自动拉取）。
+- **Node.js ≥ 22.13**（与 AiDB Studio / Bridge 的 `node:sqlite` 最低运行时一致；本包零运行时依赖，`npx` 会自动拉取）。
 - **AiDB Bridge 正在运行**，默认监听 `http://127.0.0.1:8787`；远程 Bridge 需可达且已开启
   `features.mcp`（设置 → Bridge）。
 - 客户端支持 stdio 型 MCP Server（以「命令 + 参数」方式拉起）。
@@ -185,7 +185,7 @@ CI 会校验 tag 与 `version` 一致、跑测试、核对 tarball 只含 `bin/`
 > npm 公告：绕过 2FA 的 token 正被收紧（2026-08 起影响账号操作，2027-01 起不能直接发包）。
 > 这正是改用 OIDC 的理由——CI 侧不需要任何 token。
 
-要求 Node.js ≥ 22.5；本包零运行时依赖。可信发布额外要求 npm ≥ 11.5.1、Node ≥ 22.14.0。
+运行要求 Node.js ≥ 22.13；本包零运行时依赖。可信发布额外要求 npm ≥ 11.5.1、Node ≥ 22.14.0，CI 使用 Node.js 24。
 
 ## 许可
 

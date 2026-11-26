@@ -130,7 +130,7 @@ test('MCP pairing endpoints create a read-only device', async () => {
   assert.ok(devices.body.devices.some((device: { id: string; scope: string }) => device.id === claimed.body.device.id && device.scope === 'mcp:readonly'));
 });
 
-test('mobile pairing endpoints create a full-scope device', async () => {
+test('mobile pairing endpoints create a default-deny device', async () => {
   const started = await primary.api('/pair/start', { method: 'POST', headers: { 'x-forwarded-for': '10.0.0.21' } });
   const claimed = await primary.api('/pair/claim', {
     method: 'POST',
@@ -138,7 +138,8 @@ test('mobile pairing endpoints create a full-scope device', async () => {
     body: JSON.stringify({ code: started.body.code, deviceName: '默认手机', platform: 'test' }),
   });
   assert.equal(claimed.status, 200, JSON.stringify(claimed.body));
-  assert.equal(claimed.body.device.scope, 'full');
+  assert.equal(claimed.body.device.scope, 'device');
+  assert.deepEqual(claimed.body.device.connectionIds, []);
 });
 
 test('/pair/claim 限流按真实连接地址计数，伪造 X-Forwarded-For 无法绕过', async () => {

@@ -32,6 +32,7 @@ server.on('connection', (socket) => {
 });
 await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+process.env.AIDB_EGRESS_ALLOW_PRIVATE_ORIGINS = [process.env.AIDB_EGRESS_ALLOW_PRIVATE_ORIGINS, base].filter(Boolean).join(',');
 
 after(() => {
   for (const socket of sockets) socket.destroy();

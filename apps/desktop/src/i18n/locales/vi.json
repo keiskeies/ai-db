@@ -730,7 +730,7 @@
   "openDemo": "Mở cơ sở dữ liệu demo",
   "page": "Trang",
   "pairCode": "Mã ghép đôi",
-  "pairHint": "Nhập địa chỉ và mã Bridge trên điện thoại di động. Hợp lệ trong 5 phút.",
+  "pairHint": "Nhập địa chỉ và mã Bridge trên điện thoại di động. Hợp lệ trong 1 phút.",
   "pairing": "Ghép nối di động",
   "password": "Mật khẩu",
   "payload 字段": "Trường Payload",

@@ -1,5 +1,9 @@
 import type { AppSettings } from '@aidb/core';
 import { DbError } from './drivers';
+import { EgressError, safeFetch } from './egress';
+
+const EMBEDDING_TIMEOUT_MS = 30_000;
+const EMBEDDING_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 export function embeddingAvailable(settings: AppSettings): boolean {
   const config = settings.embedding;
@@ -57,14 +61,26 @@ async function requestEmbedding(
   text: string,
 ): Promise<number[]> {
   const url = provider === 'ollama' ? `${base}/api/embeddings` : base.endsWith('/embeddings') ? base : `${base}/embeddings`;
+  let trustedOrigin: string;
+  try {
+    trustedOrigin = new URL(base).origin;
+  } catch {
+    throw new DbError('Embedding Base URL 格式不正确', { code: 'EMBEDDING_FAILED' });
+  }
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (apiKey) headers.authorization = `Bearer ${apiKey}`;
   const body = provider === 'ollama' ? { model, prompt: text } : { model, input: text };
   let response: Response;
   try {
-    response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(30000) });
-  } catch (err: any) {
-    throw new DbError(`Embedding 请求失败：${err?.message ?? '网络错误'}`, { code: 'EMBEDDING_FAILED' });
+    response = await safeFetch(url, { method: 'POST', headers, body: JSON.stringify(body) }, {
+      timeoutMs: EMBEDDING_TIMEOUT_MS,
+      maxBytes: EMBEDDING_MAX_RESPONSE_BYTES,
+      allowPrivateOrigins: [trustedOrigin],
+      allowedProtocols: ['http:', 'https:'],
+    });
+  } catch (err) {
+    const message = err instanceof EgressError ? err.message : err instanceof Error ? err.message : '网络错误';
+    throw new DbError(`Embedding 请求失败：${message}`, { code: 'EMBEDDING_FAILED' });
   }
   const payload = (await response.json().catch(() => null)) as any;
   if (!response.ok) {

@@ -313,21 +313,45 @@ export class MysqlDriver implements RowStreamDriver {
     }
   }
 
-  async describe(database?: string): Promise<TableInfo[]> {
+  private requireDatabase(database?: string): string {
     const db = database ?? this.opts.database;
     if (!db) {
       // 这句是「本次请求没带库」，不是「这条连接没配库」——连接可以完全不配默认库，
       // 那是合法配置（侧栏逐库展开就是靠 /databases + 每次带 database 走）。
-      // 原文案写成「连接未指定数据库」，用户会去改连接配置，而真正缺的是调用方的参数。
       throw new DbError('MySQL 内省必须指定数据库', {
         code: 'NO_DATABASE',
         hint: '调用方未提供 database 参数，且该连接没有默认库。先取 /connections/:id/databases，再带 ?database= 重试。',
       });
     }
+    return db;
+  }
+
+  async describe(database?: string): Promise<TableInfo[]> {
+    const db = this.requireDatabase(database);
     const pool = this.pool(db);
+    return this.describeWithQuery(async (sql, params = []) => {
+      const [rows] = await this.metadataQuery(pool, sql, params);
+      return Array.isArray(rows) ? (rows as Array<Record<string, any>>) : [];
+    }, db);
+  }
+
+  /** 备份快照专用：catalog 只经 runInTransaction 读取，绝不签出另一条池连接。 */
+  async describeInTransaction(sessionId: string, database?: string, opts: RunOptions = {}): Promise<TableInfo[]> {
+    const db = this.requireDatabase(database);
+    if (!this.txConnections.has(sessionId)) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
+    throwIfAborted(opts.signal);
+    return this.describeWithQuery(async (sql, params = []) => {
+      throwIfAborted(opts.signal);
+      const result = await this.runInTransaction(sessionId, sql, params, opts);
+      throwIfAborted(opts.signal);
+      if (result.truncated) throw new DbError('MySQL 事务内结构元数据不完整', { code: 'MYSQL_METADATA_TRUNCATED' });
+      return result.rows.map((row) => Object.fromEntries(result.columns.map((column, index) => [column.name, row[index]])));
+    }, db);
+  }
+
+  private async describeWithQuery(query: (sql: string, params?: unknown[]) => Promise<Array<Record<string, any>>>, db: string): Promise<TableInfo[]> {
     try {
-      const [tableRows] = await this.metadataQuery(
-        pool,
+      const tableRows = await query(
         'SELECT TABLE_NAME, TABLE_TYPE, TABLE_COMMENT, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME',
         [db],
       );
@@ -335,13 +359,11 @@ export class MysqlDriver implements RowStreamDriver {
       // 并非每张 information_schema 表都齐全，单表缺失不应让对象树整体为空。
       const optionalRows = async (sql: string): Promise<Array<Record<string, any>>> => {
         try {
-          const [rows] = await this.metadataQuery(pool, sql, [db]);
-          return Array.isArray(rows) ? (rows as Array<Record<string, any>>) : [];
+          return await query(sql, [db]);
         } catch {
           return [];
         }
       };
-      // 四条附属查询互不依赖，并发跑；每条各占一条连接，超出的排队而不是串行等待。
       const [columnRows, indexRows, fkRows, fkRuleRows] = await Promise.all([
         optionalRows(
           'SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_KEY, EXTRA, COLUMN_COMMENT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME, ORDINAL_POSITION',

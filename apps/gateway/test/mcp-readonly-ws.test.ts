@@ -75,10 +75,32 @@ test('mcp:readonly token is rejected on the WebSocket channel', async () => {
   assert.equal(result.code, 4401);
 });
 
-test('a full-scope device token can still open the WebSocket channel', async () => {
+test('a device-scope token can still open the WebSocket channel', async () => {
   const token = await claim();
   const result = await connect(token);
   assert.equal(result.opened, true, `ws closed with ${result.code}`);
   // 正常关闭，清理服务端连接
   await new Promise<void>((resolve) => setTimeout(resolve, 50));
+});
+
+test('device WebSocket turns cannot fall back to admin access', async () => {
+  const headers = { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` };
+  const created = await fetch(`http://127.0.0.1:${port}/api/agent/sessions`, { method: 'POST', headers, body: JSON.stringify({ title: 'ws acl' }) });
+  const { session } = await created.json() as { session: { id: string } };
+  const token = await claim();
+  const code = await new Promise<string>((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${encodeURIComponent(token)}`);
+    const timer = setTimeout(() => { ws.terminate(); reject(new Error('ws turn timeout')); }, 3000);
+    ws.on('open', () => ws.send(JSON.stringify({ type: 'turn', sessionId: session.id, text: 'hello', mode: 'full' })));
+    ws.on('message', (raw) => {
+      const message = JSON.parse(raw.toString()) as { type?: string; code?: string };
+      if (message.type === 'error') {
+        clearTimeout(timer);
+        ws.close();
+        resolve(message.code ?? '');
+      }
+    });
+    ws.on('error', (err) => { clearTimeout(timer); reject(err); });
+  });
+  assert.equal(code, 'MODE_NOT_ALLOWED');
 });

@@ -5,6 +5,8 @@ export interface RunOptions {
   database?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** 取消关联 id；直驱事务读取用它保留执行归属，管理器仍负责实际取消。 */
+  executionId?: string;
 }
 
 export interface DriverTestResult {
@@ -177,6 +179,11 @@ export function supportsKeyDetail(driver: Driver): driver is RedisKeyDriver {
 export interface TransactionDriver extends Driver {
   beginTransaction(sessionId: string, database?: string): Promise<void>;
   runInTransaction(sessionId: string, sql: string, params: unknown[], opts?: RunOptions): Promise<QueryResult>;
+  /**
+   * 在已固定的事务连接上读取结构元数据。一致性备份只认这个入口，禁止回落 describe()/连接池。
+   * 未实现的驱动仍可用于普通跨请求事务，但不能为备份快照提供结构清单。
+   */
+  describeInTransaction?(sessionId: string, database?: string, opts?: RunOptions): Promise<TableInfo[]>;
   commitTransaction(sessionId: string): Promise<void>;
   rollbackTransaction(sessionId: string): Promise<void>;
 }

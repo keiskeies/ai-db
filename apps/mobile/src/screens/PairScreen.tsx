@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Linking from 'expo-linking';
-import Zeroconf from 'react-native-zeroconf';
+import type ZeroconfClass from 'react-native-zeroconf';
+import type { Service } from 'react-native-zeroconf';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Lock, ScanLine, Search, Sparkles, X } from 'lucide-react-native';
 import { parsePairingPayload } from '@aidb/core';
@@ -80,11 +81,19 @@ export function PairScreen({ onConnected }: { onConnected: (config: BridgeConfig
     if (Platform.OS === 'web') return [];
     return new Promise((resolve) => {
       const found: Array<{ url: string; version?: string }> = [];
-      let zeroconf: Zeroconf | undefined;
+      let zeroconf: ZeroconfClass | undefined;
+      let settled = false;
       const finish = () => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         try {
           zeroconf?.stop();
+        } catch {
+          /* ignore */
+        }
+        try {
+          zeroconf?.removeDeviceListeners();
           zeroconf?.removeAllListeners();
         } catch {
           /* ignore */
@@ -93,15 +102,16 @@ export function PairScreen({ onConnected }: { onConnected: (config: BridgeConfig
       };
       const timer = setTimeout(finish, 4000);
       try {
-        zeroconf = new Zeroconf();
-        zeroconf.on('resolved', (service: any) => {
-          const host = (service.addresses ?? []).find((address: string) => /^\d+\.\d+\.\d+\.\d+$/.test(address)) ?? service.host;
+        const NativeZeroconf = require('react-native-zeroconf').default as typeof ZeroconfClass;
+        zeroconf = new NativeZeroconf();
+        zeroconf.on('resolved', (service: Service) => {
+          const host = service.ipv4[0] ?? service.host;
           if (!host) return;
           const entry = { url: `http://${host}:${service.port}`, version: service.txt?.version };
           if (!found.some((item) => item.url === entry.url)) found.push(entry);
         });
         zeroconf.on('error', () => finish());
-        zeroconf.scan('aidb', 'tcp', 'local.');
+        zeroconf.scan({ type: 'aidb', protocol: 'tcp', domain: 'local.' });
       } catch {
         finish();
       }

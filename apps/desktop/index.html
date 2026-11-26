@@ -5,6 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="color-scheme" content="dark light" />
+    <!--
+      渲染层只访问同源 Bridge 和本机开发服务；模型/搜索请求由 Bridge 发起，不在这里直连外网。
+      Vite 的 React Fast Refresh 会注入一段固定内联 preamble，只按哈希放行它，不使用 unsafe-inline/unsafe-eval。
+      内联 style 仍须开放：React/图表/打印预览会写样式属性；脚本、对象、基址与嵌套框架继续保持严格边界。
+      frame-ancestors 由 HTTP 响应头下发（meta 里会被浏览器忽略并报警告），见网关安全头。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'sha256-Z2/iFzh9VMlVkEOar1f/oSHWwQk3ve1qk/C2WdsC4Xk='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; frame-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
     <link rel="icon" type="image/svg+xml" href="/logo-mark.svg" />
     <title>AiDB Studio</title>
   </head>

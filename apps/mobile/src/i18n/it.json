@@ -32,6 +32,7 @@
   "Bridge 地址": "Bridge URL",
   "Bridge 未连接": "Bridge non connesso",
   "Bridge、设备、扩展、主题与语言": "Bridge, Dispositivi, Estensioni, Temi e Lingua",
+  "Bridge、主题与语言": "Bridge, Temi e Lingua",
   "CSV 导入、CSV / JSON 导出": "importazione CSV, esportazione CSV / JSON",
   "CSV 导入；CSV / JSON / XML / SQL / XLSX 导出": "Importa CSV; Esporta CSV / JSON / XML / SQL / XLSX",
   "CSV 首行作为列名，按列名写入当前表；只读连接会被拒绝。": "Usa la prima riga CSV come nomi colonna e scrivi nella tabella corrente per nome colonna; le connessioni in sola lettura saranno rifiutate.",

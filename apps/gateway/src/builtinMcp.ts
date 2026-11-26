@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { lookup } from 'node:dns/promises';
+import { randomUUID } from 'node:crypto';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
@@ -11,8 +11,8 @@ import {
   type McpServerInfo,
   type ToolResult,
 } from '@aidb/core';
-import { Agent } from 'undici';
 import type { McpTool } from './mcp';
+import { EgressError, isBlockedIp, resolveOutboundUrl, safeFetch } from './egress';
 import { killTree } from './processTree';
 import type { Store } from './store';
 import { runSearch } from './search';
@@ -91,7 +91,7 @@ function normalizeHostPattern(value: string): string {
   if (!bare || bare === 'localhost' || bare.endsWith('.localhost') || bare.endsWith('.local')) {
     failure(`不允许把本机/内网域名加入允许列表：${value}`, 'MCP_INVALID_ARGS');
   }
-  if (isIP(bare) !== 0 && isPrivateIp(bare)) failure(`不允许把内网地址加入允许列表：${value}`, 'MCP_INVALID_ARGS');
+  if (isIP(bare) !== 0 && isBlockedIp(bare)) failure(`不允许把内网地址加入允许列表：${value}`, 'MCP_INVALID_ARGS');
   if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/.test(bare) && isIP(bare) === 0) {
     failure(`域名格式不正确：${value}`, 'MCP_INVALID_ARGS');
   }
@@ -137,7 +137,7 @@ export class BuiltinMcpClient {
       return { ok: false, summary: 'MCP 调用已中止', error: { code: 'MCP_ABORTED', message: '调用方已中止本次 MCP 调用' }, meta: { durationMs: 0 } };
     }
     try {
-      const result = await runBuiltinMcpTool(this.kind(), this.server.args, tool, args);
+      const result = await runBuiltinMcpTool(this.kind(), this.server.args, tool, args, opts);
       return { ok: true, summary: result.summary, data: result.data, meta: { durationMs: Date.now() - started } };
     } catch (err: any) {
       return {
@@ -175,10 +175,11 @@ async function runBuiltinMcpTool(
   serverArgs: string[],
   tool: string,
   input: Record<string, unknown>,
+  opts?: { signal?: AbortSignal; timeoutMs?: number },
 ): Promise<{ summary: string; data: unknown }> {
-  if (kind === 'filesystem') return runFilesystemTool(serverArgs, tool, input);
+  if (kind === 'filesystem') return runFilesystemTool(serverArgs, tool, input, opts);
   if (kind === 'git') return runGitTool(serverArgs, tool, input);
-  return runWebTool(serverArgs, tool, input);
+  return runWebTool(serverArgs, tool, input, opts);
 }
 
 /* ------------------------------------------------------------------ filesystem */
@@ -223,6 +224,56 @@ function resolveGrantedPath(input: unknown, roots: string[], label = 'path'): st
     failure(`路径不在允许目录内：${raw}`, 'MCP_PATH_DENIED');
   }
   return candidate;
+}
+
+function throwIfMoveAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) failure('调用方已中止本次 MCP 调用', 'MCP_ABORTED');
+}
+
+/** Move operations reject symlink components instead of following an alias into another tree. */
+function assertMovePathConfined(path: string, roots: string[], label: string): void {
+  const root = roots.find((candidate) => isInside(candidate, path));
+  if (!root) failure(`路径不在允许目录内：${path}`, 'MCP_PATH_DENIED');
+  let current = root;
+  for (const part of relative(root, path).split(sep).filter(Boolean)) {
+    current = join(current, part);
+    let info;
+    try {
+      info = lstatSync(current);
+    } catch (err: any) {
+      if (err?.code === 'ENOENT') return;
+      throw err;
+    }
+    if (info.isSymbolicLink()) failure(`${label}不能包含符号链接：${path}`, 'MCP_PATH_DENIED');
+  }
+}
+
+function resolveMovePath(input: unknown, roots: string[], label: string): string {
+  const raw = typeof input === 'string' ? input.trim() : '';
+  if (!raw) failure(`缺少 ${label}`, 'MCP_INVALID_ARGS');
+  const abs = isAbsolute(raw) ? resolve(raw) : resolve(roots[0], raw);
+  assertMovePathConfined(abs, roots, label);
+  return resolveGrantedPath(raw, roots, label);
+}
+
+interface ReservedMoveBackup {
+  directory: string;
+  path: string;
+}
+
+/** A private same-directory directory atomically reserves a collision-free backup name. */
+function reserveMoveBackup(destination: string): ReservedMoveBackup {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const directory = join(dirname(destination), `.${basename(destination)}.aidb-move-${randomUUID()}`);
+    try {
+      mkdirSync(directory, { mode: 0o700 });
+      return { directory, path: join(directory, 'destination') };
+    } catch (err: any) {
+      if (err?.code === 'EEXIST') continue;
+      failure(`无法创建同目录移动备份：${err?.message ?? String(err)}`, 'MCP_MOVE_BACKUP_FAILED');
+    }
+  }
+  failure('无法预留随机移动备份名称', 'MCP_MOVE_BACKUP_FAILED');
 }
 
 function isBinary(buffer: Buffer): boolean {
@@ -699,6 +750,7 @@ async function runFilesystemTool(
   serverArgs: string[],
   tool: string,
   input: Record<string, unknown>,
+  opts?: { signal?: AbortSignal; timeoutMs?: number },
 ): Promise<{ summary: string; data: unknown }> {
   const roots = rootsOf(serverArgs, argStringAny(input, ['path', 'file_path']));
   /**
@@ -1030,25 +1082,91 @@ async function runFilesystemTool(
   }
 
   if (tool === 'move_file') {
-    const source = resolveGrantedPath(argStringAny(input, ['source', 'source_path']), roots, 'source');
-    const destination = resolveGrantedPath(argStringAny(input, ['destination', 'destination_path']), roots, 'destination');
+    const source = resolveMovePath(argStringAny(input, ['source', 'source_path']), roots, 'source');
+    const destination = resolveMovePath(argStringAny(input, ['destination', 'destination_path']), roots, 'destination');
     if (!existsSync(source)) failure(`源路径不存在：${source}`, 'MCP_PATH_MISSING');
-    const sourceStat = statSync(source);
-    if (source === destination) failure('源路径和目标路径相同', 'MCP_INVALID_ARGS');
+    const sourceStat = lstatSync(source);
+    if (normalizeCase(source) === normalizeCase(destination)) failure('源路径和目标路径相同', 'MCP_INVALID_ARGS');
     if (sourceStat.isDirectory() && isInside(source, destination)) failure('不能把目录移动到自身内部', 'MCP_INVALID_ARGS');
     if (existsSync(destination)) {
-      if (statSync(destination).isDirectory() || sourceStat.isDirectory()) failure('不支持覆盖目录', 'MCP_FILE_EXISTS');
+      if (lstatSync(destination).isDirectory() || sourceStat.isDirectory()) failure('不支持覆盖目录', 'MCP_FILE_EXISTS');
       if (!argBool(input, 'overwrite', false)) failure(`目标已存在；需要覆盖请传 overwrite=true：${destination}`, 'MCP_FILE_EXISTS');
-      unlinkSync(destination);
     }
-    mkdirSync(dirname(destination), { recursive: true });
+
+    let backup: ReservedMoveBackup | undefined;
+    let destinationBackedUp = false;
+    let sourceMoved = false;
     try {
+      throwIfMoveAborted(opts?.signal);
+      mkdirSync(dirname(destination), { recursive: true });
+      assertMovePathConfined(source, roots, 'source');
+      assertMovePathConfined(destination, roots, 'destination');
+
+      if (existsSync(destination)) {
+        if (lstatSync(destination).isDirectory() || sourceStat.isDirectory()) failure('不支持覆盖目录', 'MCP_FILE_EXISTS');
+        if (!argBool(input, 'overwrite', false)) failure(`目标已存在；需要覆盖请传 overwrite=true：${destination}`, 'MCP_FILE_EXISTS');
+        backup = reserveMoveBackup(destination);
+        assertMovePathConfined(backup.directory, roots, 'backup');
+        // Both names are on the same filesystem. The old destination is never unlinked.
+        renameSync(destination, backup.path);
+        destinationBackedUp = true;
+      }
+
+      throwIfMoveAborted(opts?.signal);
+      assertMovePathConfined(destination, roots, 'destination');
+      if (existsSync(destination)) failure('目标路径在移动过程中被其他进程修改', 'MCP_MOVE_DEST_CHANGED');
       renameSync(source, destination);
+      sourceMoved = true;
+
+      // Cancellation before backup cleanup is still reversible, so treat it as a failed move.
+      throwIfMoveAborted(opts?.signal);
+      assertMovePathConfined(destination, roots, 'destination');
+      if (backup) {
+        unlinkSync(backup.path);
+        try {
+          rmdirSync(backup.directory);
+        } catch {
+          // The replacement is already committed. Never recursively remove a path that another
+          // process may have populated after the backup file was deleted.
+        }
+      }
+      return { summary: `移动 ${source} → ${destination}`, data: { source, destination } };
     } catch (err: any) {
+      let rollbackError: unknown;
+      if (sourceMoved) {
+        try {
+          renameSync(destination, source);
+          sourceMoved = false;
+        } catch (rollbackErr) {
+          rollbackError = rollbackErr;
+        }
+      }
+      if (destinationBackedUp && backup && !rollbackError) {
+        try {
+          assertMovePathConfined(destination, roots, 'destination');
+          if (existsSync(destination)) throw Object.assign(new Error('目标路径已被其他进程占用'), { code: 'EEXIST' });
+          renameSync(backup.path, destination);
+          destinationBackedUp = false;
+        } catch (rollbackErr) {
+          rollbackError = rollbackErr;
+        }
+      }
+      if (backup) {
+        try {
+          rmdirSync(backup.directory);
+        } catch {
+          // A non-empty directory contains the only old destination after a failed rollback.
+        }
+      }
+      if (rollbackError) {
+        const saved = destinationBackedUp && backup ? `；旧目标保留在 ${backup.path}` : '';
+        failure(`移动失败且回滚未完成${saved}：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`, 'MCP_MOVE_ROLLBACK_FAILED');
+      }
+      if (opts?.signal?.aborted) failure('调用方已中止本次 MCP 调用', 'MCP_ABORTED');
       if (err?.code === 'EXDEV') failure('跨盘移动不支持，请先复制再删除', 'MCP_MOVE_CROSS_DEVICE');
-      throw err;
+      if (err instanceof BuiltinMcpError) throw err;
+      failure(`移动失败：${err instanceof Error ? err.message : String(err)}`, 'MCP_MOVE_FAILED');
     }
-    return { summary: `移动 ${source} → ${destination}`, data: { source, destination } };
   }
 
   if (tool === 'delete_file') {
@@ -1170,94 +1288,28 @@ async function runGitTool(
 
 /* ------------------------------------------------------------------ web */
 
-function isPrivateIpv4(ip: string): boolean {
-  const parts = ip.split('.').map((part) => Number(part));
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return true;
-  const [a, b, c] = parts;
-  if (a === 0 || a === 10 || a === 127) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 0) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 198 && (b === 18 || b === 19)) return true;
-  if (a === 198 && b === 51 && c === 100) return true;
-  if (a === 203 && b === 0 && c === 113) return true;
-  if (a >= 224) return true;
-  return false;
-}
-
-function ipv4FromMappedIpv6(value: string): string | undefined {
-  const rest = value.slice('::ffff:'.length);
-  if (isIP(rest) === 4) return rest;
-  const groups = rest.split(':');
-  if (groups.length !== 2) return undefined;
-  const high = Number.parseInt(groups[0], 16);
-  const low = Number.parseInt(groups[1], 16);
-  if (!Number.isInteger(high) || !Number.isInteger(low) || high < 0 || high > 0xffff || low < 0 || low > 0xffff) return undefined;
-  return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
-}
-
-function isPrivateIp(ip: string): boolean {
-  const value = ip.trim().toLowerCase().replace(/^\[|\]$/g, '').split('%')[0];
-  if (isIP(value) === 4) return isPrivateIpv4(value);
-  if (isIP(value) === 6) {
-    if (value.startsWith('::ffff:')) {
-      const mapped = ipv4FromMappedIpv6(value);
-      return mapped ? isPrivateIpv4(mapped) : true;
-    }
-    if (value === '::' || value === '::1') return true;
-    if (/^f[cd]/.test(value)) return true;
-    if (/^fe[89ab]/.test(value)) return true;
-    if (/^ff/.test(value)) return true;
-    return false;
+function webEgressFailure(err: unknown): never {
+  if (err instanceof EgressError) {
+    const code = err.code === 'EGRESS_DNS_FAILED' ? 'MCP_DNS_FAILED'
+      : err.code === 'EGRESS_REDIRECT_DENIED' || err.code === 'EGRESS_REDIRECT_LIMIT' ? 'MCP_FETCH_REDIRECT'
+        : err.code === 'EGRESS_RESPONSE_TOO_LARGE' ? 'MCP_FETCH_TOO_LARGE'
+          : err.code === 'EGRESS_TIMEOUT' ? 'MCP_FETCH_TIMEOUT'
+            : err.code === 'EGRESS_ABORTED' ? 'MCP_ABORTED'
+              : err.code === 'EGRESS_URL_DENIED' ? 'MCP_URL_DENIED'
+                : 'MCP_FETCH_FAILED';
+    failure(err.message, code);
   }
-  return true;
+  failure(`请求失败：${err instanceof Error ? err.message : String(err)}`, 'MCP_FETCH_FAILED');
 }
 
-function blockedHostName(host: string): boolean {
-  const value = host.toLowerCase();
-  return (
-    value === 'localhost' ||
-    value.endsWith('.localhost') ||
-    value.endsWith('.local') ||
-    value.endsWith('.internal') ||
-    value === 'metadata.google.internal' ||
-    value === 'instance-data'
-  );
-}
-
-/** 校验 URL 并返回本次连接必须使用的已校验地址；域名只解析一次。 */
+/** Compatibility wrapper for callers that only need the validated, pinned address. */
 export async function assertPublicUrl(url: URL): Promise<string> {
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') failure(`只支持 http/https：${url.protocol}`, 'MCP_URL_DENIED');
-  if (url.username || url.password) failure('URL 不能携带用户名或密码', 'MCP_URL_DENIED');
-  const host = url.hostname.replace(/^\[|\]$/g, '');
-  if (blockedHostName(host)) failure(`禁止访问本机/内网地址：${host}`, 'MCP_URL_DENIED');
-  if (isIP(host) !== 0) {
-    if (isPrivateIp(host)) failure(`禁止访问内网地址：${host}`, 'MCP_URL_DENIED');
-    return host;
-  }
-  let addresses;
   try {
-    addresses = await lookup(host, { all: true, verbatim: true });
-  } catch {
-    failure(`域名解析失败：${host}`, 'MCP_DNS_FAILED');
+    const resolved = await resolveOutboundUrl(url, { allowPrivateOrigins: [], allowedProtocols: ['http:', 'https:'] });
+    return resolved.address;
+  } catch (err) {
+    webEgressFailure(err);
   }
-  if (!addresses.length) failure(`域名解析失败：${host}`, 'MCP_DNS_FAILED');
-  for (const address of addresses) {
-    if (isPrivateIp(address.address)) failure(`域名解析到内网地址，已拒绝：${host} → ${address.address}`, 'MCP_URL_DENIED');
-  }
-  return addresses[0].address;
-}
-
-function pinnedAgent(address: string): Agent {
-  const family = isIP(address);
-  return new Agent({
-    connect: {
-      // 不把 URL 重新交给系统解析。URL/hostname 与 TLS SNI 仍保留原域名，仅 TCP 目标固定为上面的 IP。
-      lookup: (_hostname, _options, callback) => callback(null, address, family),
-    },
-  });
 }
 
 function hostAllowed(url: URL, patterns: string[]): boolean {
@@ -1300,32 +1352,11 @@ function htmlToText(html: string): string {
   ).trim();
 }
 
-async function readCappedBody(response: Response, cap: number): Promise<{ text: string; truncated: boolean }> {
-  const reader = response.body?.getReader();
-  if (!reader) return { text: '', truncated: false };
-  const chunks: Buffer[] = [];
-  let size = 0;
-  let truncated = false;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (!value) continue;
-    if (size + value.byteLength > cap) {
-      chunks.push(Buffer.from(value.subarray(0, cap - size)));
-      truncated = true;
-      await reader.cancel();
-      break;
-    }
-    chunks.push(Buffer.from(value));
-    size += value.byteLength;
-  }
-  return { text: Buffer.concat(chunks).toString('utf8'), truncated };
-}
-
 async function runWebTool(
   serverArgs: string[],
   tool: string,
   input: Record<string, unknown>,
+  opts?: { signal?: AbortSignal; timeoutMs?: number },
 ): Promise<{ summary: string; data: unknown }> {
   if (tool === 'web_search') {
     const query = argString(input, 'query').trim();
@@ -1358,52 +1389,43 @@ async function runWebTool(
   const patterns = serverArgs.map((value) => normalizeHostPattern(value));
   const maxChars = argInt(input, 'maxChars', 20_000, 500, 200_000);
   let current = url;
-  for (let hop = 0; hop <= 5; hop += 1) {
-    // allowlist 与 SSRF 校验必须作用于每一跳，而不是只检查用户给出的首个 URL。
-    if (!hostAllowed(current, patterns)) failure(`域名不在允许列表内：${current.hostname}`, 'MCP_URL_DENIED');
-    const address = await assertPublicUrl(current);
-    const dispatcher = pinnedAgent(address);
-    try {
-      let response: Response;
-      try {
-        response = await fetch(current, {
-          redirect: 'manual',
-          signal: AbortSignal.timeout(20_000),
-          headers: { 'user-agent': 'AiDB-Studio/0.1 (+local)', accept: 'text/html,application/json,text/plain,*/*' },
-          // Node fetch 在运行时使用 undici dispatcher；类型断言只补上 @types/node 未声明的字段。
-          dispatcher,
-        } as RequestInit & { dispatcher: Agent });
-      } catch (err: any) {
-        failure(`请求失败：${err?.message ?? current}`, 'MCP_FETCH_FAILED');
-      }
-      if ([301, 302, 303, 307, 308].includes(response.status)) {
-        const location = response.headers.get('location');
-        if (!location) failure(`重定向缺少 Location：HTTP ${response.status}`, 'MCP_FETCH_FAILED');
-        await response.body?.cancel().catch(() => undefined);
-        current = new URL(location, current);
-        continue;
-      }
-      if (!response.ok) failure(`HTTP ${response.status} ${response.statusText}`.trim(), 'MCP_FETCH_STATUS');
-      const contentType = response.headers.get('content-type') ?? '';
-      const body = await readCappedBody(response, MAX_WEB_BYTES);
-      const isHtml = /html|xml/i.test(contentType);
-      const isText = isHtml || /text\/|json|javascript|yaml|csv/i.test(contentType) || !contentType;
-      if (!isText) failure(`不支持的内容类型：${contentType || '未知'}`, 'MCP_FETCH_TYPE');
-      const text = isHtml ? htmlToText(body.text) : body.text;
-      const clipped = text.slice(0, maxChars);
-      return {
-        summary: `抓取 ${current.host} · HTTP ${response.status} · ${clipped.length} 字符${body.truncated || text.length > maxChars ? '（已截断）' : ''}`,
-        data: {
-          url: current.toString(),
-          status: response.status,
-          contentType,
-          text: clipped,
-          truncated: body.truncated || text.length > maxChars,
-        },
-      };
-    } finally {
-      await dispatcher.destroy();
-    }
+  let response: Response;
+  try {
+    response = await safeFetch(url, {
+      signal: opts?.signal,
+      headers: { 'user-agent': 'AiDB-Studio/0.1 (+local)', accept: 'text/html,application/json,text/plain,*/*' },
+    }, {
+      timeoutMs: opts?.timeoutMs ?? 20_000,
+      maxBytes: MAX_WEB_BYTES,
+      allowPrivateOrigins: [],
+      allowedProtocols: ['http:', 'https:'],
+      validateUrl: (candidate) => {
+        // The allowlist and SSRF policy are re-applied by safeFetch to every redirect hop.
+        if (!hostAllowed(candidate, patterns)) {
+          throw new EgressError(`域名不在允许列表内：${candidate.hostname}`, 'EGRESS_URL_DENIED');
+        }
+        current = candidate;
+      },
+    });
+  } catch (err) {
+    webEgressFailure(err);
   }
-  failure('重定向次数过多', 'MCP_FETCH_REDIRECT');
+  if (!response.ok) failure(`HTTP ${response.status} ${response.statusText}`.trim(), 'MCP_FETCH_STATUS');
+  const contentType = response.headers.get('content-type') ?? '';
+  const isHtml = /html|xml/i.test(contentType);
+  const isText = isHtml || /text\/|json|javascript|yaml|csv/i.test(contentType) || !contentType;
+  if (!isText) failure(`不支持的内容类型：${contentType || '未知'}`, 'MCP_FETCH_TYPE');
+  const body = await response.text();
+  const text = isHtml ? htmlToText(body) : body;
+  const clipped = text.slice(0, maxChars);
+  return {
+    summary: `抓取 ${current.host} · HTTP ${response.status} · ${clipped.length} 字符${text.length > maxChars ? '（已截断）' : ''}`,
+    data: {
+      url: current.toString(),
+      status: response.status,
+      contentType,
+      text: clipped,
+      truncated: text.length > maxChars,
+    },
+  };
 }

@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { AddressInfo } from 'node:net';
+import { DatabaseSync } from 'node:sqlite';
 import { createGateway } from '../src/server';
 import { listenRandom } from './helpers';
 
@@ -53,6 +54,7 @@ const mock = createServer((req, res) => {
 await listenRandom(mock);
 const mockPort = (mock.address() as AddressInfo).port;
 const mockBase = `http://127.0.0.1:${mockPort}`;
+process.env.AIDB_EGRESS_ALLOW_PRIVATE_ORIGINS = [process.env.AIDB_EGRESS_ALLOW_PRIVATE_ORIGINS, mockBase].filter(Boolean).join(',');
 
 after(async () => {
   await new Promise<void>((resolve) => mock.close(() => resolve()));
@@ -152,6 +154,38 @@ test('飞书 / 企微 / OneBot / 钉钉 / Slack / Discord / Telegram 渠道发�
   assert.ok(list.body.channels.every((channel: any) => !('config' in channel)));
 });
 
+test('通知出站拒绝未显式允许的私网地址且不回传网络原文', async () => {
+  const channel = await api('/notifications/channels', {
+    method: 'POST',
+    body: JSON.stringify({ name: '私网拦截', type: 'feishu', config: { webhookUrl: 'http://127.0.0.1:1/private' } }),
+  });
+  assert.equal(channel.status, 201);
+  const result = await api(`/notifications/channels/${channel.body.channel.id}/test`, { method: 'POST' });
+  assert.equal(result.body.result.ok, false);
+  assert.match(result.body.result.message, /出站安全校验/);
+  assert.doesNotMatch(result.body.result.message, /127\.0\.0\.1|ECONN/);
+});
+
+test('机器人回调的内部解密异常只返回通用错误且不改写密文', async () => {
+  const channel = gateway.store.createNotificationChannel({
+    name: '损坏回调配置', type: 'qq-onebot', config: { endpoint: mockBase, token: 'bot-token' },
+  });
+  const raw = new DatabaseSync(gateway.config.dbPath);
+  raw.prepare('UPDATE notification_channels SET config_secret = ? WHERE id = ?').run('v2.corrupted.ciphertext', channel.id);
+  raw.close();
+  const response = await fetch(`${base}/api/bots/${channel.id}/events`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ post_type: 'message' }),
+  });
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), { error: 'bot event processing failed' });
+  const check = new DatabaseSync(gateway.config.dbPath);
+  const saved = check.prepare('SELECT config_secret FROM notification_channels WHERE id = ?').get(channel.id) as { config_secret: string };
+  check.close();
+  assert.equal(saved.config_secret, 'v2.corrupted.ciphertext');
+});
+
 test('定时报告会通过绑定渠道发送通知', async () => {
   const boot = await api('/bootstrap');
   const demo = boot.body.connections.find((connection: any) => connection.engine === 'sqlite');
@@ -236,6 +270,8 @@ test('飞书 URL 验证与 OneBot inbound 问答', async () => {
       group_id: 123,
       user_id: 9,
       raw_message: '看看有哪些表',
+      time: Math.floor(Date.now() / 1000),
+      message_id: 101,
     }),
   });
   assert.equal(event.status, 200);
@@ -279,7 +315,7 @@ test('机器人缺失或空白 token 时 fail closed', async () => {
     const response = await fetch(`${base}/api/bots/${channel.id}/events`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ post_type: 'message', message_type: 'group', group_id: 123, raw_message: 'hello' }),
+      body: JSON.stringify({ post_type: 'message', message_type: 'group', group_id: 123, raw_message: 'hello', time: Math.floor(Date.now() / 1000), message_id: 201 }),
     });
     assert.equal(response.status, 403);
   }
@@ -296,7 +332,7 @@ test('allowedChats 清洗后为空拒绝所有，首尾空白仍能正确匹配'
     const response = await fetch(`${base}/api/bots/${channel.id}/events`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer bot-token' },
-      body: JSON.stringify({ post_type: 'message', message_type: 'group', group_id: 123, raw_message: 'hello' }),
+      body: JSON.stringify({ post_type: 'message', message_type: 'group', group_id: 123, raw_message: 'hello', time: Math.floor(Date.now() / 1000), message_id: 201 }),
     });
     assert.equal(response.status, 200);
     const deadline = Date.now() + 3000;
@@ -338,7 +374,7 @@ test('飞书 inbound 消息经只读 Agent 回复', async () => {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       schema: '2.0',
-      header: { token: 'verify-me', event_type: 'im.message.receive_v1' },
+      header: { token: 'verify-me', event_type: 'im.message.receive_v1', event_id: 'feishu-event-301', create_time: String(Date.now()) },
       event: {
         sender: { sender_type: 'user' },
         message: { chat_id: 'chat-1', message_type: 'text', content: JSON.stringify({ text: '看看有哪些表' }) },

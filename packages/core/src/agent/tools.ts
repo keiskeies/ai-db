@@ -125,10 +125,10 @@ export const TOOLS: ToolDefinition[] = [
     // 为什么把单条多列 ALTER 写进 description：本次事故里模型逐列改 741 个字段，
     // 462 秒里只有 0.7 秒在执行、其余全在等模型往返。语法示例直接给全（含 COMMENT），
     // 模型才会一次调用改完整张表，而不是自己猜写法或退回逐列。
-    description: `Execute SQL on a connection. SELECT is read-only; writes/DDL are classified by the highest risk in the script and may require approval. Multiple read-only statements may be sent as one script.
+    description: `Execute SQL on a connection. A call may contain one statement by default; any script with more than one executable statement requires allowMulti: true (or the user's explicit 「允许多语句」 setting). SELECT is read-only; writes/DDL are classified by the highest risk in the script and may require approval. Unknown statement syntax is rejected.
 To change many columns of one table, prefer ONE statement — MySQL accepts multiple clauses in a single ALTER, so the whole table costs one round trip instead of one per column:
   ALTER TABLE \`t\` MODIFY COLUMN \`a\` int NOT NULL COMMENT '甲', MODIFY COLUMN \`b\` varchar(10) NULL COMMENT '乙';
-For a script that must run several write/DDL statements in order, pass allowMulti: true. It is OR-ed with the user's 「允许多语句」 setting. Such a script is NOT atomic: if a later statement fails, earlier ones are already applied — order the script accordingly. Read-only connections still reject write scripts. Keep result sets small and add LIMIT to exploratory SELECTs.`,
+For a script that must run several statements in order, pass allowMulti: true. It is OR-ed with the user's 「允许多语句」 setting. Such a script is NOT atomic: if a later statement fails, earlier ones are already applied — order the script accordingly. Read-only connections still reject write scripts. Keep result sets small and add LIMIT to exploratory SELECTs.`,
     risk: 'dynamic',
     inputSchema: {
       type: 'object',
@@ -143,7 +143,7 @@ For a script that must run several write/DDL statements in order, pass allowMult
         allowMulti: {
           type: 'boolean',
           description:
-            'Explicitly declare that `sql` is a script to run statement by statement. Needed only when the script contains more than one write/DDL statement; read-only scripts never need it. The script is not atomic, and destructive statements still require approval.',
+            'Explicitly declare that `sql` is a script to run statement by statement. Required for every script with more than one executable statement, including read-only scripts. The script is not atomic, and destructive statements still require approval.',
         },
       },
     },
@@ -426,13 +426,14 @@ For a script that must run several write/DDL statements in order, pass allowMult
   },
   {
     name: 'explain_sql',
-    description: 'Get the query execution plan (EXPLAIN) for a SQL statement.',
-    risk: 'read',
+    description:
+      'Get the execution plan for exactly one provably read-only SQL statement. Scripts, write/DDL statements, unknown syntax, nested EXPLAIN, and EXPLAIN ANALYZE/ANALYSE are rejected because they may execute side effects.',
+    risk: 'dynamic',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       required: ['connectionId', 'sql'],
-      properties: { ...connectionProp, ...databaseProp, sql: { type: 'string' } },
+      properties: { ...connectionProp, ...databaseProp, sql: { type: 'string', description: 'One original read-only query; do not include EXPLAIN or multiple statements' } },
     },
     summarize: (a) => `执行计划：${String(a.sql ?? '').slice(0, 60)}`,
   },

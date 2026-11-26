@@ -32,6 +32,7 @@
   "Bridge 地址": "Bridge URL",
   "Bridge 未连接": "Bridge không kết nối",
   "Bridge、设备、扩展、主题与语言": "Bridge, Thiết bị, Tiện ích mở rộng, Giao diện & Ngôn ngữ",
+  "Bridge、主题与语言": "Bridge, Giao diện & Ngôn ngữ",
   "CSV 导入、CSV / JSON 导出": "Nhập khẩu CSV, xuất khẩu CSV / JSON",
   "CSV 导入；CSV / JSON / XML / SQL / XLSX 导出": "Nhập CSV; Xuất CSV / JSON / XML / SQL / XLSX",
   "CSV 首行作为列名，按列名写入当前表；只读连接会被拒绝。": "Sử dụng hàng CSV đầu tiên làm tên cột và ghi vào bảng hiện tại theo tên cột; các kết nối chỉ đọc sẽ bị từ chối.",

@@ -140,6 +140,8 @@ const { useAgentSocket } = require('../src/hooks/useAgentSocket.ts') as typeof i
 const { useSessions } = require('../src/hooks/useSessions.ts') as typeof import('../src/hooks/useSessions');
 const { useSchema } = require('../src/hooks/useSchema.ts') as typeof import('../src/hooks/useSchema');
 const { useBootstrap } = require('../src/hooks/useBootstrap.ts') as typeof import('../src/hooks/useBootstrap');
+const { clearBridgeConfig } = require('../src/bridge.ts') as typeof import('../src/bridge');
+const { useBridgeConfig } = require('../src/hooks/useBridgeConfig.ts') as typeof import('../src/hooks/useBridgeConfig');
 
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void; reject: (reason: unknown) => void };
 const deferred = <T>(): Deferred<T> => {
@@ -1063,13 +1065,13 @@ test('App openTable 的最新请求代次阻止表 A 迟到响应覆盖表 B', a
   };
   visit(source);
   assert.ok(initializer, 'App.tsx 应保留 openTable');
-  const compiled = ts.transpileModule(`(${initializer.getText(source)})`, {
+  const compiled = ts.transpileModule(`return (${initializer.getText(source)});`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
   }).outputText;
   const factory = new Function(
     'client', 'activeConnectionId', 'activeDatabase', 'activeConnectionIdRef', 'activeDatabaseRef',
     'tableRequestRef', 'setSelectedTable', 'setDataLoading', 'setDataPage', 'notify',
-    `return ${compiled}`,
+    compiled,
   ) as (...args: any[]) => (table: TableInfo, offset?: number) => Promise<void>;
 
   const pageA = deferred<any>();
@@ -1106,4 +1108,99 @@ test('App openTable 的最新请求代次阻止表 A 迟到响应覆盖表 B', a
   assert.equal(selectedTable, tableB);
   assert.equal(loading, false);
   assert.deepEqual(notifications, []);
+});
+
+function bridgeConfigWebHarness(start: string, saved: Record<string, string> = {}) {
+  const names = ['location', 'history', 'localStorage'] as const;
+  const descriptors = names.map((name) => Object.getOwnPropertyDescriptor(globalThis, name));
+  const values = new Map(Object.entries(saved));
+  let current = new URL(start);
+  const replacements: string[] = [];
+  Object.defineProperty(globalThis, 'location', {
+    configurable: true,
+    value: {
+      get search() { return current.search; },
+      get pathname() { return current.pathname; },
+      get hash() { return current.hash; },
+    },
+  });
+  Object.defineProperty(globalThis, 'history', {
+    configurable: true,
+    value: {
+      replaceState(_state: unknown, _title: string, next: string) {
+        replacements.push(next);
+        current = new URL(next, current.origin);
+      },
+    },
+  });
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+      removeItem: (key: string) => { values.delete(key); },
+    },
+  });
+  return {
+    values,
+    replacements,
+    get url() { return current; },
+    restore() {
+      names.forEach((name, index) => {
+        const descriptor = descriptors[index];
+        if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+        else delete (globalThis as any)[name];
+      });
+    },
+  };
+}
+
+test('移动 Web 配对 token 仅保留页面内存并立即从地址栏清除，保留无关参数且不新增历史项', async () => {
+  const token = 'pair-secret+/=';
+  const env = bridgeConfigWebHarness(
+    `https://mobile.test/pair?bridge=${encodeURIComponent('http://127.0.0.1:8787/')}&token=${encodeURIComponent(token)}&keep=1#room`,
+  );
+  await clearBridgeConfig();
+  try {
+    const runner = new HookRunner(() => useBridgeConfig());
+    runner.render();
+    await tick();
+    runner.render();
+
+    assert.deepEqual(runner.value.config, { baseUrl: 'http://127.0.0.1:8787', token });
+    assert.equal(runner.value.ready, true);
+    assert.equal(env.values.has('aidb.bridge.v1'), false);
+    assert.deepEqual(env.replacements, ['/pair?keep=1#room']);
+    assert.equal(env.url.search, '?keep=1');
+    assert.equal(env.url.hash, '#room');
+    assert.equal(JSON.stringify(env.replacements).includes(token), false);
+    assert.equal(env.url.href.includes(token), false);
+  } finally {
+    await clearBridgeConfig();
+    env.restore();
+  }
+});
+
+test('移动 Web 不完整配对中的孤立 token 会清除，并删除旧版 localStorage 凭据', async () => {
+  const saved = { baseUrl: 'http://bridge.test', token: 'saved-token' };
+  const env = bridgeConfigWebHarness(
+    'https://mobile.test/pair?token=orphan-secret&keep=1',
+    { 'aidb.bridge.v1': JSON.stringify(saved) },
+  );
+  await clearBridgeConfig();
+  try {
+    const runner = new HookRunner(() => useBridgeConfig());
+    runner.render();
+    await tick();
+    runner.render();
+
+    assert.equal(runner.value.config, null);
+    assert.equal(env.values.has('aidb.bridge.v1'), false);
+    assert.deepEqual(env.replacements, ['/pair?keep=1']);
+    assert.equal(env.url.search.includes('token='), false);
+    assert.equal(env.url.href.includes('orphan-secret'), false);
+  } finally {
+    await clearBridgeConfig();
+    env.restore();
+  }
 });

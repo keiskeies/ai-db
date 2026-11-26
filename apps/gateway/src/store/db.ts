@@ -1,6 +1,8 @@
 import { DatabaseSync } from 'node:sqlite';
 import { SecretBox } from '../crypto';
 
+type SqliteStatement = ReturnType<DatabaseSync['prepare']> & { close?: () => void };
+
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS connections (
   id TEXT PRIMARY KEY, name TEXT NOT NULL,
@@ -52,9 +54,16 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_log(created_at DESC);
 CREATE TABLE IF NOT EXISTS devices (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL, token_hash TEXT NOT NULL,
-  paired_at TEXT NOT NULL, last_seen_at TEXT, revoked INTEGER DEFAULT 0,
-  scope TEXT NOT NULL DEFAULT 'full'
+  paired_at TEXT NOT NULL, last_seen_at TEXT, revoked INTEGER DEFAULT 0, expires_at TEXT,
+  scope TEXT NOT NULL DEFAULT 'device' CHECK (scope IN ('admin','device','mcp:readonly'))
 );
+CREATE TABLE IF NOT EXISTS device_connection_permissions (
+  device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+  granted_at TEXT NOT NULL,
+  PRIMARY KEY (device_id, connection_id)
+);
+CREATE INDEX IF NOT EXISTS idx_device_permissions_connection ON device_connection_permissions(connection_id, device_id);
 CREATE TABLE IF NOT EXISTS backups (
   id TEXT PRIMARY KEY, connection_id TEXT NOT NULL, database_name TEXT, path TEXT NOT NULL,
   format TEXT NOT NULL, bytes INTEGER, label TEXT, created_at TEXT NOT NULL
@@ -223,6 +232,40 @@ CREATE TABLE IF NOT EXISTS dashboard_schedules (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS agent_turns (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+  owner_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL CHECK (status IN ('running','succeeded','failed','aborted','interrupted')),
+  deadline_at TEXT,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  abort_cause TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_turns_session ON agent_turns(session_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_turns_one_running ON agent_turns(session_id) WHERE status = 'running';
+CREATE TABLE IF NOT EXISTS agent_turn_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  turn_id TEXT NOT NULL REFERENCES agent_turns(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(turn_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_turn_events_replay ON agent_turn_events(turn_id, seq);
+CREATE TABLE IF NOT EXISTS artifact_run_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL REFERENCES artifact_runs(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(run_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_artifact_run_events_replay ON artifact_run_events(run_id, seq);
 `;
 
 export const iso = () => new Date().toISOString();
@@ -238,7 +281,12 @@ export class StoreDb {
     this.db.exec('PRAGMA journal_mode = WAL');
     this.db.exec('PRAGMA foreign_keys = ON');
     this.db.exec('PRAGMA busy_timeout = 5000');
-    this.migrate();
+    try {
+      this.migrate();
+    } catch (err) {
+      this.db.close();
+      throw err;
+    }
   }
 
   migrate(): void {
@@ -338,11 +386,15 @@ export class StoreDb {
       }
     }
     this.ensureColumn('jobs', 'payload', 'TEXT');
-    // 出站 MCP 配对凭据需要受限 scope；旧库补列后默认值 'full'，移动端不受影响。
-    this.ensureColumn('devices', 'scope', "TEXT NOT NULL DEFAULT 'full'");
+    // 宿主管理令牌只存在于 config.token；历史设备凭据不得通过补列/旧 full 值提升为 admin。
+    // 缺失、full 或损坏的 scope 一律落到最小权限 device；只有明确保存的 admin 才保留管理能力。
+    this.ensureColumn('devices', 'scope', "TEXT NOT NULL DEFAULT 'device'");
+    this.db.exec("UPDATE devices SET scope = 'device' WHERE scope IS NULL OR scope NOT IN ('admin','device','mcp:readonly')");
+    // 设备令牌默认不设 TTL；若持久化 expires_at，则到期/损坏时间一律按失效处理。
+    this.ensureColumn('devices', 'expires_at', 'TEXT');
     // 术语同义词要跨重启保留，否则召回与 prompt 的加成会静默消失
     this.ensureColumn('memories', 'synonyms', 'TEXT');
-    this.db.exec('PRAGMA user_version = 9');
+    this.db.exec('PRAGMA user_version = 11');
   }
 
   ensureColumn(table: string, column: string, type: string): void {
@@ -351,15 +403,30 @@ export class StoreDb {
   }
 
   all<T>(sql: string, params: unknown[] = []): T[] {
-    return (this.db.prepare(sql).all as (...args: unknown[]) => unknown)(...params) as T[];
+    const statement = this.db.prepare(sql) as SqliteStatement;
+    try {
+      return (statement.all as (...args: unknown[]) => unknown)(...params) as T[];
+    } finally {
+      statement.close?.();
+    }
   }
 
   one<T>(sql: string, params: unknown[] = []): T | undefined {
-    return (this.db.prepare(sql).get as (...args: unknown[]) => unknown)(...params) as T | undefined;
+    const statement = this.db.prepare(sql) as SqliteStatement;
+    try {
+      return (statement.get as (...args: unknown[]) => unknown)(...params) as T | undefined;
+    } finally {
+      statement.close?.();
+    }
   }
 
   exec(sql: string, params: unknown[] = []): { changes: number; lastInsertRowid: number | bigint } {
-    return (this.db.prepare(sql).run as (...args: unknown[]) => { changes: number; lastInsertRowid: number | bigint })(...params);
+    const statement = this.db.prepare(sql) as SqliteStatement;
+    try {
+      return (statement.run as (...args: unknown[]) => { changes: number; lastInsertRowid: number | bigint })(...params);
+    } finally {
+      statement.close?.();
+    }
   }
 
   /**

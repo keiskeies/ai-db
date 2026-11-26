@@ -50,6 +50,52 @@ test('embedText：同文本命中缓存不再请求上游，并发同文本合�
   }
 });
 
+test('embedText：私有 provider 仅信任配置 origin，重定向到其他私网 origin 被拒绝', async () => {
+  let redirectedCalls = 0;
+  const target = createServer((_req, res) => {
+    redirectedCalls += 1;
+    res.end(JSON.stringify({ data: [{ embedding: [9, 9] }] }));
+  });
+  await new Promise<void>((resolve) => target.listen(0, '127.0.0.1', resolve));
+  const targetPort = (target.address() as AddressInfo).port;
+  const source = createServer((_req, res) => {
+    res.statusCode = 302;
+    res.setHeader('location', `http://127.0.0.1:${targetPort}/embeddings`);
+    res.end();
+  });
+  await new Promise<void>((resolve) => source.listen(0, '127.0.0.1', resolve));
+  const sourcePort = (source.address() as AddressInfo).port;
+  try {
+    await assert.rejects(embedText(settingsFor(sourcePort), 'redirect-private'), (err: any) => err.code === 'EMBEDDING_FAILED');
+    assert.equal(redirectedCalls, 0);
+  } finally {
+    await Promise.all([
+      new Promise<void>((resolve) => source.close(() => resolve())),
+      new Promise<void>((resolve) => target.close(() => resolve())),
+    ]);
+  }
+});
+
+test('embedText：超过响应字节上限时失败且不缓存', async () => {
+  let calls = 0;
+  const server = createServer((_req, res) => {
+    calls += 1;
+    res.setHeader('content-type', 'application/json');
+    res.setHeader('content-length', String(2 * 1024 * 1024 + 1));
+    res.end('{}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = (server.address() as AddressInfo).port;
+  try {
+    const settings = settingsFor(port);
+    await assert.rejects(embedText(settings, 'oversized'), (err: any) => err.code === 'EMBEDDING_FAILED');
+    await assert.rejects(embedText(settings, 'oversized'), (err: any) => err.code === 'EMBEDDING_FAILED');
+    assert.equal(calls, 2);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test('embedText：上游失败不缓存，重试仍会请求', async () => {
   let calls = 0;
   const server = createServer((_req, res) => {

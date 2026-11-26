@@ -26,5 +26,16 @@ project.xcworkspace
 # Bundle artifacts
 *.jsbundle
 
+# Signing material is managed by EAS remote credentials or kept outside the repo.
+*.p12
+*.pfx
+*.cer
+*.mobileprovision
+*.provisionprofile
+*.pem
+credentials.json
+certs/
+secrets/
+
 # CocoaPods
 /Pods/

@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { open, statfs, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
 import { Router } from 'express';
 import {
   TOOLS,
@@ -6,6 +9,7 @@ import {
   type AppSettings,
 } from '@aidb/core';
 import { unavailableEngines } from '../engineAvailability';
+import { SqliteDriver } from '../drivers/sqlite';
 import { auditCsv } from '../services';
 import { probeSearchBackend, resetSearchHealth, runSearch, SEARCH_BACKENDS, searchHealth } from '../search';
 import {
@@ -16,6 +20,52 @@ import {
   type ApiDeps,
 } from './shared';
 
+export const MIN_BACKUP_FREE_BYTES = 64 * 1024 * 1024;
+
+export function hasBackupCapacity(stats: { bsize: number | bigint; bavail: number | bigint }): boolean {
+  try {
+    const blockSize = BigInt(stats.bsize);
+    const availableBlocks = BigInt(stats.bavail);
+    return blockSize > 0n && availableBlocks > 0n && availableBlocks * blockSize >= BigInt(MIN_BACKUP_FREE_BYTES);
+  } catch {
+    return false;
+  }
+}
+
+export async function checkSqliteWritable(filePath: string): Promise<boolean> {
+  let driver: SqliteDriver | undefined;
+  try {
+    driver = new SqliteDriver(filePath, false);
+    const table = `aidb_health_${randomUUID().replaceAll('-', '')}`;
+    await driver.execScript(`BEGIN IMMEDIATE; CREATE TABLE "${table}" (id INTEGER); ROLLBACK;`, undefined, { timeoutMs: 2_000 });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await driver?.close().catch(() => undefined);
+  }
+}
+
+export async function checkBackupStorage(directory: string): Promise<boolean> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  const probe = join(directory, `.aidb-health-${randomUUID()}`);
+  try {
+    if (!hasBackupCapacity(await statfs(directory))) return false;
+    handle = await open(probe, 'wx', 0o600);
+    await handle.write('x');
+    await handle.sync();
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try {
+      await handle?.close();
+    } finally {
+      await unlink(probe).catch(() => undefined);
+    }
+  }
+}
+
 export function createSystemRouter(deps: ApiDeps): Router {
   const { store, host, config } = deps;
   const router = Router();
@@ -23,6 +73,7 @@ export function createSystemRouter(deps: ApiDeps): Router {
   router.get('/health', (_req, res) => {
     res.json({
       ok: true,
+      status: 'alive',
       version: config.version,
       platform: process.platform,
       arch: process.arch,
@@ -31,6 +82,40 @@ export function createSystemRouter(deps: ApiDeps): Router {
       uptimeMs: Date.now() - deps.startedAt,
     });
   });
+
+  router.get('/health/metrics', (req, res) => {
+    const device = res.locals.device as { scope?: string } | undefined;
+    if (device && device.scope !== 'admin') {
+      res.status(403).json({ error: { code: 'SCOPE_DENIED', message: '只有管理员可以查看运维指标' } });
+      return;
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ metrics: deps.metrics.snapshot() });
+  });
+
+  router.get('/health/ready', ah(async (_req, res) => {
+    const [sqliteWritable, backupsWritable] = await Promise.all([
+      checkSqliteWritable(config.dbPath),
+      checkBackupStorage(config.backupDir),
+    ]);
+    const checks = {
+      sqlite: sqliteWritable ? 'ok' : 'error',
+      backups: backupsWritable ? 'ok' : 'error',
+    };
+    const ok = sqliteWritable && backupsWritable;
+    res.status(ok ? 200 : 503).json({
+      ok,
+      status: ok ? 'alive' : 'unavailable',
+      checks,
+      version: config.version,
+      platform: process.platform,
+      arch: process.arch,
+      demoReady: store.listConnections().some((c) => c.engine === 'sqlite'),
+      unavailableEngines: unavailableEngines(),
+      uptimeMs: Date.now() - deps.startedAt,
+      ...(!ok ? { error: { code: 'HEALTH_CHECK_FAILED', message: '服务不可用', correlationId: res.locals.correlationId } } : {}),
+    });
+  }));
 
   router.get('/bootstrap', (_req, res) => {
     res.json({

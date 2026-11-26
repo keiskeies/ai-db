@@ -145,6 +145,7 @@ export interface ArtifactRunInfo {
   id: string;
   artifactId: string;
   status: CommandRunStatus;
+  input?: unknown;
   steps?: unknown;
   result?: unknown;
   error?: string;

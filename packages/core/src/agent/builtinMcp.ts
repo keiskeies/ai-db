@@ -177,8 +177,8 @@ const filesystemTools: BuiltinMcpToolDefinition[] = [
   {
     name: 'move_file',
     description:
-      'Move or rename a file or directory inside granted roots. Existing destinations are only replaced when overwrite=true (files only). Write operation, requires approval in ask mode.',
-    risk: 'write',
+      'Move or rename a file or directory inside granted roots. Existing file destinations are only replaced when overwrite=true, using a reversible same-directory backup. Moving removes the source and overwriting replaces the destination, so this is destructive and always requires approval outside full mode.',
+    risk: 'destructive',
     inputSchema: {
       type: 'object',
       additionalProperties: false,

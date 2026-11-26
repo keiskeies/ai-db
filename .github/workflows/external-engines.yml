@@ -1,0 +1,117 @@
+name: External engine contracts
+
+# Deliberately separate from the normal quality gate and release workflow.
+# Service-backed tests are opt-in so routine PR/push CI stays fast. A successful
+# run for a commit is the evidence of live-engine coverage; wiring alone is not.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: external-engines-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+  NPM_CONFIG_REPLACE_REGISTRY_HOST: always
+
+jobs:
+  contracts:
+    name: MySQL, PostgreSQL, MongoDB and Redis contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    services:
+      mysql:
+        image: mysql:8.4.6
+        env:
+          MYSQL_ROOT_PASSWORD: testpass
+          MYSQL_ROOT_HOST: '%'
+          MYSQL_DATABASE: aidb_tx
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --host=127.0.0.1 --user=root --password=testpass --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=20
+          --health-start-period=30s
+      postgres:
+        image: postgres:17.6-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: aidb_tx
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready --username=postgres --dbname=aidb_tx"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=20
+          --health-start-period=20s
+      mongodb:
+        image: mongo:8.0.4
+        env:
+          MONGO_INITDB_DATABASE: aidb_test
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd="mongosh --quiet --eval 'db.adminCommand({ ping: 1 })'"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=20
+          --health-start-period=20s
+      redis-stack:
+        image: redis/redis-stack-server:7.4.0-v10
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=20
+          --health-start-period=15s
+    env:
+      # Ephemeral service-container credentials only; never production secrets.
+      AIDB_TEST_MYSQL_PORT: '3306'
+      AIDB_TEST_MYSQL_PASSWORD: testpass
+      AIDB_TEST_PG_TX_PORT: '5432'
+      AIDB_TEST_PG_TX_PASSWORD: testpass
+      AIDB_TEST_MONGO_PORT: '27017'
+      AIDB_TEST_REDIS_PORT: '6379'
+      AIDB_TEST_REDIS_STACK_PORT: '6379'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --include=optional --registry=https://registry.npmjs.org --replace-registry-host=always
+
+      - name: Verify workflow and service wiring
+        run: npm run test:workflows
+
+      # Explicit file list: do not silently enable every environment-gated suite.
+      # Redis-backed files run serially because some use DB 0 and module-global
+      # RediSearch indexes. All selected gates must have non-empty env values.
+      - name: Run live engine contracts
+        run: |
+          node --import tsx --test --test-concurrency=1 --test-timeout=120000 --test-reporter=spec \
+            apps/gateway/test/agent-transaction.test.ts \
+            apps/gateway/test/external-engine-readonly.test.ts \
+            apps/gateway/test/mysql-transaction.test.ts \
+            apps/gateway/test/tx-reclaim.test.ts \
+            apps/gateway/test/nosql.test.ts \
+            apps/gateway/test/nosql-http.test.ts \
+            apps/gateway/test/redis-stack.test.ts \
+            apps/gateway/test/redis-key.test.ts \
+            apps/gateway/test/redis-keys-delete.test.ts

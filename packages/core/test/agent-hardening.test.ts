@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluatePermission, toolSignature } from '../src/agent/policy';
+import { evaluatePermission, resolveRisk, toolSignature } from '../src/agent/policy';
+import { getTool } from '../src/agent/tools';
 import { rescueXmlToolCalls } from '../src/agent/xmlTools';
 import { applyLimit, maskLiterals } from '../src/sql/classify';
 import { AgentRuntime } from '../src/agent/runtime';
@@ -135,6 +136,73 @@ test('full 直接放行，生产破坏性操作在非 full 仍审批', () => {
   assert.equal(evaluatePermission('destructive', { mode: 'auto', connectionReadonly: false, environment: 'prod', alwaysAllowed: new Set([toolSignature(call)]) }, call), 'ask');
 });
 
+test('内置 move_file 覆盖移动按破坏性审批，auto 模式不能自动执行', () => {
+  const call: ToolCall = {
+    id: 'move-overwrite',
+    name: 'mcp_call',
+    args: {
+      server: 'builtin-filesystem',
+      tool: 'move_file',
+      arguments: { source: '/workspace/new.txt', destination: '/workspace/existing.txt', overwrite: true },
+    },
+  };
+  const risk = resolveRisk(call, getTool('mcp_call')!);
+  assert.equal(risk, 'destructive');
+  assert.equal(evaluatePermission(risk, { mode: 'auto', connectionReadonly: false, environment: 'dev' }, call), 'ask');
+});
+
+test('Agent 最高风险预检：unknown 在 ask/auto/full 下都拒绝', () => {
+  const call = runSql('SELEC 1');
+  for (const mode of ['ask', 'auto', 'full'] as const) {
+    assert.equal(
+      evaluatePermission(resolveRisk(call, getTool('run_sql')!, 'sqlite'), { mode, connectionReadonly: false, environment: 'dev', engine: 'sqlite' }, call),
+      'deny',
+      mode,
+    );
+  }
+  const mixed = runSql('SELECT 1; EXEC usp_rebuild_indexes');
+  assert.equal(
+    evaluatePermission(resolveRisk(mixed, getTool('run_sql')!, 'sqlserver'), { mode: 'full', connectionReadonly: false, environment: 'dev', engine: 'sqlserver' }, mixed),
+    'deny',
+    '一条 unknown 不能让整段脚本落到 ddl 自动放行',
+  );
+});
+
+test('readonly 模式只允许明确 read，session 与 EXPLAIN ANALYZE 均拒绝', () => {
+  const base = { mode: 'readonly' as const, connectionReadonly: false, environment: 'dev' as const, engine: 'postgresql' as const };
+  const read = runSql('SELECT 1');
+  const session = runSql('SET SESSION group_concat_max_len = 65535');
+  const analyzed = runSql('EXPLAIN (ANALYZE) SELECT 1');
+  assert.equal(evaluatePermission(resolveRisk(read, getTool('run_sql')!, base.engine), base, read), 'allow');
+  assert.equal(evaluatePermission(resolveRisk(session, getTool('run_sql')!, base.engine), base, session), 'deny');
+  assert.equal(evaluatePermission(resolveRisk(analyzed, getTool('run_sql')!, base.engine), base, analyzed), 'deny');
+});
+
+test('explain_sql 动态风险取原始 SQL，严格输入在审批前拒绝', () => {
+  const tool = getTool('explain_sql')!;
+  assert.equal(tool.risk, 'dynamic');
+  const call = (sql: string): ToolCall => ({ id: 'e', name: 'explain_sql', args: { connectionId: 'c', sql } });
+  const ctx = { mode: 'auto' as const, connectionReadonly: false, environment: 'dev' as const, engine: 'postgresql' as const };
+
+  assert.equal(resolveRisk(call('SELECT 1'), tool, ctx.engine), 'read');
+  assert.equal(evaluatePermission('read', ctx, call('SELECT 1')), 'allow');
+  assert.equal(resolveRisk(call('SELECT 1 FROM DUAL'), tool, 'oracle'), 'write', 'Oracle 会写 PLAN_TABLE_OUTPUT');
+  assert.equal(resolveRisk(call('DELETE FROM t'), tool, ctx.engine), 'destructive');
+  assert.equal(resolveRisk(call('EXPLAIN (ANALYZE) DELETE FROM t'), tool, ctx.engine), 'destructive');
+  assert.equal(resolveRisk(call('SELECT 1; DELETE FROM t'), tool, ctx.engine), 'destructive');
+
+  for (const sql of [
+    'SELECT 1; SELECT 2',
+    'DELETE FROM t',
+    'EXPLAIN (ANALYZE) SELECT 1',
+    'EXPLAIN (FORMAT JSON) SELECT 1',
+    'SELEC 1',
+  ]) {
+    assert.equal(evaluatePermission(resolveRisk(call(sql), tool, ctx.engine), ctx, call(sql)), 'deny', sql);
+  }
+  assert.equal(evaluatePermission('read', { ...ctx, engine: undefined }, call('SELECT 1')), 'deny', '目标方言不明时不能审批 EXPLAIN');
+});
+
 test('工具参数中的密码不会随 assistant tool_calls 再次进入模型历史', async () => {
   const provider = new Scripted([
     [{ type: 'tool_call', call: { id: 'secret', name: 'create_connection', args: { name: 'x', engine: 'mysql', host: '127.0.0.1', port: 3306, username: 'root', Password: 'plain-secret' } } }, { type: 'done', stopReason: 'tool_use' }],
@@ -155,6 +223,64 @@ test('工具参数中的密码不会随 assistant tool_calls 再次进入模型�
   assert.ok(second);
   assert.ok(!JSON.stringify(second.messages).includes('plain-secret'));
   assert.ok(JSON.stringify(second.messages).includes('***'));
+});
+
+test('runtime 不执行 unknown SQL，也不把它送进 full 模式审批', async () => {
+  const call = runSql('SELEC 1');
+  const provider = new Scripted([
+    [{ type: 'tool_call', call }, { type: 'done', stopReason: 'tool_use' }],
+    [{ type: 'text', text: 'denied' }, { type: 'done', stopReason: 'end_turn' }],
+  ]);
+  let executed = 0;
+  let approvals = 0;
+  const runtime = new AgentRuntime({
+    provider,
+    buildSystem: () => 'sys',
+    executeTool: async () => { executed += 1; return { ok: true, summary: 'should not run', meta: { durationMs: 1 } }; },
+    requestApproval: async () => { approvals += 1; return { decision: 'allow', scope: 'once' }; },
+    emit: () => {},
+    generateId: () => 'id',
+  });
+  const outcome = await runtime.run({
+    sessionId: 's', userText: 'q', mode: 'full', environment: 'dev', connectionReadonly: false,
+    connection: { id: 'conn1', name: 'one', engine: 'sqlite', color: 'green', environment: 'dev', groupName: '', database: 'db', readonly: false, createdAt: '', updatedAt: '' },
+    history: [], context: {}, sessionAllowed: new Set(), alwaysAllowed: new Set(),
+  });
+  assert.equal(outcome.status, 'done');
+  assert.equal(executed, 0);
+  assert.equal(approvals, 0);
+});
+
+test('runtime 跨连接 SQL 不沿用会话方言，按保守最高风险审批', async () => {
+  // 会话是 PG，目标是 MySQL：PG 会把 /*! ... */ 当普通注释，MySQL 会执行。
+  // 若错误沿用 PG 方言，这段脚本会被当成一条 read 并在 auto 下直接执行。
+  const call: ToolCall = {
+    id: 'cross-engine',
+    name: 'run_sql',
+    args: { connectionId: 'mysql-target', sql: 'SELECT 1 /*!; DELETE FROM probe */', allowMulti: true },
+  };
+  const provider = new Scripted([
+    [{ type: 'tool_call', call }, { type: 'done', stopReason: 'tool_use' }],
+    [{ type: 'text', text: 'denied' }, { type: 'done', stopReason: 'end_turn' }],
+  ]);
+  let executed = 0;
+  let approvals = 0;
+  const runtime = new AgentRuntime({
+    provider,
+    buildSystem: () => 'sys',
+    executeTool: async () => { executed += 1; return { ok: true, summary: 'should not run', meta: { durationMs: 1 } }; },
+    requestApproval: async () => { approvals += 1; return { decision: 'deny', scope: 'once' }; },
+    emit: () => {},
+    generateId: () => 'id',
+  });
+  const outcome = await runtime.run({
+    sessionId: 's-cross', userText: 'q', mode: 'auto', environment: 'dev', connectionReadonly: false,
+    connection: { id: 'pg-session', name: 'pg', engine: 'postgresql', color: 'green', environment: 'dev', groupName: '', database: 'db', readonly: false, createdAt: '', updatedAt: '' },
+    history: [], context: {}, sessionAllowed: new Set(), alwaysAllowed: new Set(),
+  });
+  assert.equal(outcome.status, 'done');
+  assert.equal(executed, 0);
+  assert.equal(approvals, 1, '保守分类应看到 DELETE 并要求审批，而不是按 read 自动执行');
 });
 
 const tag = (body: string) => '<' + body + '>';
@@ -221,6 +347,31 @@ class Scripted implements LlmProvider {
     for (const ev of script) yield ev;
   }
 }
+
+test('runtime 将 TURN_DEADLINE 中止信号区分为预算到期而非用户停止', async () => {
+  const controller = new AbortController();
+  controller.abort(Object.assign(new Error('预算到期'), { code: 'TURN_DEADLINE' }));
+  const events: Array<Extract<import('../src/agent/types').AgentEvent, { type: 'aborted' }>> = [];
+  const provider = new Scripted([[{ type: 'text', text: '不应调用' }, { type: 'done', stopReason: 'end_turn' }]]);
+  const runtime = new AgentRuntime({
+    provider,
+    buildSystem: () => 'sys',
+    executeTool: async () => ({ ok: true, summary: 'ok', meta: { durationMs: 1 } }),
+    requestApproval: async () => ({ decision: 'allow', scope: 'once' }),
+    emit: (event) => { if (event.type === 'aborted') events.push(event); },
+    generateId: () => 'id',
+  });
+  const outcome = await runtime.run({
+    sessionId: 'deadline', userText: 'q', mode: 'readonly', environment: 'dev', connectionReadonly: false,
+    history: [], context: {}, sessionAllowed: new Set(), alwaysAllowed: new Set(), signal: controller.signal,
+  });
+  assert.equal(outcome.status, 'aborted');
+  assert.equal(outcome.abortCause, 'deadline');
+  assert.equal(provider.requests.length, 0);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].cause, 'deadline');
+  assert.match(events[0].reason, /绝对时间预算/);
+});
 
 test('runtime 用会话连接与数据库审批，省略参数沿用会话作用域', async () => {
   const call: ToolCall = { id: 'a', name: 'run_sql', args: { sql: 'UPDATE orders SET active = 1 WHERE id = 1' } };

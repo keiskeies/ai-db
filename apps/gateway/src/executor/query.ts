@@ -21,6 +21,7 @@ import { QUALITY_CHECK_TIMEOUT_MS } from '../manager';
 import { defineTool, ok, agentTxKey } from './types';
 
 const SENSITIVE = /pass|secret|token|api[_-]?key|phone|mobile|email|ssn|card|身份证|手机|邮箱/i;
+const ORACLE_PLAN_QUERY = 'SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())';
 
 export const runSqlTool = defineTool('run_sql', async (call, ctx, s) => {
   const a = call.args;
@@ -28,8 +29,16 @@ export const runSqlTool = defineTool('run_sql', async (call, ctx, s) => {
   const conn = s.requireConnection(call, ctx);
   const sql = String(a.sql ?? '').trim();
   if (!sql) throw new DbError('SQL 不能为空', { code: 'EMPTY_SQL' });
+  const classification = classifySql(sql, conn.engine);
+  // 执行器是最后一道边界：即使调用方绕过 Agent runtime，未知语法也不能
+  // 借 unknown -> ddl 的历史映射在 auto/full 下被当成可执行 DDL。
+  if (!classification.statements.length || classification.statements.some((statement) => statement.kind === 'unknown')) {
+    throw new DbError('无法证明 SQL 安全，已拒绝执行未知语法', {
+      code: 'SQL_UNKNOWN',
+      hint: '请改写为明确支持的 SQL 语句；未知语法不会进入审批或执行。',
+    });
+  }
   if (a.dryRun === true) {
-    const classification = classifySql(sql, conn.engine);
     return ok(started, '仅编译，未执行', {
       statements: classification.statements.map((s) => s.sql),
       risk: classification.risk,
@@ -41,9 +50,9 @@ export const runSqlTool = defineTool('run_sql', async (call, ctx, s) => {
     database: s.databaseOf(call, conn),
     maxRows,
     timeoutMs: settings.queryTimeoutMs,
-    // 与用户全局开关取或：参数不覆盖「允许多语句」，也不额外否决它。
-    // 放行多语句不等于放宽权限——挡破坏性操作的是 resolveRisk/evaluatePermission，
-    // 它们对整段脚本取最高风险，批量和逐条调用得到的判定完全相同。
+    // 用户显式开启的全局开关与本次调用的 allowMulti 都算显式授权；manager
+    // 只接受真正的 true。放行多语句不等于放宽权限：resolveRisk/evaluatePermission
+    // 仍对整段脚本取最高风险，unknown 在执行器与 runtime 两层都被拒绝。
     allowMulti: settings.allowMultiStatement || a.allowMulti === true,
     autoLimit: settings.autoLimit,
     actor: 'agent',
@@ -255,12 +264,22 @@ export const explainSqlTool = defineTool('explain_sql', async (call, ctx, s) => 
       hint: '可以改用 audit_database / 索引检查，或粘贴执行计划 XML 让 AI 解读',
     });
   }
+  // buildExplain 会按连接方言重新拆句并分类原始 SQL；这里不能只依赖
+  // runtime 的审批结果，因为 /agent/tools 等直接执行路径也会到达本工具。
   const explain = buildExplain(conn.engine, sql);
-  const script =
-    conn.engine === 'oracle'
-      ? `${explain};
-SELECT PLAN_TABLE_OUTPUT AS plan FROM TABLE(DBMS_XPLAN.DISPLAY())`
-      : explain;
+  const script = conn.engine === 'oracle' ? `${explain};\n${ORACLE_PLAN_QUERY}` : explain;
+  const internal = classifySql(script, conn.engine);
+  // Oracle 的 EXPLAIN PLAN FOR 会写 PLAN_TABLE_OUTPUT，因此第一条按 write
+  // 审批/只读连接拦截；第二条必须是固定只读查询。其他方言只能生成一条 read。
+  const expectedKinds = conn.engine === 'oracle' ? ['write', 'read'] : ['read'];
+  if (
+    internal.statements.length !== expectedKinds.length
+    || internal.statements.some((statement, index) => statement.kind !== expectedKinds[index])
+  ) {
+    throw new DbError('内部 EXPLAIN 脚本未通过受控语句校验', { code: 'EXPLAIN_INTERNAL_INVALID' });
+  }
+  // Oracle 的第二条是固定 plan-table 查询，不包含任何调用方文本；只有这里
+  // 显式 allowMulti: true，其他方言始终只执行 buildExplain 生成的一条语句。
   const batch = await s.manager.query(conn.id, script, {
     database: s.databaseOf(call, conn),
     maxRows: 200,

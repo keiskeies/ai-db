@@ -730,7 +730,7 @@
   "openDemo": "Buka database demo",
   "page": "Halaman",
   "pairCode": "Kode pasangan",
-  "pairHint": "Masukkan alamat dan kode Bridge di ponsel. Berlaku selama 5 menit.",
+  "pairHint": "Masukkan alamat dan kode Bridge di ponsel. Berlaku selama 1 menit.",
   "pairing": "Pemaduan ponsel",
   "password": "Kata sandi",
   "payload 字段": "Bidang payload",

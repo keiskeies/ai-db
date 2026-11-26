@@ -295,7 +295,7 @@ await mobile.goto(`http://127.0.0.1:${mobilePort}`, { waitUntil: 'networkidle' }
 await mobile.waitForTimeout(2000);
 await mobile.screenshot({ path: join(outDir, '16-mobile-pairing.png') }).catch((e) => shotLog.push(`16 ✗ ${e.message}`));
 try {
-  const pair = await api('/pair/start', { method: 'POST' });
+  const pair = await api('/pair/start', { method: 'POST', body: JSON.stringify({ connectionIds: [demo.id] }) });
   await mobile.getByTestId('m-bridge-url').fill(base);
   await mobile.getByTestId('m-pair-code').fill(pair.body.code);
   await mobile.getByTestId('m-connect').click();

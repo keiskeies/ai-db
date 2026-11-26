@@ -83,6 +83,37 @@ test('explain dialect per engine', () => {
   assert.match(buildExplain('postgresql', 'SELECT 1'), /EXPLAIN \(FORMAT JSON/);
 });
 
+test('buildExplain 只接受方言感知的单条明确只读语句', () => {
+  assert.equal(buildExplain('postgresql', '  SELECT 1;  '), 'EXPLAIN (FORMAT JSON) SELECT 1');
+  assert.equal(buildExplain('sqlite', 'SELECT 1;;'), 'EXPLAIN QUERY PLAN SELECT 1', '空分号不是额外可执行语句');
+  assert.equal(
+    buildExplain('postgresql', 'SELECT $$a;b$$ AS note'),
+    'EXPLAIN (FORMAT JSON) SELECT $$a;b$$ AS note',
+    'PG 美元引用里的分号不能当成多语句',
+  );
+  assert.equal(
+    buildExplain('mysql', String.raw`SELECT 'a\';b' AS note`),
+    String.raw`EXPLAIN FORMAT=JSON SELECT 'a\';b' AS note`,
+    'MySQL 反斜杠转义里的分号不能当成多语句',
+  );
+
+  const rejected: Array<[Parameters<typeof buildExplain>[0], string, string]> = [
+    ['sqlite', 'SELECT 1; DELETE FROM probe', 'EXPLAIN_SQL_MULTIPLE'],
+    ['sqlite', 'SELECT 1; SELECT 2', 'EXPLAIN_SQL_MULTIPLE'],
+    ['sqlite', 'DELETE FROM probe', 'EXPLAIN_SQL_NOT_READONLY'],
+    ['sqlite', 'UPDATE probe SET note = \'x\' WHERE id = 1', 'EXPLAIN_SQL_NOT_READONLY'],
+    ['sqlite', 'SELECT * FROM probe FOR UPDATE', 'EXPLAIN_SQL_NOT_READONLY'],
+    ['sqlite', 'SELEC 1', 'EXPLAIN_SQL_NOT_READONLY'],
+    ['postgresql', 'EXPLAIN (ANALYZE) DELETE FROM probe', 'EXPLAIN_SQL_NOT_READONLY'],
+    ['postgresql', 'EXPLAIN ANALYZE SELECT 1', 'EXPLAIN_SQL_NOT_READONLY'],
+    ['postgresql', 'EXPLAIN (FORMAT JSON) SELECT 1', 'EXPLAIN_SQL_NESTED'],
+    ['sqlite', '   ', 'EXPLAIN_SQL_EMPTY'],
+  ];
+  for (const [engine, sql, code] of rejected) {
+    assert.throws(() => buildExplain(engine, sql), (error: any) => error.code === code, `${engine}: ${sql}`);
+  }
+});
+
 test('foreign keys are emitted inside create table and skipped for clickhouse', () => {
   const fk = { name: 'fk_tasks_owner', columns: ['owner_id'], refTable: 'users', refColumns: ['id'], onDelete: 'CASCADE' };
   const sqlite = buildCreateTable('sqlite', { table: 'tasks', columns: cols, foreignKeys: [fk] });

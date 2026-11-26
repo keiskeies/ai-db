@@ -26,6 +26,55 @@ export interface RedisOptions {
   cluster?: boolean;
 }
 
+export interface RedisReconcileSnapshot {
+  key: string;
+  type: string;
+  value: unknown;
+  /** PTTL in milliseconds; -1 means persistent and -2 means missing. */
+  ttl: number;
+  /** Client timestamp taken immediately before PTTL. */
+  capturedAt: number;
+}
+
+export interface RedisReconcileCommand {
+  command: string;
+  args: string[];
+  /** PEXPIRE is resolved immediately before MULTI so the absolute deadline is not extended. */
+  expireAt?: number;
+}
+
+export interface RedisReconcileCasInput {
+  key: string;
+  expected: RedisReconcileSnapshot;
+  commands: RedisReconcileCommand[];
+  database?: string;
+  timeoutMs?: number;
+}
+
+export interface RedisReconcileCasResult {
+  applied: boolean;
+  /** Whether EXEC ran any queued command (runtime errors can partially apply a transaction). */
+  wrote: boolean;
+  snapshot?: RedisReconcileSnapshot;
+  error?: string;
+}
+
+export interface RedisReconcileDriver {
+  supportsReconcileCas(): boolean;
+  compareAndSwapKey(input: RedisReconcileCasInput): Promise<RedisReconcileCasResult>;
+}
+
+/** PTTL naturally decreases between snapshots; expiry semantics still have to match exactly. */
+export const REDIS_SNAPSHOT_TTL_TOLERANCE_MS = 1000;
+const MAX_RECONCILE_SNAPSHOT_ENTRIES = 100_000;
+
+function containsBinary(value: unknown): boolean {
+  if (value instanceof Uint8Array) return true;
+  if (Array.isArray(value)) return value.some(containsBinary);
+  if (value && typeof value === 'object') return Object.values(value as Record<string, unknown>).some(containsBinary);
+  return false;
+}
+
 function serialize(value: unknown): unknown {
   if (value === null || value === undefined) return null;
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
@@ -37,9 +86,36 @@ function serialize(value: unknown): unknown {
 
 function scalarType(value: unknown): string {
   if (value === null || value === undefined) return 'null';
+  if (value instanceof Uint8Array) return 'binary';
   if (typeof value === 'number') return 'integer';
   if (typeof value === 'boolean') return 'boolean';
   return 'string';
+}
+
+function reconcileSnapshotValue(type: string, value: unknown): string {
+  if ((type === 'hash' || type === 'set' || type === 'zset') && Array.isArray(value)) {
+    return JSON.stringify([...value].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
+  }
+  return JSON.stringify(value);
+}
+
+/** Shared by the pre-write snapshot check and WATCH/MULTI/EXEC. */
+export function redisSnapshotsMatch(expected: RedisReconcileSnapshot, actual: RedisReconcileSnapshot, now = Date.now()): boolean {
+  if (expected.key !== actual.key || expected.type !== actual.type) return false;
+  if (expected.ttl === -1 || expected.ttl === -2) {
+    if (actual.ttl !== expected.ttl) return false;
+  } else if (expected.ttl > 0) {
+    if (actual.ttl <= 0) return false;
+    const expectedRemaining = expected.capturedAt + expected.ttl - now;
+    if (Math.abs(actual.ttl - expectedRemaining) > REDIS_SNAPSHOT_TTL_TOLERANCE_MS) return false;
+  } else {
+    return false;
+  }
+  try {
+    return reconcileSnapshotValue(expected.type, expected.value) === reconcileSnapshotValue(actual.type, actual.value);
+  } catch {
+    return false;
+  }
 }
 
 function scalarResult(value: unknown, started: number, statement: string): QueryResult {
@@ -61,11 +137,17 @@ function flattenPairs(raw: unknown): unknown[] {
 
 function pairs(flat: unknown[], left: string, right: string): { columns: { name: string; type: string }[]; rows: unknown[][] } {
   const rows: unknown[][] = [];
-  for (let index = 0; index + 1 < flat.length; index += 2) rows.push([serialize(flat[index]), serialize(flat[index + 1])]);
+  let leftBinary = false;
+  let rightBinary = false;
+  for (let index = 0; index + 1 < flat.length; index += 2) {
+    leftBinary ||= flat[index] instanceof Uint8Array;
+    rightBinary ||= flat[index + 1] instanceof Uint8Array;
+    rows.push([serialize(flat[index]), serialize(flat[index + 1])]);
+  }
   return {
     columns: [
-      { name: left, type: 'string' },
-      { name: right, type: 'string' },
+      { name: left, type: leftBinary ? 'binary' : 'string' },
+      { name: right, type: rightBinary ? 'binary' : 'string' },
     ],
     rows,
   };
@@ -73,8 +155,9 @@ function pairs(flat: unknown[], left: string, right: string): { columns: { name:
 
 function listResult(values: unknown[], name: string, started: number, statement: string, truncated = false): QueryResult {
   const rows = values.map((value) => [serialize(value)]);
+  const binary = values.some((value) => value instanceof Uint8Array);
   return {
-    columns: [{ name, type: scalarType(values[0]) }],
+    columns: [{ name, type: binary ? 'binary' : scalarType(values[0]) }],
     rows,
     rowCount: rows.length,
     durationMs: Date.now() - started,
@@ -156,11 +239,13 @@ function resultFromRedis(
   const upper = command.toUpperCase();
   if (upper === 'INFO' && typeof raw === 'string') return infoResult(raw, started, statement);
   if (raw && typeof raw === 'object' && !Array.isArray(raw) && !Buffer.isBuffer(raw)) {
-    const rows = Object.entries(raw as Record<string, unknown>).map(([field, value]) => [field, serialize(value)]);
+    const entries = Object.entries(raw as Record<string, unknown>);
+    const rows = entries.map(([field, value]) => [field, serialize(value)]);
+    const binary = entries.some(([, value]) => value instanceof Uint8Array);
     return {
       columns: [
         { name: 'field', type: 'string' },
-        { name: 'value', type: 'json', kind: 'json' },
+        { name: 'value', type: binary ? 'binary' : 'json', kind: binary ? undefined : 'json' },
       ],
       rows,
       rowCount: rows.length,
@@ -247,8 +332,9 @@ function resultFromRedis(
       return listResult(raw, upper === 'KEYS' || upper.endsWith('SCAN') ? 'key' : 'value', started, statement, raw.length > maxRows);
     }
     const rows = raw.slice(0, maxRows).map((value) => [serialize(value)]);
+    const binary = containsBinary(raw);
     return {
-      columns: [{ name: 'value', type: 'json', kind: 'json' }],
+      columns: [{ name: 'value', type: binary ? 'binary' : 'json', kind: binary ? undefined : 'json' }],
       rows,
       rowCount: rows.length,
       durationMs: Date.now() - started,
@@ -262,6 +348,8 @@ function resultFromRedis(
 export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
   engine: Engine = 'redis';
   private clients = new Map<number, Redis>();
+  /** WATCH/MULTI must never share the ordinary query connection with interleaved requests. */
+  private reconcileClients = new Map<number, Redis[]>();
 
   constructor(private opts: RedisOptions) {}
 
@@ -342,9 +430,161 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
   private drop(database?: string): void {
     const index = this.dbIndex(database);
     const client = this.clients.get(index);
-    if (!client) return;
-    this.clients.delete(index);
-    client.disconnect();
+    if (client) {
+      this.clients.delete(index);
+      client.disconnect();
+    }
+    this.clearReconcileClients(index);
+  }
+
+  private clearReconcileClients(database?: number): void {
+    const indexes = database === undefined ? [...this.reconcileClients.keys()] : [database];
+    for (const index of indexes) {
+      for (const client of this.reconcileClients.get(index) ?? []) client.disconnect();
+      this.reconcileClients.delete(index);
+    }
+  }
+
+  private async acquireReconcileClient(database?: string): Promise<Redis> {
+    const index = this.dbIndex(database);
+    const pooled = this.reconcileClients.get(index)?.pop();
+    if (pooled && pooled.status === 'ready') return pooled;
+    pooled?.disconnect();
+    const base = await this.ready(database);
+    const client = base.duplicate({ lazyConnect: true, maxRetriesPerRequest: 0 });
+    client.on('error', () => undefined);
+    if (client.status === 'wait') await client.connect();
+    return client;
+  }
+
+  private releaseReconcileClient(database: string | undefined, client: Redis, reusable: boolean): void {
+    if (!reusable || client.status !== 'ready') {
+      client.disconnect();
+      return;
+    }
+    const index = this.dbIndex(database);
+    const pool = this.reconcileClients.get(index) ?? [];
+    if (pool.length >= 4) client.disconnect();
+    else {
+      pool.push(client);
+      this.reconcileClients.set(index, pool);
+    }
+  }
+
+  private async readReconcileSnapshot(client: Redis, key: string): Promise<RedisReconcileSnapshot> {
+    const type = String(await client.type(key));
+    const capturedAt = Date.now();
+    const ttl = Number(await client.pttl(key));
+    let value: unknown = null;
+    if (type === 'string') {
+      value = await client.get(key);
+    } else if (type === 'hash') {
+      const count = Number(await client.hlen(key));
+      if (count > MAX_RECONCILE_SNAPSHOT_ENTRIES) throw new DbError(`Redis hash ${key} 超过快照上限`, { code: 'SNAPSHOT_TOO_LARGE' });
+      const raw = await client.call('HGETALL', key) as unknown;
+      const flat = Array.isArray(raw) ? flattenPairs(raw) : Object.entries((raw ?? {}) as Record<string, unknown>).flat();
+      value = Array.from({ length: Math.floor(flat.length / 2) }, (_, index) => [flat[index * 2], flat[index * 2 + 1]]);
+    } else if (type === 'list' || type === 'set') {
+      const count = Number(type === 'list' ? await client.llen(key) : await client.scard(key));
+      if (count > MAX_RECONCILE_SNAPSHOT_ENTRIES) throw new DbError(`Redis ${type} ${key} 超过快照上限`, { code: 'SNAPSHOT_TOO_LARGE' });
+      value = type === 'list'
+        ? await client.lrange(key, 0, -1)
+        : await client.smembers(key);
+      value = (value as unknown[]).map((item) => [item]);
+    } else if (type === 'zset') {
+      const count = Number(await client.zcard(key));
+      if (count > MAX_RECONCILE_SNAPSHOT_ENTRIES) throw new DbError(`Redis zset ${key} 超过快照上限`, { code: 'SNAPSHOT_TOO_LARGE' });
+      const flat = flattenPairs(await client.call('ZRANGE', key, 0, -1, 'WITHSCORES') as unknown);
+      value = Array.from({ length: Math.floor(flat.length / 2) }, (_, index) => [flat[index * 2], flat[index * 2 + 1]]);
+    } else if (type !== 'none') {
+      throw new DbError(`Redis 键 ${key} 的类型 ${type} 无法完整快照，已拒绝执行`, { code: 'RECON_UNSUPPORTED_TYPE' });
+    }
+    if (containsBinary(value)) {
+      throw new DbError(`Redis 键 ${key} 包含二进制值，无法无损备份或修复`, { code: 'RECON_UNSUPPORTED_BINARY' });
+    }
+    return { key, type, value, ttl, capturedAt };
+  }
+
+  /** Redis Cluster cannot atomically WATCH/MULTI keys across slots; reconciliation fails closed there. */
+  supportsReconcileCas(): boolean {
+    return !this.opts.cluster;
+  }
+
+  /** Per-key compare-and-swap used by both repair and compensating rollback. */
+  async compareAndSwapKey(input: RedisReconcileCasInput): Promise<RedisReconcileCasResult> {
+    if (!this.supportsReconcileCas()) {
+      throw new DbError('Redis Cluster 无法保证跨键对账修复的原子性，已拒绝执行', { code: 'RECON_CAS_UNSUPPORTED', status: 400 });
+    }
+    if (!input.key || !Array.isArray(input.commands) || !input.commands.length) {
+      throw new DbError('Redis 对账 CAS 参数不完整', { code: 'INVALID_INPUT' });
+    }
+    if (containsBinary(input.expected.value)) {
+      throw new DbError(`Redis 键 ${input.key} 包含二进制值，无法无损备份或修复`, { code: 'RECON_UNSUPPORTED_BINARY' });
+    }
+    const allowed = new Set(['SET', 'HSET', 'HDEL', 'DEL', 'RPUSH', 'SADD', 'ZADD', 'PEXPIRE', 'PERSIST']);
+    for (const command of input.commands) {
+      if (!allowed.has(command.command) || !Array.isArray(command.args) || command.args[0] !== input.key || command.args.some((arg) => typeof arg !== 'string')) {
+        throw new DbError('Redis 对账 CAS 命令不符合安全执行契约', { code: 'INVALID_INPUT' });
+      }
+      if (command.expireAt !== undefined && command.command !== 'PEXPIRE') {
+        throw new DbError('Redis 对账 CAS 过期时间参数无效', { code: 'INVALID_INPUT' });
+      }
+    }
+
+    let client: Redis | undefined;
+    let reusable = true;
+    try {
+      return await withQueryTimeout((async () => {
+        client = await this.acquireReconcileClient(input.database);
+        await client.watch(input.key);
+        let execStarted = false;
+        try {
+          const actual = await this.readReconcileSnapshot(client, input.key);
+          if (!redisSnapshotsMatch(input.expected, actual)) {
+            return { applied: false, wrote: false, snapshot: actual, error: `Redis 键 ${input.key} 的值或 TTL 已变化` };
+          }
+          const resolved: RedisReconcileCommand[] = [];
+          for (const command of input.commands) {
+            const args = [...command.args];
+            if (command.expireAt !== undefined) {
+              const remaining = Math.floor(command.expireAt - Date.now());
+              if (remaining <= 0) {
+                return { applied: false, wrote: false, snapshot: actual, error: `Redis 键 ${input.key} 已过期` };
+              }
+              args[1] = String(remaining);
+            }
+            resolved.push({ command: command.command, args });
+          }
+          const transaction = client.multi();
+          for (const command of resolved) transaction.call(command.command, ...command.args);
+          execStarted = true;
+          const replies = await transaction.exec();
+          if (replies === null) {
+            return { applied: false, wrote: false, snapshot: await this.readReconcileSnapshot(client, input.key), error: `Redis 键 ${input.key} 在事务执行前被修改` };
+          }
+          const after = await this.readReconcileSnapshot(client, input.key);
+          const commandError = replies.find(([error]) => error instanceof Error)?.[0];
+          if (commandError) {
+            return { applied: false, wrote: true, snapshot: after, error: commandError.message };
+          }
+          return { applied: true, wrote: true, snapshot: after };
+        } finally {
+          if (!execStarted) await client.unwatch().catch(() => undefined);
+        }
+      })(), input.timeoutMs, {
+        code: 'REDIS_CAS_TIMEOUT',
+        label: 'Redis 对账 CAS',
+        onTimeout: () => {
+          reusable = false;
+          client?.disconnect();
+        },
+      });
+    } catch (err: any) {
+      if (err instanceof DbError) throw err;
+      throw new DbError(err?.message ?? 'Redis 对账 CAS 执行失败', { code: 'REDIS_CAS_FAILED' });
+    } finally {
+      if (client) this.releaseReconcileClient(input.database, client, reusable);
+    }
   }
 
   private async modules(client: Redis): Promise<string[]> {
@@ -892,5 +1132,6 @@ export class RedisDriver implements StructuredQueryDriver, RedisKeyDriver {
     // 直接断开：对卡死的服务端等待 QUIT 会让关闭流程一起挂住。
     for (const client of this.clients.values()) client.disconnect();
     this.clients.clear();
+    this.clearReconcileClients();
   }
 }

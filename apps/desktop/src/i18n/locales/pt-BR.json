@@ -730,7 +730,7 @@
   "openDemo": "Abrir banco de dados de demonstração",
   "page": "Página",
   "pairCode": "Código de pareamento",
-  "pairHint": "Digite o endereço e o código do Bridge no celular. Válido por 5 minutos.",
+  "pairHint": "Digite o endereço e o código do Bridge no celular. Válido por 1 minuto.",
   "pairing": "Pareamento móvel",
   "password": "Senha",
   "payload 字段": "Campo do payload",

@@ -8,11 +8,13 @@ const { spawn } = require('node:child_process');
 const { backupBeforeUpgrade, markVersion } = require('./upgrade.cjs');
 const { installMenu, configureAboutPanel } = require('./menu.cjs');
 const updater = require('./updater.cjs');
+const sshKeyImport = require('./ssh-key-import.cjs');
+const { SshKeyImportError, addPrivateKeyDirectory } = sshKeyImport;
 
 let gatewayProcess = null;
 let mainWindow = null;
-// 网关端口/token 必须跨重启保持不变：渲染层页面 URL 里带着它们，
-// 重启换新端口会让已加载的页面永远连不回来。
+// 网关端口/token 由主进程持有；token 只经现有 preload 的 gateway:event 通道送入渲染层内存，
+// 不放进页面 URL、localStorage 或 sessionStorage。窗口重载时由 dom-ready 重新交付。
 let gatewayInfo = null;
 // 主动退出（before-quit）置位：exit 回调据此区分「用户 quitting」与「意外崩溃」。
 let quitting = false;
@@ -31,6 +33,63 @@ const RESTART_DELAY_CAP_MS = 30_000;
 const DEV_ICON = path.join(__dirname, '..', 'build', 'icon.png');
 const windowIcon = !app.isPackaged && fs.existsSync(DEV_ICON) ? DEV_ICON : undefined;
 
+// 只放行应用自己展示的 HTTPS 外链。搜索/模型文本里的URL也走这里，不能借此打开任意协议或站点。
+const EXTERNAL_HTTPS_HOSTS = new Set([
+  'github.com',
+  'api.github.com',
+  'platform.deepseek.com',
+  'console.anthropic.com',
+  'platform.openai.com',
+  'api.openai.com',
+  'api.search.brave.com',
+  'app.tavily.com',
+  'serper.dev',
+  'www.mojeek.com',
+]);
+
+function isAllowedExternalUrl(target) {
+  try {
+    const url = new URL(target);
+    return url.protocol === 'https:'
+      && !url.username
+      && !url.password
+      && (!url.port || url.port === '443')
+      && EXTERNAL_HTTPS_HOSTS.has(url.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+function openAllowedExternalUrl(target) {
+  if (!isAllowedExternalUrl(target)) return false;
+  try {
+    void Promise.resolve(shell.openExternal(target)).catch(() => undefined);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// 主框架只允许留在启动时确定的本地应用 origin（开发态为 Vite origin）。
+// 外链仍只经 setWindowOpenHandler 交给系统浏览器，重定向/脚本跳转不能替换整个应用。
+function isTrustedAppUrl(target, trustedOrigin) {
+  try {
+    const url = new URL(target, trustedOrigin);
+    return (url.protocol === 'http:' || url.protocol === 'https:')
+      && !url.username
+      && !url.password
+      && url.origin === trustedOrigin;
+  } catch {
+    return false;
+  }
+}
+
+function guardMainFrameNavigation(event, target, trustedOrigin) {
+  if (isTrustedAppUrl(target, trustedOrigin)) return true;
+  event.preventDefault();
+  return false;
+}
+
 function readOpenTableArg(argv = process.argv) {
   const arg = argv.find((item) => item.startsWith('--open-table='));
   if (!arg) return null;
@@ -41,6 +100,152 @@ function readOpenTableArg(argv = process.argv) {
   }
 }
 
+// Windows 不实现 POSIX mode。私钥目录/文件必须显式移除继承，只保留当前用户、SYSTEM
+// 和 Administrators；随后用 Get-Acl 复核 owner、ACE 集合、继承标志与权限，失败即拒绝导入。
+const WINDOWS_ACL_TIMEOUT_MS = 10_000;
+const WINDOWS_ACL_SCRIPT = String.raw`
+$ErrorActionPreference = 'Stop'
+$target = $env:AIDB_SSH_ACL_TARGET
+$kind = $env:AIDB_SSH_ACL_KIND
+if ([string]::IsNullOrWhiteSpace($target)) { throw 'missing ACL target' }
+$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+$userSid = $identity.User.Value
+$inheritance = [System.Security.AccessControl.InheritanceFlags]::None
+if ($kind -eq 'Directory') {
+  $security = New-Object System.Security.AccessControl.DirectorySecurity
+  $inheritance = [System.Security.AccessControl.InheritanceFlags]::ObjectInherit -bor [System.Security.AccessControl.InheritanceFlags]::ContainerInherit
+} elseif ($kind -eq 'File') {
+  $security = New-Object System.Security.AccessControl.FileSecurity
+} else {
+  throw 'invalid ACL kind'
+}
+$security.SetOwner($identity.User)
+$security.SetAccessRuleProtection($true, $false)
+$rights = [System.Security.AccessControl.FileSystemRights]::FullControl
+foreach ($sid in @($userSid, 'S-1-5-18', 'S-1-5-32-544')) {
+  $rule = [System.Security.AccessControl.FileSystemAccessRule]::new([System.Security.Principal.SecurityIdentifier]$sid, $rights, $inheritance, [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)
+  $security.AddAccessRule($rule)
+}
+Set-Acl -LiteralPath $target -AclObject $security
+$actual = Get-Acl -LiteralPath $target
+if (-not $actual.AreAccessRulesProtected) { throw 'ACL inheritance is not blocked' }
+$owner = $actual.GetOwner([System.Security.Principal.SecurityIdentifier])
+if ($owner.Value -ne $userSid) { throw 'unexpected ACL owner' }
+$rules = @($actual.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+$actualSids = @($rules | ForEach-Object { $_.IdentityReference.Value } | Sort-Object)
+$expectedSids = @(@($userSid, 'S-1-5-18', 'S-1-5-32-544') | Sort-Object)
+if (($actualSids -join '|') -ne ($expectedSids -join '|')) { throw 'unexpected ACL principals' }
+foreach ($rule in $rules) {
+  if ($rule.IsInherited -or $rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or $rule.FileSystemRights -ne $rights -or $rule.InheritanceFlags -ne $inheritance -or $rule.PropagationFlags -ne [System.Security.AccessControl.PropagationFlags]::None) { throw 'unexpected ACL rule' }
+}
+`;
+
+function runWindowsAcl(target, kind) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let outputBytes = 0;
+    const systemRoot = process.env.SystemRoot || 'C:\\Windows';
+    const executable = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(ok);
+    };
+    const countOutput = (chunk) => {
+      outputBytes += chunk.length;
+      if (outputBytes > 64 * 1024) {
+        child.kill();
+        finish(false);
+      }
+    };
+    let child;
+    try {
+      child = spawn(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', WINDOWS_ACL_SCRIPT], {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: {
+          SystemRoot: systemRoot,
+          WINDIR: process.env.WINDIR || systemRoot,
+          PATH: process.env.PATH,
+          AIDB_SSH_ACL_TARGET: target,
+          AIDB_SSH_ACL_KIND: kind,
+        },
+      });
+    } catch {
+      resolve(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      child.kill();
+      finish(false);
+    }, WINDOWS_ACL_TIMEOUT_MS);
+    child.stdout?.on('data', countOutput);
+    child.stderr?.on('data', countOutput);
+    child.on('error', () => finish(false));
+    child.on('close', (code) => finish(code === 0));
+  });
+}
+
+async function hardenWindowsPrivateKeyPath(target, kind) {
+  if (process.platform !== 'win32') return;
+  if (typeof target !== 'string' || !target || !['File', 'Directory'].includes(kind)) {
+    throw new SshKeyImportError('SSH_KEY_STORE_FAILED');
+  }
+  if (!await runWindowsAcl(target, kind)) {
+    // 不记录命令输出：其中可能包含本机路径/账户信息；调用方只会看到固定错误码。
+    throw new SshKeyImportError('SSH_KEY_ACL_UNAVAILABLE');
+  }
+}
+
+async function ensurePrivateKeyDirectory(userData) {
+  const directory = await sshKeyImport.ensurePrivateKeyDirectory(userData);
+  await hardenWindowsPrivateKeyPath(directory, 'Directory');
+  return directory;
+}
+
+async function hardenExistingPrivateKeys(directory) {
+  if (process.platform !== 'win32') return;
+  let entries;
+  try {
+    entries = await fs.promises.readdir(directory, { withFileTypes: true });
+  } catch {
+    throw new SshKeyImportError('SSH_KEY_STORE_FAILED');
+  }
+  for (const entry of entries) {
+    if (!entry.name.endsWith('.key')) continue;
+    const file = path.join(directory, entry.name);
+    let info;
+    try {
+      info = await fs.promises.lstat(file);
+    } catch {
+      throw new SshKeyImportError('SSH_KEY_STORE_FAILED');
+    }
+    if (info.isSymbolicLink() || !info.isFile()) {
+      throw new SshKeyImportError('SSH_KEY_STORE_FAILED');
+    }
+    await hardenWindowsPrivateKeyPath(file, 'File');
+  }
+}
+
+async function importPrivateKeyFile(sourcePath, userData) {
+  const directory = await ensurePrivateKeyDirectory(userData);
+  await hardenExistingPrivateKeys(directory);
+  let imported;
+  try {
+    imported = await sshKeyImport.importPrivateKeyFile(sourcePath, userData);
+    // 目录 ACL 先收紧，新文件继承受限权限；写入完成后再显式验证文件 ACL。
+    await hardenWindowsPrivateKeyPath(imported.path, 'File');
+    return imported;
+  } catch (err) {
+    // ACL 工具不可用/超时时不能留下一个权限未确认的私钥副本。
+    if (typeof imported?.path === 'string') {
+      await fs.promises.unlink(imported.path).catch(() => undefined);
+    }
+    throw err;
+  }
+}
+
 // 渲染层生成菜单树后经 IPC 下发；语言变更时重发一次即可整体重建。
 ipcMain.handle('menu:set', (_event, spec) => {
   try {
@@ -48,6 +253,50 @@ ipcMain.handle('menu:set', (_event, spec) => {
   } catch (err) {
     console.error('[desktop] install menu failed', err);
     return false;
+  }
+});
+
+function sshImportDialogText(value, fallback) {
+  return typeof value === 'string' && value.trim() ? value.trim().slice(0, 120) : fallback;
+}
+
+function sshKeyImportFailure(err) {
+  const code = err instanceof SshKeyImportError ? err.code : 'SSH_KEY_IMPORT_FAILED';
+  // 只记错误码：绝不把所选路径、私钥内容或任何密码写进日志。
+  console.error('[desktop] SSH private-key import failed:', code);
+  return { ok: false, code };
+}
+
+// 渲染层只能请求“打开选择器并导入”，不能指定要读取的路径。选择结果只留在主进程。
+ipcMain.handle('ssh:import-private-key', async (event, payload) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event?.sender !== mainWindow.webContents) {
+    return { ok: false, code: 'SSH_KEY_IMPORT_UNAVAILABLE' };
+  }
+  const ui = payload?.ui;
+  let selection;
+  try {
+    selection = await dialog.showOpenDialog(mainWindow, {
+      title: sshImportDialogText(ui?.title, 'Import SSH private key'),
+      buttonLabel: sshImportDialogText(ui?.buttonLabel, 'Import'),
+      defaultPath: path.join(app.getPath('home'), '.ssh'),
+      properties: ['openFile'],
+      filters: [
+        { name: sshImportDialogText(ui?.privateKeys, 'SSH private keys'), extensions: ['pem', 'key', 'ppk'] },
+        { name: sshImportDialogText(ui?.allFiles, 'All files'), extensions: ['*'] },
+      ],
+    });
+  } catch {
+    console.error('[desktop] SSH private-key picker failed');
+    return { ok: false, code: 'SSH_KEY_DIALOG_FAILED' };
+  }
+  if (selection.canceled || !Array.isArray(selection.filePaths) || !selection.filePaths[0]) {
+    return { canceled: true };
+  }
+  try {
+    const imported = await importPrivateKeyFile(selection.filePaths[0], app.getPath('userData'));
+    return { ok: true, ...imported };
+  } catch (err) {
+    return sshKeyImportFailure(err);
   }
 });
 
@@ -214,24 +463,72 @@ function getFreePort() {
   });
 }
 
-function waitForHealth(url, timeoutMs = 25000) {
+function waitForBridgeReady(port, token, timeoutMs = 25000) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535
+    || typeof token !== 'string' || !token
+    || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return Promise.reject(new Error('Bridge readiness credentials are invalid'));
+  }
+  const url = `http://127.0.0.1:${port}/api/health/ready`;
   const started = Date.now();
   return new Promise((resolve, reject) => {
-    const attempt = () => {
-      const req = http.get(url, (res) => {
-        res.resume();
-        if (res.statusCode === 200) return resolve();
-        retry();
-      });
-      req.on('error', retry);
-      req.setTimeout(1200, () => {
-        req.destroy();
-        retry();
-      });
+    let settled = false;
+    let retryTimer = null;
+    let request = null;
+    const clearDeadline = () => clearTimeout(deadline);
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearDeadline();
+      if (retryTimer) clearTimeout(retryTimer);
+      if (request && !request.destroyed) request.destroy();
+      if (error) reject(error);
+      else resolve();
     };
+    // 总时限同时覆盖重试间隔和单次请求；错误不携带 URL、响应或 token。
+    const deadline = setTimeout(() => {
+      finish(new Error('Bridge did not become authenticated ready'));
+    }, timeoutMs);
     const retry = () => {
-      if (Date.now() - started > timeoutMs) reject(new Error(`Bridge did not become ready: ${url}`));
-      else setTimeout(attempt, 250);
+      if (settled || retryTimer) return;
+      const remaining = timeoutMs - (Date.now() - started);
+      if (remaining <= 0) return finish(new Error('Bridge did not become authenticated ready'));
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        attempt();
+      }, Math.min(250, remaining));
+    };
+    const attempt = () => {
+      if (settled) return;
+      const remaining = timeoutMs - (Date.now() - started);
+      if (remaining <= 0) return finish(new Error('Bridge did not become authenticated ready'));
+      let currentRequest;
+      try {
+        currentRequest = http.get(url, {
+          agent: false,
+          headers: {
+            accept: 'application/json',
+            authorization: `Bearer ${token}`,
+            'cache-control': 'no-store',
+          },
+        }, (res) => {
+          res.on('error', retry);
+          res.on('aborted', retry);
+          res.resume();
+          // /api/health 是公开 liveness；只有带本地凭据的 readiness 2xx 才可放行。
+          if (res.statusCode === 200) finish();
+          else retry();
+        });
+      } catch {
+        finish(new Error('Bridge did not become authenticated ready'));
+        return;
+      }
+      request = currentRequest;
+      currentRequest.on('error', retry);
+      currentRequest.setTimeout(Math.min(1200, remaining), () => {
+        currentRequest.destroy();
+        retry();
+      });
     };
     attempt();
   });
@@ -297,6 +594,11 @@ function notifyGatewayFatal(message) {
   }
 }
 
+function sendSessionToken(token) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('gateway:event', { type: 'token', token });
+}
+
 function scheduleGatewayRestart() {
   if (quitting || restartTimer) return;
   const now = Date.now();
@@ -318,7 +620,8 @@ async function attemptGatewayRestart() {
   if (quitting) return;
   restartTimestamps.push(Date.now());
   try {
-    await startEmbeddedGateway();
+    const info = await startEmbeddedGateway();
+    sendSessionToken(info.token);
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('gateway:event', { type: 'recovered' });
   } catch (err) {
     console.error('[desktop] gateway restart failed', err);
@@ -332,11 +635,12 @@ async function startEmbeddedGateway() {
   // 杜绝重复 spawn 造成的孤儿进程。健康检查不过才杀掉重建。
   if (gatewayAlive() && gatewayInfo) {
     try {
-      await waitForHealth(`http://127.0.0.1:${gatewayInfo.port}/api/health`);
+      await waitForBridgeReady(gatewayInfo.port, gatewayInfo.token);
       return gatewayInfo;
     } catch {
       const stale = gatewayProcess;
       gatewayProcess = null;
+      gatewayInfo = null;
       stale.kill();
     }
   }
@@ -353,15 +657,26 @@ async function startEmbeddedGateway() {
   // dmdb 需要 --openssl-legacy-provider，而 Electron 内置 Node 不接受该参数；
   // 有系统 Node（>=22.13）时优先用它启动 Bridge，否则回退到 Electron Node（达梦连接会给出明确提示）。
   const nodeBin = await findSystemNode();
-  const env = {
+  const userData = app.getPath('userData');
+  // 导入目录必须先存在且权限受控，网关启动时即可读取后续导入的私钥，无需重启。
+  // Windows 同时复核旧版本已生成的 .key，避免升级后继续使用未显式加固的副本。
+  const privateKeyDir = await ensurePrivateKeyDirectory(userData);
+  await hardenExistingPrivateKeys(privateKeyDir);
+  const defaultKnownHosts = path.join(app.getPath('home'), '.ssh', 'known_hosts');
+  const env = addPrivateKeyDirectory({
     ...process.env,
     NODE_ENV: 'production',
-    AIDB_HOME: app.getPath('userData'),
+    AIDB_HOME: userData,
     AIDB_HOST: '127.0.0.1',
     AIDB_PORT: String(port),
     AIDB_TOKEN: token,
     AIDB_STATIC_DIR: staticDir,
-  };
+    AIDB_ALLOW_LOCAL_KEY: '1',
+  }, userData);
+  // 复用用户已有的 OpenSSH 信任库；文件不存在时保持未知主机拒绝，绝不自动信任。
+  if (!env.AIDB_SSH_KNOWN_HOSTS_FILE && fs.existsSync(defaultKnownHosts)) {
+    env.AIDB_SSH_KNOWN_HOSTS_FILE = defaultKnownHosts;
+  }
   if (nodeBin) {
     delete env.ELECTRON_RUN_AS_NODE;
   } else {
@@ -383,7 +698,17 @@ async function startEmbeddedGateway() {
   };
   child.on('exit', (code, signal) => onGone(`exit code=${code} signal=${signal}`));
   child.on('error', (err) => onGone(`error ${err?.message ?? err}`));
-  await waitForHealth(`http://127.0.0.1:${port}/api/health`);
+  try {
+    await waitForBridgeReady(port, token);
+  } catch (err) {
+    // 半启动进程不能继续占用端口或携带未交付的 token 进入下一轮复用。
+    if (gatewayProcess === child) {
+      gatewayProcess = null;
+      gatewayInfo = null;
+      child.kill();
+    }
+    throw err;
+  }
   // 恢复健康后退避复位：下一次意外崩溃从 1s 重新开始。
   restartDelay = 1000;
   if (app.isPackaged) markVersion(app.getPath('userData'), app.getVersion());
@@ -392,11 +717,20 @@ async function startEmbeddedGateway() {
 
 async function createWindow() {
   let url;
+  let trustedOrigin;
+  let sessionToken = 'dev-token';
   if (process.env.VITE_DEV_SERVER_URL) {
-    url = `${process.env.VITE_DEV_SERVER_URL}#token=dev-token`;
+    const devUrl = new URL(process.env.VITE_DEV_SERVER_URL);
+    if (!['http:', 'https:'].includes(devUrl.protocol) || devUrl.username || devUrl.password) {
+      throw new Error('Invalid VITE_DEV_SERVER_URL');
+    }
+    url = `${process.env.VITE_DEV_SERVER_URL.replace(/\/$/, '')}/`;
+    trustedOrigin = devUrl.origin;
   } else {
     const { port, token } = await startEmbeddedGateway();
-    url = `http://127.0.0.1:${port}/#token=${token}`;
+    url = `http://127.0.0.1:${port}/`;
+    trustedOrigin = new URL(url).origin;
+    sessionToken = token;
   }
   mainWindow = new BrowserWindow({
     width: 1480,
@@ -417,14 +751,26 @@ async function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
     },
   });
+  const deliverToken = () => sendSessionToken(sessionToken);
+  // preload 在 dom-ready 前已注册监听；每次重载都重新交付，令牌仍只存在于当前渲染层内存。
+  mainWindow.webContents.on('dom-ready', deliverToken);
+  // 首轮 loadURL 前装好守卫：同 origin 的开发热更新/应用内跳转不受影响，外部重定向与
+  // javascript/data/file 跳转一律拦截。外链只从下面的新窗口处理器交给系统浏览器。
+  mainWindow.webContents.on('will-navigate', (event, target) => {
+    guardMainFrameNavigation(event, target, trustedOrigin);
+  });
+  mainWindow.webContents.on('will-redirect', (event, target) => {
+    guardMainFrameNavigation(event, target, trustedOrigin);
+  });
+  mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault());
+  mainWindow.webContents.setWindowOpenHandler(({ url: target }) => {
+    openAllowedExternalUrl(target);
+    return { action: 'deny' };
+  });
   mainWindow.loadURL(url);
   mainWindow.webContents.once('did-finish-load', () => {
     const openTable = readOpenTableArg();
     if (openTable) mainWindow?.webContents.send('open-table', openTable);
-  });
-  mainWindow.webContents.setWindowOpenHandler(({ url: target }) => {
-    shell.openExternal(target).catch(() => undefined);
-    return { action: 'deny' };
   });
   mainWindow.on('closed', () => {
     mainWindow = null;

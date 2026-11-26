@@ -16,7 +16,7 @@ import { ArtifactsScreen } from '../screens/ArtifactsScreen';
 import { UsersScreen } from '../screens/UsersScreen';
 import { ToolsScreen } from '../screens/ToolsScreen';
 
-export function ToolsRouter({ toolPage, setToolPage, client, activeConnection, activeDatabase, tables, toolTable, toolSql, setToolSql }: { toolPage: 'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'pipelines' | 'dictionary' | 'monitor' | 'search' | 'history' | 'audit' | 'artifacts' | 'users' | null; setToolPage: Dispatch<SetStateAction<'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'pipelines' | 'dictionary' | 'monitor' | 'search' | 'history' | 'audit' | 'artifacts' | 'users' | null>>; client: BridgeClient; activeConnection: ConnectionConfig | undefined; activeDatabase: string | undefined; tables: TableInfo[]; toolTable: string | undefined; toolSql: string | undefined; setToolSql: Dispatch<SetStateAction<string | undefined>> }) {
+export function ToolsRouter({ toolPage, setToolPage, client, activeConnection, activeDatabase, tables, toolTable, toolSql, setToolSql, canManageHost }: { toolPage: 'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'pipelines' | 'dictionary' | 'monitor' | 'search' | 'history' | 'audit' | 'artifacts' | 'users' | null; setToolPage: Dispatch<SetStateAction<'query' | 'table' | 'io' | 'backups' | 'dashboards' | 'pipelines' | 'dictionary' | 'monitor' | 'search' | 'history' | 'audit' | 'artifacts' | 'users' | null>>; client: BridgeClient; activeConnection: ConnectionConfig | undefined; activeDatabase: string | undefined; tables: TableInfo[]; toolTable: string | undefined; toolSql: string | undefined; setToolSql: Dispatch<SetStateAction<string | undefined>>; canManageHost: boolean }) {
   return (
           toolPage === 'query' ? (
             <QueryScreen client={client} connection={activeConnection} database={activeDatabase} initialSql={toolSql} onBack={() => setToolPage(null)} />
@@ -49,6 +49,7 @@ export function ToolsRouter({ toolPage, setToolPage, client, activeConnection, a
               connection={activeConnection}
               database={activeDatabase}
               tables={tables}
+              canManageHost={canManageHost}
               onOpen={(page) => {
                 if (page === 'query') setToolSql(undefined);
                 setToolPage(page);

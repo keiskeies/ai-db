@@ -191,11 +191,16 @@ test('出站代理按请求注入：代理不可达时报错而不是悄悄直�
   const settings = gateway.store.getSettings();
   gateway.store.saveSettings({
     ...settings,
-    search: { ...settings.search, proxyUrl: 'http://127.0.0.1:1', searxngBaseUrl: `http://127.0.0.1:${mockPort}` },
+    search: {
+      ...settings.search,
+      proxyUrl: 'http://proxy-user:proxy-pass@127.0.0.1:1/?token=proxy-query-secret',
+      searxngBaseUrl: `http://127.0.0.1:${mockPort}`,
+    },
   });
   const probed: any = await fetch(`${base}/api/search/backends/searxng/probe`, { method: 'POST', headers }).then((res) => res.json());
   assert.equal(probed.health.status, 'error');
   assert.match(probed.health.lastError, /经代理 http:\/\/127\.0\.0\.1:1/);
+  assert.doesNotMatch(probed.health.lastError, /proxy-user|proxy-pass|proxy-query-secret/);
 
   gateway.store.saveSettings({ ...gateway.store.getSettings(), search: { ...gateway.store.getSettings().search, proxyUrl: 'socks5://127.0.0.1:7891' } });
   const direct: any = await fetch(`${base}/api/search/backends/searxng/probe`, { method: 'POST', headers }).then((res) => res.json());
@@ -205,6 +210,117 @@ test('出站代理按请求注入：代理不可达时报错而不是悄悄直�
   const cleared = gateway.store.getSettings();
   gateway.store.saveSettings({ ...cleared, search: { ...cleared.search, proxyUrl: '', searxngBaseUrl: '' } });
   mock.close();
+});
+
+test('非法代理地址日志保留 host:port，但不泄露凭据或查询参数', async (t) => {
+  const original = gateway.store.getSettings();
+  const warnings: string[] = [];
+  const warned = t.mock.method(console, 'warn', (message?: unknown, ...rest: unknown[]) => {
+    warnings.push([message, ...rest].map(String).join(' '));
+  });
+  try {
+    gateway.store.saveSettings({
+      ...original,
+      search: {
+        ...original.search,
+        proxyUrl: 'http://proxy-user:proxy-pass@127.0.0.1:99999?token=proxy-query-secret',
+      },
+    });
+    const probed: any = await fetch(`${base}/api/search/backends/searxng/probe`, { method: 'POST', headers }).then((res) => res.json());
+    const diagnostic = warnings.join('\n');
+    assert.match(diagnostic, /127\.0\.0\.1:99999/);
+    assert.doesNotMatch(diagnostic, /proxy-user|proxy-pass|proxy-query-secret/);
+    assert.doesNotMatch(JSON.stringify(probed), /proxy-user|proxy-pass|proxy-query-secret/);
+  } finally {
+    gateway.store.saveSettings(original);
+    warned.mock.restore();
+  }
+});
+
+test('代理描述和嵌套 fetch 错误在返回与健康遥测中脱敏', async () => {
+  const original = gateway.store.getSettings();
+  const originalFetch = globalThis.fetch;
+  const proxy = 'http://proxy-user:proxy-pass@127.0.0.1:1/';
+  const target = 'https://example.com/search?q=private-query&api_key=target-key';
+  globalThis.fetch = (async () => {
+    throw new Error(`request to ${target} failed`, {
+      cause: new Error(`connect to ${proxy}?token=proxy-query-secret failed`),
+    });
+  }) as typeof fetch;
+  try {
+    gateway.store.saveSettings({
+      ...original,
+      search: { ...original.search, proxyUrl: proxy, searxngBaseUrl: 'http://127.0.0.1:1' },
+    });
+    const probed: any = await originalFetch(`${base}/api/search/backends/searxng/probe`, { method: 'POST', headers }).then((res) => res.json());
+    const listed: any = await originalFetch(`${base}/api/search/backends`, { headers }).then((res) => res.json());
+    const diagnostic = JSON.stringify({ probed, listed });
+    assert.match(diagnostic, /127\.0\.0\.1:1/);
+    assert.match(diagnostic, /example\.com/);
+    assert.doesNotMatch(diagnostic, /proxy-user|proxy-pass|proxy-query-secret|private-query|target-key/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    gateway.store.saveSettings(original);
+  }
+});
+
+test('自建 SearXNG 仅信任配置 origin，重定向到其他私网 origin 被拒绝', async () => {
+  let targetCalls = 0;
+  const target = createServer((_req, res) => {
+    targetCalls += 1;
+    res.end(JSON.stringify({ results: [] }));
+  });
+  const targetPort = await listenRandom(target, '127.0.0.1');
+  const source = createServer((_req, res) => {
+    res.statusCode = 302;
+    res.setHeader('location', `http://127.0.0.1:${targetPort}/search`);
+    res.end();
+  });
+  const sourcePort = await listenRandom(source, '127.0.0.1');
+  const original = gateway.store.getSettings();
+  try {
+    gateway.store.saveSettings({
+      ...original,
+      search: { ...original.search, enabled: ['searxng'], concurrency: 1, proxyUrl: '', searxngBaseUrl: `http://127.0.0.1:${sourcePort}` },
+    });
+    const response = await fetch(`${base}/api/search/query`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ query: 'redirect-private' }),
+    });
+    const body: any = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(body));
+    const backend = body.backends.find((item: any) => item.id === 'searxng');
+    assert.equal(backend.ok, false);
+    assert.match(backend.error, /内网地址|受限地址/);
+    assert.equal(targetCalls, 0);
+  } finally {
+    gateway.store.saveSettings(original);
+    source.close();
+    target.close();
+  }
+});
+
+test('搜索响应超过统一字节上限时报告失败', async () => {
+  const searx = createServer((_req, res) => {
+    res.setHeader('content-type', 'application/json');
+    res.setHeader('content-length', String(2 * 1024 * 1024 + 1));
+    res.end('{}');
+  });
+  const searxPort = await listenRandom(searx, '127.0.0.1');
+  const original = gateway.store.getSettings();
+  try {
+    gateway.store.saveSettings({
+      ...original,
+      search: { ...original.search, proxyUrl: '', searxngBaseUrl: `http://127.0.0.1:${searxPort}` },
+    });
+    const probed: any = await fetch(`${base}/api/search/backends/searxng/probe`, { method: 'POST', headers }).then((res) => res.json());
+    assert.equal(probed.health.status, 'error');
+    assert.match(probed.health.lastError, /超过.*字节上限/);
+  } finally {
+    gateway.store.saveSettings(original);
+    searx.close();
+  }
 });
 
 test('自建 SearXNG：time_range 空结果回退重试，参数错误要可见', async () => {

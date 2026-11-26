@@ -818,7 +818,7 @@ function ToolCard({
  * 并给一个一键续跑（服务端同时留了续跑检查点，续跑不用从头再来）。
  */
 function TurnStopNotice({ live, onContinue }: { live: LiveTurn; onContinue: () => void }) {
-  const unfinished = live.status === 'aborted' ? live.abortCause === 'stalled' : isUnfinishedStop(live.stop);
+  const unfinished = live.status === 'aborted' ? live.abortCause === 'stalled' || live.abortCause === 'deadline' : isUnfinishedStop(live.stop);
   // 有 live.error 时不再另写一句：runtime 发的那条已经把原因和改法说清了，
   // 这里再补一行只是同一件事说两遍。
   const notice = live.error
@@ -1953,7 +1953,9 @@ export function AgentPanel() {
                         {live.status === 'aborted'
                           ? live.abortCause === 'stalled'
                             ? t('stalled')
-                            : t('aborted')
+                            : live.abortCause === 'deadline'
+                              ? t('stoppedUnfinished')
+                              : t('aborted')
                           // done + 没做完，以及截断那类 error，都不能写「已完成/已失败」：
                           // 前者是计划还剩两项没打勾时最刺眼的一行字，后者会让人以为
                           // 执行出了错，而实际只差把话说完。

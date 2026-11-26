@@ -14,6 +14,7 @@ import {
   engineMeta,
   engineUsesSchema,
   formatStructuredQuery,
+  hasUnsafeSqlSyntax,
   managesObjects,
   managesIndexes,
   parseRedisCommandLine,
@@ -59,17 +60,8 @@ interface CachedDriver {
 }
 
 /**
- * 单次 run_sql 的语句条数上限。
- *
- * 超过这个数量才需要显式 allowMulti；正常脚本（建表序列、一张表几十条列变更）直接放行。
- * 上限保护的是「一次误粘贴几百条语句」这类规模事故，不是权限——权限见 resolveRisk。
- */
-export const MAX_SCRIPT_STATEMENTS = 200;
-
-/**
- * 无条件硬上限：allowMulti 是模型可以自己声明的参数，不能让它成为规模闸的钥匙。
- * 超过 200 条需要显式声明，超过 1000 条无论谁都拒绝——每条最多几千行，
- * 无上限的脚本会把内存和执行时长一起拖垮。
+ * 显式 allowMulti: true 脚本的无条件硬上限。allowMulti 只授权“逐条执行脚本”，
+ * 不能关闭规模保护；超过 1000 条无论调用方是谁都拒绝。
  */
 export const MAX_SCRIPT_HARD_STATEMENTS = 1000;
 
@@ -104,18 +96,21 @@ export interface QueryOptions {
   database?: string;
   maxRows?: number;
   timeoutMs?: number;
+  /** false/省略 = 最多一条可执行语句；只有显式 true 才允许逐条执行脚本。 */
   allowMulti?: boolean;
   autoLimit?: boolean;
   actor: 'user' | 'agent';
   /** 跨请求事务会话；存在时语句走被固定的那条连接。 */
   sessionId?: string;
+  /** 复合写要求会话必须仍归属当前连接的有效事务，禁止静默回退到池连接。 */
+  requireTransaction?: boolean;
   /** 执行追踪 id（G1）：路由生成并传入，客户端提前断开时据此取消，见 cancelExecution。 */
   executionId?: string;
   /** Agent stop / 请求断连信号；复合任务会把它贯通到每一批。 */
   signal?: AbortSignal;
 }
 
-type ExecutionOptions = Pick<QueryOptions, 'executionId' | 'signal' | 'sessionId'>;
+type ExecutionOptions = Pick<QueryOptions, 'executionId' | 'signal' | 'sessionId' | 'timeoutMs'>;
 
 export class ConnectionManager {
   private clients = new Map<string, CachedDriver>();
@@ -309,7 +304,24 @@ export class ConnectionManager {
         /* fall through */
       }
     }
-    const tables = await this.describe(connectionId, database, opts);
+    const describe = this.describe(connectionId, database, opts);
+    // 仅调用方显式给出预算时才设 schema 超时；普通 schema 读取保持原有缓存/驱动口径。
+    // Agent 回合把自己的剩余绝对预算传下来，超时错误先赢得竞态，再取消在途连接。
+    const tables = opts.timeoutMs !== undefined && opts.timeoutMs > 0
+      ? await withQueryTimeout(describe, opts.timeoutMs, {
+          code: 'SCHEMA_TIMEOUT',
+          label: 'Schema 读取',
+          onTimeout: () => {
+            if (opts.executionId) {
+              this.cancelExecution(opts.executionId);
+              return;
+            }
+            const cached = this.clients.get(connectionId);
+            if (cached) this.destroyDriverConnections(cached.driver);
+            void this.close(connectionId).catch(() => undefined);
+          },
+        })
+      : await describe;
     this.throwIfAborted(opts);
     let schemas: DatabaseSchema[];
     if (engineUsesSchema(conn.engine)) {
@@ -1415,6 +1427,14 @@ export class ConnectionManager {
       const query = this.parseStructuredQuery(conn, sql);
       return this.executeStructured(connectionId, conn, query, opts);
     }
+    // /query 等直连路径不经过 Agent 的 unknown 审批闸门；词法不完整/歧义必须在建连前拒绝。
+    if (hasUnsafeSqlSyntax(sql, conn.engine)) {
+      throw new DbError('无法证明 SQL 安全，已拒绝解析不完整的括号、引号或注释', {
+        code: 'SQL_UNKNOWN',
+        status: 400,
+        hint: '请改写为明确支持的 SQL 语句；不确定的方括号标识符或注释边界不会进入执行。',
+      });
+    }
     const statements = splitStatements(sql, conn.engine);
     if (!statements.length) throw new DbError('SQL 为空', { code: 'EMPTY_SQL' });
     if (statements.length > MAX_SCRIPT_HARD_STATEMENTS) {
@@ -1423,21 +1443,14 @@ export class ConnectionManager {
         hint: '请分批执行：每批控制在合理条数内，逐次调用并确认上一批结果后再继续。',
       });
     }
-    // 这道闸拦「规模」，不拦「批量」。
-    //
-    // 旧实现在「含写/DDL 且有 2 条以上语句」时整段拒绝，本机历史里 22 段多语句脚本
-    // 被它拦下 18 段，全部是正当工作：CREATE TABLE + CREATE INDEX 的建表序列、
-    // 同一张表十几条 ALTER TABLE … COMMENT 补注释。误报率 100%，每次误报都让模型
-    // 重跑一整步。它也不是权限边界——同样的语句逐条调用本来就被允许，真正的边界是
-    // resolveRisk（取全脚本最高风险）+ evaluatePermission，与条数无关。
-    //
-    // 所以改成按条数封顶：正常脚本直接放行，规模失控的才需要显式声明。
-    if (statements.length > MAX_SCRIPT_STATEMENTS && !opts.allowMulti) {
-      throw new DbError(`脚本含 ${statements.length} 条语句，超过单次上限 ${MAX_SCRIPT_STATEMENTS} 条`, {
+    // 真正的单语句边界：省略或 false 都只允许一条可执行语句。只有显式
+    // allowMulti: true 才进入下面的逐条执行循环；空分号不构成额外语句。
+    if (statements.length > 1 && opts.allowMulti !== true) {
+      throw new DbError(`脚本含 ${statements.length} 条可执行语句；未显式允许执行多语句脚本`, {
         code: 'SCRIPT_TOO_LARGE',
         hint:
           '整段执行需显式声明：调用 run_sql 时传 allowMulti: true，或在 设置 → 查询 打开「允许多语句」。' +
-          `整段脚本非原子：中途失败时前面的语句已生效。超过 ${MAX_SCRIPT_STATEMENTS} 条时建议分批，每批之间可以确认上一批的结果。`,
+          '整段脚本非原子：中途失败时前面的语句已生效，请分批并在每批之间确认结果。',
       });
     }
     if (conn.readonly) {
@@ -1449,13 +1462,21 @@ export class ConnectionManager {
     // 事务会话里的语句必须走被固定的那条连接，否则 COMMIT/ROLLBACK 作用不到。
     // 同时也必须校验归属：别的连接的事务 id 混进来时应当普通执行，而不是抛 TX_NOT_FOUND。
     const candidate = opts.sessionId ? this.txSessions.get(opts.sessionId) : undefined;
+    if (opts.requireTransaction && (!candidate || candidate.connectionId !== connectionId)) {
+      throw new DbError('事务会话不存在或已结束，已拒绝非原子写入', { code: 'ATOMIC_TRANSFER_UNSUPPORTED', status: 409 });
+    }
     this.beginExecution(connectionId, opts, Boolean(candidate));
     const driver = await this.driverFor(connectionId).catch((err) => {
       if (opts.executionId) this.activeExecutions.delete(opts.executionId);
       throw err;
     });
-    const txSession = candidate && candidate.connectionId === connectionId ? candidate : undefined;
+    const currentTx = opts.sessionId ? this.txSessions.get(opts.sessionId) : undefined;
+    const txSession = currentTx && currentTx.connectionId === connectionId ? currentTx : undefined;
     const txDriver = txSession && supportsTransaction(driver) ? driver : undefined;
+    if (opts.requireTransaction && !txDriver) {
+      if (opts.executionId) this.activeExecutions.delete(opts.executionId);
+      throw new DbError('驱动不再支持事务，已拒绝非原子写入', { code: 'ATOMIC_TRANSFER_UNSUPPORTED', status: 409 });
+    }
     if (txSession) txSession.lastUsedAt = Date.now();
     // G1：登记执行追踪，客户端提前断开时 cancelExecution 据此定位连接与事务归属。
     const inTx = Boolean(txDriver && opts.sessionId);
@@ -1483,7 +1504,7 @@ export class ConnectionManager {
         const prepared = opts.autoLimit !== false && opts.maxRows ? applyLimit(statement, opts.maxRows, conn.engine) : statement;
         try {
           const result = txDriver && opts.sessionId
-            ? await txDriver.runInTransaction(opts.sessionId, prepared, [], { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs })
+            ? await txDriver.runInTransaction(opts.sessionId, prepared, [], { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs, signal: opts.signal, executionId: opts.executionId })
             : await driver.run(prepared, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs });
           this.throwIfAborted(opts);
           sets.push(result);
@@ -1584,14 +1605,22 @@ export class ConnectionManager {
     }
     if (conn.readonly) throw new DbError('该连接为只读，禁止写入', { code: 'READONLY', status: 403 });
     const candidate = opts.sessionId ? this.txSessions.get(opts.sessionId) : undefined;
+    if (opts.requireTransaction && (!candidate || candidate.connectionId !== connectionId)) {
+      throw new DbError('事务会话不存在或已结束，已拒绝非原子写入', { code: 'ATOMIC_TRANSFER_UNSUPPORTED', status: 409 });
+    }
     this.beginExecution(connectionId, opts, Boolean(candidate));
     const driver = await this.driverFor(connectionId).catch((err) => {
       if (opts.executionId) this.activeExecutions.delete(opts.executionId);
       throw err;
     });
     // 事务里的参数化语句必须走被固定的那条连接，与 query() 的逻辑一致。
-    const txSession = candidate && candidate.connectionId === connectionId ? candidate : undefined;
+    const currentTx = opts.sessionId ? this.txSessions.get(opts.sessionId) : undefined;
+    const txSession = currentTx && currentTx.connectionId === connectionId ? currentTx : undefined;
     const txDriver = txSession && supportsTransaction(driver) ? driver : undefined;
+    if (opts.requireTransaction && !txDriver) {
+      if (opts.executionId) this.activeExecutions.delete(opts.executionId);
+      throw new DbError('驱动不再支持事务，已拒绝非原子写入', { code: 'ATOMIC_TRANSFER_UNSUPPORTED', status: 409 });
+    }
     if (txSession) txSession.lastUsedAt = Date.now();
     // 与 query() 相同的内存上限语义：调用方传 maxRows 时用 applyLimit 追加 LIMIT，
     // 只改动 SQL 末尾，不破坏 $1 占位符，参数化执行安全。
@@ -1599,7 +1628,7 @@ export class ConnectionManager {
     try {
       this.throwIfAborted(opts);
       const result = txDriver && opts.sessionId
-        ? await txDriver.runInTransaction(opts.sessionId, prepared, params, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs })
+        ? await txDriver.runInTransaction(opts.sessionId, prepared, params, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs, signal: opts.signal, executionId: opts.executionId })
         : await driver.runParams(prepared, params, { database: opts.database, maxRows: opts.maxRows, timeoutMs: opts.timeoutMs });
       this.throwIfAborted(opts);
       if (prepared !== sql && opts.maxRows && result.rowCount >= opts.maxRows) result.truncated = true;

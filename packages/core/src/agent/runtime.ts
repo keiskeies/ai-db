@@ -591,16 +591,19 @@ export class AgentRuntime {
      * 中止文案必须诚实：停摆不是用户的选择。
      */
     const abortReason = (cause: AgentAbortCause): string =>
-      cause === 'stalled' ? '模型连接无响应（可继续）' : '用户中止';
+      cause === 'stalled'
+        ? '模型连接无响应（可继续）'
+        : cause === 'deadline'
+          ? '回合已到达绝对时间预算'
+          : '用户中止';
 
     /**
-     * 中止原因由 runtime 自己判：**只有两种**——模型连接彻底不动了（stalled），或者用户点了停止。
-     *
-     * 曾经还有第三种 'timeout'：回合跑满固定分钟数就被上层掐断。已删——回合该不该结束
-     * 取决于「还有没有进展」，而不是挂了多久；上层计时器看不见进展，只能连健康长回合一起掐。
-     * 现在卡死的判定权在字节流那一层（见 providers/common.ts 的停摆阈值），它知道区别。
+     * runtime 区分模型停摆、用户停止与宿主绝对预算到期；预算与连接停摆是独立约束。
+     * 停摆阈值由 provider 字节流判定，绝对预算由持久化回合 claim 的 deadline 约束。
      */
-    const aborted = (cause: AgentAbortCause = 'user'): AgentRunResult => {
+    const signaledAbortCause = (): AgentAbortCause =>
+      (input.signal?.reason as { code?: unknown } | undefined)?.code === 'TURN_DEADLINE' ? 'deadline' : 'user';
+    const aborted = (cause: AgentAbortCause = signaledAbortCause()): AgentRunResult => {
       commitStep();
       emitTurnUsage();
       deps.emit({ type: 'aborted', turnId, reason: abortReason(cause), cause });
@@ -629,7 +632,7 @@ export class AgentRuntime {
 
     // 0 表示「无步数上限」：一直跑到模型主动结束、用户中止、或预算压缩后仍超窗为止。
     // 无限制不代表失去约束——真正约束来自上下文 token 预算（contextTokenBudget，见下）：
-    // 它顶不住时会压缩早期工具结果，而不是把整回合掐掉。时间从来不是约束。
+    // 它顶不住时会压缩早期工具结果，而不是把整回合掐掉；绝对时间预算由宿主回合 claim 约束。
     for (let step = 0; maxSteps === 0 || step < maxSteps; step++) {
       if (input.signal?.aborted) return aborted();
       steps = step + 1;
@@ -889,7 +892,15 @@ export class AgentRuntime {
           messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: serializeForModel(res, undefined, resultBudget()) });
           continue;
         }
-        const risk = resolveRisk(call, tool, input.context.connection?.engine);
+        const explicitConnectionId = typeof call.args.connectionId === 'string' ? call.args.connectionId.trim() : '';
+        const activeConnection = input.context.connection;
+        // 只有目标就是会话连接时才能复用其方言。跨连接/无会话连接时传
+        // undefined，让分类器按保守方言拆句并取最高风险，避免用 PG 的注释
+        // 规则审批一段实际发往 MySQL 的 SQL。explain_sql 在这种作用域不明时拒绝。
+        const engine = activeConnection && (!explicitConnectionId || explicitConnectionId === activeConnection.id)
+          ? activeConnection.engine
+          : undefined;
+        const risk = resolveRisk(call, tool, engine);
         const described = describeCall(call);
         const summary = tool.summarize?.(call.args) ?? described.summary;
         deps.emit({ type: 'tool_call', callId: call.id, tool: call.name, args: redactToolSecrets(call.args) as Record<string, unknown>, risk, summary });
@@ -916,6 +927,7 @@ export class AgentRuntime {
             mode: input.mode,
             connectionReadonly: input.connectionReadonly,
             environment: input.environment,
+            engine,
             ...signatureScope,
             sessionAllowed: input.sessionAllowed,
             alwaysAllowed: input.alwaysAllowed,

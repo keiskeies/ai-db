@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import { validateBuiltinMcpArgs } from '../builtinMcp';
 import { listMcpTools } from '../mcp';
 import {
@@ -10,6 +10,17 @@ import {
 export function createMcpRouter(deps: ApiDeps): Router {
   const { store } = deps;
   const router = Router();
+
+  // 自定义 MCP 可以携带 command/args/env 并启动宿主进程；发现与调用一律仅 admin。
+  // device 默认不暴露任何本地 MCP（包括内置文件系统/Git/Web），mcp:readonly 仍走独立只读桥。
+  const requireAdmin = (_req: Request, res: Response, next: NextFunction): void => {
+    if (res.locals.device && res.locals.device.scope !== 'admin') {
+      res.status(403).json({ error: { code: 'SCOPE_DENIED', message: '仅管理员可以管理或调用 MCP Server' } });
+      return;
+    }
+    next();
+  };
+  router.use(requireAdmin);
 
   router.get('/mcp/servers', (_req, res) => {
     res.json({ servers: store.listMcpServers() });

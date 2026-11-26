@@ -22,6 +22,7 @@ export class DuckdbSession {
   private instance?: DuckDBInstance;
   private connection?: DuckDBConnection;
   private opening?: Promise<DuckDBConnection>;
+  private hardened = false;
   private seq = 0;
 
   constructor(private readonly dir: string) {}
@@ -33,6 +34,12 @@ export class DuckdbSession {
         .then(async (instance) => {
           this.instance = instance;
           this.connection = await instance.connect();
+          // 扩展安全开关可在注册受控 input 前设置；external access 必须等 input 物化后再关闭。
+          await this.connection.run('SET autoinstall_known_extensions = false');
+          await this.connection.run('SET autoload_known_extensions = false');
+          await this.connection.run('SET allow_unsigned_extensions = false');
+          await this.connection.run('SET allow_community_extensions = false');
+          this.hardened = false;
           return this.connection;
         })
         .catch((err) => {
@@ -43,21 +50,51 @@ export class DuckdbSession {
     return this.opening;
   }
 
+  private closeConnection(): void {
+    try {
+      this.connection?.closeSync();
+    } catch {
+      /* 忽略关闭失败 */
+    }
+    try {
+      this.instance?.closeSync();
+    } catch {
+      /* 忽略关闭失败 */
+    }
+    this.connection = undefined;
+    this.instance = undefined;
+    this.opening = undefined;
+    this.hardened = false;
+  }
+
+  private async harden(connection: DuckDBConnection): Promise<void> {
+    if (this.hardened) return;
+    await connection.run('SET enable_external_access = false');
+    await connection.run('SET lock_configuration = true');
+    this.hardened = true;
+  }
+
   /**
-   * 把行集注册为 input 视图。
+   * 把行集注册为 input 表。
    *
-   * 空行集不建视图：read_json_auto 对 `[]` 会报「没有可读的行」，
+   * read_json_auto 只在我们刚写入的临时文件上执行一次，并立即物化为表；随后关闭
+   * external access 并锁定配置。这样后续 SQL 仍能查询 input，但 read_csv/COPY/URL
+   * 等外部读取全部失效。多个 SQL step 复用同一 session 时，下一次 loadRows 重建连接。
+   *
+   * 空行集不建表：read_json_auto 对 `[]` 会报「没有可读的行」，
    * 而「上一步没数据」是可预期的状态，应该由调用方短路而不是抛驱动错误。
    */
   async loadRows(rows: Record<string, unknown>[]): Promise<boolean> {
     if (!rows.length) return false;
+    if (this.hardened) this.closeConnection();
     const connection = await this.connect();
-    await mkdir(this.dir, { recursive: true });
+    await mkdir(this.dir, { recursive: true, mode: 0o700 });
     const file = path.join(this.dir, `input-${(this.seq += 1)}.json`);
-    await writeFile(file, JSON.stringify(rows), 'utf8');
+    await writeFile(file, JSON.stringify(rows), { encoding: 'utf8', mode: 0o600 });
     const literal = file.replace(/\\/g, '/').replace(/'/g, "''");
     try {
-      await connection.run(`CREATE OR REPLACE VIEW input AS SELECT * FROM read_json_auto('${literal}', union_by_name => true)`);
+      await connection.run(`CREATE OR REPLACE TABLE input AS SELECT * FROM read_json_auto('${literal}', union_by_name => true)`);
+      await this.harden(connection);
     } catch (err: any) {
       throw new PipelineError(`上一步数据无法建为 input 表：${err?.message ?? err}`, 'PIPELINE_DUCKDB_LOAD', '行里混用了不兼容的类型时，先在 map 步骤里把字段投影成一致的形状');
     }
@@ -67,6 +104,7 @@ export class DuckdbSession {
   async query(sql: string, maxRows: number): Promise<DuckQueryResult> {
     const statement = singleStatement(sql);
     const connection = await this.connect();
+    await this.harden(connection);
     try {
       const reader = await connection.runAndReadAll(statement);
       const columns = reader.columnNames();
@@ -87,19 +125,7 @@ export class DuckdbSession {
   }
 
   async close(): Promise<void> {
-    try {
-      this.connection?.closeSync();
-    } catch {
-      /* 忽略关闭失败 */
-    }
-    try {
-      this.instance?.closeSync();
-    } catch {
-      /* 忽略关闭失败 */
-    }
-    this.connection = undefined;
-    this.instance = undefined;
-    this.opening = undefined;
+    this.closeConnection();
     await rm(this.dir, { recursive: true, force: true }).catch(() => undefined);
   }
 }

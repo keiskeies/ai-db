@@ -730,7 +730,7 @@
   "openDemo": "打開範例庫",
   "page": "頁",
   "pairCode": "配對碼",
-  "pairHint": "在行動端輸入 Bridge 位址與配對碼，5 分鐘內有效。",
+  "pairHint": "在行動端輸入 Bridge 位址與配對碼，1 分鐘內有效。",
   "pairing": "行動端配對",
   "password": "密碼",
   "payload 字段": "payload 字段",

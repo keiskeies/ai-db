@@ -9,12 +9,12 @@
     "start": "node --openssl-legacy-provider dist/index.js",
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test --test-timeout=60000 \"test/*.test.ts\""
+    "test": "node --import tsx --test --test-concurrency=4 --test-timeout=60000 \"test/*.test.ts\""
   },
   "dependencies": {
     "@aidb/core": "*",
     "@duckdb/node-api": "^2.0.0-r.1",
-    "adm-zip": "^0.5.16",
+    "adm-zip": "^0.6.1",
     "bonjour-service": "^1.4.4",
     "bson": "^7.3.2",
     "cassandra-driver": "^4.10.0",
@@ -24,7 +24,7 @@
     "ioredis": "^6.0.0",
     "js-yaml": "^4.3.2",
     "mongodb": "^7.7.0",
-    "mssql": "^12.7.13",
+    "mssql": "^12.8.1",
     "mysql2": "^3.12.0",
     "neo4j-driver": "^6.2.0",
     "oracledb": "^26.0.0",
@@ -44,7 +44,7 @@
     "@types/pg": "^8.11.10",
     "@types/ssh2": "^1.15.1",
     "@types/ws": "^8.5.13",
-    "esbuild": "^0.24.2",
+    "esbuild": "^0.28.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
   }

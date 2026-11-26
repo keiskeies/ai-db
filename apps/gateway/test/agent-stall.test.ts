@@ -459,15 +459,17 @@ test('分类那段确实把 max_steps 认成没做完，而不是留成 undefine
   const from = src.indexOf(head);
   assert.ok(from >= 0, '找不到续跑原因的分类表达式');
   const body = src.slice(from + head.length, src.indexOf(';\n', from)).trim();
-  const classify = (result: any, disconnected: boolean): unknown => {
+  const classify = (result: any, disconnected: boolean, deadlineExpired = false): unknown => {
+    const turn = { deadlineExpired };
     const unfinished = eval(body);
     return unfinished;
   };
-  assert.ok(body.startsWith('result.status'), '取出来的必须是那个三元表达式本体');
+  assert.ok(body.startsWith('turn.deadlineExpired'), '取出来的必须是含绝对预算的分类表达式本体');
   assert.ok(body.length < 900, '截取的片段过长，说明分号定位跑偏了');
   const done = (stop: string) => ({ status: 'done', stop });
   assert.equal(classify({ status: 'aborted', abortCause: 'stalled' }, false), 'stalled');
   assert.equal(classify({ status: 'aborted', abortCause: 'user' }, true), 'disconnected');
+  assert.equal(classify({ status: 'aborted', abortCause: 'user' }, false, true), 'deadline');
   assert.equal(classify(done('max_output_tokens'), false), 'truncated');
   assert.equal(classify(done('empty_response'), false), 'empty');
   assert.equal(classify(done('max_steps'), false), 'max_steps', '界面给「继续」时服务端必须留了东西可续');

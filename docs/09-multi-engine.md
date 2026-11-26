@@ -1,6 +1,6 @@
 # AiDB Studio — 多引擎架构与接入矩阵
 
-> 版本：v0.4-dev · 日期：2026-10-28 · 关联：[产品总览](./00-product-overview.md) · [功能规格](./02-feature-spec.md) · [Agent](./04-ai-agent-design.md)
+> 版本基线：0.0.10 · Node.js ≥ 22.13 · 关联：[产品总览](./00-product-overview.md) · [功能规格](./02-feature-spec.md) · [Agent](./04-ai-agent-design.md) · [支持策略](../SUPPORT.md)
 
 ## 1. 目标
 
@@ -207,44 +207,104 @@ type DialectId = 'sqlite' | 'mysql' | 'postgres' | 'mssql' | 'oracle' | 'clickho
 - PostgreSQL / Qdrant / Milvus 的查询工具栏提供“向量检索”面板：选择表/集合与向量字段，输入文本（走 Embedding）或向量 JSON、TopK，结果直接进入 DataGrid。
 - `openData` 对非关系型自动改为打开查询标签：MongoDB 预填 `{collection, op:'find', filter:{}, limit:100}`，Redis 预填 `SCAN 0 COUNT 100`，Cassandra/ScyllaDB 预填 `SELECT * FROM "ks"."table" LIMIT 100;`，Neo4j 预填 `MATCH (n) RETURN n LIMIT 100`，Qdrant/Milvus/Weaviate 预填 `{collection, op:'scroll', topK:20}`，搜索索引预填 `{index, query:{match_all:{}}, size:100}`。
 
-## 10. 测试
+## 10. 测试与验证矩阵
+
+> 本节区分“代码支持”“测试存在”和“某个 commit 真正跑过”。本次交付的作者环境没有 Docker，**未执行也未声称通过真实引擎测试**。下文的“真实”是指工作流配置为连接真实服务；只有对应 commit 的 workflow run 全绿、且所选环境门控没有变成 skip，才能记为 tested。
+
+### 10.1 工作流与状态定义
+
+| 工作流 | 触发 | 服务与范围 | 验证性质 |
+| --- | --- | --- | --- |
+| `.github/workflows/ci.yml` | PR、push `main`、`workflow_call` | 无数据库 service container；`npm run verify:ci` 运行常规测试、构建和静态检查 | 常规质量门；真实嵌入式 SQLite/DuckDB + mock/stub/unit/integration |
+| `.github/workflows/external-engines.yml` | 仅 `workflow_dispatch` | MySQL 8.4.6、PostgreSQL 17.6、MongoDB 8.0、Redis Stack 7.4；只跑下文列出的文件 | opt-in 真实服务；不是 PR/release 的必经门 |
+| `.github/workflows/release.yml` / `publish-mcp.yml` | tag 或 manual dispatch | 复用 `ci.yml`，不启动外部引擎服务 | 不得据此声称外部引擎 tested |
+| `scripts/workflows.test.mjs` | 常规 CI 和外部引擎 workflow | 校验 service/env/文件列表/action SHA/权限/版本与政策漂移 | 静态回归；不连接数据库 |
+
+- **真实（manual）**：测试代码连接工作流启动的真实服务；仍需该次 run 提供通过证据。
+- **mock/stub**：注入假 pool、客户端、HTTP/TCP 服务或固定响应，不验证对应数据库产品。
+- **opt-in**：已有环境变量门控的真实实例测试，但未纳入当前外部引擎 workflow，或虽有服务却未选中该文件。
+- **未覆盖**：没有对应的自动化真实实例路径；协议别名注册、驱动工厂单测或功能说明不能替代 live 验证。
+
+### 10.2 外部引擎 workflow 明确选中的真实测试
+
+| 引擎/服务 | 覆盖路径 | 测试文件 | 状态 | 边界 |
+| --- | --- | --- | --- | --- |
+| MySQL 8.4.6 | 跨请求提交/回滚、Agent 事务、空闲回收、只读 SQL/事务拒绝 | `agent-transaction.test.ts`、`mysql-transaction.test.ts`、`tx-reclaim.test.ts`、`external-engine-readonly.test.ts` | 真实（manual） | 临时 `aidb_tx` 库；不是 MariaDB/MySQL 系厂商兼容性矩阵 |
+| PostgreSQL 17.6 | 跨请求提交/回滚、只读 SQL/事务拒绝 | `mysql-transaction.test.ts`、`external-engine-readonly.test.ts` | 真实（manual） | 临时 `aidb_tx` 库；不覆盖 pgvector/TimescaleDB/国产 PG 分支 |
+| MongoDB 8.0 | driver contract、HTTP `/schema` + `/query` 管线 | `nosql.test.ts`、`nosql-http.test.ts` | 真实（manual） | 临时 database；写入/索引 HTTP 扩展仍未选中 |
+| Redis Stack 7.4 | driver contract、HTTP 管线、JSON/RediSearch/TimeSeries、键详情/增删改/TTL/重命名、索引删除 | `nosql.test.ts`、`nosql-http.test.ts`、`redis-stack.test.ts`、`redis-key.test.ts`、`redis-keys-delete.test.ts` | 真实（manual） | 同一 Stack 服务同时提供 `AIDB_TEST_REDIS_PORT` 与 `AIDB_TEST_REDIS_STACK_PORT`；文件串行运行；不覆盖 Cluster 或遗留对账门控 |
+
+工作流为每个所选文件设置非空端口/密码，所有 `uses` 与常规 CI 一样固定到 action commit SHA，workflow/job 仅授予 `contents: read`，不读取仓库 secrets。服务密码是 disposable container 凭据，不是生产凭据。
+
+### 10.3 常规 CI 中的嵌入式与 mock 测试
+
+| 范围 | 测试文件 | 状态 | 不能据此声称 |
+| --- | --- | --- | --- |
+| SQLite 事务 | `sqlite-transaction.test.ts`、`agent-tx-readonly.test.ts` 及常规 gateway integration | 真实嵌入式文件数据库 | 外部 SQL 引擎事务兼容性 |
+| DuckDB | `duckdb.test.ts` | 真实嵌入式引擎 | 云数仓或 MySQL/PG 方言兼容性 |
+| MySQL 元数据 | `mysql-metadata.test.ts` | mock pool | 真实 MySQL/MariaDB/兼容厂商元数据 |
+| PostgreSQL 元数据 | `postgres-metadata.test.ts` | mock pool | 真实 PG/兼容厂商元数据 |
+| Oracle 元数据 | `oracle-metadata.test.ts` | mock pool | Oracle 11g/12c/19c/21c/23ai 实机兼容 |
+| Redis Cluster | `redis-cluster.test.ts` | mock cluster nodes | 真实 Cluster 拓扑、故障转移、跨槽扫描 |
+| Cassandra 2.x 元数据 | `cassandra-legacy.test.ts` | mock client | Cassandra/ScyllaDB 实机元数据 |
+| ClickHouse 超时 | `clickhouse-timeout.test.ts` | 本地 HTTP stub | 真实 ClickHouse 查询/计划/版本兼容 |
+| Redis/FalkorDB/DM 超时 | `query-timeout.test.ts` | 假 Redis TCP 服务 + 超时 helper | 对应真实服务器的超时与连接回收 |
+| TLS 参数映射 | `ssl.test.ts` | unit/stub dispatcher | 真实 TLS 握手、证书轮换或各产品 TLS 支持 |
+
+其余没有 `AIDB_TEST_*` 门控的 gateway 测试由常规 CI 执行；它们可能是 unit、integration 或 mock，不能因为“未 skip”就标成外部引擎 live tested。
+
+### 10.4 已有真实实例门控、但当前 workflow 未覆盖
+
+| 引擎/范围 | 测试文件 | 门控变量 | 状态与原因 |
+| --- | --- | --- | --- |
+| MongoDB 写入/索引 HTTP | `mongo-write.test.ts`、`mongo-index-http.test.ts` | `AIDB_TEST_MONGO_PORT` | opt-in；manual workflow 有 Mongo 服务但未选中这些扩展 |
+| Oracle 事务 | `oracle-transaction.test.ts` | `AIDB_TEST_ORACLE_PORT`、`AIDB_TEST_ORACLE_USER`、`AIDB_TEST_ORACLE_PASSWORD`、`AIDB_TEST_ORACLE_SERVICE` | opt-in / 未覆盖；需自带 Oracle、Thin/Instant Client 与许可，未放入 CI |
+| 达梦 DM8 与事务 | `dm.test.ts`、`dm-transaction.test.ts` | `AIDB_TEST_DM_PORT`、`AIDB_TEST_DM_TX_PORT`、`AIDB_TEST_DM_PASSWORD` | opt-in / 未覆盖；需初始化 DM8 且使用 `NODE_OPTIONS=--openssl-legacy-provider`，未使用社区镜像作 CI 承诺 |
+| SQL Server 事务 | `sqlserver-transaction.test.ts` | `AIDB_TEST_SQLSERVER_PORT`、`AIDB_TEST_SQLSERVER_PASSWORD`、`AIDB_TEST_SQLSERVER_DB` | opt-in / 未覆盖；需自带 SQL Server 实例 |
+| SSH 隧道 | `ssh.test.ts` | `AIDB_TEST_SSH_PORT`、`AIDB_TEST_SSH_TARGET_HOST`、`AIDB_TEST_SSH_TARGET_PORT`、`AIDB_TEST_SSH_USER`、`AIDB_TEST_SSH_PASSWORD`、`AIDB_TEST_SSH_KEY`、`AIDB_TEST_MYSQL_PASSWORD` | opt-in / 未覆盖；需 sshd、目标 MySQL 与密钥/密码 fixture |
+| Redis 遗留对账 | `recon-redis.test.ts` | `AIDB_REDIS_TEST=1`、`AIDB_REDIS_PORT`、`AIDB_REDIS_PASSWORD` | opt-in / 未覆盖；独立遗留门控，默认密码逻辑与当前无认证 Stack 服务不兼容，未擅自改测试契约 |
+| TimescaleDB | `timescale.test.ts` | `AIDB_TEST_TIMESCALE_PORT` | opt-in；复用 PG 协议，但超表扩展未由当前 PG 服务验证 |
+| pgvector + Embedding | `pgvector.test.ts` | `AIDB_TEST_PGVECTOR_PORT` | opt-in；需要扩展与 embedding 配置 |
+| Qdrant | `qdrant.test.ts`、`qdrant-index.test.ts`、`create-object.test.ts`、`export-nosql.test.ts`、`import-documents.test.ts`、`record-edit.test.ts` | `AIDB_TEST_QDRANT_PORT` | opt-in；未加入 service matrix |
+| Elasticsearch | `elasticsearch.test.ts`、`create-object.test.ts`、`field-add.test.ts`、`import-documents.test.ts`、`record-edit.test.ts` | `AIDB_TEST_ELASTICSEARCH_PORT` | opt-in；混合文件还要求 Qdrant/Weaviate/Arango 的对应端口 |
+| Weaviate | `weaviate.test.ts`、`create-object.test.ts`、`field-add.test.ts`、`record-edit.test.ts` | `AIDB_TEST_WEAVIATE_PORT` | opt-in；混合文件需同时满足其他服务门控 |
+| ArangoDB | `arangodb.test.ts`、`arango-index.test.ts`、`arango-write.test.ts`、`create-object.test.ts`、`export-nosql.test.ts`、`record-edit.test.ts` | `AIDB_TEST_ARANGO_PORT`、`AIDB_TEST_ARANGO_PASSWORD` | opt-in；混合文件按各 test 的 skip 条件启用 |
+| Neo4j | `neo4j.test.ts`、`neo4j-http.test.ts` | `AIDB_TEST_NEO4J_PORT`、`AIDB_TEST_NEO4J_PASSWORD` | opt-in |
+| Memgraph | `memgraph.test.ts` | `AIDB_TEST_MEMGRAPH_PORT` | opt-in |
+| Cassandra | `cassandra.test.ts` | `AIDB_TEST_CASSANDRA_PORT` | opt-in；ScyllaDB 无独立 live 门控 |
+| FalkorDB | `falkordb.test.ts` | `AIDB_TEST_FALKORDB_PORT` | opt-in |
+| InfluxDB 3 | `influxdb.test.ts`、`influx-write.test.ts` | `AIDB_TEST_INFLUXDB_PORT`（写入文件另含 Mongo 门控） | opt-in；需按测试初始化 3.x 服务 |
+| TDengine | `tdengine.test.ts` | `AIDB_TEST_TDENGINE_PORT`、`AIDB_TEST_TDENGINE_USER`、`AIDB_TEST_TDENGINE_PASSWORD` | opt-in |
+| Milvus | `milvus.test.ts` | `AIDB_TEST_MILVUS_PORT` | opt-in；需 etcd/MinIO 等 standalone 依赖 |
+
+### 10.5 明确未覆盖
+
+- ClickHouse 真实实例；Oracle/DM8/SQL Server/SSH 的 CI service；pgvector/TimescaleDB、Qdrant、Elasticsearch/OpenSearch、Weaviate、ArangoDB、Neo4j/Memgraph、Cassandra/ScyllaDB、FalkorDB、InfluxDB、TDengine、Milvus 的当前 workflow 实机路径。
+- Redis Cluster 真实拓扑；OpenSearch、ScyllaDB 以及 MySQL/PG 协议别名（MariaDB、CockroachDB、Kingbase、openGauss/GaussDB、OceanBase、TiDB、PolarDB、TDSQL、GreatSQL、GoldenDB、Doris、StarRocks、GBase 8a 等）没有独立产品/版本矩阵。`drivers.test.ts` 只验证工厂路由。
+- 当前外部引擎 job 不覆盖真实 TLS 握手、SSH、备份/恢复、导入导出、受限数据库账号、HA/故障转移、性能/容量或多版本升级。常规 CI 的 SQLite 集成测试不能替代这些外部引擎边界。
+- 没有 Docker 的本机不得把静态 wiring 检查、mock 通过或测试文件存在写成 live-engine passing。
+
+### 10.6 本地复现
+
+常规非 live 检查：
 
 ```bash
-npm run typecheck --workspaces --if-present
-npm --workspace @aidb/core run test
+npm run test:workflows
+npm --workspace @aidb/gateway run typecheck
 npm --workspace @aidb/gateway run test
-npm run build
+npm run verify:docs
 ```
 
-真实实例契约测试通过环境变量启用，未设置时自动跳过：
+有 Docker 时，可启动与 workflow 相同的 pinned 服务（等待就绪后再跑测试）：
 
 ```bash
-# 临时容器（示例）
-docker run -d --rm --name aidb-test-mongo -p 27018:27017 mongo:7
-docker run -d --rm --name aidb-test-redis -p 6380:6379 redis:7-alpine
-# Redis Stack（含 JSON/RediSearch/TimeSeries）：docker run -d --rm --name aidb-test-redis-stack -p 6380:6379 redis/redis-stack-server:latest
-docker run -d --rm --name aidb-test-neo4j -p 7688:7687 -e NEO4J_AUTH=neo4j/testpass neo4j:5
-docker run -d --rm --name aidb-test-memgraph -p 7689:7687 memgraph/memgraph:latest
-docker run -d --rm --name aidb-test-cassandra -p 9043:9042 -e CASSANDRA_CLUSTER_NAME=aidb -e MAX_HEAP_SIZE=512M -e HEAP_NEWSIZE=128M cassandra:4.1
-docker run -d --rm --name aidb-test-pgvector -p 5434:5432 -e POSTGRES_PASSWORD=test -e POSTGRES_DB=aidb pgvector/pgvector:pg16
-docker run -d --rm --name aidb-test-qdrant -p 6335:6333 qdrant/qdrant
-docker run -d --rm --name aidb-test-weaviate -p 8081:8080 -e AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true -e PERSISTENCE_DATA_PATH=/var/lib/weaviate -e DEFAULT_VECTORIZER_MODULE=none -e CLUSTER_HOSTNAME=node1 semitechnologies/weaviate:1.26.4
-docker run -d --rm --name aidb-test-es -p 9203:9200 -e discovery.type=single-node -e xpack.security.enabled=false -e ES_JAVA_OPTS='-Xms512m -Xmx512m' docker.elastic.co/elasticsearch/elasticsearch:8.15.0
-docker run -d --rm --name aidb-test-tdengine -p 6042:6041 tdengine/tdengine:3.2.3.0
-docker run -d --rm --name aidb-test-falkor -p 6382:6379 falkordb/falkordb:latest
-docker run -d --rm --name aidb-test-influx -p 8184:8181 influxdb:3-core influxdb3 serve --node-id=aidb --object-store=memory --without-auth
-docker run -d --rm --name aidb-test-arango -p 8530:8529 -e ARANGO_ROOT_PASSWORD=testpass arangodb:3.12
-docker run -d --rm --name aidb-test-timescale -p 5445:5432 -e POSTGRES_PASSWORD=test -e POSTGRES_DB=aidb timescale/timescaledb:latest-pg16
-# Milvus standalone 需要 etcd + minio，参考官方 docker compose；示例映射 19531:19530
-
-# 达梦 DM8：官方未提供轻量镜像，可用社区镜像初始化后运行（示例）
-# docker run ... sizx/dm8，dminit + dmserver，映射 5237:5236
-
-AIDB_TEST_SSH_PORT=10222 AIDB_TEST_SSH_TARGET_HOST=172.17.0.17 AIDB_TEST_SSH_TARGET_PORT=3306 AIDB_TEST_SSH_KEY=D:/keys/id_ed25519 AIDB_TEST_MONGO_PORT=27018 AIDB_TEST_REDIS_PORT=6380 AIDB_TEST_NEO4J_PORT=7688 AIDB_TEST_NEO4J_PASSWORD=testpass AIDB_TEST_MEMGRAPH_PORT=7689 AIDB_TEST_CASSANDRA_PORT=9043 AIDB_TEST_PGVECTOR_PORT=5434 AIDB_TEST_QDRANT_PORT=6335 AIDB_TEST_WEAVIATE_PORT=8081 AIDB_TEST_ELASTICSEARCH_PORT=9203 AIDB_TEST_MILVUS_PORT=19531 AIDB_TEST_TDENGINE_PORT=6042 AIDB_TEST_FALKORDB_PORT=6382 AIDB_TEST_INFLUXDB_PORT=8184 AIDB_TEST_ARANGO_PORT=8530 AIDB_TEST_REDIS_STACK_PORT=6380 AIDB_TEST_TIMESCALE_PORT=5445 npm --workspace @aidb/gateway run test
-NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSWORD=SYSDBA npm --workspace @aidb/gateway run test
+docker run -d --rm --name aidb-ci-mysql -p 3306:3306 -e MYSQL_ROOT_PASSWORD=testpass -e MYSQL_ROOT_HOST=% -e MYSQL_DATABASE=aidb_tx mysql:8.4.6
+docker run -d --rm --name aidb-ci-pg -p 5432:5432 -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=testpass -e POSTGRES_DB=aidb_tx postgres:17.6-alpine
+docker run -d --rm --name aidb-ci-mongo -p 27017:27017 -e MONGO_INITDB_DATABASE=aidb_test mongo:8.0.4
+docker run -d --rm --name aidb-ci-redis -p 6379:6379 redis/redis-stack-server:7.4.0-v10
 ```
 
-覆盖：驱动工厂协议别名路由、MongoDB、Redis（含 Redis Stack 模块与 RediSearch）、Neo4j/Memgraph/FalkorDB、ArangoDB、Cassandra/ScyllaDB、达梦、DuckDB、TDengine、InfluxDB、TimescaleDB 超表标注（均含本地 stub 或联机协议测试）、Qdrant/Milvus/Weaviate、pgvector + Embedding、Elasticsearch/OpenSearch，HTTP `/schema`、`/query`、`/vector/search` 管线、对象创建与删除（Qdrant / Elasticsearch / OpenSearch / Weaviate / MongoDB / ArangoDB）、Redis 键与 RediSearch 索引删除、索引与字段的建删（MongoDB / Qdrant / ArangoDB 索引，Elasticsearch / OpenSearch / Weaviate 追加字段）、非 SQL 连接的功能禁用、SSH 隧道（转发 MySQL、关闭释放端口、错误密码）。
+设置 §10.2 的全部环境变量，再原样运行 `.github/workflows/external-engines.yml` 中 **Run live engine contracts** 的显式文件列表。不要用整个 gateway suite 的结果冒充该矩阵：其他环境门控会继续 skip。opt-in 引擎由使用者提供实例并设置 §10.4 的变量；未设置时 skip 是预期行为，不是通过。
 
 ## 11. 已知限制
 
@@ -257,7 +317,7 @@ NODE_OPTIONS=--openssl-legacy-provider AIDB_TEST_DM_PORT=5237 AIDB_TEST_DM_PASSW
 - 国产分析型（Doris/StarRocks/GBase 8a）只保证查询与浏览，DDL 设计器按能力位关闭。
 - 达梦 dmdb 使用 DES-CFB 登录加密，Node 18+ 需要 `--openssl-legacy-provider`；桌面端 Bridge 与 `npm start` 已内置该参数，独立部署请自行添加。DM 方言沿用 Oracle 兼容类型与 `LIMIT` 分页，复杂 PL/SQL、系统表差异仍需按实例验证。
 - DuckDB 使用 sqlite 方言的引号/占位符/LIMIT，DDL 设计器关闭；DuckDB 原生模块已随 gateway 打包，但桌面端优先使用系统 Node，回退到 Electron Node 时需按 ABI 验证二进制。
-- Qdrant/Milvus/Weaviate 文本检索依赖 Embedding Provider；Qdrant 的 API Key、Milvus/Weaviate 的 Token/API Key 填在密码字段。当前只支持浏览/检索，不支持写入与删除。
+- Qdrant/Milvus/Weaviate 文本检索依赖 Embedding Provider；Qdrant 的 API Key、Milvus/Weaviate 的 Token/API Key 填在密码字段。三者支持批量写入/删除；Qdrant/Weaviate 另支持结果行整条编辑，Milvus 没有单点读回编辑接口。
 - pgvector 只支持 PostgreSQL 方言；相似度分数按 `1 - cosine_distance` 返回，metric 以索引定义为准。
 - Elasticsearch/OpenSearch 支持 `_search` DSL 与按 ID 写入文档；OpenSearch 复用 Elasticsearch 驱动，个别 API/字段差异需按实例验证。
 - Memgraph 复用 Bolt 驱动；不支持 `CALL db.labels()`，标签/关系通过 Cypher 扫描推断；多数据库与系统表能力有限。

@@ -187,7 +187,7 @@ Agent 审批闸的 `POST /query`、`/connections`、`/settings`，以及 `GET /c
   `tool.risk`：`memory_write` / `update_plan` / `backup_database` 等被错标成 `risk='read'`
   但会写持久状态或落盘，必须挡在白名单之外；白名单内的 `run_sql` 等仍由 `resolveRisk`
   二次判定为 `read` 才放行。`GET /agent/tools` 对受限凭据也只返回白名单工具，避免枚举全部目录。
-- 两条链路彻底隔离：`/pair/start`+`/pair/claim` 是移动端（硬编码 `full`，带二维码），
+- 两条链路彻底隔离：`/pair/start`+`/pair/claim` 是移动端（硬编码受限 `device` scope、逐连接授权，带二维码），
   `/pair/mcp/start`+`/pair/mcp/claim` 是 MCP（硬编码 `mcp:readonly`，无二维码）；
   各自独立码池与限流桶（`start`/`claim`/`mcp-start`/`mcp-claim`），跨池兑换返回 `PAIR_INVALID`。
   `features.mcp=false` 时两个 MCP 端点 `403 FEATURE_DISABLED`。
@@ -198,7 +198,7 @@ Agent 审批闸的 `POST /query`、`/connections`、`/settings`，以及 `GET /c
   `X-Forwarded-For` 伪造的 `req.ip`），配对码由 `crypto.randomInt` 生成；两个 start 端点
   均需主令牌，只有桌面端能生成配对码。
 - **破坏性变更**：早期未发布的版本（包名当时为 `@aidb/mcp`）曾向 `/pair/claim` 传 `scope:'mcp:readonly'`；
-  现在该端点硬编码 `full`，旧包会静默获得 full 凭据，必须升级。包名此后又由
+  现在该端点硬编码 `device`，旧包必须升级；该 scope 默认无连接访问权。包名此后又由
   `@aidb-studio/mcp`（曾发布 0.0.8）改为 `@aidb-studio/aidb-studio`，装过旧包名的需改配置。桌面端设备列表用
   「只读 MCP」徽标区分两类设备，可分别吊销。
 - `tools/list` 排除 `mcp_list_servers` / `mcp_list_tools` / `mcp_call`，本地 MCP

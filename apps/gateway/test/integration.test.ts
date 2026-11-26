@@ -791,12 +791,13 @@ test('pairing issues a device token and revocation blocks it', async () => {
   assert.equal(claim.status, 200);
   const claimed = (await claim.json()) as any;
   assert.ok(claimed.token);
-  const withDevice = await fetch(`${base}/api/bootstrap`, { headers: { authorization: `Bearer ${claimed.token}` } });
+  const withDevice = await fetch(`${base}/api/connections`, { headers: { authorization: `Bearer ${claimed.token}` } });
   assert.equal(withDevice.status, 200);
+  assert.deepEqual((await withDevice.json() as any).connections, []);
   const devices = await api<{ devices: Array<{ id: string }> }>('/devices');
   assert.ok(devices.body.devices.length === 1);
   await api(`/devices/${devices.body.devices[0].id}`, { method: 'DELETE' });
-  const afterRevoke = await fetch(`${base}/api/bootstrap`, { headers: { authorization: `Bearer ${claimed.token}` } });
+  const afterRevoke = await fetch(`${base}/api/connections`, { headers: { authorization: `Bearer ${claimed.token}` } });
   assert.equal(afterRevoke.status, 401);
 });
 

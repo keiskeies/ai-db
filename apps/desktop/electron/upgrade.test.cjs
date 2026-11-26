@@ -74,7 +74,7 @@ test('NSIS 配置保持按用户覆盖安装并保留数据', () => {
   assert.match(yml, /oneClick:\s*false/);
   assert.match(yml, /perMachine:\s*false/);
   assert.match(yml, /deleteAppDataOnUninstall:\s*false/);
-  assert.match(yml, /artifactName:\s*\$\{productName\}-\$\{version\}-setup\.\$\{ext\}/);
+  assert.match(yml, /artifactName:\s*AiDB-Studio-\$\{version\}-\$\{arch\}-setup\.\$\{ext\}/);
 });
 
 test('主进程在拉起 Bridge 前备份、健康后才写版本标记', () => {

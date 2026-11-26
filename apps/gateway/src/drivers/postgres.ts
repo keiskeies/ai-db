@@ -127,23 +127,39 @@ export class PostgresDriver implements Driver {
 
   async describe(database?: string): Promise<TableInfo[]> {
     const pool = this.pool(database);
+    return this.describeWithQuery((sql) => pool.query(sql));
+  }
+
+  /** 备份快照专用：所有 catalog 查询都经 runInTransaction 固定到已 BEGIN 的 client。 */
+  async describeInTransaction(sessionId: string, _database?: string, opts: RunOptions = {}): Promise<TableInfo[]> {
+    if (!this.txClients.has(sessionId)) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
+    throwIfAborted(opts.signal);
+    return this.describeWithQuery(async (sql) => {
+      throwIfAborted(opts.signal);
+      const result = await this.runInTransaction(sessionId, sql, [], opts);
+      throwIfAborted(opts.signal);
+      if (result.truncated) throw new DbError('PostgreSQL 事务内结构元数据不完整', { code: 'PG_METADATA_TRUNCATED' });
+      return {
+        rows: result.rows.map((row) => Object.fromEntries(result.columns.map((column, index) => [column.name, row[index]]))),
+      };
+    });
+  }
+
+  private async describeWithQuery(query: (sql: string) => Promise<{ rows: any[] }>): Promise<TableInfo[]> {
     try {
-      // 六条 catalog 查询互不依赖，并发发出；池子只有 3 条连接，多出来的排队而不是串行等待。
+      // 普通内省可并发占用池连接；事务内由 pg client 队列保证这些查询仍走同一条连接。
       // 列、索引、外键都只是补充信息：Greenplum/Redshift 等 PG 分支可能缺某个系统视图，
       // 不能因为一个查询失败就把整棵对象树判空。
       const empty = { rows: [] as any[] };
       const [tablesRes, columnsRes, indexesRes, attrsRes, fksRes, estRes, genRes] = await Promise.all([
-        pool.query(
+        query(
           `SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema NOT IN ${SYSTEM_SCHEMAS} ORDER BY table_schema, table_name`,
         ),
-        pool
-          .query(
-            `SELECT table_schema, table_name, column_name, data_type, udt_name, is_nullable, column_default FROM information_schema.columns WHERE table_schema NOT IN ${SYSTEM_SCHEMAS} ORDER BY table_schema, table_name, ordinal_position`,
-          )
-          .catch(() => empty),
+        query(
+          `SELECT table_schema, table_name, column_name, data_type, udt_name, is_nullable, column_default FROM information_schema.columns WHERE table_schema NOT IN ${SYSTEM_SCHEMAS} ORDER BY table_schema, table_name, ordinal_position`,
+        ).catch(() => empty),
         // indkey 是索引列 attnum 的有序列表；在 JS 里还原列名与顺序，避免依赖 PG 9.5+ 的 array_position。
-        pool
-          .query(`
+        query(`
         SELECT n.nspname AS schema, t.relname AS table, i.relname AS index, ix.indisunique AS unique,
                ix.indisprimary AS primary, ix.indkey AS indkey, ix.indrelid AS relid
         FROM pg_index ix
@@ -151,18 +167,14 @@ export class PostgresDriver implements Driver {
         JOIN pg_class i ON i.oid = ix.indexrelid
         JOIN pg_namespace n ON n.oid = t.relnamespace
         WHERE n.nspname NOT IN ${SYSTEM_SCHEMAS}
-        ORDER BY t.relname, i.relname`)
-          .catch(() => empty),
-        pool
-          .query(`
+        ORDER BY t.relname, i.relname`).catch(() => empty),
+        query(`
         SELECT a.attrelid AS relid, a.attnum, a.attname AS column
         FROM pg_attribute a
         JOIN pg_class t ON t.oid = a.attrelid
         JOIN pg_namespace n ON n.oid = t.relnamespace
-        WHERE a.attnum > 0 AND NOT a.attisdropped AND n.nspname NOT IN ${SYSTEM_SCHEMAS}`)
-          .catch(() => empty),
-        pool
-          .query(`
+        WHERE a.attnum > 0 AND NOT a.attisdropped AND n.nspname NOT IN ${SYSTEM_SCHEMAS}`).catch(() => empty),
+        query(`
         SELECT tc.table_schema AS schema, tc.table_name AS table, tc.constraint_name AS name,
                kcu.column_name AS column, ccu.table_name AS ref_table, ccu.column_name AS ref_column
         FROM information_schema.table_constraints tc
@@ -171,31 +183,26 @@ export class PostgresDriver implements Driver {
         JOIN information_schema.constraint_column_usage ccu
           ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema
         WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema NOT IN ${SYSTEM_SCHEMAS}
-        ORDER BY tc.table_schema, tc.table_name, tc.constraint_name`)
-          .catch(() => empty),
-        pool
-          .query(`
+        ORDER BY tc.table_schema, tc.table_name, tc.constraint_name`).catch(() => empty),
+        query(`
         SELECT n.nspname AS schema, c.relname AS table, c.reltuples AS estimate
         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE c.relkind IN ('r','p') AND n.nspname NOT IN ${SYSTEM_SCHEMAS}`)
-          .catch(() => empty),
+        WHERE c.relkind IN ('r','p') AND n.nspname NOT IN ${SYSTEM_SCHEMAS}`).catch(() => empty),
         // attidentity 是 PG 10+、attgenerated 是 PG 12+；旧版本会报缺列，
         // 所以单独一条查询，失败只丢自增/生成列标记，不连普通列信息一起丢。
-        pool
-          .query(`
+        query(`
         SELECT n.nspname AS schema, c.relname AS table, a.attname AS column, a.attidentity, a.attgenerated
         FROM pg_attribute a
         JOIN pg_class c ON c.oid = a.attrelid
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE a.attnum > 0 AND NOT a.attisdropped
           AND (a.attidentity <> '' OR a.attgenerated <> '')
-          AND n.nspname NOT IN ${SYSTEM_SCHEMAS}`)
-          .catch(() => empty),
+          AND n.nspname NOT IN ${SYSTEM_SCHEMAS}`).catch(() => empty),
       ]);
       let hypertables: Array<Record<string, any>> = [];
       if (this.engine === 'timescale') {
         try {
-          const res = await pool.query(
+          const res = await query(
             'SELECT hypertable_schema, hypertable_name, num_chunks FROM timescaledb_information.hypertables',
           );
           hypertables = res.rows as Array<Record<string, any>>;
@@ -301,6 +308,7 @@ export class PostgresDriver implements Driver {
       }
       return [...tables.values()];
     } catch (err: any) {
+      if (err instanceof DbError) throw err;
       // 池级 statement_timeout 取消（57014）保留超时语义，其余按内省错误上报。
       if (err?.code === '57014') throw new DbError(`PostgreSQL 内省超时（${METADATA_TIMEOUT_MS}ms）`, { code: 'PG_TIMEOUT', status: 504 });
       throw new DbError(err.message, { code: 'PG_METADATA_ERROR' });

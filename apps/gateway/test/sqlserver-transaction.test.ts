@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import mssql from 'mssql';
 import { SqlServerDriver } from '../src/drivers/sqlserver';
 import { supportsTransaction } from '../src/drivers/types';
 
@@ -40,6 +41,43 @@ test('SQL Server 跨请求事务：提交保留、回滚撤销', { skip: !PORT }
 
     await db.run('DROP TABLE dbo.tx_probe', { database: DATABASE });
   } finally {
+    await db.close();
+  }
+});
+
+test('SQL Server transaction request is cancelled and reported as ABORTED', async () => {
+  const db = new SqlServerDriver({ host: '127.0.0.1', port: 1, user: 'sa', database: DATABASE });
+  const controller = new AbortController();
+  let cancelCount = 0;
+  let rejectQuery!: (error: Error) => void;
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  class FakeRequest {
+    constructor(_transaction: unknown) {
+      markStarted();
+    }
+    cancel(): void {
+      cancelCount += 1;
+      rejectQuery(new Error('cancelled'));
+    }
+    async query(): Promise<never> {
+      return new Promise<never>((_resolve, reject) => { rejectQuery = reject; });
+    }
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(mssql, 'Request');
+  assert.ok(descriptor);
+  Object.defineProperty(mssql, 'Request', { ...descriptor, value: FakeRequest });
+  (db as any).txTransactions.set('cancel-session', {});
+  try {
+    const pending = db.runInTransaction('cancel-session', 'INSERT INTO dbo.items (id) VALUES (1)', [], { signal: controller.signal });
+    await started;
+    controller.abort();
+    await assert.rejects(pending, { code: 'ABORTED' });
+    assert.equal(cancelCount, 1, 'abort must cancel the request pinned to the transaction');
+  } finally {
+    controller.abort();
+    (db as any).txTransactions.clear();
+    Object.defineProperty(mssql, 'Request', descriptor);
     await db.close();
   }
 });

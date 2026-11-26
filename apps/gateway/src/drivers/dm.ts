@@ -3,7 +3,7 @@ import type { ColumnInfo, Engine, IndexInfo, QueryResult, TableInfo } from '@aid
 import type { Driver, DriverTestResult, RunOptions } from './types';
 import { authorityHost } from './host';
 import { DbError } from './types';
-import { withQueryTimeout } from './timeout';
+import { throwIfAborted, withQueryTimeout } from './timeout';
 
 export interface DmOptions {
   host: string;
@@ -139,24 +139,74 @@ export class DmDriver implements Driver {
   async describe(database?: string): Promise<TableInfo[]> {
     const schema = (database || this.opts.database || (await this.currentUser())).toUpperCase();
     try {
-      return await this.withConnection(async (connection) => {
-        const tables = await connection.execute(
+      return await this.withConnection((connection) => this.describeOnConnection(
+        connection,
+        schema,
+        (sql, params, options = {}) => connection.execute(sql, params, options),
+      ));
+    } catch (err: any) {
+      throw new DbError(err?.message ?? `无法读取达梦 schema ${schema}`, { code: err?.errCode ? `DM_${err.errCode}` : 'DM_ERROR', hint: dmHint(err) });
+    }
+  }
+
+  /** 备份快照专用：schema 解析和全部 catalog 都固定在该事务连接上。 */
+  async describeInTransaction(sessionId: string, database?: string, opts: RunOptions = {}): Promise<TableInfo[]> {
+    const connection = this.txConnections.get(sessionId);
+    if (!connection) throw new DbError('事务会话不存在或已结束', { code: 'TX_NOT_FOUND', status: 404 });
+    throwIfAborted(opts.signal);
+    let schema = database || this.opts.database;
+    if (!schema) {
+      const current = await this.runInTransaction(sessionId, 'SELECT USER AS NAME FROM DUAL', [], opts);
+      schema = String(current.rows[0]?.[0] ?? 'SYSDBA');
+    }
+    const execute = async (sql: string, params: unknown[], options: Record<string, unknown> = {}) => {
+      throwIfAborted(opts.signal);
+      const result = await withQueryTimeout(
+        connection.execute(sql, params, { ...options, autoCommit: false }) as Promise<dmdb.Result<Record<string, unknown>>>,
+        opts.timeoutMs,
+        {
+          code: 'DM_TIMEOUT',
+          label: '达梦查询',
+          onTimeout: () => {
+            this.txConnections.delete(sessionId);
+            void connection.close().catch(() => undefined);
+          },
+        },
+      );
+      throwIfAborted(opts.signal);
+      return result;
+    };
+    try {
+      return await this.describeOnConnection(connection, schema.toUpperCase(), execute);
+    } catch (err: any) {
+      if (err instanceof DbError) throw err;
+      throw new DbError(err?.message ?? `无法读取达梦 schema ${schema}`, { code: err?.errCode ? `DM_${err.errCode}` : 'DM_ERROR', hint: dmHint(err) });
+    }
+  }
+
+  private async describeOnConnection(
+    connection: dmdb.Connection,
+    schema: string,
+    execute: (sql: string, params: unknown[], options?: Record<string, unknown>) => Promise<dmdb.Result<Record<string, unknown>>>,
+  ): Promise<TableInfo[]> {
+    try {
+      const tables = await execute(
           'SELECT TABLE_NAME AS NAME, NUM_ROWS AS ROW_EST FROM ALL_TABLES WHERE OWNER = ? ORDER BY TABLE_NAME',
           [schema],
           { outFormat: dmdb.OUT_FORMAT_OBJECT, maxRows: 5000 },
         );
-        const views = await connection.execute(
+        const views = await execute(
           'SELECT VIEW_NAME AS NAME FROM ALL_VIEWS WHERE OWNER = ? ORDER BY VIEW_NAME',
           [schema],
           { outFormat: dmdb.OUT_FORMAT_OBJECT, maxRows: 5000 },
         );
-        const columns = await connection.execute(
+        const columns = await execute(
           `SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION, DATA_SCALE, NULLABLE, DATA_DEFAULT
            FROM ALL_TAB_COLUMNS WHERE OWNER = ? ORDER BY TABLE_NAME, COLUMN_ID`,
           [schema],
           { outFormat: dmdb.OUT_FORMAT_OBJECT, maxRows: 100000 },
         );
-        const indexes = await connection.execute(
+        const indexes = await execute(
           `SELECT i.TABLE_NAME, i.INDEX_NAME, i.UNIQUENESS, c.COLUMN_NAME, c.COLUMN_POSITION
            FROM ALL_INDEXES i
            JOIN ALL_IND_COLUMNS c ON c.INDEX_OWNER = i.OWNER AND c.INDEX_NAME = i.INDEX_NAME
@@ -164,7 +214,7 @@ export class DmDriver implements Driver {
           [schema],
           { outFormat: dmdb.OUT_FORMAT_OBJECT, maxRows: 100000 },
         );
-        const primary = await connection.execute(
+        const primary = await execute(
           `SELECT cc.TABLE_NAME, cc.COLUMN_NAME
            FROM ALL_CONSTRAINTS c
            JOIN ALL_CONS_COLUMNS cc ON cc.OWNER = c.OWNER AND cc.CONSTRAINT_NAME = c.CONSTRAINT_NAME
@@ -237,8 +287,8 @@ export class DmDriver implements Driver {
           }
         }
         return tablesList.sort((a, b) => a.name.localeCompare(b.name));
-      });
     } catch (err: any) {
+      if (err instanceof DbError) throw err;
       throw new DbError(err?.message ?? `无法读取达梦 schema ${schema}`, { code: err?.errCode ? `DM_${err.errCode}` : 'DM_ERROR', hint: dmHint(err) });
     }
   }

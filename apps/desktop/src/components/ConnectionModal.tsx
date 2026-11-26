@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Cable, Check, Loader2, PlugZap, X } from 'lucide-react';
+import { Cable, Check, Loader2, PlugZap, Upload, X } from 'lucide-react';
 import type { ConnectionConfig, Engine, EngineMeta } from '@aidb/core';
 import { ENGINES, engineMeta } from '@aidb/core';
 import { api } from '../lib/api';
+import type { ImportedSshPrivateKey } from '../lib/desktop';
 import { useApp } from '../store';
 import type { ConnectionEditorState } from '../store';
 import { Modal, OptGroup, Option, SecretInput, Select } from './ui';
@@ -96,10 +97,16 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
   const [sshAuth, setSshAuth] = useState<'password' | 'key'>(c?.ssh?.authMethod ?? 'password');
   const [sshPassword, setSshPassword] = useState('');
   const [sshKeyPath, setSshKeyPath] = useState(c?.ssh?.privateKeyPath ?? '');
+  const [sshKeyImporting, setSshKeyImporting] = useState(false);
+  const [sshKeyImportError, setSshKeyImportError] = useState<string | null>(null);
+  const [importedSshKey, setImportedSshKey] = useState<ImportedSshPrivateKey | null>(null);
+  const canImportSshKey = api.canImportSshPrivateKey();
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; version?: string; latencyMs: number; message?: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const testCtrl = useRef<AbortController | null>(null);
+  const sshKeyImportGeneration = useRef(0);
+  const sshKeyImportPending = useRef(false);
 
   // 本机缺预编译原生绑定的引擎（当前只有 macOS Intel 的 Oracle）：选项置灰，测试与保存一并禁用。
   const blocked = new Map(unavailableEngines.map((item) => [item.engine, item]));
@@ -117,6 +124,69 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
     setPort(meta.defaultPort ? String(meta.defaultPort) : '');
     setUsername(meta.defaultUsername ?? '');
     if (meta.fileBased || meta.model !== 'relational' || meta.defaultDatabase) setDatabase(meta.defaultDatabase ?? '');
+  };
+
+  // 原生对话框可能跨过切换认证方式/关闭弹窗；只让最新一次导入写回表单。
+  useEffect(() => () => {
+    sshKeyImportGeneration.current += 1;
+    sshKeyImportPending.current = false;
+  }, []);
+
+  const invalidateSshKeyImport = () => {
+    sshKeyImportGeneration.current += 1;
+    sshKeyImportPending.current = false;
+    setSshKeyImporting(false);
+    setSshKeyImportError(null);
+  };
+
+  const sshKeyImportErrorText = (code: string) => {
+    switch (code) {
+      case 'SSH_KEY_IMPORT_UNAVAILABLE': return t('当前环境不支持原生私钥导入，请使用桌面应用。');
+      case 'SSH_KEY_DIALOG_FAILED': return t('无法打开私钥文件选择器。');
+      case 'SSH_KEY_READ_FAILED': return t('无法读取所选文件，请确认它是可读的普通私钥文件。');
+      case 'SSH_KEY_SYMLINK_REJECTED': return t('已拒绝导入符号链接，请选择实际私钥文件。');
+      case 'SSH_KEY_TOO_LARGE': return t('SSH 私钥文件不能超过 64 KiB。');
+      case 'SSH_KEY_STORE_FAILED': return t('无法创建或写入受保护的私钥目录。');
+      default: return t('SSH 私钥导入失败，请重试。');
+    }
+  };
+
+  const importSshKey = async () => {
+    if (sshKeyImportPending.current) return;
+    const generation = ++sshKeyImportGeneration.current;
+    sshKeyImportPending.current = true;
+    setSshKeyImporting(true);
+    setSshKeyImportError(null);
+    try {
+      const result = await api.importSshPrivateKey({
+        title: t('导入 SSH 私钥'),
+        buttonLabel: t('import'),
+        privateKeys: t('SSH 私钥文件'),
+        allFiles: t('所有文件'),
+      });
+      if (sshKeyImportGeneration.current !== generation) return;
+      // 取消选择器不写入新路径或导入元数据。
+      if (result.canceled) return;
+      if (!result.ok) {
+        setSshKeyImportError(result.code);
+        return;
+      }
+      setSshKeyPath(result.path);
+      setImportedSshKey({
+        fileName: result.fileName,
+        sourceFileName: result.sourceFileName,
+        path: result.path,
+        sizeBytes: result.sizeBytes,
+      });
+      setSshKeyImportError(null);
+    } catch {
+      if (sshKeyImportGeneration.current === generation) setSshKeyImportError('SSH_KEY_IMPORT_FAILED');
+    } finally {
+      if (sshKeyImportGeneration.current === generation) {
+        sshKeyImportPending.current = false;
+        setSshKeyImporting(false);
+      }
+    }
   };
 
   const buildBody = (): Record<string, unknown> => {
@@ -445,7 +515,7 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
         {engine !== 'sqlite' ? (
           <div className="setting-card">
             <label className="checkbox" style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-              <input type="checkbox" checked={sshEnabled} onChange={(e) => setSshEnabled(e.target.checked)} data-testid="ssh-enabled" /> {t('ssh')}
+              <input type="checkbox" checked={sshEnabled} onChange={(e) => { invalidateSshKeyImport(); setSshEnabled(e.target.checked); }} data-testid="ssh-enabled" /> {t('ssh')}
             </label>
             {sshEnabled ? (
               <div className="form-grid" style={{ marginTop: 10 }}>
@@ -471,7 +541,7 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
                 </div>
                 <div className="field">
                   <label>{tr("认证方式")}</label>
-                  <Select className="select" value={sshAuth} onChange={(e) => setSshAuth(e.target.value as 'password' | 'key')} data-testid="ssh-auth">
+                  <Select className="select" value={sshAuth} onChange={(e) => { invalidateSshKeyImport(); setSshAuth(e.target.value as 'password' | 'key'); }} data-testid="ssh-auth">
                     <Option value="password">{t('authByPassword')}</Option>
                     <Option value="key">{t('authByKey')}</Option>
                   </Select>
@@ -489,9 +559,49 @@ function ConnectionForm({ editor }: { editor: ConnectionEditorState }) {
                 ) : (
                   <div className="field full">
                     <label>{t('keyFile')}</label>
-                    <input className="input mono" value={sshKeyPath} onChange={(e) => setSshKeyPath(e.target.value)} placeholder="C:/Users/me/.ssh/id_ed25519" data-testid="ssh-key-path" />
+                    <div className="row gap-6">
+                      <input
+                        className="input mono"
+                        style={{ flex: 1, minWidth: 0 }}
+                        value={sshKeyPath}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          setSshKeyPath(next);
+                          if (importedSshKey && importedSshKey.path !== next) setImportedSshKey(null);
+                          setSshKeyImportError(null);
+                        }}
+                        placeholder="C:/Users/me/.ssh/id_ed25519"
+                        data-testid="ssh-key-path"
+                      />
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => void importSshKey()}
+                        disabled={!canImportSshKey || sshKeyImporting}
+                        title={!canImportSshKey ? t('当前环境不支持原生私钥导入，请使用桌面应用。') : undefined}
+                        data-testid="ssh-key-import"
+                      >
+                        {sshKeyImporting ? <Loader2 size={12} className="spin" /> : <Upload size={12} />} {sshKeyImporting ? t('正在导入 SSH 私钥…') : t('导入 SSH 私钥')}
+                      </button>
+                    </div>
+                    <span className="hint">{t('手动路径必须位于网关明确授权的目录；推荐使用「导入 SSH 私钥」复制到桌面应用受保护目录。')}</span>
+                    {importedSshKey ? (
+                      <span className="hint" style={{ color: 'var(--success)' }} role="status" data-testid="ssh-key-import-status">
+                        <Check size={11} /> {t('已导入：{0}（{1} 字节）', [importedSshKey.sourceFileName, importedSshKey.sizeBytes])}
+                      </span>
+                    ) : null}
+                    {sshKeyImportError ? (
+                      <span className="hint" style={{ color: 'var(--danger)' }} role="alert" data-testid="ssh-key-import-error">
+                        {sshKeyImportErrorText(sshKeyImportError)}
+                      </span>
+                    ) : null}
                   </div>
                 )}
+                <div className="field full">
+                  <span className="hint" data-testid="ssh-known-hosts-hint">
+                    {tr('SSH 主机密钥必须已写入用户目录下的 .ssh/known_hosts（可通过 AIDB_SSH_KNOWN_HOSTS_FILE 指定其他文件）；未知主机会被拒绝，不会自动信任。')}
+                  </span>
+                </div>
               </div>
             ) : null}
           </div>

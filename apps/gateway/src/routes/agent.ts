@@ -6,6 +6,7 @@ import {
   getTool,
   isAgentContextActive,
   listProviderModels,
+  modelOrigin,
   resolveRisk,
   sseHeaders,
   suggestQuestions,
@@ -16,6 +17,7 @@ import {
 } from '@aidb/core';
 import { readAttachment, saveAttachment } from '../attachments';
 import type { AgentHost } from '../agentHost';
+import { safeFetch } from '../egress';
 import {
   ah,
   sseWrite,
@@ -105,14 +107,13 @@ export function createAgentRouter(deps: ApiDeps): Router {
         : typeof body.connectionId === 'string' && body.connectionId ? body.connectionId : undefined;
       const riskEngine = riskConnId ? store.getConnection(riskConnId)?.engine : undefined;
       const risk = resolveRisk(call, tool, riskEngine);
-      // explain_sql 等静态 read 工具同样携带调用方 SQL；只读配对凭据必须在
-      // 执行器之前按真实语句风险拦截，不能只信任工具定义上的 risk。
-      if (res.locals.mcpReadonly && typeof args.sql === 'string' && classifySql(args.sql, riskEngine).risk !== 'read') {
-        res.status(403).json({ error: { code: 'TOOL_READ_ONLY', message: `MCP 只读桥不允许执行 ${name} 中的写 SQL` } });
-        return;
-      }
-      if (risk !== 'read') {
-        res.status(403).json({ error: { code: 'TOOL_READ_ONLY', message: `MCP 只读桥不允许执行 ${name}（风险 ${risk}）` } });
+      const sqlClassification = typeof args.sql === 'string' ? classifySql(args.sql, riskEngine) : undefined;
+      // explain_sql 等静态 read 工具同样携带调用方 SQL；出站 MCP 桥必须在执行器
+      // 之前逐条判定。session 的聚合 risk 也是 read，但不能靠聚合结果混进只读桥。
+      const hasNonReadSql = sqlClassification &&
+        (!sqlClassification.statements.length || sqlClassification.statements.some((statement) => statement.kind !== 'read'));
+      if (risk !== 'read' || hasNonReadSql) {
+        res.status(403).json({ error: { code: 'TOOL_READ_ONLY', message: `MCP 只读桥不允许执行 ${name}（风险 ${risk}或包含非只读 SQL）` } });
         return;
       }
       const result = await executor.execute(call, {
@@ -171,12 +172,39 @@ export function createAgentRouter(deps: ApiDeps): Router {
       }
       const stored = store.getSettings().agent;
       const configId = str(body.modelConfigId);
-      const config = configId ? stored.modelConfigs?.find((item) => item.id === configId) : undefined;
-      const apiKey =
-        str(body.apiKey) ??
-        (config ? store.getModelApiKey(config.id) : kind === stored.provider ? stored.apiKey : undefined);
+      const modelConfig = configId ? stored.modelConfigs?.find((item) => item.id === configId) : undefined;
+      if (configId && !modelConfig) throw Object.assign(new Error('模型配置不存在'), { code: 'MODEL_CONFIG_NOT_FOUND', status: 404 });
+      if (modelConfig && modelConfig.provider !== kind) {
+        throw Object.assign(new Error('模型配置的协议与当前请求不一致'), { code: 'MODEL_KEY_PROVIDER_MISMATCH', status: 400 });
+      }
+      const baseUrl = str(body.baseUrl) ?? modelConfig?.baseUrl ?? stored.baseUrl;
+      const requestedOrigin = modelOrigin(baseUrl);
+      const suppliedKey = str(body.apiKey)?.trim() || undefined;
+      const storedKey = modelConfig
+        ? store.getModelApiKey(modelConfig.id)
+        : kind === stored.provider ? stored.apiKey : undefined;
+      const sameOrigin = Boolean(
+        requestedOrigin
+        && (modelConfig ? modelOrigin(modelConfig.baseUrl) === requestedOrigin : kind === stored.provider && modelOrigin(stored.baseUrl) === requestedOrigin),
+      );
+      if (storedKey && !sameOrigin && !suppliedKey) {
+        throw Object.assign(new Error('已存模型密钥不能用于其他 origin；自定义 origin 必须重新提供 API Key'), { code: 'MODEL_KEY_ORIGIN_MISMATCH', status: 400 });
+      }
+      const reuseStoredKey = Boolean(storedKey && sameOrigin && !suppliedKey);
+      const apiKey = suppliedKey ?? (reuseStoredKey ? storedKey : undefined);
+      const keyOrigin = apiKey
+        ? (reuseStoredKey ? (modelConfig?.baseUrl ?? stored.baseUrl) : baseUrl)
+        : undefined;
+      const keyProvider = apiKey ? (reuseStoredKey ? (modelConfig?.provider ?? stored.provider) : kind) : undefined;
       try {
-        res.json(await listProviderModels({ kind, baseUrl: String(body.baseUrl ?? ''), apiKey }));
+        const secureFetch = (url: string | URL, init?: RequestInit) => safeFetch(url, { ...init, redirect: 'manual' }, {
+          allowPrivateOrigins: [...(config.allowedPrivateOrigins ?? []), ...(requestedOrigin ? [requestedOrigin] : [])],
+          sameOriginOnly: true,
+          followRedirects: false,
+          timeoutMs: 8000,
+          maxBytes: 2 * 1024 * 1024,
+        });
+        res.json(await listProviderModels({ kind, baseUrl, apiKey, keyOrigin, keyProvider }, { fetchImpl: secureFetch as typeof fetch }));
       } catch (err: any) {
         throw Object.assign(err, { status: Number(err?.status) || 400 });
       }
@@ -260,6 +288,31 @@ export function createAgentRouter(deps: ApiDeps): Router {
     res.status(204).end();
   }));
 
+  router.get('/agent/sessions/:id/turns', (req, res) => {
+    if (!store.getSession(req.params.id)) throw Object.assign(new Error('会话不存在'), { code: 'SESSION_NOT_FOUND', status: 404 });
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ turns: store.listTurns(req.params.id, num(req.query.limit, 20, 1, 100)) });
+  });
+
+  router.get('/agent/sessions/:id/turns/:turnId/events', (req, res) => {
+    const sessionId = req.params.id;
+    if (!store.getSession(sessionId)) throw Object.assign(new Error('会话不存在'), { code: 'SESSION_NOT_FOUND', status: 404 });
+    const turn = store.getTurn(req.params.turnId);
+    if (!turn || turn.sessionId !== sessionId) throw Object.assign(new Error('回合不存在'), { code: 'TURN_NOT_FOUND', status: 404 });
+    const rawAfter = Number(req.query.after ?? 0);
+    const after = Number.isFinite(rawAfter) ? Math.max(0, Math.floor(rawAfter)) : 0;
+    const replay = store.agentEvents(turn.id, after, num(req.query.limit, 1000, 1, 1000));
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      turn,
+      events: replay.events,
+      firstSeq: replay.firstSeq,
+      lastSeq: replay.lastSeq,
+      nextAfter: replay.events.at(-1)?.seq ?? after,
+      truncated: replay.firstSeq !== undefined && after < replay.firstSeq - 1,
+    });
+  });
+
   router.post(
     '/agent/sessions/:id/turns',
     ah(async (req, res) => {
@@ -271,6 +324,7 @@ export function createAgentRouter(deps: ApiDeps): Router {
       res.writeHead(200, sseHeaders());
       res.flushHeaders?.();
       let finished = false;
+      let ownedTurnId: string | undefined;
       const heartbeat = setInterval(() => {
         if (!finished) sseWrite(res, ': ping\n\n');
       }, 15000);
@@ -280,12 +334,14 @@ export function createAgentRouter(deps: ApiDeps): Router {
           clearInterval(heartbeat);
           // 走到这里说明流是被**对端**掐的：客户端的静默上限、用户关页面、或半开连接。
           // 用户一次停止都没点过，所以记成 disconnected 而不是 user——回合结束时
-          // 据此落续跑检查点（见 AgentHost.abortCauses）。
-          host.abort(sessionId, 'disconnected');
+          // 据此落续跑检查点（见 AgentHost.abortCauses）。只能取消本请求注册的代次，
+          // 迟到 close 不能命中同会话已经启动的替代回合。
+          if (ownedTurnId) host.abort(sessionId, 'disconnected', ownedTurnId);
         }
       });
       try {
-        await host.startTurn(
+        const previousTurnId = host.getTurnId(sessionId);
+        const running = host.startTurn(
           sessionId,
           {
             text: String(body.text ?? ''),
@@ -294,11 +350,17 @@ export function createAgentRouter(deps: ApiDeps): Router {
             images: Array.isArray(body.images) ? (body.images as string[]).map(String).slice(0, 4) : undefined,
             connectionId: str(body.connectionId),
             database: str(body.database),
+            idempotencyKey: str(body.idempotencyKey),
           },
           (event) => {
             if (!finished && !res.writableEnded) sseWrite(res, encodeSse(event));
           },
         );
+        // startTurn 在首个 await 前同步注册 active；此时捕获的 id 才属于本请求。
+        // 若并发请求遇到 SESSION_BUSY，不能把上一位请求的 active 误认成自己的取消目标。
+        const turnId = host.getTurnId(sessionId);
+        if (turnId && turnId !== previousTurnId) ownedTurnId = turnId;
+        await running;
       } catch (err: any) {
         if (!res.writableEnded) {
           sseWrite(res, encodeSse({ type: 'error', code: err?.code ?? 'AGENT_ERROR', message: err?.message ?? 'Agent 运行失败' }));

@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
-import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -13,7 +14,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const desktopDist = join(root, 'apps', 'desktop', 'dist');
 const mobileDist = join(root, 'apps', 'mobile', 'dist');
 const gatewayEntry = join(root, 'apps', 'gateway', 'dist', 'index.js');
-const shots = join(root, 'docs', 'screenshots');
+const shots = process.env.AIDB_E2E_SCREENSHOT_DIR ? resolve(root, process.env.AIDB_E2E_SCREENSHOT_DIR) : join(root, 'docs', 'screenshots');
+mkdirSync(shots, { recursive: true });
 
 // 生成最小 xlsx（ZIP + deflate + sharedStrings），用于导入联机用例
 function writeXlsx(path) {
@@ -111,20 +113,19 @@ async function cleanup() {
   await quiet('browser', () => browser?.close());
   await quiet('mobile server', () => new Promise((resolve) => (mobileServer?.listening ? mobileServer.close(() => resolve()) : resolve())));
 
-  // kill() 在 POSIX 上只发 SIGTERM，进程可能不理会；补一次 SIGKILL 兜底。
-  await quiet('gateway', () => {
+  await quiet('gateway', async () => {
     if (!gateway || gateway.exitCode !== null || gateway.signalCode !== null) return;
+    const closed = once(gateway, 'close');
     gateway.kill('SIGTERM');
-    setTimeout(() => {
-      try {
-        if (gateway.exitCode === null && gateway.signalCode === null) gateway.kill('SIGKILL');
-      } catch {
-        /* 已经退了 */
-      }
-    }, 1000).unref?.();
+    let timer;
+    await Promise.race([closed, new Promise((resolve) => { timer = setTimeout(resolve, 10_000); })]);
+    clearTimeout(timer);
+    if (gateway.exitCode === null && gateway.signalCode === null) {
+      gateway.kill('SIGKILL');
+      await Promise.race([closed, new Promise((resolve) => { timer = setTimeout(resolve, 5_000); })]);
+      clearTimeout(timer);
+    }
   });
-  // 给子进程一点时间真正退出，再删它正在用的目录。
-  await new Promise((r) => setTimeout(r, 400));
   await quiet('temp home', () => rmSync(home, { recursive: true, force: true }));
 }
 
@@ -224,28 +225,33 @@ async function pickByLabel(scope, selector, label) {
 /** 触发器把当前值挂在 data-value 上，读它比展开菜单便宜。 */
 const selectedValue = (scope, selector) => scope.locator(selector).first().getAttribute('data-value');
 
-async function waitHealth(url, timeout = 25000) {
+async function waitHealth(url, timeout = 25000, headers = {}) {
   const started = Date.now();
   while (Date.now() - started < timeout) {
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, { headers });
       if (res.ok) return;
     } catch {
       /* retry */
     }
     await new Promise((r) => setTimeout(r, 250));
   }
-  throw new Error(`Bridge did not start: ${url}`);
+  const exit = gateway ? `exit=${gateway.exitCode} signal=${gateway.signalCode}` : 'not spawned';
+  const logs = gatewayLogs.join('').slice(-2000);
+  throw new Error(`Bridge did not start: ${url} (${exit})${logs ? `\n${logs}` : ''}`);
 }
 
 const port = await freePort();
-const gatewayEnv = { ...process.env, NODE_OPTIONS: [process.env.NODE_OPTIONS, '--openssl-legacy-provider'].filter(Boolean).join(' '), AIDB_HOME: home, AIDB_HOST: '127.0.0.1', AIDB_PORT: String(port), AIDB_TOKEN: TOKEN, AIDB_SECRET: 'e2e-secret', AIDB_STATIC_DIR: desktopDist, NODE_ENV: 'production' };
+const mobilePort = await freePort();
+const mobileBase = `http://127.0.0.1:${mobilePort}`;
+const gatewayEnv = { ...process.env, NODE_OPTIONS: [process.env.NODE_OPTIONS, '--openssl-legacy-provider'].filter(Boolean).join(' '), AIDB_HOME: home, AIDB_HOST: '127.0.0.1', AIDB_PORT: String(port), AIDB_PUBLIC_URL: mobileBase, AIDB_TOKEN: TOKEN, AIDB_SECRET: 'aidb-e2e-master-secret-2026-32bytes', AIDB_SECRET_CANARY: 'v2.4flrgnhv7ahzNYpo.dYoosrnsFvo67od1xCJWtw==.0cNT4kjKi264/DfUXlTuugnHFkeuyzOITMOKpCua5PPnbbUYbq8gx5l0AQ==', AIDB_STATIC_DIR: desktopDist, NODE_ENV: 'production' };
 delete gatewayEnv.ELECTRON_RUN_AS_NODE;
 gateway = spawn(process.execPath, [gatewayEntry], { env: gatewayEnv, stdio: ['ignore', 'pipe', 'pipe'] });
 gateway.stdout.on('data', (d) => gatewayLogs.push(String(d)));
 gateway.stderr.on('data', (d) => gatewayLogs.push(String(d)));
 const bridge = `http://127.0.0.1:${port}`;
 await waitHealth(`${bridge}/api/health`);
+await waitHealth(`${bridge}/api/health/ready`, 25000, { authorization: `Bearer ${TOKEN}` });
 
 const headers = { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` };
 const api = async (path, init = {}) => {
@@ -526,9 +532,7 @@ mobileServer = createServer((req, res) => {
   res.setHeader('content-type', mime[extname(file)] ?? 'text/html; charset=utf-8');
   createReadStream(file).pipe(res);
 });
-const mobilePort = await freePort();
 await new Promise((r) => mobileServer.listen(mobilePort, '127.0.0.1', r));
-const mobileBase = `http://127.0.0.1:${mobilePort}`;
 
 // 输入卡右侧那枚胶囊现在同时显示「模型 · 推理等级」，档位列表来自模型档案。
 // 默认设置里没有推理档案（胶囊只剩模型名），所以先给离线推理模型一份档位表，
@@ -3480,8 +3484,16 @@ while (Date.now() < reportDeadline) {
 }
 check('report tool generates a saved report', Boolean(generatedReportId), generatedReportId || 'timeout');
 if (generatedReportId) {
-  const generatedRuns = await api(`/artifacts/${generatedReportId}/runs?limit=1`);
-  const generatedSpec = generatedRuns.body?.runs?.[0]?.result;
+  let generatedRun;
+  const generatedRunDeadline = Date.now() + 90000;
+  while (Date.now() < generatedRunDeadline) {
+    const generatedRuns = await api(`/artifacts/${generatedReportId}/runs?limit=1`);
+    generatedRun = generatedRuns.body?.runs?.[0];
+    if (generatedRun && ['succeeded', 'failed', 'canceled'].includes(generatedRun.status)) break;
+    await page.waitForTimeout(250);
+  }
+  check('report run finishes successfully', generatedRun?.status === 'succeeded', `${generatedRun?.status ?? 'missing'} ${generatedRun?.error ?? ''}`);
+  const generatedSpec = generatedRun?.result;
   check('report persists its schema-grounded brief', Boolean(generatedSpec?.meta?.brief?.grounding?.tables?.length && generatedSpec?.meta?.brief?.plan?.length), `${generatedSpec?.meta?.brief?.grounding?.tables?.length ?? 0} tables/${generatedSpec?.meta?.brief?.plan?.length ?? 0} steps`);
   const generatedBlocks = (generatedSpec?.sections ?? []).flatMap((section) => section.blocks ?? []);
   const metricCount = generatedBlocks.filter((block) => block.kind === 'metric').flatMap((block) => block.metrics ?? []).length;
@@ -3534,7 +3546,7 @@ const pairingText = await mobile.locator('body').innerText();
 check('mobile pairing screen', pairingText.includes('Bridge 地址') && pairingText.includes('配对码'));
 await mobile.screenshot({ path: join(shots, 'mobile-pairing.png') });
 
-const pair = await api('/pair/start', { method: 'POST' });
+const pair = await api('/pair/start', { method: 'POST', body: JSON.stringify({ connectionIds: [demo.id] }) });
 check('pairing code issued', /^\d{6}$/.test(pair.body.code), pair.body.code);
 await mobile.getByTestId('m-bridge-url').fill(bridge);
 await mobile.getByTestId('m-pair-code').fill(pair.body.code);

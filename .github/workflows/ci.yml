@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to test; release callers pass the exact tag being built.
+        type: string
+        required: false
+        default: ''
+    outputs:
+      sha:
+        description: Exact commit that passed the quality gate.
+        value: ${{ jobs.quality.outputs.sha }}
+
+permissions:
+  contents: read
+
+env:
+  NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+  NPM_CONFIG_REPLACE_REGISTRY_HOST: always
+
+jobs:
+  quality:
+    name: Quality gate
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Validate source identity
+        id: source
+        shell: bash
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          tested=$(git rev-parse HEAD)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            resolved=$(git rev-parse "${REQUESTED_REF}^{commit}")
+            if [ "$resolved" != "$GITHUB_SHA" ]; then
+              echo "::error::requested ref does not match the dispatch commit; publish from that commit or push a tag"
+              exit 1
+            fi
+          elif [ "${{ github.event_name }}" = "push" ] && [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            if [ "$tested" != "$GITHUB_SHA" ]; then
+              echo "::error::checked-out tag commit does not match the event commit"
+              exit 1
+            fi
+          fi
+          echo "sha=$tested" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: npm ci --include=optional --registry=https://registry.npmjs.org --replace-registry-host=always
+
+      # Deliberately excludes scripts/e2e.mjs: that script writes docs/screenshots.
+      # Unit/integration coverage includes MCP and Electron CommonJS tests via npm test.
+      - name: Typecheck, test, build, docs, controls and i18n
+        run: npm run verify:ci
+
+      - name: Audit production and build dependencies
+        run: npm run audit:all
+
+      - name: Generate and validate CycloneDX SBOM
+        run: npm run sbom
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: aidb-sbom
+          path: dist/sbom.cdx.json
+          if-no-files-found: error
+          retention-days: 7
+
+  attest:
+    name: Attest SBOM provenance
+    needs: quality
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: aidb-sbom
+          path: dist
+
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: dist/sbom.cdx.json

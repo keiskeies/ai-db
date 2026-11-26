@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, ScrollView, View, type ScrollViewInstance } from 'react-native';
 import { ChevronLeft, ChevronRight, Pencil, Plus, RefreshCw, Trash2, Wrench, X } from 'lucide-react-native';
 import { type ConnectionConfig, type TableInfo } from '@aidb/core';
 import { BridgeClient, type DataPage } from '../bridge';
@@ -45,8 +45,8 @@ export function TableDataScreen({
   const [saving, setSaving] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'cards'>('grid');
   const [inspect, setInspect] = useState<{ row: unknown[]; index: number } | null>(null);
-  const gridHeaderRef = useRef<ScrollView>(null);
-  const gridBodyRef = useRef<ScrollView>(null);
+  const gridHeaderRef = useRef<ScrollViewInstance | null>(null);
+  const gridBodyRef = useRef<ScrollViewInstance | null>(null);
   const lastGridXRef = useRef(0);
 
   const syncGridScroll = (x: number) => {
