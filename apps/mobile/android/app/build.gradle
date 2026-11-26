@@ -207,8 +207,10 @@ tasks.register("validateReleaseSigning") {
             if (!(expected ==~ /[0-9A-F]{64}/)) {
                 throw new GradleException("MYAPP_UPLOAD_CERT_SHA256 must be a SHA-256 fingerprint.")
             }
-            def keyStore = java.security.KeyStore.getInstance(signing.storeFile)
-            keyStore.load(signing.storeFile, signing.storePassword.toCharArray())
+            // getInstance(File) derives the keystore type from the filename extension and loads
+            // it with a dummy password, which rejects a valid JKS. The (File, password) overload
+            // detects the type from the content and verifies with the real password.
+            def keyStore = java.security.KeyStore.getInstance(signing.storeFile, signing.storePassword.toCharArray())
             def certificate = keyStore.getCertificate(signing.keyAlias)
             if (certificate == null) {
                 throw new GradleException("Android release signing alias has no certificate.")

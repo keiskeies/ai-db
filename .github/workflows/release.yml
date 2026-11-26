@@ -253,14 +253,18 @@ jobs:
         run: |
           set -o pipefail
           : > electron-builder.log
+          rc=0
           for arch in x64 arm64; do
             extra=""
             if [ "${{ matrix.artifact }}" = "windows" ] && [ "$arch" = "arm64" ]; then
               extra="-c.publish.channel=latest-arm64"
             fi
             echo "=== ${{ matrix.target }} --${arch} ${extra}"
-            npx electron-builder ${{ matrix.target }} --${arch} ${extra} --publish never 2>&1 | tee -a electron-builder.log
+            if ! npx electron-builder ${{ matrix.target }} --${arch} ${extra} --publish never 2>&1 | tee -a electron-builder.log; then
+              rc=1
+            fi
           done
+          exit "$rc"
 
       - name: Verify mac architectures and signing state
         if: runner.os == 'macOS'
@@ -551,16 +555,33 @@ jobs:
         if: failure()
         shell: bash
         run: |
+          set -uo pipefail
           log=apps/desktop/electron-builder.log
           if [ -f "$log" ]; then
-            tail -n 25 "$log" | while IFS= read -r line; do echo "::error::$line"; done
+            # 全量日志直接打进 job 输出，原始日志里始终能找到真实错误。
+            cat "$log"
+            # GitHub 每个 job 只保留约 10 条 annotation，旧的逐行 ::error:: 会把真正的
+            # ⨯ 错误行挤出上限（v0.0.11 mac 就是这么丢的）。这里转义 %/\r/换行后，
+            # 用 max-annotations=1 的单条 annotation 承载最后 80 行。
+            msg=$(tail -n 80 "$log" | awk 'BEGIN{ORS=""} { gsub(/%/, "%25"); gsub(/\r/, "%0D"); print sep $0; sep="%0A" }')
+            echo "::error title=electron-builder log (last 80 lines),max-annotations=1::${msg}"
           else
             echo "::error::electron-builder.log was not created"
           fi
           out="$RUNNER_TEMP/rpmbuild.out"
           if [ -f "$out" ]; then
-            tail -n 60 "$out" | while IFS= read -r line; do echo "::error::rpmbuild: $line"; done
+            msg=$(tail -n 60 "$out" | awk 'BEGIN{ORS=""} { gsub(/%/, "%25"); gsub(/\r/, "%0D"); print sep $0; sep="%0A" }')
+            echo "::error title=rpmbuild log,max-annotations=1::${msg}"
           fi
+
+      - name: Upload packaging log
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: aidb-packaging-log-${{ matrix.artifact }}
+          path: apps/desktop/electron-builder.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload installers
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -817,7 +838,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${EXPO_TOKEN:-}" ]; then
-            echo "::error::EXPO_TOKEN secret is required for the iOS production build"
+            echo "::error::EXPO_TOKEN secret is required for the iOS EAS build"
             exit 1
           fi
           project=$(node -p 'require("./apps/mobile/app.json").expo.extra?.eas?.projectId ?? ""')
@@ -860,7 +881,13 @@ jobs:
             console.log("iOS native version synced: " + version + " (" + app.ios.buildNumber + ")");
           '
 
-      - name: Trigger EAS production build
+      - name: Trigger EAS iOS build (internal distribution)
+        # release 环境里没有 Apple Distribution 发布证书：EAS 在非交互模式下不会
+        # 使用未经校验的 Distribution Certificate，所以 --profile production 一定
+        # 拿不到凭据。这里用 preview（distribution internal，Apple Development +
+        # Ad Hoc 描述文件，EAS 托管凭据可直接签发）。将来接入 Distribution 证书与
+        # App Store Connect API key 后，把 profile 换回 production，并同步放开
+        # 下面 IPA 校验与 Stage 任务里对 App Store 描述文件的断言。
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
@@ -868,13 +895,19 @@ jobs:
           IPA_URL_FILE: ${{ runner.temp }}/ipa-url.txt
         run: |
           set -euo pipefail
-          npx --yes eas-cli@27.11.0 build --platform ios --profile production --non-interactive --wait --json > "$EAS_BUILD_JSON"
+          # 失败时 eas-cli 会把原因写到 stderr；--json 重定向会把 stdout 留成空文件，
+          # 因此同时落一份 stderr，保证日志里能看到真实原因而不是「exit code 1」。
+          if ! npx --yes eas-cli@27.11.0 build --platform ios --profile preview --non-interactive --wait --json > "$EAS_BUILD_JSON" 2> "$EAS_BUILD_JSON.err"; then
+            echo "::error::EAS preview iOS build failed"
+            tail -n 40 "$EAS_BUILD_JSON" "$EAS_BUILD_JSON.err" || true
+            exit 1
+          fi
           node <<'NODE'
           const fs = require('fs');
           const raw = JSON.parse(fs.readFileSync(process.env.EAS_BUILD_JSON, 'utf8'));
           const build = Array.isArray(raw) ? raw[0] : raw;
           if (build?.status !== 'FINISHED' || !build?.artifacts?.buildUrl) {
-            throw new Error('EAS production build did not finish with an IPA artifact URL');
+            throw new Error('EAS iOS build did not finish with an IPA artifact URL');
           }
           const url = new URL(build.artifacts.buildUrl);
           if (url.protocol !== 'https:') throw new Error('EAS IPA artifact URL must use HTTPS');
@@ -930,8 +963,14 @@ jobs:
           fi
           codesign --verify --deep --strict --verbose=2 "$app"
           details=$(codesign -dv --verbose=4 "$app" 2>&1)
-          printf '%s\n' "$details" | grep -q '^Authority=Apple Distribution:' || { echo "::error::IPA app is not Apple Distribution signed"; exit 1; }
-          printf '%s\n' "$details" | grep -q 'flags=0x10000(runtime)' || { echo "::error::IPA app lacks hardened runtime"; exit 1; }
+          # 当前 EAS 托管的是 Apple Development 凭据（没有 Distribution 证书），
+          # internal 分发的 IPA 由 Development 证书 + Ad Hoc 描述文件签名。
+          # 断言「真实签名 + 团队一致」，不再伪装 App Store 分发。
+          authority=$(printf '%s\n' "$details" | awk -F= '/^Authority=/{ print substr($2, 1, index($2, ":") - 1); exit }')
+          case "$authority" in
+            "Apple Distribution"|"Apple Development") ;;
+            *) echo "::error::IPA app is not signed by an Apple certificate (authority: ${authority:-none})"; exit 1 ;;
+          esac
           signed_identifier=$(printf '%s\n' "$details" | awk -F= '/^Identifier=/{ print $2; exit }')
           signed_team=$(printf '%s\n' "$details" | awk -F= '/^TeamIdentifier=/{ print $2; exit }')
           if [ "$signed_identifier" != "$bundle_id" ] || [[ ! "$signed_team" =~ ^[A-Z0-9]{10}$ ]]; then
@@ -945,45 +984,66 @@ jobs:
           security cms -D -i "$profile" -o "$profile_plist"
           profile_team=$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$profile_plist")
           profile_entitlement=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$profile_plist")
-          profile_application=$(/usr/libexec/PlistBuddy -c 'Print :ApplicationIdentifier:0' "$profile_plist")
           expected_application="$profile_team.$bundle_id"
-          if [ "$profile_team" != "$signed_team" ] || [ "$profile_entitlement" != "$expected_application" ] || [ "$profile_application" != "$expected_application" ]; then
+          if [ "$profile_team" != "$signed_team" ] || [ "$profile_entitlement" != "$expected_application" ]; then
             echo "::error::IPA provisioning team/application identifier does not match the signed app"
             exit 1
           fi
           if /usr/libexec/PlistBuddy -c 'Print :ProvisionedDevices' "$profile_plist" > /dev/null 2>&1; then
-            echo "::error::IPA provisioning profile is ad-hoc/development, not App Store distribution"
-            exit 1
+            # Ad Hoc：设备白名单存在，可安装到已注册设备，不能上 App Store。
+            store_profile=false
+          else
+            store_profile=true
           fi
           entitlements="$RUNNER_TEMP/ios-entitlements.plist"
           codesign -d --entitlements :- "$app" > "$entitlements"
           signed_application=$(/usr/libexec/PlistBuddy -c 'Print :application-identifier' "$entitlements")
-          get_task_allow=$(/usr/libexec/PlistBuddy -c 'Print :get-task-allow' "$entitlements" 2>/dev/null || true)
-          if [ "$signed_application" != "$expected_application" ] || [ "$get_task_allow" = "true" ]; then
-            echo "::error::IPA signed entitlements do not match production provisioning"
+          if [ "$signed_application" != "$expected_application" ]; then
+            echo "::error::IPA signed entitlements do not match the provisioning profile"
             exit 1
           fi
 
-          TEAM_IDENTIFIER="$profile_team" BUNDLE_IDENTIFIER="$bundle_id" APP_VERSION="$version" BUILD_NUMBER="$actual_build" CONFIGURED_BUILD_NUMBER="$build_number" node <<'NODE'
+          BUNDLE_ID="$bundle_id" AUTHORITY="$authority" TEAM="$signed_team" STORE_PROFILE="$store_profile" node <<'NODE'
+          const fs = require('fs');
+          const storeProfile = process.env.STORE_PROFILE === 'true';
+          fs.writeFileSync('../../dist-mobile/IOS_DISTRIBUTION.txt', [
+            `iOS distribution policy for ${process.env.BUNDLE_ID}`,
+            '================================================',
+            `This IPA is signed with EAS-managed Apple credentials (authority: ${process.env.AUTHORITY},`,
+            `team ${process.env.TEAM}) and verified with codesign --verify --deep --strict.`,
+            `Provisioning profile type: ${storeProfile ? 'App Store' : 'Ad Hoc (device-limited, ProvisionedDevices present)'}.`,
+            'It is NOT notarized and NOT App Store-ready: the release environment has no',
+            'Apple Distribution certificate, so EAS signs internal (Ad Hoc) builds with an',
+            'Apple Development certificate. Install it on registered devices or via an',
+            'MDM/test distribution service. Publishing to the App Store requires a',
+            'Distribution certificate plus an App Store Connect API key in EAS, after which',
+            'this note and signing-ios.json must be regenerated from the real profile.',
+          ].join('\n') + '\n');
+          NODE
+
+          TEAM_IDENTIFIER="$profile_team" BUNDLE_IDENTIFIER="$bundle_id" APP_VERSION="$version" BUILD_NUMBER="$actual_build" CONFIGURED_BUILD_NUMBER="$build_number" SIGNING_AUTHORITY="$authority" STORE_PROFILE="$store_profile" node <<'NODE'
           const fs = require('fs');
           const path = require('path');
           const crypto = require('crypto');
           const dir = '../../dist-mobile';
+          const authority = process.env.SIGNING_AUTHORITY;
+          const storeProfile = process.env.STORE_PROFILE === 'true';
           fs.writeFileSync(path.join(dir, 'signing-ios.json'), JSON.stringify({
             platform: 'ios',
             signed: true,
             signatureVerified: true,
-            signing: 'Apple Distribution',
-            productionReady: true,
-            hardenedRuntime: true,
+            signing: authority,
+            productionReady: storeProfile && authority === 'Apple Distribution',
+            distribution: storeProfile ? 'app-store' : 'internal-adhoc',
             provisioningVerified: true,
-            storeProfile: true,
+            storeProfile,
+            notarized: false,
             teamIdentifier: process.env.TEAM_IDENTIFIER,
             bundleIdentifier: process.env.BUNDLE_IDENTIFIER,
             version: process.env.APP_VERSION,
             buildNumber: process.env.BUILD_NUMBER,
             configuredBuildNumber: process.env.CONFIGURED_BUILD_NUMBER,
-            verification: 'codesign --verify --deep --strict; Apple Distribution; hardened runtime; embedded provisioning profile; Info.plist',
+            verification: 'codesign --verify --deep --strict; embedded provisioning profile; Info.plist; see IOS_DISTRIBUTION.txt',
           }, null, 2) + '\n');
           const files = fs.readdirSync(dir, { withFileTypes: true })
             .filter((entry) => entry.isFile() && entry.name !== 'SHA256SUMS-ios')
@@ -1000,6 +1060,7 @@ jobs:
             dist-mobile/*.ipa
             dist-mobile/SHA256SUMS-ios
             dist-mobile/signing-ios.json
+            dist-mobile/IOS_DISTRIBUTION.txt
           if-no-files-found: error
           retention-days: 7
 
@@ -1096,11 +1157,19 @@ jobs:
           }
 
           const ios = readJson('signing-ios.json');
-          if (ios.signed !== true || ios.signatureVerified !== true || ios.productionReady !== true || ios.signing !== 'Apple Distribution') {
+          if (ios.signed !== true || ios.signatureVerified !== true || !['Apple Distribution', 'Apple Development'].includes(ios.signing)) {
             throw new Error('iOS release signature was not independently verified');
           }
-          if (ios.hardenedRuntime !== true || ios.provisioningVerified !== true || ios.storeProfile !== true) {
-            throw new Error('iOS release is missing hardened-runtime or store-provisioning verification');
+          // release 环境没有 Distribution 证书时走 EAS preview（Ad Hoc）内部分发：
+          // manifest 必须如实标出 distribution 与 productionReady，不得伪装 App Store 就绪。
+          if (ios.productionReady === true && (ios.storeProfile !== true || ios.signing !== 'Apple Distribution')) {
+            throw new Error('iOS signing manifest claims App Store readiness without a store profile and Distribution certificate');
+          }
+          if (ios.provisioningVerified !== true || ios.notarized === true) {
+            throw new Error('iOS release is missing provisioning verification or falsely claims notarization');
+          }
+          if (ios.productionReady !== true && !fs.existsSync(path.join(dir, 'IOS_DISTRIBUTION.txt'))) {
+            throw new Error('Non-App-Store iOS release is missing IOS_DISTRIBUTION.txt');
           }
           if (!/^[A-Z0-9]{10}$/.test(String(ios.teamIdentifier ?? '')) || !ios.bundleIdentifier || !ios.version || !/^\d+$/.test(String(ios.buildNumber ?? ''))) {
             throw new Error('iOS signing manifest identity is incomplete');
@@ -1177,6 +1246,9 @@ jobs:
           const androidLine = signing.android.productionReady === true
             ? '- Android is an APK signed with the protected production upload key; apksigner verified its certificate SHA-256 against the release secret. It is for sideloading, not a Google Play App Bundle.'
             : '- Android is an APK signed with the repository-tracked standard Android debug key (`apps/mobile/android/app/debug.keystore`), the same key every local checkout reuses; apksigner verified its certificate SHA-256. It is for sideloading and tester updates only, not a Google Play upload, and a future Play upload key cannot upgrade these installs in place.';
+          const iosLine = signing.ios.productionReady === true
+            ? '- iOS is an EAS production/store IPA. The downloaded app was independently verified on macOS with `codesign`, embedded provisioning identity and `Info.plist` version checks; it has not been submitted to App Store Connect.'
+            : `- iOS is an EAS internal-distribution IPA signed with an ${signing.ios.signing} certificate${signing.ios.distribution === 'internal-adhoc' ? ' and an Ad Hoc (device-limited) provisioning profile' : ''}. The downloaded app was independently verified on macOS with \`codesign\`, embedded provisioning identity and \`Info.plist\` version checks. It is not notarized and not App Store-ready; install it on registered devices or via MDM/test distribution. See \`IOS_DISTRIBUTION.txt\`.`;
           const notes = [
             `# AiDB Studio ${tag}`,
             '',
@@ -1192,7 +1264,7 @@ jobs:
             '',
             '## Distribution notes',
             androidLine,
-            '- iOS is an EAS production/store IPA. The downloaded app was independently verified on macOS with `codesign` (Apple Distribution and hardened runtime), embedded provisioning identity and `Info.plist` version checks; it has not been submitted to App Store Connect.',
+            iosLine,
             '- Oracle has no upstream prebuilt binding for macOS Intel or Windows ARM64; Oracle is unavailable in those packages.',
             '',
             '## Assets',
@@ -1230,5 +1302,6 @@ jobs:
             dist-release/signing-*.json
             dist-release/SHA256SUMS-*
             dist-release/*_SIGNING.txt
+            dist-release/IOS_DISTRIBUTION.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

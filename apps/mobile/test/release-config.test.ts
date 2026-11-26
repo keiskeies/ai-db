@@ -330,11 +330,24 @@ test('desktop verifies signatures when present and states the unsigned policy wh
   assert.match(desktopText, /Status -ne "NotSigned"/);
   assert.match(desktopText, /no signing certificate is configured in the release environment/);
   assert.match(desktopText, /`\$\{platform\.toUpperCase\(\)\}_SIGNING\.txt`/);
-  const upload = steps.find((step) => step.uses?.startsWith('actions/upload-artifact@'));
+  const upload = steps.find((step) => (step.name ?? '') === 'Upload installers');
   assert.equal(upload?.with?.['if-no-files-found'], 'error');
   assert.match(String(upload?.with?.path), /signing-\*\.json/);
   assert.match(String(upload?.with?.path), /SHA256SUMS-\*/);
   assert.match(String(upload?.with?.path), /\*_SIGNING\.txt/);
+
+  // 失败上报：GitHub 每 job 只留约 10 条 annotation，逐行 ::error:: 会把真正的 ⨯ 错误挤出上限
+  // （v0.0.11 mac 就是这么丢的）。必须全量 cat + 单条 max-annotations=1 摘要 + 日志 artifact。
+  const report = workflowRun('desktop', 'Report packaging error');
+  assert.match(report, /^\s+cat "\$log"$/m);
+  assert.match(report, /max-annotations=1/);
+  assert.ok(report.includes('gsub(/%/, "%25")'));
+  assert.ok(report.includes('gsub(/\\r/, "%0D")'));
+  assert.doesNotMatch(report, /while IFS= read -r line; do echo "::error::\$line"; done/);
+  const logUpload = steps.find((step) => (step.name ?? '') === 'Upload packaging log');
+  assert.equal(logUpload?.if, 'failure()');
+  assert.match(String(logUpload?.with?.path), /electron-builder\.log/);
+  assert.match(workflowRun('desktop', 'Package installers'), /if ! npx electron-builder/);
 });
 
 test('Android signing stages production credentials or falls back to the tracked debug key', () => {
@@ -385,7 +398,7 @@ test('Android signing stages production credentials or falls back to the tracked
   assert.ok(!releaseJobs.android?.steps?.some((step) => step.uses?.startsWith('actions/attest-build-provenance@')));
 });
 
-test('iOS EAS production artifacts fail closed and receive independent macOS signature verification', () => {
+test('iOS EAS internal-distribution artifacts fail closed and receive independent macOS signature verification', () => {
   const ios = releaseJobs.ios;
   assert.ok(ios);
   assert.equal(ios['runs-on'], 'macos-latest');
@@ -393,7 +406,7 @@ test('iOS EAS production artifacts fail closed and receive independent macOS sig
   assert.deepEqual(ios.permissions, { contents: 'read' });
   assert.equal(ios.env?.EXPO_TOKEN, undefined);
   assert.equal(workflowStep('ios', 'Check EAS configuration').env?.EXPO_TOKEN, '${{ secrets.EXPO_TOKEN }}');
-  assert.equal(workflowStep('ios', 'Trigger EAS production build').env?.EXPO_TOKEN, '${{ secrets.EXPO_TOKEN }}');
+  assert.equal(workflowStep('ios', 'Trigger EAS iOS build (internal distribution)').env?.EXPO_TOKEN, '${{ secrets.EXPO_TOKEN }}');
   const guardRun = workflowRun('ios', 'Check EAS configuration');
   assert.match(guardRun, /EXPO_TOKEN secret is required/);
   assert.match(guardRun, /non-placeholder UUID/);
@@ -401,9 +414,11 @@ test('iOS EAS production artifacts fail closed and receive independent macOS sig
   assert.doesNotMatch(guardRun, /warning|skipped|ok=0/);
   assert.ok(!ios.steps?.some((step) => step.if || step['continue-on-error']));
 
-  const buildRun = workflowRun('ios', 'Trigger EAS production build');
-  assert.match(buildRun, /--profile production/);
-  assert.doesNotMatch(buildRun, /--profile preview/);
+  const buildRun = workflowRun('ios', 'Trigger EAS iOS build (internal distribution)');
+  // release 环境没有 Distribution 证书，production profile 在 --non-interactive 下必然
+  // 拿不到凭据；改用 preview（internal/Ad Hoc），并捕获 stderr 暴露真实失败原因。
+  assert.match(buildRun, /--profile preview/);
+  assert.match(buildRun, /EAS_BUILD_JSON\.err/);
   assert.match(buildRun, /status !== 'FINISHED'/);
   assert.match(buildRun, /url\.protocol !== 'https:'/);
   const verifyRun = workflowRun('ios', 'Download, inspect and stage IPA');
@@ -413,26 +428,27 @@ test('iOS EAS production artifacts fail closed and receive independent macOS sig
   assert.match(verifyRun, /unzip -tq/);
   assert.match(verifyRun, /unsafe path in IPA/);
   assert.match(verifyRun, /codesign --verify --deep --strict/);
-  assert.match(verifyRun, /Authority=Apple Distribution:/);
-  assert.match(verifyRun, /flags=0x10000\(runtime\)/);
+  assert.match(verifyRun, /"Apple Distribution"\|"Apple Development"/);
   assert.match(verifyRun, /security cms -D/);
   assert.match(verifyRun, /TeamIdentifier:0/);
   assert.match(verifyRun, /Entitlements:application-identifier/);
-  assert.match(verifyRun, /ApplicationIdentifier:0/);
   assert.match(verifyRun, /ProvisionedDevices/);
   assert.match(verifyRun, /Print :CFBundleIdentifier/);
   assert.match(verifyRun, /Print :CFBundleShortVersionString/);
   assert.match(verifyRun, /Print :CFBundleVersion/);
   assert.match(verifyRun, /signatureVerified: true/);
-  assert.match(verifyRun, /productionReady: true/);
   assert.match(verifyRun, /provisioningVerified: true/);
-  assert.doesNotMatch(verifyRun, /signatureVerified: false|productionReady: false/);
+  // manifest 必须如实描述分发方式，不写死 productionReady/storeProfile。
+  assert.match(verifyRun, /productionReady: storeProfile && authority === 'Apple Distribution'/);
+  assert.match(verifyRun, /notarized: false/);
+  assert.match(verifyRun, /IOS_DISTRIBUTION\.txt/);
   const upload = ios.steps?.find((step) => step.uses?.startsWith('actions/upload-artifact@'));
   assert.equal(upload?.with?.name, 'aidb-ios');
   assert.equal(upload?.if, undefined);
   assert.equal(upload?.with?.['if-no-files-found'], 'error');
   assert.match(String(upload?.with?.path), /dist-mobile\/\*\.ipa/);
   assert.match(String(upload?.with?.path), /SHA256SUMS-ios/);
+  assert.match(String(upload?.with?.path), /IOS_DISTRIBUTION\.txt/);
   assert.ok(!ios.steps?.some((step) => step.uses?.startsWith('actions/attest-build-provenance@')));
 });
 
@@ -496,7 +512,8 @@ test('draft release staging requires verified native assets, iOS checksums and t
   assert.match(validationRun, /does not state the unsigned release policy/);
   assert.match(validationRun, /unsigned release is missing its signing policy note/);
   assert.match(validationRun, /ios\.signatureVerified !== true/);
-  assert.match(validationRun, /ios\.signing !== 'Apple Distribution'/);
+  assert.match(validationRun, /'Apple Distribution', 'Apple Development'/);
+  assert.match(validationRun, /iOS signing manifest claims App Store readiness without a store profile and Distribution certificate/);
   assert.match(validationRun, /ios\.provisioningVerified !== true/);
   assert.match(validationRun, /requires both Android APK and iOS IPA artifacts/);
   assert.match(validationRun, /for platform in windows macos linux android ios;/);
@@ -510,10 +527,14 @@ test('draft release staging requires verified native assets, iOS checksums and t
   assert.match(notesRun, /debug\.keystore/);
   assert.match(notesRun, /independently verified on macOS/);
   assert.match(notesRun, /EAS production\/store IPA/);
+  assert.match(notesRun, /signing\.ios\.productionReady === true/);
+  assert.match(notesRun, /notarized and not App Store-ready/);
+  assert.match(notesRun, /IOS_DISTRIBUTION\.txt/);
   assert.doesNotMatch(notesRun, /signature was not independently verified|iOS was skipped/);
   const draft = workflowStep('release', 'Create draft release');
   assert.equal(draft.with?.draft, true);
   assert.equal(draft.with?.target_commitish, '${{ needs.quality.outputs.sha }}');
   assert.match(String(draft.with?.files), /dist-release\/\*\.ipa/);
   assert.match(String(draft.with?.files), /dist-release\/SHA256SUMS-\*/);
+  assert.match(String(draft.with?.files), /dist-release\/IOS_DISTRIBUTION\.txt/);
 });
