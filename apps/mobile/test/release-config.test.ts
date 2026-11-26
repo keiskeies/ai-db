@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import os from 'node:os';
 import yaml from 'js-yaml';
 
 const mobileRoot = fileURLToPath(new URL('../', import.meta.url));
@@ -70,6 +72,98 @@ const workflowRun = (jobName: string, stepName: string): string => {
   return run;
 };
 const needsOf = (job: WorkflowJob): string[] => typeof job.needs === 'string' ? [job.needs] : job.needs ?? [];
+
+const sha256 = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
+const shellProbe = spawnSync('bash', ['-c', 'command -v sha256sum >/dev/null'], { encoding: 'utf8' });
+const gateShellUsable = shellProbe.status === 0;
+const unsignedPolicy = 'no signing certificate is configured in the release environment';
+
+const writeManifest = (dir: string, name: string, body: Record<string, unknown>) => {
+  writeFileSync(join(dir, name), JSON.stringify(body, null, 2) + '\n');
+};
+
+// 复刻各平台「Record signing policy and checksums」的写法：目录下所有文件进校验和，
+// 只排除自己那份 SHA256SUMS-<platform>。
+const writeChecksums = (dir: string, platform: string) => {
+  const names = readdirSync(dir)
+    .filter((name) => name !== `SHA256SUMS-${platform}` && statSync(join(dir, name)).isFile())
+    .sort();
+  const lines = names.map((name) => `${sha256(join(dir, name))}  ${name}`);
+  writeFileSync(join(dir, `SHA256SUMS-${platform}`), lines.join('\n') + '\n');
+};
+
+interface StagedRelease {
+  root: string;
+  dir: string;
+}
+
+// 复刻 release job 的下载布局：每个平台一个产出目录（对应各自的 release/ 或
+// dist-mobile/），再按 merge-multiple 摊进同一个 dist-release —— 同名文件后写覆盖先写。
+// electronBuilderLog 决定这份构建日志在每个平台叫什么名字；removeDebugLog 对应工作流里
+// 打包后、算校验和前的删除，用它对比「删掉」与「原样上传」两种形态。
+const debugLogPattern = /^builder-debug.*\.yml$/;
+const buildStaging = (electronBuilderLog: (platform: string) => string | null, removeDebugLog: boolean): StagedRelease => {
+  const root = mkdtempSync(join(os.tmpdir(), 'aidb-release-gate-'));
+  const dir = join(root, 'dist-release');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'sbom.cdx.json'), JSON.stringify({ bomFormat: 'CycloneDX', components: [{ name: 'aidb-gateway' }] }));
+  const manifests: Record<string, Record<string, unknown>> = {
+    windows: { platform: 'windows', signed: false, verification: `Unsigned: ${unsignedPolicy}` },
+    macos: { platform: 'macos', signed: false, verification: `Unsigned: ${unsignedPolicy}` },
+    linux: { platform: 'linux', signed: false, verification: 'Not platform-signed; see LINUX_SIGNING.txt' },
+    android: { platform: 'android', signed: true, signatureVerified: true, signing: 'debug', certificateSha256: 'A'.repeat(64), productionReady: false },
+    ios: {
+      platform: 'ios',
+      signed: true,
+      signatureVerified: true,
+      signing: 'iPhone Distribution',
+      productionReady: false,
+      provisioningVerified: true,
+      storeProfile: false,
+      notarized: false,
+      teamIdentifier: 'AB12CD34EF',
+      bundleIdentifier: 'top.keiskei.ai-db',
+      version: '0.0.11',
+      buildNumber: '3',
+    },
+  };
+  const perPlatform: Record<string, string[]> = {
+    windows: ['AiDB-Studio-0.0.11-x64-setup.exe', 'latest.yml', 'WINDOWS_SIGNING.txt'],
+    macos: ['AiDB-Studio-0.0.11-arm64.dmg', 'latest-mac.yml', 'MACOS_SIGNING.txt'],
+    linux: ['AiDB-Studio-0.0.11-x64.deb', 'latest-linux.yml', 'LINUX_SIGNING.txt'],
+    android: ['AiDB-Studio-0.0.11-android.apk'],
+    ios: ['AiDB-Studio-0.0.11-ios.ipa', 'IOS_DISTRIBUTION.txt'],
+  };
+  for (const [platform, files] of Object.entries(perPlatform)) {
+    const stage = join(root, `stage-${platform}`);
+    mkdirSync(stage, { recursive: true });
+    for (const name of files) writeFileSync(join(stage, name), `${platform} payload for ${name}\n`);
+    if (platform !== 'android' && platform !== 'ios') {
+      const logName = electronBuilderLog(platform);
+      if (logName) writeFileSync(join(stage, logName), `${platform} electron-builder debug log\n`);
+      if (removeDebugLog) {
+        for (const name of readdirSync(stage)) {
+          if (debugLogPattern.test(name)) rmSync(join(stage, name));
+        }
+      }
+    }
+    writeManifest(stage, `signing-${platform}.json`, manifests[platform]);
+    writeChecksums(stage, platform);
+    for (const name of readdirSync(stage)) {
+      const src = join(stage, name);
+      if (statSync(src).isFile()) writeFileSync(join(dir, name), readFileSync(src));
+    }
+    rmSync(stage, { recursive: true, force: true });
+  }
+  return { root, dir };
+};
+
+// 用 bash -s 从 stdin 取脚本：工作流那一段（含 node heredoc）原样跑，不做路径转换。
+const runStagingGate = (staged: StagedRelease) => spawnSync('bash', ['-s'], {
+  cwd: staged.root,
+  encoding: 'utf8',
+  input: workflowRun('release', 'Verify SBOM, signing manifests and checksums'),
+});
 
 function plistString(key: string) {
   return infoPlist.match(new RegExp(`<key>${key}</key>\\s*<string>([^<]+)</string>`))?.[1];
@@ -598,4 +692,65 @@ test('draft release staging requires verified native assets, iOS checksums and t
   assert.match(String(draft.with?.files), /dist-release\/\*\.ipa/);
   assert.match(String(draft.with?.files), /dist-release\/SHA256SUMS-\*/);
   assert.match(String(draft.with?.files), /dist-release\/IOS_DISTRIBUTION\.txt/);
+});
+
+// v0.0.11 的 release job 只报了一行 "Process completed with exit code 1."：
+// 真实原因是 sha256sum 的 `builder-debug.yml: FAILED`，而 Windows/macOS/Linux 三个
+// 桌面 job 都把这份 electron-builder 构建日志以同名写进 release/ 并上传，
+// merge-multiple 摊平后只剩一份，另外两个平台的校验和必然对不上。
+test('desktop checksums exclude the electron-builder debug log', () => {
+  const checksumStep = workflowRun('desktop', 'Record signing policy and checksums');
+  assert.match(checksumStep, /const name of fs\.readdirSync\('release'\)/);
+  assert.match(checksumStep, /if \(\/\^builder-debug\.\*\\\.yml\$\/\.test\(name\)\) fs\.rmSync\(path\.join\('release', name\)\)/);
+  // 删掉而不是改名：校验和只覆盖真正挂到 Release 上的资产。
+  assert.match(checksumStep, /entry\.name !== `SHA256SUMS-\$\{platform\}`\)/);
+});
+
+test('release staging gate reports its own failure and checks every platform', () => {
+  const validationRun = workflowRun('release', 'Verify SBOM, signing manifests and checksums');
+  // 真实错误必须进 annotation（日志正文未登录取不到），且单条 annotation 截断在
+  // 4096 字节：正文压成一行，堆栈只进 full log。
+  assert.match(validationRun, /::error title=Release staging gate,max-annotations=1::/);
+  assert.match(validationRun, /buf\.length <= 3600 \? buf : buf\.subarray\(0, 3600\)/);
+  assert.match(validationRun, /console\.error\(`\[release staging gate\] \$\{error instanceof Error \? error\.stack/);
+  assert.match(validationRun, /catch \(error\) \{/);
+  assert.match(validationRun, /annotate\(error\);/);
+  // manifest gate 失败也要继续跑校验和，两段结论合并退出。
+  assert.match(validationRun, /node <<'NODE' \|\| gate_rc=1/);
+  assert.match(validationRun, /rc="\$gate_rc"/);
+  assert.match(validationRun, /sha256sum --strict -c/);
+  assert.match(validationRun, /artifact name collision in merged staging/);
+});
+
+test('release staging gate passes without the debug log and names the colliding file', (t) => {
+  if (!gateShellUsable) {
+    t.skip('bash with sha256sum is required to execute the staging gate');
+    return;
+  }
+  // 修复后的形态：构建日志在校验和之前删掉，摊平后每个文件只有一份、哈希各对各的。
+  const fixed = buildStaging(() => 'builder-debug.yml', true);
+  t.after(() => rmSync(fixed.root, { recursive: true, force: true }));
+  const pass = runStagingGate(fixed);
+  assert.doesNotMatch(pass.stdout + pass.stderr, /::error/, pass.stdout + pass.stderr);
+  assert.equal(pass.status, 0, `${pass.stdout}\n${pass.stderr}`);
+  assert.match(pass.stdout, /signing manifests verified/);
+
+  // 回归守卫：一旦有人删掉这段清理，三个桌面 job 的同名 builder-debug.yml 又会摊进
+  // 同一个 dist-release，gate 必须点名冲突文件而不是只丢一个 exit 1。
+  const colliding = buildStaging(() => 'builder-debug.yml', false);
+  t.after(() => rmSync(colliding.root, { recursive: true, force: true }));
+  const fail = runStagingGate(colliding);
+  assert.equal(fail.status, 1, `${fail.stdout}\n${fail.stderr}`);
+  assert.match(fail.stdout, /::error title=Release staging gate/);
+  assert.match(fail.stdout, /artifact name collision in merged staging: builder-debug\.yml/);
+  // 校验和段照样跑完五个平台，FAILED 只出现在真正相撞的那个上。
+  assert.match(fail.stdout, /builder-debug\.yml: FAILED/);
+  assert.match(fail.stdout, /signing-ios\.json: OK/);
+  // 单条 annotation 从头部截断在 4096 字节，超限就丢掉后半段：正文必须留有余量。
+  const annotation = (fail.stdout.match(/::error title=Release staging gate[^\n]*/) ?? [''])[0];
+  assert.ok(annotation.length <= 4096, `annotation is ${annotation.length} bytes and would be truncated`);
+  assert.match(annotation, /builder-debug\.yml/);
+  // 堆栈只进日志，不占 annotation 预算。
+  assert.doesNotMatch(annotation, /runScriptInThisContext/);
+  assert.match(fail.stderr, /\[release staging gate\][\s\S]*runScriptInThisContext/);
 });

@@ -619,6 +619,15 @@ jobs:
                 : 'Windows SmartScreen warns on unsigned installers; choose "More info" > "Run anyway".',
             ].join('\n') + '\n');
           }
+          // builder-debug.yml 是 electron-builder 的构建日志，不是交付物：三个桌面 job
+          // 都以同名写进各自的 release/，而 release job 用 merge-multiple 摊平进同一个
+          // dist-release，后落的覆盖先落的，于是每个平台 SHA256SUMS 里那条记录只有一个
+          // 平台算得对（v0.0.11 的 `builder-debug.yml: FAILED`）。它也不在发布资产里，
+          // 留在校验和里等于让用户去核对一个下载不到的文件。原始内容见 CI 日志与
+          // electron-builder.log，这里删掉，校验和就只覆盖真正发布的资产。
+          for (const name of fs.readdirSync('release')) {
+            if (/^builder-debug.*\.yml$/.test(name)) fs.rmSync(path.join('release', name));
+          }
           const files = fs.readdirSync('release', { withFileTypes: true })
             .filter((entry) => entry.isFile() && entry.name !== `SHA256SUMS-${platform}`)
             .map((entry) => entry.name)
@@ -1210,10 +1219,36 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node <<'NODE'
+          # 两段都要跑完：manifest gate 一挂就跳过校验和，等于把后半段的结论一起丢了。
+          gate_rc=0
+          node <<'NODE' || gate_rc=1
           const fs = require('fs');
           const path = require('path');
           const dir = 'dist-release';
+          // 这个 gate 抛错只有 "Process completed with exit code 1." 进 annotation，
+          // 正文在日志里（未登录拿不到）。所以异常一律先落成 ::error:: 再退出。
+          // annotation 单条从头部截断在 4096 字节、每 job 只留约 10 条，所以正文压成
+          // 一行：真实错误在前，dist-release 清单紧随其后，堆栈只留 full log。
+          const esc = (text) => String(text).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+          const listing = () => {
+            try {
+              return fs
+                .readdirSync(dir, { withFileTypes: true })
+                .filter((entry) => entry.isFile())
+                .map((entry) => `${entry.name}:${fs.statSync(path.join(dir, entry.name)).size}B`)
+                .sort()
+                .join(' ');
+            } catch (error) {
+              return `unable to list ${dir}: ${error instanceof Error ? error.message : error}`;
+            }
+          };
+          const annotate = (error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`[release staging gate] ${error instanceof Error ? error.stack ?? message : message}`);
+            const buf = Buffer.from(esc(`${message} | dist-release: ${listing()}`), 'utf8');
+            console.log(`::error title=Release staging gate,max-annotations=1::${(buf.length <= 3600 ? buf : buf.subarray(0, 3600)).toString('utf8')}`);
+          };
+          try {
           const readJson = (name) => JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
           const sbom = readJson('sbom.cdx.json');
           if (sbom.bomFormat !== 'CycloneDX' || !Array.isArray(sbom.components) || sbom.components.length === 0) {
@@ -1277,22 +1312,55 @@ jobs:
           if (!files.some((name) => name.endsWith('.apk')) || !files.some((name) => name.endsWith('.ipa'))) {
             throw new Error('release staging requires both Android APK and iOS IPA artifacts');
           }
-          for (const platform of ['windows', 'macos', 'linux', 'android', 'ios']) {
+          const platforms = ['windows', 'macos', 'linux', 'android', 'ios'];
+          const sums = new Map();
+          for (const platform of platforms) {
             const checksumName = `SHA256SUMS-${platform}`;
             const lines = fs.readFileSync(path.join(dir, checksumName), 'utf8').split(/\r?\n/).filter(Boolean);
             if (lines.length === 0) throw new Error(`${checksumName} is empty`);
-            const listed = new Set(lines.map((line) => line.slice(66).replace(/^\*/, '')));
+            const listed = new Map();
+            for (const line of lines) {
+              listed.set(line.slice(66).replace(/^\*/, ''), line.slice(0, 64));
+            }
             if (!listed.has(`signing-${platform}.json`)) {
               throw new Error(`${checksumName} does not cover signing-${platform}.json`);
             }
+            for (const [name, digest] of listed) {
+              const seen = sums.get(name);
+              if (seen && seen.digest !== digest) {
+                seen.platforms.push(platform);
+              } else if (!seen) {
+                sums.set(name, { digest, platforms: [platform] });
+              }
+            }
+          }
+          // merge-multiple 把每个 artifact 摊平进同一个目录：两个平台产出同名文件时
+          // 后落的直接覆盖先落的，磁盘上只剩一份，可每个 SHA256SUMS 都记着自己的哈希。
+          // 于是校验必然只对一个平台成立（v0.0.11 是 builder-debug.yml 撞上，报
+          // `builder-debug.yml: FAILED`）。同名必须同哈希，否则就是命名冲突。
+          const collisions = [...sums.entries()].filter(([, entry]) => entry.platforms.length > 1);
+          if (collisions.length > 0) {
+            throw new Error(`artifact name collision in merged staging: ${collisions.map(([name, entry]) => `${name} (${entry.platforms.join(', ')})`).join('; ')}`);
           }
           console.log(`SBOM: ${sbom.components.length} components; desktop, Android and iOS signing manifests verified`);
+          console.log(`staged files: ${files.length}; checksum entries verified unique: ${sums.size}`);
+          } catch (error) {
+            annotate(error);
+            process.exitCode = 1;
+          }
           NODE
+          # 五个平台逐个校验，失败累计，别在第一处失败就掩盖后面四个平台的结论。
+          rc="$gate_rc"
           for platform in windows macos linux android ios; do
             checksums="dist-release/SHA256SUMS-${platform}"
-            test -f "$checksums" || { echo "::error::missing $checksums"; exit 1; }
-            (cd dist-release && sha256sum -c "SHA256SUMS-${platform}")
+            if [ ! -f "$checksums" ]; then
+              echo "::error::missing $checksums"
+              rc=1
+              continue
+            fi
+            (cd dist-release && sha256sum --strict -c "SHA256SUMS-${platform}") || rc=1
           done
+          exit "$rc"
 
       - name: Verify update metadata
         shell: bash
